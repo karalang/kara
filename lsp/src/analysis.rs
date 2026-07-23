@@ -123,6 +123,27 @@ pub fn hover(text: &str, position: Position) -> Option<Hover> {
     })
 }
 
+/// Render a `std.panic` crash report (`docs/design.md § 4. Crash Report
+/// Format`) from its JSON text to the human-readable form — the LSP-side
+/// counterpart of `karac debug`, so an editor command ("Kāra: Render Crash
+/// Report") gets byte-identical output to the CLI. Shares the same
+/// [`karac::crash_report`] model + renderer the compiler binary uses (the
+/// "rendering logic shared by `karac` and the LSP server" contract); the effect
+/// summaries flow through the same `effect_render` compact form as hover.
+///
+/// Uncoloured — the LSP delivers plain text to an editor panel, not a TTY.
+/// `Err` carries a human message for `InvalidParams` (bad JSON / not a crash
+/// report).
+pub fn render_crash_report(json_text: &str) -> Result<String, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json_text).map_err(|e| format!("not valid JSON: {e}"))?;
+    let report = karac::crash_report::CrashReport::from_value(&value)?;
+    Ok(karac::crash_report::render(
+        &report,
+        karac::effect_render::ColorChoice::Never,
+    ))
+}
+
 /// Resolve the definition range for the reference at `position` (in the same
 /// document — single-file today). `None` when nothing navigable sits there
 /// (not a resolved reference, or a prelude/builtin with no source location).
@@ -386,6 +407,30 @@ mod tests {
     #[test]
     fn hover_none_on_keyword() {
         assert!(hover("fn f() {}", Position::new(0, 0)).is_none());
+    }
+
+    #[test]
+    fn render_crash_report_matches_shared_renderer() {
+        let json = r#"{
+            "panic_kind": "index_out_of_bounds",
+            "message": "boom",
+            "logical_stack": [
+                { "function": "f", "file": "a.kara", "line": 1, "column": 1,
+                  "effects": [ {"verb":"sends","resource":"Net"}, {"verb":"reads","resource":"Db"} ] }
+            ]
+        }"#;
+        let out = render_crash_report(json).expect("valid crash report");
+        assert!(out.contains("panic: index out of bounds"));
+        // Effect summary uses the shared compact form (canonical order).
+        assert!(out.contains("reads(Db) + sends(Net)"));
+        // No ANSI in the LSP surface.
+        assert!(!out.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn render_crash_report_rejects_bad_input() {
+        assert!(render_crash_report("{not json").is_err());
+        assert!(render_crash_report("[1,2,3]").is_err());
     }
 
     #[test]

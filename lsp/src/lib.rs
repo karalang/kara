@@ -228,6 +228,29 @@ fn handle_request(
                 Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
             }
         }
+        // Custom request: render a std.panic crash report to human-readable
+        // text. Params: `{ "text": "<crash-report JSON>" }`. Response:
+        // `{ "rendered": "<text>" }`. The LSP-shaped counterpart of
+        // `karac debug` — a "Kāra: Render Crash Report" editor command calls
+        // this and shows the result in a panel. (No source document involved,
+        // so it does not key off `docs`.)
+        "kara/renderCrashReport" => {
+            let text = params.get("text").and_then(serde_json::Value::as_str);
+            match text {
+                Some(json_text) => match analysis::render_crash_report(json_text) {
+                    Ok(rendered) => lsp_server::Response::new_ok(
+                        id,
+                        serde_json::json!({ "rendered": rendered }),
+                    ),
+                    Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e),
+                },
+                None => lsp_server::Response::new_err(
+                    id,
+                    INVALID_PARAMS,
+                    "kara/renderCrashReport requires a string `text` field".to_string(),
+                ),
+            }
+        }
         _ => lsp_server::Response::new_err(
             id,
             METHOD_NOT_FOUND,
