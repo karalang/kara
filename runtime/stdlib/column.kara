@@ -145,6 +145,29 @@ impl[T] Column[T] {
         Column { handle_id: 0 }
     }
 
+    // --- Arrow IPC interchange (phase-11 Arrow IPC slice 1). ---
+    // Serialize the column to the Apache Arrow **IPC stream** format — a single
+    // RecordBatch with one field `col`, interoperable with any Arrow reader
+    // (pyarrow `ipc.open_stream`, polars, DuckDB). The validity bitmap maps to
+    // Arrow's null buffer. Round-trips through `from_arrow_ipc`. Slice 1
+    // supports `i64` / `f64` element columns (interpreter reference impl in
+    // `src/interpreter/arrow_ipc.rs`; codegen + the runtime
+    // `libkarac_runtime_arrow.a` archive are slice 2 — `karac run` routes an
+    // arrow program to the interpreter until then).
+    #[compiler_builtin]
+    fn to_arrow_ipc(ref self) -> Vec[u8] {
+        Vec.new()
+    }
+
+    // Parse an Arrow IPC stream (`Vec[u8]`) into a column — the round-trip peer
+    // of `to_arrow_ipc`. Reads the first RecordBatch's first column. `T` is
+    // supplied by the call-site expected type (`let c: Column[i64] =
+    // Column.from_arrow_ipc(bytes)`), like `Column.new`.
+    #[compiler_builtin]
+    fn from_arrow_ipc(bytes: Vec[u8]) -> Column[T] {
+        Column { handle_id: 0 }
+    }
+
     // --- Statistical reductions (phase-11 stats). All operate on the
     // valid (non-null) slots only — SQL/pandas aggregate semantics. An
     // empty valid set is a runtime error (no identity for min/max; the

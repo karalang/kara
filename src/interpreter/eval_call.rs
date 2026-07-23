@@ -901,7 +901,8 @@ impl<'a> super::Interpreter<'a> {
                 "Column.new"
                 | "Column.with_capacity"
                 | "Column.from_vec"
-                | "Column.from_iter_nullable" => {
+                | "Column.from_iter_nullable"
+                | "Column.from_arrow_ipc" => {
                     if let Some(v) = self.eval_column_new(&path_str, args, span) {
                         return v;
                     }

@@ -74,6 +74,34 @@ fn none_value() -> Value {
     }
 }
 
+/// Wrap a raw byte buffer as a `Vec[u8]` value (the interpreter's `Value::Array`
+/// of `Value::Int`, 0..=255) — the return shape of `Column.to_arrow_ipc`.
+fn bytes_to_value(bytes: Vec<u8>) -> Value {
+    Value::Array(Arc::new(RwLock::new(
+        bytes.into_iter().map(|b| Value::Int(b as i64)).collect(),
+    )))
+}
+
+/// Read a `Vec[u8]` value back into a raw byte buffer — the arg shape of
+/// `Column.from_arrow_ipc`. `None` if the value is not an array of integer
+/// bytes (the typechecker enforces `Vec[u8]`, so this is defensive).
+fn value_to_bytes(v: &Value) -> Option<Vec<u8>> {
+    match v {
+        Value::Array(a) => {
+            let g = a.read().unwrap();
+            let mut out = Vec::with_capacity(g.len());
+            for e in g.iter() {
+                match e {
+                    Value::Int(n) => out.push(*n as u8),
+                    _ => return None,
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 impl<'a> super::Interpreter<'a> {
     /// Column constructors dispatched from `eval_call.rs`. Returns `None`
     /// for an unrecognized path / malformed args (caller falls through).
@@ -81,7 +109,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         path_str: &str,
         args: &[CallArg],
-        _span: &Span,
+        span: &Span,
     ) -> Option<Value> {
         match path_str {
             // `new()` / `with_capacity(cap)` — start empty (the capacity
@@ -138,6 +166,27 @@ impl<'a> super::Interpreter<'a> {
                     data: Arc::new(RwLock::new(data)),
                     valid: Arc::new(RwLock::new(valid)),
                 })
+            }
+            // `from_arrow_ipc(bytes)` — parse an Arrow IPC stream (`Vec[u8]`)
+            // into a column. Reads the first RecordBatch's first column; slice
+            // 1 supports Int64 / Float64 (arrow_ipc.rs). The round-trip peer of
+            // `to_arrow_ipc`.
+            "Column.from_arrow_ipc" => {
+                let arg = args.first()?;
+                let bytes_val = self.eval_expr_inner(&arg.value);
+                let Some(bytes) = value_to_bytes(&bytes_val) else {
+                    return Some(self.record_runtime_error(
+                        "Column.from_arrow_ipc expects a Vec[u8] byte buffer".to_string(),
+                        span,
+                    ));
+                };
+                match super::arrow_ipc::column_from_ipc(&bytes) {
+                    Ok((data, valid)) => Some(Value::Column {
+                        data: Arc::new(RwLock::new(data)),
+                        valid: Arc::new(RwLock::new(valid)),
+                    }),
+                    Err(e) => Some(self.record_runtime_error(e, span)),
+                }
             }
             _ => None,
         }
@@ -243,6 +292,19 @@ impl<'a> super::Interpreter<'a> {
                     .map(|(_, v)| v.clone())
                     .collect();
                 Some(Value::Array(Arc::new(RwLock::new(out))))
+            }
+            // Serialize to an Arrow IPC stream (`Vec[u8]`) — a single
+            // RecordBatch with one field `col`, interoperable with any Arrow
+            // reader (pyarrow / polars / DuckDB). Slice 1: i64 / f64 columns
+            // with nulls (arrow_ipc.rs). The bytes round-trip back through
+            // `from_arrow_ipc`.
+            "to_arrow_ipc" => {
+                let data_guard = data.read().unwrap();
+                let valid_guard = valid.read().unwrap();
+                match super::arrow_ipc::column_to_ipc(&data_guard, &valid_guard) {
+                    Ok(bytes) => Some(bytes_to_value(bytes)),
+                    Err(e) => Some(self.record_runtime_error(e, span)),
+                }
             }
             // Replace every null slot with `value` → a fresh all-valid
             // column (the receiver is unchanged). `treat_nan_as_null = true`

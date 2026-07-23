@@ -133,6 +133,17 @@ karac-runtime = { path = "runtime", optional = true }
 libc = { version = "0.2", optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 regex = "1"
+# Arrow IPC interchange (phase-11 Arrow IPC slice 1) — backs the
+# interpreter's `Column.to_arrow_ipc` / `Column.from_arrow_ipc` dispatch
+# (`src/interpreter/arrow_ipc.rs`), the reference implementation. Minimal
+# sub-crates (not the `arrow` umbrella): the columnar core (arrow-array +
+# arrow-schema, pulling arrow-buffer / arrow-data) plus the IPC reader/writer
+# (arrow-ipc, pulling flatbuffers) — dropping the compute crates. Compiler-side
+# (interpreter) dep in the same class as `regex` / `serde_json`; codegen builds
+# get the same behavior through the runtime's own `arrow` feature (slice 2).
+arrow-array = "55"
+arrow-schema = "55"
+arrow-ipc = "55"
 # Slice 2 of the PubGrub resolver entry (phase-5 line 813): structured
 # semver-constraint vocabulary. `VersionReq` parses Cargo-style comparators
 # (bare `1.2` → `^1.2.0` → `>=1.2.0, <2.0.0`; `=1.2.3`; `>=1.0, <1.5`; etc.)

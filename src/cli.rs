@@ -4934,6 +4934,18 @@ fn cmd_run(
     // libkarac_runtime_gpu.a and links the real backend) is unaffected.
     #[cfg(feature = "llvm")]
     let program_uses_gpu = program_declares_gpu_kernel(&pipeline.parsed.program);
+    // Arrow IPC programs (`col.to_arrow_ipc()` / `Column.from_arrow_ipc(..)`)
+    // are interpreter-only in slice 1 — codegen + the runtime
+    // `libkarac_runtime_arrow.a` archive are slice 2. Route them to the
+    // interpreter (which carries the arrow-rs backend, `arrow_ipc.rs`) rather
+    // than letting the JIT attempt codegen and dead-end at the gap, mirroring
+    // the `gpu` fallback above. A source scan (not an AST walk) keeps this
+    // slice-1 gate cheap; a false positive only routes a non-arrow program to
+    // the (correct, if unoptimized) interpreter. The AOT `karac build` path
+    // errors cleanly with the same intent until slice 2 lands.
+    #[cfg(feature = "llvm")]
+    let program_uses_arrow_ipc =
+        source.contains(".to_arrow_ipc(") || source.contains("from_arrow_ipc(");
     // LazyFrame programs run on the JIT lane like everything else since
     // the codegen twin covered the full op surface (phase-11 slice 9);
     // the interpreter-routing gate that lived here was the interim
@@ -4945,6 +4957,7 @@ fn cmd_run(
         && timeout.is_none()
         && !interp
         && !program_uses_gpu
+        && !program_uses_arrow_ipc
         && std::env::var("KARAC_RUN_JIT").as_deref() != Ok("0")
     {
         // Codegen consumes ownership + concurrency (the interpreter path skips

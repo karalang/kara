@@ -3796,6 +3796,63 @@ fn test_column_narrow_element_binop_overflow_traps() {
     );
 }
 
+// ── Arrow IPC interchange (phase-11 Arrow IPC slice 1, interp MVP) ──
+// `Column.to_arrow_ipc()` serializes to the Apache Arrow IPC stream format
+// (spec-compliant bytes via arrow-rs); `Column.from_arrow_ipc(bytes)` parses
+// them back. Round-trip preserves length, the null pattern, and values.
+#[test]
+fn test_column_arrow_ipc_roundtrip_i64() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10); c.push(20); c.push_null(); c.push(40);\n\
+             let bytes = c.to_arrow_ipc();\n\
+             let d: Column[i64] = Column.from_arrow_ipc(bytes);\n\
+             println(d.len());\n\
+             println(d.null_count());\n\
+             println(d.sum());\n\
+         }",
+    );
+    // len 4, one null, sum of valid (10+20+40) = 70.
+    assert_eq!(out, "4\n1\n70\n");
+}
+
+#[test]
+fn test_column_arrow_ipc_roundtrip_f64() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[f64] = Column.new();\n\
+             c.push(1.5); c.push(2.5); c.push_null();\n\
+             let bytes = c.to_arrow_ipc();\n\
+             let d: Column[f64] = Column.from_arrow_ipc(bytes);\n\
+             println(d.len());\n\
+             println(d.null_count());\n\
+             println(d.sum());\n\
+         }",
+    );
+    assert_eq!(out, "3\n1\n4\n");
+}
+
+#[test]
+fn test_column_arrow_ipc_roundtrip_from_vec_nonempty_bytes() {
+    // A from_vec column serializes to a non-empty IPC stream and round-trips
+    // its values (no nulls). The byte count is stable for a fixed schema/data,
+    // but we only assert it's a plausible Arrow stream (> the 8-byte EOS
+    // marker) to avoid pinning arrow-rs's exact framing.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1, 2, 3, 4, 5]);\n\
+             let bytes = c.to_arrow_ipc();\n\
+             let big = bytes.len() > 8;\n\
+             println(big);\n\
+             let d: Column[i64] = Column.from_arrow_ipc(bytes);\n\
+             println(d.len());\n\
+             println(d.sum());\n\
+         }",
+    );
+    assert_eq!(out, "true\n5\n15\n");
+}
+
 #[test]
 fn test_column_narrow_element_binop_in_range_ok() {
     // Non-overflowing narrow element ops keep working after the peel.

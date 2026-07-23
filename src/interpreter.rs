@@ -6,6 +6,7 @@ use crate::ast::*;
 use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
 
+mod arrow_ipc;
 mod builtin;
 mod comptime_builtins;
 mod eval_call;
