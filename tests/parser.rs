@@ -1094,6 +1094,67 @@ fn test_or_pattern() {
 }
 
 #[test]
+fn test_parenthesized_pattern_is_grouping_not_one_tuple() {
+    // B-2026-07-23-19: `(P)` with no trailing comma is a GROUPING (yields the
+    // inner pattern), not a 1-element tuple. Pre-fix `(1 | 2 | 3)` parsed as
+    // `Tuple([Or([1,2,3])])`, which can't match a scalar scrutinee — codegen
+    // over-matched (always-true tuple-on-non-aggregate) and the interpreter
+    // never matched. Here the grouped or-pattern must surface as `Or`.
+    let prog = parse_ok("fn main() { match x { (1 | 2 | 3) => true, _ => false } }");
+    if let Item::Function(f) = &prog.items[0] {
+        let expr = f.body.final_expr.as_ref().unwrap();
+        if let ExprKind::Match { arms, .. } = &expr.kind {
+            assert!(
+                matches!(&arms[0].pattern.kind, PatternKind::Or(alts) if alts.len() == 3),
+                "`(1 | 2 | 3)` must parse as a grouped Or, got {:?}",
+                arms[0].pattern.kind
+            );
+        }
+    }
+}
+
+#[test]
+fn test_at_binding_over_parenthesized_or_pattern() {
+    // `x @ (1 | 2 | 3)` must bind `x` over the grouped Or, not over a 1-tuple.
+    let prog = parse_ok("fn main() { match x { y @ (1 | 2) => true, _ => false } }");
+    if let Item::Function(f) = &prog.items[0] {
+        let expr = f.body.final_expr.as_ref().unwrap();
+        if let ExprKind::Match { arms, .. } = &expr.kind {
+            match &arms[0].pattern.kind {
+                PatternKind::AtBinding { pattern, .. } => assert!(
+                    matches!(&pattern.kind, PatternKind::Or(alts) if alts.len() == 2),
+                    "`y @ (1 | 2)` inner must be an Or, got {:?}",
+                    pattern.kind
+                ),
+                other => panic!("expected AtBinding, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn test_one_tuple_pattern_keeps_trailing_comma_form() {
+    // `(P,)` (trailing comma) stays a 1-tuple; `(A, B)` a 2-tuple — the
+    // grouping rule only collapses the no-comma single-element form.
+    let prog = parse_ok("fn main() { match x { (a,) => true, (a, b) => false, _ => false } }");
+    if let Item::Function(f) = &prog.items[0] {
+        let expr = f.body.final_expr.as_ref().unwrap();
+        if let ExprKind::Match { arms, .. } = &expr.kind {
+            assert!(
+                matches!(&arms[0].pattern.kind, PatternKind::Tuple(t) if t.len() == 1),
+                "`(a,)` must stay a 1-tuple, got {:?}",
+                arms[0].pattern.kind
+            );
+            assert!(
+                matches!(&arms[1].pattern.kind, PatternKind::Tuple(t) if t.len() == 2),
+                "`(a, b)` must be a 2-tuple, got {:?}",
+                arms[1].pattern.kind
+            );
+        }
+    }
+}
+
+#[test]
 fn test_pipe_operator() {
     let prog = parse_ok("fn main() { let x = data |> transform |> output; }");
     if let Item::Function(f) = &prog.items[0] {

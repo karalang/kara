@@ -21600,6 +21600,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_at_binding_parenthesized_or() {
+        // B-2026-07-23-19: the GROUPED form `x @ (1 | 2 | 3)` (vs the
+        // distributed `x @ 1 | x @ 2` above). Pre-fix the parser read
+        // `(1 | 2 | 3)` as a 1-element tuple `Tuple([Or(...)])`, which can't
+        // match a scalar — codegen over-matched (always-true tuple-on-scalar
+        // branch, so `9` wrongly hit the arm) and the interpreter under-matched
+        // (a tuple pattern never matches a scalar, so `2` fell through). The
+        // parser now treats `(P)` as a grouping, so both backends agree.
+        let out = run_program(
+            r#"
+fn f(n: i64) -> i64 {
+    match n {
+        x @ (1 | 2 | 3) => x * 100,
+        other => other,
+    }
+}
+fn main() {
+    println(f(2));  // grouped or matches → 200
+    println(f(9));  // must NOT match the grouped or → 9
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["200", "9"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_top_level_parenthesized_or() {
+        // The `@`-free grouped or-pattern `(1 | 2)` must also match by value,
+        // not fall through the (pre-fix) tuple-on-scalar always-true branch.
+        let out = run_program(
+            r#"
+fn f(n: i64) -> i64 {
+    match n {
+        (1 | 2) => 10,
+        _ => 20,
+    }
+}
+fn main() {
+    println(f(1));
+    println(f(2));
+    println(f(3));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "10", "20"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_match_byte_literal() {
         // Byte-literal patterns (`b'I'`) desugar to integer patterns with
         // a U8 suffix; previously the parser rejected them outright.

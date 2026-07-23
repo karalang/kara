@@ -251,16 +251,35 @@ impl super::Parser {
                 })
             }
             Token::LeftParen => {
-                // Tuple pattern
+                // Parenthesized pattern: a tuple `(A, B, …)`, a 1-tuple `(P,)`,
+                // or — with no trailing comma and a single element — a GROUPING
+                // `(P)` that simply yields `P`. The grouping form matters for
+                // or-patterns: `x @ (1 | 2 | 3)` (and top-level `(1 | 2)`) must
+                // parse as the inner `Or`, not a 1-element `Tuple([Or(...)])` —
+                // the latter can never match a scalar scrutinee, so codegen fell
+                // to its always-true tuple-on-non-aggregate branch (over-match)
+                // and the interpreter never matched (under-match). Mirrors Rust:
+                // `(P)` is grouping, `(P,)` is a 1-tuple. (B-2026-07-23-19.)
                 self.advance();
                 let mut patterns = Vec::new();
+                let mut trailing_comma = false;
                 while !self.check(&Token::RightParen) && !self.is_at_end() {
                     patterns.push(self.parse_pattern()?);
-                    if !self.eat(&Token::Comma) {
+                    if self.eat(&Token::Comma) {
+                        // A comma keeps the tuple reading; whether it is a
+                        // *trailing* comma is decided by what follows (another
+                        // element resets this on the next iteration).
+                        trailing_comma = true;
+                    } else {
+                        trailing_comma = false;
                         break;
                     }
                 }
                 self.expect(&Token::RightParen)?;
+                // `(P)` — exactly one element, no trailing comma — is a grouping.
+                if patterns.len() == 1 && !trailing_comma {
+                    return patterns.into_iter().next();
+                }
                 Some(Pattern {
                     kind: PatternKind::Tuple(patterns),
                     span: self.span_from(&start),
