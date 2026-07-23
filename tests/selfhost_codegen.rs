@@ -128,6 +128,13 @@ const CORPUS: &[&str] = &[
     "fn main() { let mut v = Vec.new(); v.push(7); v.push(8); println((v[0] * v[1]).to_string()) }",
     "fn main() { let mut v = Vec.new(); let mut i = 0; while i < 6 { v.push(i * i); i = i + 1; } let mut s = 0; let mut j = 0; while j < v.len() { s = s + v[j]; j = j + 1; } println(s.to_string()) }",
     "fn main() { let mut a = Vec.new(); let mut b = Vec.new(); a.push(1); b.push(2); b.push(3); println((a.len() + b.len()).to_string()); println((a[0] + b[1]).to_string()) }",
+    // B-2026-07-23-24: Vec[bool] — shares Vec[i64]'s kind-3 i64-lane storage;
+    // `push`/indexed-assign zext the i1 bool into the i64 lane, and a boolean-
+    // context element read (`if`/`while`/`and`/`or`/`not`) truncs the i64 lane
+    // back to i1. The exact ledger repro plus a mixed-op exercise; differential
+    // vs the seed's `karac run` (which handles Vec[bool] natively).
+    "fn main() { let mut v: Vec[bool] = Vec.new(); v.push(false); v[0] = true; if v[0] { println(\"t\"); } }",
+    "fn main() { let mut v: Vec[bool] = Vec.new(); v.push(true); v.push(false); v.push(true); v[1] = true; let mut cnt = 0; let mut i = 0; while i < v.len() { if v[i] { cnt = cnt + 1; } i = i + 1; } println(cnt.to_string()); if v[0] and v[2] { println(\"both\") } if v[0] or v[1] { println(\"some\") } if not v[1] { println(\"no\") } else { println(\"yes\") } }",
     // Slice 14: enums + match — {tag,payload} aggregates (0/1 i64 payload),
     // qualified construction (bare path + call-with-path), value- and
     // statement-position match, payload bindings, bare-variant arms

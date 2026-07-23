@@ -1496,7 +1496,10 @@ impl Emitter {
                                 + aiop
                                 + "\n";
                             let arv = self.emit_value(value);
-                            let Val { op: arop, kind: ark, heap: arh } = arv;
+                            let Val { op: arop0, kind: ark, heap: arh } = arv;
+                            // B-2026-07-23-24: a Vec[bool] `v[i] = b` shares this
+                            // i64-lane store; a bool RHS (kind 1) zext's first.
+                            let arop = self.to_i64_lane(arop0, ark);
                             self.body = self.body
                                 + "  store i64 "
                                 + arop
@@ -2044,7 +2047,9 @@ impl Emitter {
                             let CallArg { label, mut_marker, value, span: asp } = ma;
                             let av = self.emit_value(value);
                             let Val { op: aop, kind: ak, heap: ah } = av;
-                            ev = aop;
+                            // B-2026-07-23-24: a Vec[bool] shares this i64-lane
+                            // path; a bool arg (kind 1) zext's to the i64 lane.
+                            ev = self.to_i64_lane(aop, ak);
                         }
                         let sp = "%v" + slot.to_string();
                         let ag = self.fresh();
@@ -2227,7 +2232,10 @@ impl Emitter {
                 // nested `if` for `else if`), handled by recursion.
                 let IfExpr { cond, then_block, else_branch, span } = n;
                 let c = self.emit_value(cond);
-                let Val { op: cop, kind: ck, heap: ch } = c;
+                let Val { op: cop0, kind: ck, heap: ch } = c;
+                // B-2026-07-23-24: a Vec[bool] element read yields an i64 lane
+                // (kind 0); normalize to i1 for the branch.
+                let cop = self.to_i1(cop0, ck);
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
                 let lthen = "then" + lid.to_string();
@@ -2477,7 +2485,9 @@ impl Emitter {
                 self.body = self.body + "  br label %" + lhead.clone() + "\n";
                 self.body = self.body + lhead.clone() + ":\n";
                 let c = self.emit_value(cond);
-                let Val { op: cop, kind: ck, heap: ch } = c;
+                let Val { op: cop0, kind: ck, heap: ch } = c;
+                // B-2026-07-23-24: normalize an i64-lane bool (Vec[bool] read) to i1.
+                let cop = self.to_i1(cop0, ck);
                 self.body = self.body
                     + "  br i1 "
                     + cop
@@ -4364,6 +4374,35 @@ impl Emitter {
         self.body = self.body + "  call void @free(ptr " + pr + ")\n";
     }
 
+    // B-2026-07-23-24: normalize a value that MAY be an i64-lane bool into an i1
+    // for a boolean context (`if` / `while` / `and` / `or` / `not`). Vec[bool]
+    // shares Vec[i64]'s kind-3 i64-lane storage, so an element read yields the
+    // raw i64 lane (kind 0); a genuine i1 (kind 1) passes through UNCHANGED, so
+    // every existing bool condition emits byte-identical IR. The typechecker
+    // guarantees the only kind-0 value reaching a boolean position is a
+    // bool-stored-as-i64 (0/1), so the low-bit `trunc` is exact.
+    fn to_i1(mut ref self, op: String, kind: i64) -> String {
+        if kind == 1 {
+            return op;
+        }
+        let r = self.fresh();
+        self.body = self.body + "  " + r.clone() + " = trunc i64 " + op + " to i1\n";
+        r
+    }
+
+    // B-2026-07-23-24: widen an i1 bool (kind 1) to the i64 storage lane a
+    // Vec[i64]-layout vec (kind 3, shared by Vec[bool]) uses for `push` and
+    // indexed assignment. A value already in an i64 lane (kind 0) passes
+    // through, so a Vec[i64] element store is byte-identical.
+    fn to_i64_lane(mut ref self, op: String, kind: i64) -> String {
+        if kind == 1 {
+            let r = self.fresh();
+            self.body = self.body + "  " + r.clone() + " = zext i1 " + op + " to i64\n";
+            return r;
+        }
+        op
+    }
+
     // Free the heap buffer OWNED by local slot `idx` (load the aggregate,
     // extract the buffer pointer — field 0 for both string {ptr,i64} and
     // Vec {ptr,len,cap} — free) — reassignment's old value and the scope-exit
@@ -4698,9 +4737,12 @@ impl Emitter {
                     Deref => 2,
                 };
                 if uk == 1 {
+                    // B-2026-07-23-24: `not <Vec[bool] element>` reads an i64
+                    // lane (kind 0); normalize to i1 before the xor.
+                    let iop1 = self.to_i1(iop, ik);
                     let r = self.fresh();
                     self.body =
-                        self.body + "  " + r.clone() + " = xor i1 " + iop + ", true\n";
+                        self.body + "  " + r.clone() + " = xor i1 " + iop1 + ", true\n";
                     return Val { op: r, kind: 1, heap: false };
                 }
                 if uk == 0 {
@@ -4724,7 +4766,10 @@ impl Emitter {
                 let BinIr { kind, text } = bi;
                 if kind == 2 {
                     let lv2 = self.emit_value(left);
-                    let Val { op: lop2, kind: lk2, heap: lh2 } = lv2;
+                    let Val { op: lop2a, kind: lk2, heap: lh2 } = lv2;
+                    // B-2026-07-23-24: short-circuit `and`/`or` operands may be
+                    // i64-lane bools (Vec[bool] reads); normalize each to i1.
+                    let lop2 = self.to_i1(lop2a, lk2);
                     let slot = self.fresh();
                     self.body = self.body + "  " + slot.clone() + " = alloca i1, align 1\n";
                     self.body = self.body
@@ -4760,7 +4805,8 @@ impl Emitter {
                     }
                     self.body = self.body + lrhs + ":\n";
                     let rv2 = self.emit_value(right);
-                    let Val { op: rop2, kind: rk2, heap: rh2 } = rv2;
+                    let Val { op: rop2a, kind: rk2, heap: rh2 } = rv2;
+                    let rop2 = self.to_i1(rop2a, rk2);
                     self.body = self.body
                         + "  store i1 "
                         + rop2
@@ -5350,7 +5396,9 @@ impl Emitter {
                 let slot = self.fresh();
                 self.body = self.body + "  " + slot.clone() + " = alloca i64, align 8\n";
                 let c = self.emit_value(cond);
-                let Val { op: cop, kind: ck, heap: ch } = c;
+                let Val { op: cop0, kind: ck, heap: ch } = c;
+                // B-2026-07-23-24: normalize an i64-lane bool (Vec[bool] read) to i1.
+                let cop = self.to_i1(cop0, ck);
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
                 let lthen = "vthen" + lid.to_string();
