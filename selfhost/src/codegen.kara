@@ -68,6 +68,7 @@ import ast.{
     ContinueExpr,
     WrapType,
     TupleVariantPattern,
+    OrPattern,
     EnumDefNode,
     VariantNode,
     Pattern,
@@ -2802,6 +2803,7 @@ impl Emitter {
             let mut bind_payload = "".to_string();
             let mut bind_payload2 = "".to_string();
             let mut bind_whole = "".to_string();
+            let mut or_tags: Vec[i64] = Vec.new();
             match pattern {
                 TupleVariantPat(tvp) => {
                     let TupleVariantPattern { segments, elems, span: tsp } = tvp;
@@ -2835,12 +2837,35 @@ impl Emitter {
                         bind_whole = bn;
                     }
                 }
+                OrPat(orp) => {
+                    // `A | B | …` (Slice 49): collect each alternative's
+                    // variant tag. Unit-variant alts only (payload-binding
+                    // or-alts are out of surface — no shared binding this
+                    // slice). Sets `tag` to the first for the >= 0 path and
+                    // `or_tags` to all for the or-chain.
+                    let OrPattern { alts, span: orsp } = orp;
+                    for alt in alts {
+                        match alt {
+                            BindingPat(abp) => {
+                                let BindingPattern { name: an, span: absp } = abp;
+                                let at = self.en_variant_tag(ei, an);
+                                if at >= 0 {
+                                    if tag < 0 {
+                                        tag = at;
+                                    }
+                                    or_tags.push(at);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {}
             }
             if tag >= 0 {
                 let lbody = "marm" + mid.to_string() + "_" + ai.to_string();
                 let lnext = "mnext" + mid.to_string() + "_" + ai.to_string();
-                let c = self.fresh();
+                let mut c = self.fresh();
                 self.body = self.body
                     + "  "
                     + c.clone()
@@ -2849,6 +2874,24 @@ impl Emitter {
                     + ", "
                     + tag.to_string()
                     + "\n";
+                // Or-pattern (Slice 49): OR the equality tests of the
+                // remaining alternative tags into the branch condition.
+                let mut oti = 1;
+                while oti < or_tags.len() {
+                    let c2 = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + c2.clone()
+                        + " = icmp eq i64 "
+                        + tg.clone()
+                        + ", "
+                        + or_tags[oti].to_string()
+                        + "\n";
+                    let co = self.fresh();
+                    self.body = self.body + "  " + co.clone() + " = or i1 " + c + ", " + c2 + "\n";
+                    c = co;
+                    oti = oti + 1;
+                }
                 self.body = self.body
                     + "  br i1 "
                     + c
