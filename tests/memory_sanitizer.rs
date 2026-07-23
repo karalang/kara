@@ -17471,6 +17471,67 @@ fn main() {
     }
 
     #[test]
+    fn asan_enum_mapset_payload_no_leak_no_double_free() {
+        // B-2026-07-23-11: a user enum whose variant payload is a `Map`/`Set`
+        // (-family) collection. The enum drop walker previously had no Map/Set
+        // arm (`enum_drop_kind_for_type_expr` → `None`), so a pure
+        // construct-then-drop leaked the whole kv-table (valgrind
+        // "definitely-lost" from `karac_map_new`). The `MapOrSet` drop kind frees
+        // the handle via `karac_map_free_with_drop_vec`, and the symmetric
+        // entry-copy (`deep_copy_enum_heap_payload_in_place`) deep-clones the
+        // handle so a by-value enum param owns an independent table — no
+        // double-free across the call boundary. Exercises four paths in a loop so
+        // any per-iteration imbalance accumulates into a fault: (1) construct +
+        // scope-exit drop (the ledger repro), (2) `ref V` read (source retains,
+        // enum drop frees), (3) by-value consume (entry-copy deep-clone → caller
+        // and callee each free their own), (4) a heap-VALUED `Map[String,String]`
+        // so the `(drop_key, drop_val)` flags release per-entry buffers, and a
+        // `Set[String]` element. On Linux CI LeakSanitizer faults if the handle
+        // (or a heap key/value) leaks; ASAN faults on a double-free.
+        assert_clean_asan_run(
+            r#"
+enum V { Table(Map[String, i64]) }
+enum S { Names(Set[String]) }
+enum W { Pairs(Map[String, String]) }
+fn size(v: ref V) -> i64 { match v { Table(m) => m.len() as i64 } }
+fn consume(v: V) -> i64 { match v { Table(m) => m.len() as i64 } }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 0;
+    while i < 40 {
+        let mut mp: Map[String, i64] = Map.new();
+        mp.insert("a", 1);
+        mp.insert("b", 2);
+        let t = V.Table(mp);           // (1) construct
+        total = total + size(t);       // (2) ref read; t dropped at loop end
+
+        let mut mp2: Map[String, i64] = Map.new();
+        mp2.insert("x", 9);
+        let t2 = V.Table(mp2);
+        total = total + consume(t2);   // (3) by-value consume (deep-clone entry)
+
+        let mut names: Set[String] = Set.new();
+        names.insert("alice".to_string());
+        names.insert("bob".to_string());
+        let sn = S.Names(names);       // Set[String] payload
+        total = total + match sn { Names(nm) => nm.len() as i64 };
+
+        let mut pm: Map[String, String] = Map.new();
+        pm.insert("k".to_string(), "value_payload".to_string());
+        let w = W.Pairs(pm);           // (4) heap-valued Map
+        total = total + match w { Pairs(pp) => pp.len() as i64 };
+
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["240"],
+            "enum_mapset_payload_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_inline_enum_ctor_call_arg_no_leak_no_double_free() {
         // B-2026-06-12-10: an inline enum-variant constructor passed by value as
         // a call argument (`wrap(Tok.V(mk()))`) — and the method form

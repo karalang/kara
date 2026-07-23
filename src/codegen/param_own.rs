@@ -1242,6 +1242,50 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         continue;
                     }
+                    // B-2026-07-23-11: a `Map`/`Set`(-family) payload — deep-clone
+                    // the handle in place (src == dst == the payload-word slot) via
+                    // the map clone fn, so a callee-owned by-value enum param owns
+                    // an INDEPENDENT kv-table. The symmetric peer of the enum
+                    // drop's `MapOrSet` arm: without it the callee copy and caller
+                    // temp alias one handle and both drops free it (double-free).
+                    // `emit_map_clone_fn` reads the old handle, allocates a fresh
+                    // deep clone, and writes the new handle back to the slot (it
+                    // does NOT free the old one — the caller retains it). The
+                    // payload word is one handle at `start_word + 1`.
+                    if *kind == EnumDropKind::MapOrSet {
+                        let kv = variant_tes
+                            .get(name)
+                            .and_then(|tes| tes.get(fi))
+                            .and_then(|te| {
+                                if let Some((k, v)) = super::helpers::map_kv_type_exprs(te) {
+                                    Some((k, v))
+                                } else {
+                                    super::helpers::set_inner_type_expr(te).map(|elem| {
+                                        // `Set[T]` clones as `Map[T, ()]` — the unit
+                                        // value half (matches the clone-fn Set arm).
+                                        let unit_te = TypeExpr {
+                                            kind: TypeKind::Tuple(Vec::new()),
+                                            span: elem.span.clone(),
+                                        };
+                                        (elem, unit_te)
+                                    })
+                                }
+                            });
+                        if let Some((k_te, v_te)) = kv {
+                            if let Ok(field_ptr) = self.builder.build_struct_gep(
+                                enum_ty,
+                                base_ptr,
+                                (*start_word + 1) as u32,
+                                "p14e.map.p",
+                            ) {
+                                let clone_fn = self.emit_map_clone_fn(&k_te, &v_te);
+                                self.builder
+                                    .build_call(clone_fn, &[field_ptr.into(), field_ptr.into()], "")
+                                    .unwrap();
+                            }
+                        }
+                        continue;
+                    }
                     if *kind != EnumDropKind::VecOrString {
                         continue;
                     }

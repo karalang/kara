@@ -238,6 +238,18 @@ pub(crate) enum EnumDropKind {
     /// enums aren't in `enum_layouts` yet at `declare_enums` time) — tracked
     /// separately, not in this slice.
     NestedStruct,
+    /// B-2026-07-23-11: payload field is a `Map`/`Set`(-family) collection —
+    /// `Map[K,V]` / `Set[T]` / `SortedMap[K,V]` / `SortedSet[T]`, laid out as a
+    /// single heap-handle word (`payload_word_count_for_type_expr` → 1). Dropped
+    /// by loading the handle at the payload word and calling
+    /// `karac_map_free_with_drop_vec(handle, drop_key, drop_val)` — the
+    /// `(drop_key, drop_val)` flags derived from the K/V types via
+    /// `map_drop_flags` (`emit_enum_drop_switch`), mirroring the tuple/struct
+    /// Map drop. Kept symmetric with the entry-copy: a by-value enum param
+    /// carrying this payload deep-clones the handle in
+    /// `deep_copy_enum_heap_payload_in_place` (via `emit_map_clone_fn`) so the
+    /// callee copy and caller temp own independent kv-tables (no double-free).
+    MapOrSet,
 }
 
 impl EnumDropKind {

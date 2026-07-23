@@ -25077,6 +25077,49 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_ir_plain_enum_map_payload_drop_walk() {
+        // B-2026-07-23-11: a plain (non-shared) user enum whose variant payload
+        // is a `Map`/`Set`(-family) collection previously classified `None` in
+        // `enum_drop_kind_for_type_expr`, so `__karac_drop_<E>` emitted no free
+        // for the handle word and the whole kv-table leaked at scope-exit drop
+        // (contrast `Vec`/`String` payloads, which freed). The new `MapOrSet`
+        // drop kind loads the handle at the payload word and routes it through
+        // `karac_map_free_with_drop_vec` (the same runtime entrypoint the
+        // tuple/struct Map drop uses). IR gate: the synthesized enum-drop fn
+        // exists and calls the map-free runtime fn under the `drop.map.handle`
+        // label.
+        let ir = ir_for(
+            r#"
+enum V { Table(Map[String, i64]) }
+fn main() {
+    let mut mp: Map[String, i64] = Map.new();
+    let _ = mp.insert("a", 1);
+    let _t = V.Table(mp);
+    println(1);
+}
+"#,
+        );
+        assert!(
+            ir.contains("__karac_drop_V"),
+            "expected synthesized enum-drop fn `__karac_drop_V` in IR; \
+             not found in:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("drop.map.handle"),
+            "expected the `MapOrSet` drop arm's `drop.map.handle` label in the \
+             enum-drop fn; not found in:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free_with_drop_vec"),
+            "expected the enum-drop fn to route the Map payload through \
+             `karac_map_free_with_drop_vec`; not found in:\n{}",
+            ir
+        );
+    }
+
     // ── Prereq.2 user-`impl Drop` dispatch — drop-glue wrapper emission ──
     //
     // The wrapper `karac_drop_<Type>` is synthesised for every user type

@@ -293,6 +293,52 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        EnumDropKind::MapOrSet => {
+                            // B-2026-07-23-11 — a `Map`/`Set`(-family) payload is
+                            // a single heap-handle word at `start_word` (LLVM
+                            // field `start_word + 1`, tag is field 0). Load the
+                            // handle and free it via `karac_map_free_with_drop_vec`
+                            // — the same runtime entrypoint the tuple/struct Map
+                            // drop uses. The `(drop_key, drop_val)` flags come
+                            // from the field's K/V types (`map_drop_flags`) so a
+                            // heap-K/V map also releases its per-entry buffers. A
+                            // moved-out payload has this word zeroed to null
+                            // (`zero_enum_payload_caps`); the runtime null-guards,
+                            // so the free is then a safe no-op.
+                            let handle_idx = (*start_word + 1) as u32;
+                            let handle_ptr = self
+                                .builder
+                                .build_struct_gep(
+                                    layout.llvm_type,
+                                    p_arg,
+                                    handle_idx,
+                                    "drop.map.handle.p",
+                                )
+                                .unwrap();
+                            let handle = self
+                                .builder
+                                .build_load(ptr_ty, handle_ptr, "drop.map.handle")
+                                .unwrap()
+                                .into_pointer_value();
+                            let (dk, dv) = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .map(|te| self.map_drop_flags(te))
+                                .unwrap_or((0, 0));
+                            let i32_t = self.context.i32_type();
+                            self.builder
+                                .build_call(
+                                    self.karac_map_free_with_drop_vec_fn,
+                                    &[
+                                        handle.into(),
+                                        i32_t.const_int(dk, false).into(),
+                                        i32_t.const_int(dv, false).into(),
+                                    ],
+                                    "",
+                                )
+                                .unwrap();
+                        }
                     }
                 }
             }

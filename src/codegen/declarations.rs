@@ -4694,6 +4694,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
                 match name {
                     "String" | "Vec" => EnumDropKind::VecOrString,
+                    // B-2026-07-23-11: a `Map`/`Set`(-family) payload — a single
+                    // heap-handle word (`payload_word_count_for_type_expr` gives
+                    // Map/Set/SortedMap/SortedSet = 1 word). The enum drop's
+                    // `MapOrSet` arm frees it via `karac_map_free_with_drop_vec`,
+                    // and — the symmetric peer — the by-value entry-copy
+                    // (`deep_copy_enum_heap_payload_in_place`) deep-clones the
+                    // handle so a callee-owned copy and the caller's temp own
+                    // independent kv-tables. Before this both were no-ops (the
+                    // handle just leaked at drop); now both engage together, so
+                    // there is no by-value-param double-free. Unlike a *struct*
+                    // carrying a Map field (still `None`-classified, since
+                    // `deep_copy_one_aggregate_field` has no Map arm), a DIRECT
+                    // Map/Set enum payload is deep-copyable via the map clone fn.
+                    "Map" | "Set" | "SortedMap" | "SortedSet" => EnumDropKind::MapOrSet,
                     // B-2026-06-13-13: a named non-shared user struct laid out
                     // inline in the variant payload (e.g. the lexer's
                     // `CStringLiteral(CStr{Vec[u8]})`). Its own
