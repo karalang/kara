@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 167 | 1 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
-| codegen-gap | 75 | 1 |
+| codegen-gap | 75 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 41 | 0 |
 | run-vs-build | 40 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 479 | 2 |
+| codegen | 479 | 1 |
 | typecheck | 84 | 0 |
 | interp | 70 | 1 |
 | ownership | 27 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **656 surfaced · 3 open · 648 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **656 surfaced · 2 open · 649 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-23-5 | 2026-07-23 | codegen | medium | A generic fn whose return type PERMUTES the struct's type params — `fn swap[A,B](p: Pair[A,B]) -> Pair[B,A] { Pair { first: p.second, second: p.first } }` — miscompiles: the mono builds the returned struct literal with the INPUT layout `Pair[A,B]` instead of `Pair[B,A]`, failing LLVM module verification when A and B have different sizes. | — |
 | B-2026-07-23-12 | 2026-07-23 | interp | low | `mut ref` enum-payload `Map` mutation does not write through in the interpreter (interp keeps the pre-mutation size) while codegen writes through correctly — interp/codegen divergence for `match v (mut ref V) { Table(m) => m.insert(..) }`. | — |
-| B-2026-07-23-14 | 2026-07-23 | codegen | medium | Returning a `Map`/`Set`(-family) value moved OUT of an enum payload fails codegen module verification: `fn unwrap(v: V) -> Map[K,V] { match v { Table(m) => m } }` emits `ret i64 %matchval` for a `ptr`-typed return. The Map handle extracted from the enum's i64 payload word is not reinterpreted to a pointer before the return inst. interp is correct; a `Vec`/`String` payload in the same shape compiles fine. | — |
 
-### Fixed (648)
+### Fixed (649)
 
-<details><summary>648 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>649 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -788,6 +787,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **656 surfaced 
 | B-2026-07-23-10 | codegen | medium | CODEGEN-GAP in the selfhost codegen PORT (codegen.kara emitter): `i64.to_f64()` was unimplemented — the method returned the i64 receiver unchanged (k… | e2aaaa9 |
 | B-2026-07-23-11 | codegen | medium | A user enum carrying a `Map`/`Set`(-family) payload leaks the handle at scope-exit drop: the enum drop walker has no Map/Set arm, so the whole kv-tab… | a609803 |
 | B-2026-07-23-13 | codegen | high | SEED codegen double-free: `if let Variant(t) = e` over an OWNED-VARIABLE user-enum scrutinee with a heap (String/Vec) payload re-freed the payload | 5e9bdd0 |
+| B-2026-07-23-14 | codegen | medium | Returning a `Map`/`Set`(-family) value moved OUT of an enum payload fails codegen module verification: `fn unwrap(v: V) -> Map[K,V] { match v { Table… | 178a193 |
 
 </details>
 
