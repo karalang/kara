@@ -6272,6 +6272,76 @@ fn test_total_order_wrapper_compare_map_sort_interp_parity() {
 }
 
 #[test]
+fn test_float_wrapper_value_from_enum_payload_interp_parity() {
+    // B-2026-07-23-2 — `.value` on a float-wrapper bound out of a user-enum
+    // payload, in a match arm beside an `f64` arm. The interpreter was already
+    // correct here (the bug was codegen's phi-type mismatch bailing to `ret i64
+    // 0`); this pins the run==build contract for the codegen E2E fix. Same
+    // program + output as `test_e2e_float_wrapper_value_field_from_enum_payload`.
+    let output = run("enum Num { I(i64), F(F32) }\n\
+             enum Dbl { I(i64), D(F64) }\n\
+             fn show(n: Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value } }\n\
+             fn show_ref(n: ref Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value } }\n\
+             fn show_first(n: Num) -> f64 { match n { F(f) => f.value, I(x) => x as f64 } }\n\
+             fn show_arith(n: Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value + 1.0 } }\n\
+             fn show_d(n: Dbl) -> f64 { match n { I(x) => x as f64, D(d) => d.value } }\n\
+             fn main() {\n\
+                 let a = Num.F(F32 { value: 2.5 });\n\
+                 println(show(a));\n\
+                 println(show(Num.I(7)));\n\
+                 let b = Num.F(F32 { value: 4.0 });\n\
+                 println(show_ref(b));\n\
+                 println(show_first(Num.F(F32 { value: 1.5 })));\n\
+                 println(show_arith(Num.F(F32 { value: 2.5 })));\n\
+                 println(show_d(Dbl.D(F64 { value: 3.25 })));\n\
+                 println(show_d(Dbl.I(9)));\n\
+             }");
+    assert_eq!(output, "2.5\n7\n4\n1.5\n3.5\n3.25\n9\n");
+}
+
+#[test]
+fn test_map_set_from_enum_payload_interp_parity() {
+    // B-2026-07-23-3 — a `Map`/`Set`-family collection bound out of a user-enum
+    // payload, method-dispatched (`m.len()` / `s.contains(x)`). The interpreter
+    // already handled this; pins run==build for the codegen dispatch fix. Same
+    // program + output as `test_e2e_map_set_method_dispatch_from_enum_payload`.
+    let output = run("enum MapBox { Table(Map[String, i64]) }\n\
+             enum SetBox { Items(Set[i64]) }\n\
+             enum SmapBox { T(SortedMap[i64, i64]) }\n\
+             enum SsetBox { S(SortedSet[i64]) }\n\
+             fn map_len_ref(v: ref MapBox) -> i64 { match v { Table(m) => m.len() as i64 } }\n\
+             fn map_len_val(v: MapBox) -> i64 { match v { Table(m) => m.len() as i64 } }\n\
+             fn set_len_ref(v: ref SetBox) -> i64 { match v { Items(s) => s.len() as i64 } }\n\
+             fn set_has_ref(v: ref SetBox, x: i64) -> bool { match v { Items(s) => s.contains(x) } }\n\
+             fn smap_len_ref(v: ref SmapBox) -> i64 { match v { T(m) => m.len() as i64 } }\n\
+             fn sset_len_ref(v: ref SsetBox) -> i64 { match v { S(s) => s.len() as i64 } }\n\
+             fn main() {\n\
+                 let mut mp: Map[String, i64] = Map.new();\n\
+                 let _ = mp.insert(\"a\", 1);\n\
+                 let _ = mp.insert(\"b\", 2);\n\
+                 let t = MapBox.Table(mp);\n\
+                 println(map_len_ref(t));\n\
+                 let mut mp2: Map[String, i64] = Map.new();\n\
+                 let _ = mp2.insert(\"x\", 9);\n\
+                 println(map_len_val(MapBox.Table(mp2)));\n\
+                 let mut st: Set[i64] = Set.new();\n\
+                 st.insert(1); st.insert(2); st.insert(2);\n\
+                 let sv = SetBox.Items(st);\n\
+                 println(set_len_ref(sv));\n\
+                 println(set_has_ref(sv, 2));\n\
+                 println(set_has_ref(sv, 5));\n\
+                 let mut sm: SortedMap[i64, i64] = SortedMap.new();\n\
+                 let _ = sm.insert(3, 1);\n\
+                 let _ = sm.insert(1, 2);\n\
+                 println(smap_len_ref(SmapBox.T(sm)));\n\
+                 let mut ss: SortedSet[i64] = SortedSet.new();\n\
+                 ss.insert(7); ss.insert(4); ss.insert(7);\n\
+                 println(sset_len_ref(SsetBox.S(ss)));\n\
+             }");
+    assert_eq!(output, "2\n1\n2\ntrue\nfalse\n2\n2\n");
+}
+
+#[test]
 fn test_f16_bf16_from_constructor() {
     assert!(run("fn main() { let x = F16.from(2.5); println(x); }").starts_with("F16(2.5"));
     assert!(run("fn main() { let x = Bf16.from(3.25); println(x); }").starts_with("Bf16(3.25"));

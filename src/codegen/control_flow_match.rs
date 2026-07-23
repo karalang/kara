@@ -746,6 +746,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // rather than falling through to the const-0 placeholder. See
         // `unify_int_branch_widths` for the value-preservation invariant.
         self.unify_int_match_arm_widths(&mut arm_results);
+        // Reconcile mixed float arm widths (`I(x) => x as f64` beside `F(f) =>
+        // f.value` where `f: F32`) by widening every narrower float arm up to
+        // the widest present — else the all-same-type check below fails and the
+        // match falls to the `i64 0` placeholder (B-2026-07-23-2). See
+        // `unify_float_match_arm_widths` for the widen-not-truncate rationale.
+        self.unify_float_match_arm_widths(&mut arm_results);
 
         // Build phi if all (live) arms produce a value of the same type. A
         // single live arm (the rest diverging) yields a one-incoming phi,

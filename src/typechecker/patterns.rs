@@ -1557,7 +1557,15 @@ impl<'a> super::TypeChecker<'a> {
         // `finalize_pattern_binding_inner_types` so a still-unsolved K/V/elem
         // typevar re-resolves the same way the Vec arm's does.
         if let Type::Named { name, args } = ty {
-            if (name == "Map" && args.len() == 2) || (name == "Set" && args.len() == 1) {
+            // The whole `Map`/`Set` family — `SortedMap` / `SortedSet` share
+            // `Map` / `Set`'s K/V/elem extraction (`extract_map_kv_types` /
+            // `extract_set_elem_type` accept both), so an enum-payload
+            // `SortedMap` binding needs the same full-TypeExpr recording or its
+            // codegen dispatch tables are never registered and `m.len()` fails
+            // "no handler for method" — the SortedMap leg of B-2026-07-23-3.
+            if ((name == "Map" || name == "SortedMap") && args.len() == 2)
+                || ((name == "Set" || name == "SortedSet") && args.len() == 1)
+            {
                 let key = SpanKey::from_span(&pattern.span);
                 self.pattern_binding_inner_types
                     .insert(key, Self::type_to_type_expr(ty));

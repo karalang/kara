@@ -472,7 +472,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // m }` return-the-map shape is balanced by the arm-tail
                     // `suppress_map_cleanup_for_tail_identifier` in `compile_match`
                     // (the Map sibling of the Vec tail-move suppression).
-                    if matches!(type_name.as_str(), "Map" | "Set") {
+                    if matches!(
+                        type_name.as_str(),
+                        "Map" | "Set" | "SortedMap" | "SortedSet"
+                    ) {
                         if let Some(full_te) = self.pattern_binding_inner_types.get(&key).cloned() {
                             self.register_var_from_type_expr(name, &full_te);
                             if !self.pattern_binding_is_borrow {
@@ -1430,6 +1433,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(None);
                 }
+                // B-2026-07-23-3: a `Map`/`Set`-family payload binding (`Table(m)`
+                // where `m: Map[K, V]`) is a single control-block POINTER word, so
+                // `llvm_type_for_name("Map")` returns the i64 fallback and the
+                // `declared_mismatches_word` guard below does NOT trip (unlike a
+                // `Vec` payload, whose `{ptr,i64,i64}` LLVM type mismatches the word
+                // and defers). The via-ptr fast path would then bind `m` as a bare
+                // ref-to-i64 leaf WITHOUT the `map_key_types` / `map_val_types` /
+                // `set_elem_types` dispatch side-tables, and `m.len()` /
+                // `s.contains(x)` fails codegen ("no handler for method"). Defer to
+                // the value-source path, which registers those tables via
+                // `register_var_from_type_expr` (and, under a borrow scrutinee,
+                // correctly skips the scope-exit `track_map_var` free). Read-correct;
+                // the pointer copy aliases the same control block, so a `mut ref`-arm
+                // `m.insert(...)` still mutates the underlying handle.
+                if patterns
+                    .iter()
+                    .any(|p| self.pattern_binds_map_set_payload(p))
+                {
+                    return Ok(None);
+                }
                 let offsets: Vec<(usize, usize)> = layout
                     .field_word_offsets
                     .get(variant_name)
@@ -1580,6 +1603,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.struct_types.contains_key(n.as_str())
                     || self.shared_types.contains_key(n.as_str())
             });
+        }
+        false
+    }
+
+    /// Whether a leaf binding's typechecker-recorded surface type is a
+    /// `Map`/`Set`-family collection — the payload shapes whose single-pointer
+    /// word masquerades as a plain i64 in the via-ptr fast path, so it must
+    /// defer to the value-source path for its dispatch side-table registration
+    /// (B-2026-07-23-3). Companion to [`Self::pattern_binds_struct_payload`].
+    fn pattern_binds_map_set_payload(&self, pat: &Pattern) -> bool {
+        if let PatternKind::Binding(_) = &pat.kind {
+            let key = (pat.span.offset, pat.span.length);
+            return self
+                .pattern_binding_types
+                .get(&key)
+                .is_some_and(|n| matches!(n.as_str(), "Map" | "Set" | "SortedMap" | "SortedSet"));
         }
         false
     }

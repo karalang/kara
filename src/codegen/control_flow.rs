@@ -1526,6 +1526,68 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Harmonize the LLVM float widths of a `match`'s arm values before the phi —
+    /// the float sibling of [`unify_int_match_arm_widths`]. When arms mix float
+    /// widths (`match n { I(x) => x as f64, F(f) => f.value }` — an `f64` arm
+    /// beside an `f32` from an `F32.value` payload field), the phi's `all-same-
+    /// type` check fails and the whole `match` falls to the `i64 0` placeholder
+    /// (`ret i64 0` against a `double` return — B-2026-07-23-2). The typechecker
+    /// already unified every arm to one Kāra float type, and float widening
+    /// (`fpext`) is EXACT — so promote every narrower float arm UP to the widest
+    /// present, in its own predecessor block. Widen (not truncate, unlike the
+    /// int case): a genuine `f64` arm truncated to `f32` would lose precision,
+    /// and any residual mismatch against a *narrower* declared return type is
+    /// re-narrowed losslessly by the fn-tail `coerce_to_current_ret_type`
+    /// (`f32 -> f64 -> f32` round-trips exact). Arms that are not floats, or
+    /// already at the max width, pass through untouched. Uses
+    /// `build_float_cast_bf16_safe` so an `f16`/`bf16` arm widens through the
+    /// aarch64-selectable integer path, never a bare `fpext bfloat`.
+    pub(super) fn unify_float_match_arm_widths(
+        &self,
+        arms: &mut [(BasicValueEnum<'ctx>, BasicBlock<'ctx>)],
+    ) {
+        let target = arms
+            .iter()
+            .filter_map(|(v, _)| match v {
+                BasicValueEnum::FloatValue(fv) => Some(fv.get_type()),
+                _ => None,
+            })
+            .max_by_key(|ft| self.float_bits_int_type(*ft).get_bit_width());
+        let Some(target) = target else {
+            return;
+        };
+        for (v, bb) in arms.iter_mut() {
+            if let BasicValueEnum::FloatValue(fv) = v {
+                if fv.get_type() != target {
+                    *v = self.floatcast_branch_value_in_pred(*fv, target, *bb);
+                }
+            }
+        }
+    }
+
+    /// Cast a phi-bound float branch value to `target` (widening or narrowing) at
+    /// the end of its predecessor block — the width-agnostic sibling of
+    /// [`fptrunc_branch_value_in_pred`], routed through `build_float_cast_bf16_safe`
+    /// so `bf16` legs never emit an unselectable `fpext bfloat`. Positioned in the
+    /// predecessor so the result dominates the phi's incoming edge.
+    fn floatcast_branch_value_in_pred(
+        &self,
+        v: inkwell::values::FloatValue<'ctx>,
+        target: inkwell::types::FloatType<'ctx>,
+        pred: BasicBlock<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let resume = self.builder.get_insert_block();
+        match pred.get_terminator() {
+            Some(term) => self.builder.position_before(&term),
+            None => self.builder.position_at_end(pred),
+        }
+        let t = self.build_float_cast_bf16_safe(v, target, "mfw.fcast");
+        if let Some(bb) = resume {
+            self.builder.position_at_end(bb);
+        }
+        t.into()
+    }
+
     pub(super) fn compile_while(
         &mut self,
         label: Option<&str>,
