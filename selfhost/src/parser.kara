@@ -16,6 +16,7 @@ import token.{Token, SpannedToken};
 import ast.{
     Expr,
     expr_span,
+    clone_span,
     is_loop_block_expr,
     BinOp,
     UnaryOp,
@@ -588,6 +589,112 @@ impl Parser {
                     value: v,
                     span: sp,
                 }));
+                continue;
+            }
+            // Compound assignment `target OP= value;` (B-2026-07-23-22). Desugar
+            // to `target = target OP value`: the port has no first-class
+            // CompoundAssign statement, but `Expr` is a `shared` (RC) handle, so
+            // the target place-expr is shared into BOTH the assign target and the
+            // binary's left operand — an AST node read in two positions (codegen
+            // reads it, never mutates), reusing the existing `Assign` + `Binary`
+            // emitter with no codegen change. Runtime behavior matches the seed's
+            // `x += v` (whose AST uses a dedicated CompoundAssign node). Before
+            // this, an `OP=` token was neither `Equal` nor a recognized infix op,
+            // so the LHS became a bare expression-statement and the `OP= value`
+            // tail was SILENTLY DROPPED (`let mut x = 5; x += 3;` left x = 5).
+            let mut compound_op = BinOp.Add;
+            let is_compound = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    PlusEqual => {
+                        compound_op = BinOp.Add;
+                        true
+                    }
+                    MinusEqual => {
+                        compound_op = BinOp.Sub;
+                        true
+                    }
+                    StarEqual => {
+                        compound_op = BinOp.Mul;
+                        true
+                    }
+                    SlashEqual => {
+                        compound_op = BinOp.Div;
+                        true
+                    }
+                    PercentEqual => {
+                        compound_op = BinOp.Mod;
+                        true
+                    }
+                    AmpEqual => {
+                        compound_op = BinOp.BitAnd;
+                        true
+                    }
+                    PipeEqual => {
+                        compound_op = BinOp.BitOr;
+                        true
+                    }
+                    CaretEqual => {
+                        compound_op = BinOp.BitXor;
+                        true
+                    }
+                    LessLessEqual => {
+                        compound_op = BinOp.Shl;
+                        true
+                    }
+                    GreaterGreaterEqual => {
+                        compound_op = BinOp.Shr;
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if is_compound {
+                self.advance(); // OP=
+                let v = self.parse_expr_bp(0);
+                self.eat_semicolon();
+                // Desugar `target OP= value` -> `target = target OP value`. The
+                // target place-expr must appear TWICE (assign target + binary
+                // left), but `Expr` is a `shared` handle with no clone method and
+                // the ownership checker moves it on first use — so we REBUILD it.
+                // Identifier targets, the common shape (`x += v`, `i += 1`,
+                // `acc += x`), are reconstructed from their NAME into two fresh
+                // `Ident` nodes, reusing the existing `Assign` + `Binary` emitter
+                // (zero codegen change). A non-identifier place target
+                // (`self.x += v`, `a[i] += v`) is not yet lowered by the port;
+                // emit an Error statement so the update is a LOUD failure, never
+                // the pre-fix silent no-op. B-2026-07-23-22.
+                let esp = expr_span(e);
+                match e {
+                    Ident(id) => {
+                        let IdentExpr { name: tn, span: tsp } = id;
+                        let target2 = Expr.Ident(IdentExpr {
+                            name: tn.clone(),
+                            span: clone_span(tsp),
+                        });
+                        let left2 = Expr.Ident(IdentExpr {
+                            name: tn,
+                            span: clone_span(tsp),
+                        });
+                        stmts.push(Stmt.Assign(AssignStmt {
+                            target: target2,
+                            value: Expr.Binary(BinaryExpr {
+                                op: compound_op,
+                                left: left2,
+                                right: v,
+                                span: clone_span(tsp),
+                            }),
+                            span: clone_span(tsp),
+                        }));
+                    }
+                    _ => {
+                        stmts.push(Stmt.Exp(ExprStmt {
+                            expr: Expr.Error(SpanNode { span: clone_span(esp) }),
+                            span: clone_span(esp),
+                        }));
+                    }
+                }
                 continue;
             }
             let has_semi = if self.pos < self.tokens.len() {

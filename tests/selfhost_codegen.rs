@@ -497,6 +497,17 @@ const CORPUS: &[&str] = &[
     // Vec-of-struct/enum are out. Covers a scalar store, a compute-into-slot
     // loop `v[j] = j * j`, and a String reassign-in-loop (leak guard).
     "fn main() {\n    let mut v: Vec[i64] = Vec.new();\n    let mut i = 0;\n    while i < 5 {\n        v.push(0);\n        i = i + 1;\n    }\n    let mut j = 0;\n    while j < 5 {\n        v[j] = j * j;\n        j = j + 1;\n    }\n    println((v[0] + v[2] + v[4]).to_string());\n    v[0] = 99;\n    println(v[0].to_string());\n    let mut s: Vec[String] = Vec.new();\n    s.push(\"old\".to_string());\n    s.push(\"keep\".to_string());\n    let mut k = 0;\n    while k < 3 {\n        s[0] = \"new\".to_string();\n        k = k + 1;\n    }\n    println(s[0]);\n    println(s[1]);\n}",
+    // B-2026-07-23-22: COMPOUND ASSIGNMENT `x += v` (and `-= *= /= %= &= |= ^=
+    // <<= >>=`) was SILENTLY DROPPED by the port's `parse_block` — the LHS was
+    // parsed as a bare expression-statement and the `OP= value` tail discarded,
+    // so `x += 3` left x unchanged (a valid program running with the update
+    // missing; the seed accepts it and produces 8). Fix: `parse_block` desugars
+    // `target OP= value` to `target = target OP value`, RC-sharing the `shared`
+    // Expr target into both the assign target and the binary's left — reusing
+    // the existing `Assign` + `Binary` emitter with ZERO new codegen. Covers all
+    // ten arithmetic/bitwise/shift forms and a loop-counter `i += 1` / an
+    // accumulator `acc += i`. Differential vs the seed's `karac run`.
+    "fn main() {\n    let mut x = 5;\n    x += 3;\n    println(x.to_string());\n    x -= 2;\n    println(x.to_string());\n    x *= 4;\n    println(x.to_string());\n    x /= 5;\n    println(x.to_string());\n    x %= 3;\n    println(x.to_string());\n    let mut b = 12;\n    b &= 10;\n    println(b.to_string());\n    b |= 5;\n    println(b.to_string());\n    b ^= 6;\n    println(b.to_string());\n    let mut sh = 1;\n    sh <<= 4;\n    println(sh.to_string());\n    sh >>= 2;\n    println(sh.to_string());\n    let mut acc = 0;\n    let mut i = 0;\n    while i < 5 {\n        acc += i;\n        i += 1;\n    }\n    println(acc.to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
