@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 162 | 0 |
-| leak | 94 | 0 |
+| leak | 95 | 0 |
 | double-free | 78 | 0 |
 | codegen-gap | 71 | 0 |
 | missing-feature | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 466 | 0 |
+| codegen | 467 | 0 |
 | typecheck | 84 | 0 |
 | interp | 69 | 0 |
 | ownership | 27 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **642 surfaced · 0 open · 637 fixed** (2026-05-20 → 2026-07-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **643 surfaced · 0 open · 638 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (637)
+### Fixed (638)
 
-<details><summary>637 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>638 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -773,6 +773,7 @@ _None — the ledger is fully drained._
 | B-2026-07-22-12 | codegen | medium | Overwriting an existing key on a `Map[K, String]` / `Map[K, Vec[…]]` (and the parallel `Map.remove`) leaks the DISPLACED / removed old value's heap b… | abe0236, af564fa |
 | B-2026-07-22-13 | ownership | low | Spurious `rc-fallback` (perf false-positive) for a `match`/`if let` binding that is CONSUMED EXACTLY ONCE, when the match sits inside a loop: `while… | 042f848 |
 | B-2026-07-22-14 | autopar | medium | Auto-par false-negative REGRESSION from B-2026-07-22-9: the new producer-side move-hazard guard de-parallelizes a heap-owning producer whose binding… | 7a73b9d |
+| B-2026-07-23-1 | codegen | medium | An early `return` out of a `for (k, v) in map` / `for x in set` loop leaks the `karac_map_iter_new` iterator handle | 1dea868 |
 
 </details>
 
