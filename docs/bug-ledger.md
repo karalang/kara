@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 162 | 0 |
+| miscompile | 163 | 1 |
 | leak | 95 | 0 |
-| double-free | 78 | 0 |
+| double-free | 79 | 1 |
 | codegen-gap | 73 | 2 |
 | missing-feature | 61 | 0 |
 | false-positive | 41 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 469 | 2 |
+| codegen | 471 | 4 |
 | typecheck | 84 | 0 |
 | interp | 69 | 0 |
 | ownership | 27 | 0 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **645 surfaced · 2 open · 638 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **647 surfaced · 4 open · 638 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-23-2 | 2026-07-23 | codegen | medium | F32/F64 total-order wrapper: `.value` field access on a match-arm binding extracted from a USER-ENUM payload falls through to the const-0 tail -> malformed IR / module-verification failure under `karac build` (interp correct). Followup to B-2026-07-22-11. | — |
 | B-2026-07-23-3 | 2026-07-23 | codegen | medium | A `Map`/`Set` value bound out of a USER-ENUM variant payload loses its container type for codegen method dispatch: `match v { Table(m) => m.len() }` fails 'no handler for method len on variable m' under `karac build` (interp correct). `Vec` payloads work. | — |
+| B-2026-07-23-4 | 2026-07-23 | codegen | high | Matching a fresh-temp `Result[_, _]` (a direct function-call return) whose extracted payload is a STRUCT with a heap field (String/Vec), and reading that field (`match f() { Ok(w) => println(w.s) }`), double-frees the field's buffer under `karac build` — a memory-safety bug in an extremely common pattern. interp is clean. | — |
+| B-2026-07-23-5 | 2026-07-23 | codegen | medium | A generic fn whose return type PERMUTES the struct's type params — `fn swap[A,B](p: Pair[A,B]) -> Pair[B,A] { Pair { first: p.second, second: p.first } }` — miscompiles: the mono builds the returned struct literal with the INPUT layout `Pair[A,B]` instead of `Pair[B,A]`, failing LLVM module verification when A and B have different sizes. | — |
 
 ### Fixed (638)
 
