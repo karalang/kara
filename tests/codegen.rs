@@ -8490,6 +8490,37 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_user_fn_named_like_compiler_builtin_is_typechecked() {
+        // B-2026-07-23-5: a USER function whose NAME collides with a stdlib
+        // `#[compiler_builtin]` (`mem::swap`) was silently SKIPPED by the
+        // typechecker (`env.compiler_builtins.contains(name)` — a name-keyed set
+        // populated across user+stdlib). Its body's `expr_types` were never
+        // recorded, so codegen's per-literal instantiation record was empty and
+        // a generic `swap` returning a PERMUTED struct (`Pair[A,B] -> Pair[B,A]`)
+        // built the returned literal with the INPUT layout, failing LLVM module
+        // verification (A and B different sizes). Now the skip gates on the
+        // function's OWN `#[compiler_builtin]` attribute, so the user `swap` is
+        // type-checked and its literal instantiation recorded. Verifies interp
+        // == JIT == AOT.
+        if let Some(out) = run_program(
+            "struct Pair[A, B] { first: A, second: B }\n\
+             fn swap[A, B](p: Pair[A, B]) -> Pair[B, A] {\n\
+             \x20   Pair { first: p.second, second: p.first }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let q = swap(Pair { first: 42, second: \"x\".to_string() });\n\
+             \x20   println(q.first);\n\
+             \x20   println(f\"{q.second}\");\n\
+             \x20   let r = swap(Pair { first: true, second: 99 });\n\
+             \x20   println(f\"{r.first}\");\n\
+             \x20   println(f\"{r.second}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "x\n42\n99\ntrue\n");
+        }
+    }
+
     /// B-2026-07-11-28: a GENERIC monomorph with a VOID return whose body TAIL is
     /// a statement-position `if` (or `while`) emitted `ret i64 0` into a void LLVM
     /// function — module verification failed ("non-void return in Function of

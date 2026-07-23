@@ -16052,6 +16052,53 @@ fn test_compiler_builtin_body_is_not_type_checked() {
 }
 
 #[test]
+fn test_user_fn_named_like_builtin_body_is_type_checked() {
+    // B-2026-07-23-5: a USER function whose NAME collides with a baked
+    // `#[compiler_builtin]` (the `mem::swap` intrinsic) must still have its
+    // BODY type-checked. The skip previously gated on
+    // `env.compiler_builtins.contains(name)` — a name-keyed set populated
+    // across user + baked stdlib — so the non-attributed user `swap` was
+    // silently skipped and a body type error went unreported (and downstream
+    // its `expr_types` were never recorded, miscompiling a permuted-struct
+    // return). Now the skip gates on the function's OWN attribute, so this
+    // deliberately ill-typed body surfaces its error. `typecheck_errors`
+    // asserts errors exist, so this test PANICS pre-fix (body skipped → no
+    // error) and passes post-fix.
+    let errors = typecheck_errors(
+        "struct Pair[A, B] { first: A, second: B }\n\
+         fn swap[A, B](p: Pair[A, B]) -> Pair[B, A] {\n\
+         \x20   let bad: i64 = \"not an int\";\n\
+         \x20   Pair { first: p.second, second: p.first }\n\
+         }\n\
+         fn main() { }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::TypeMismatch)),
+        "expected a TypeMismatch from the skipped-then-checked body, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_user_generic_fn_named_like_builtin_typechecks_clean() {
+    // Positive companion: a well-typed user `swap` colliding with the baked
+    // `mem::swap` builtin now type-checks cleanly (its body is no longer
+    // skipped, and no spurious error is introduced by checking it).
+    typecheck_ok(
+        "struct Pair[A, B] { first: A, second: B }\n\
+         fn swap[A, B](p: Pair[A, B]) -> Pair[B, A] {\n\
+         \x20   Pair { first: p.second, second: p.first }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let q = swap(Pair { first: 42, second: \"x\".to_string() });\n\
+         \x20   println(q.first);\n\
+         }",
+    );
+}
+
+#[test]
 fn test_compiler_builtin_signature_validates_caller() {
     // The stdlib-source declaration registers `id_intrinsic[T](T) -> T`.
     // A user-side caller that respects the signature (i64 in, i64 out)

@@ -36,7 +36,20 @@ impl<'a> super::TypeChecker<'a> {
                     // skip body-checking entirely. This lets stdlib source
                     // pair an attribute with whatever body keeps the parser
                     // happy without that body being held to type-correctness.
-                    if self.env.compiler_builtins.contains(&f.name) {
+                    //
+                    // Gate on THIS function's own `#[compiler_builtin]`
+                    // attribute, NOT `env.compiler_builtins.contains(name)`:
+                    // the latter is a name-keyed set populated across ALL
+                    // programs (user + stdlib), so a USER function whose name
+                    // collides with a stdlib builtin (`fn swap[A,B](..)` vs the
+                    // baked `mem::swap` builtin) was silently skipped — its body
+                    // never type-checked, its `expr_types` never recorded. That
+                    // starved codegen's per-literal instantiation record and a
+                    // generic user `swap` returning a permuted struct
+                    // miscompiled (B-2026-07-23-5); more broadly, any body error
+                    // in such a shadowing function went unreported. The
+                    // per-function attribute is the precise signal.
+                    if f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) {
                         continue;
                     }
                     self.check_function(f, None, &[]);
