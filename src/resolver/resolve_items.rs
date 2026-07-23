@@ -100,7 +100,21 @@ impl<'a> super::Resolver<'a> {
         // and the typechecker enforces its ensures-only restriction, so this
         // only satisfies name resolution. (B-2026-07-23-17.)
         for req in &f.requires {
+            // `old` resolves inside `requires` too so the typechecker — not the
+            // resolver — enforces its ensures-only restriction
+            // (E_OLD_OUTSIDE_ENSURES); without the binding, `requires old(x)`
+            // would wrongly report an undefined-name resolve error.
+            self.table.push_scope(ScopeKind::Block);
+            let _ = self.table.define(
+                "old".to_string(),
+                SymbolKind::Function {
+                    param_names: vec!["expr".to_string()],
+                },
+                req.span.clone(),
+                false,
+            );
             self.resolve_expr(req);
+            self.table.pop_scope();
         }
         for clause in &f.ensures {
             self.table.push_scope(ScopeKind::Block);
