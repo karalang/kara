@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 171 | 0 |
+| miscompile | 172 | 0 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 75 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 481 | 0 |
+| codegen | 482 | 0 |
 | typecheck | 85 | 0 |
 | interp | 70 | 0 |
 | ownership | 27 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **662 surfaced · 1 open · 656 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **663 surfaced · 1 open · 657 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **662 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-23-20 | 2026-07-23 | autopar | high | Auto-par miscompiles a reduction loop whose body passes a LOOP-INVARIANT shared `mut ref` scratch buffer to a helper. `while w < n { sink = sink + f(..., mut scratch, ...); w += 1 }` is parallelized as a `sink` reduction, but `scratch` (a binding declared OUTSIDE the loop, written every iteration inside `f`) makes the iterations dependent, so parallel workers race on it -> nondeterministic WRONG output from the DEFAULT `karac build` (and `karac run` JIT), while `KARAC_AUTO_PAR=0` is stable and correct. A/B run==build violation; auto-par safety analysis is unsound for this shape. | — |
 
-### Fixed (656)
+### Fixed (657)
 
-<details><summary>656 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>657 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -794,6 +794,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **662 surfaced 
 | B-2026-07-23-17 | resolver | medium | An undefined name inside a `requires`/`ensures` contract expression passes `karac check` and ICEs at runtime ('variable … not found … should be caugh… | e2fd788 |
 | B-2026-07-23-18 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): UNARY NEGATION `-x` was a silent NO-OP | c979710 |
 | B-2026-07-23-19 | parser | high | A parenthesized single pattern `(P)` is parsed as a 1-element tuple `Tuple([P])` instead of a grouping, so `x @ (1 \| 2 \| 3)` and top-level `(1 \| 2)`… | b85cad8 |
+| B-2026-07-23-21 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): the BITWISE and SHIFT operators `& \| ^ << >>` were ALL emitted as `add` | 8a5fec2 |
 
 </details>
 
