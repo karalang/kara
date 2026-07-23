@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 162 | 0 |
 | leak | 95 | 0 |
 | double-free | 78 | 0 |
-| codegen-gap | 71 | 0 |
+| codegen-gap | 73 | 2 |
 | missing-feature | 61 | 0 |
 | false-positive | 41 | 0 |
 | run-vs-build | 39 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 467 | 0 |
+| codegen | 469 | 2 |
 | typecheck | 84 | 0 |
 | interp | 69 | 0 |
 | ownership | 27 | 0 |
@@ -124,11 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **643 surfaced · 0 open · 638 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **645 surfaced · 2 open · 638 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (2)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-23-2 | 2026-07-23 | codegen | medium | F32/F64 total-order wrapper: `.value` field access on a match-arm binding extracted from a USER-ENUM payload falls through to the const-0 tail -> malformed IR / module-verification failure under `karac build` (interp correct). Followup to B-2026-07-22-11. | — |
+| B-2026-07-23-3 | 2026-07-23 | codegen | medium | A `Map`/`Set` value bound out of a USER-ENUM variant payload loses its container type for codegen method dispatch: `match v { Table(m) => m.len() }` fails 'no handler for method len on variable m' under `karac build` (interp correct). `Vec` payloads work. | — |
 
 ### Fixed (638)
 
