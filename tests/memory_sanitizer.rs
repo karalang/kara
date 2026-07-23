@@ -2116,6 +2116,46 @@ fn main() {
     }
 
     #[test]
+    fn asan_if_let_owned_var_enum_string_payload_no_double_free() {
+        // B-2026-07-23-13: an OWNED-VARIABLE user-enum scrutinee with a heap
+        // payload, destructured in an `if let` — `let e = E.B(s); if let B(t) =
+        // e { … }`. The destructure MOVES the String into `t`, but the source
+        // `e`'s `__karac_drop_<E>` (queued by `track_enum_var` at its let-site,
+        // fires at the outer scope) still read the source's populated payload
+        // words and re-freed the same buffer → double-free. The `match` on the
+        // SAME enum was already fine — `compile_match` suppresses the source's
+        // per-field cleanup for the consumed arm, but the `if let` leg only ran
+        // that suppression for a FRESH-TEMP scrutinee, never a plain variable.
+        // Fix: `compile_if_let` now mirrors the match path's variable-scrutinee
+        // `suppress_destructured_enum_payload_cleanup(value, pattern)` in the
+        // non-freshtemp / owned-binding branch. 200 iterations with ≥6 B
+        // payloads so a re-free aborts (ASAN) and a missed suppression that
+        // instead leaked would show under LSan.
+        assert_clean_asan_run(
+            r#"
+enum E { A(i64), B(String), C }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 200i64 {
+        let e: E = E.B(f"payload{i}");
+        if let B(t) = e {
+            total = total + t.len();
+        } else {
+            total = total + 1i64;
+        }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // "payload{i}": len 7 + digits — 10*8 + 90*9 + 100*10 = 1890.
+            &["1890"],
+            "if_let_owned_var_enum_string_payload_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_match_bound_enum_payload_vec_field_copy_no_double_free() {
         // B-2026-07-17-20: copying a Vec field OUT of a match-bound struct
         // payload that aliases a BORROWED ref-Vec enum element

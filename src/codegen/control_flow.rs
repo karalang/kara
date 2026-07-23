@@ -157,6 +157,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // runs no suppression so the drop walk frees the temp wholesale.
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+        } else if optres_bindings_owned {
+            // B-2026-07-23-13: OWNED-VARIABLE user-enum scrutinee — the missing
+            // mirror of the `match` path (control_flow_match.rs, the
+            // `suppress_destructured_enum_payload_cleanup(scrutinee, …)` else
+            // arm). `let e = E.B(s); if let B(t) = e { … }` destructure-MOVES
+            // the String into `t`, but the source `e`'s `__karac_drop_<E>`
+            // (queued by `track_enum_var` at its let-site, fires at the outer
+            // scope) still read the source's populated payload words and
+            // re-freed the same buffer → double-free (the `match` on the same
+            // enum was fine — only the if-let leg skipped this). Zero the
+            // source's `cap` word(s) for each consumed heap field so the
+            // drop-switch's `cap > 0` guard skips. Gated on
+            // `optres_bindings_owned` (borrow / ref-param scrutinees fold into
+            // `pattern_binding_is_borrow` and no-op here); the helper self-gates
+            // to heap-bearing bound fields, so non-heap patterns no-op too. The
+            // miss/else edge runs no suppression, so the drop frees `e` whole.
+            self.suppress_destructured_enum_payload_cleanup(value, pattern);
         }
         // B-2026-06-10-6: a variable `Option[String]`/`Option[Vec]` scrutinee
         // with a `FreeInlineOptionPayload` needs its source `cap` zeroed when
