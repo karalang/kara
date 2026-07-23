@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 170 | 0 |
+| miscompile | 171 | 0 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 75 | 0 |
@@ -119,20 +119,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 14 | 0 |
 | cli | 12 | 0 |
 | resolver | 11 | 0 |
-| parser | 4 | 0 |
+| parser | 5 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **660 surfaced · 0 open · 655 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **661 surfaced · 0 open · 656 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (655)
+### Fixed (656)
 
-<details><summary>655 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>656 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -791,6 +791,7 @@ _None — the ledger is fully drained._
 | B-2026-07-23-16 | codegen | high | A PLAIN struct pattern whose field sub-pattern is an enum-variant pattern — `match it { Item { shape: Shape.Circle(r), . | df1b68c |
 | B-2026-07-23-17 | resolver | medium | An undefined name inside a `requires`/`ensures` contract expression passes `karac check` and ICEs at runtime ('variable … not found … should be caugh… | e2fd788 |
 | B-2026-07-23-18 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): UNARY NEGATION `-x` was a silent NO-OP | c979710 |
+| B-2026-07-23-19 | parser | high | A parenthesized single pattern `(P)` is parsed as a 1-element tuple `Tuple([P])` instead of a grouping, so `x @ (1 \| 2 \| 3)` and top-level `(1 \| 2)`… | b85cad8 |
 
 </details>
 
