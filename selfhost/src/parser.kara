@@ -686,6 +686,22 @@ impl Parser {
     fn parse_if(mut ref self) -> Expr {
         let start = self.current_span();
         self.advance(); // if
+        // `if let PAT = VALUE { THEN } else ELSE` (Slice 52) desugars, at parse
+        // time, to `match VALUE { PAT => { THEN } _ => ELSE }` — no new AST node,
+        // reusing the fully-supported match machinery (variant bindings,
+        // wildcard, block bodies). Only surfaced as a statement/expression head;
+        // `while let` stays out of surface (no emitter leg).
+        let is_let = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Let => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_let {
+            return self.parse_if_let(start);
+        }
         // The condition is a `no_struct_literal` position: a trailing `Name {`
         // opens the branch body, not a struct literal. Save/restore so nested
         // parses are unaffected (mirrors the seed's `parse_condition_expr`).
@@ -699,6 +715,51 @@ impl Parser {
             cond: cond,
             then_block: then_block,
             else_branch: else_branch,
+            span: self.span_from(start),
+        })
+    }
+
+    // `if let PAT = VALUE { THEN } else ELSE` → `match VALUE { PAT => { THEN }
+    // _ => ELSE }` (Slice 52). Called with `if`/`let` about to be consumed:
+    // `if` is already eaten by the caller, `let` is the current token. The
+    // VALUE sits in a `no_struct_literal` position (a trailing `Name {` opens
+    // the then-block, not a struct literal) just like a plain `if` condition.
+    // The wildcard arm takes the `else` branch verbatim (an `Expr.Blk` / `else
+    // if` chain), or an empty block when there is no `else`.
+    fn parse_if_let(mut ref self, start: Span) -> Expr {
+        self.advance(); // let
+        let pattern = self.parse_pattern();
+        self.eat_equal();
+        let saved = self.no_struct_literal;
+        self.no_struct_literal = true;
+        let value = self.parse_expr_bp(0);
+        self.no_struct_literal = saved;
+        let then_block = self.parse_block();
+        let else_branch = self.parse_else();
+        let wild_body = match else_branch {
+            Some(e) => e,
+            None => Expr.Blk(Block {
+                stmts: Vec.new(),
+                tail: None,
+                span: self.current_span(),
+            }),
+        };
+        let mut arms: Vec[MatchArm] = Vec.new();
+        arms.push(MatchArm {
+            pattern: pattern,
+            guard: None,
+            body: Expr.Blk(then_block),
+            span: self.current_span(),
+        });
+        arms.push(MatchArm {
+            pattern: Pattern.WildcardPat(SpanNode { span: self.current_span() }),
+            guard: None,
+            body: wild_body,
+            span: self.current_span(),
+        });
+        Expr.Match(MatchExpr {
+            scrutinee: value,
+            arms: arms,
             span: self.span_from(start),
         })
     }

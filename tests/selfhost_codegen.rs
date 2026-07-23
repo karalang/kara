@@ -425,6 +425,19 @@ const CORPUS: &[&str] = &[
     // literal-bound loop, nested ranges, break/continue routing through the
     // increment block, and a variable upper bound.
     "fn main() {\n    let mut s = 0;\n    for i in 0..5 {\n        s = s + i;\n    }\n    println(s.to_string());\n    let mut c = 0;\n    for i in 0..3 {\n        for j in 0..3 {\n            c = c + 1;\n        }\n    }\n    println(c.to_string());\n    let mut b = 0;\n    for i in 0..10 {\n        if i == 4 {\n            break;\n        }\n        b = b + i;\n    }\n    println(b.to_string());\n    let mut k = 0;\n    for i in 0..6 {\n        if i % 2 == 0 {\n            continue;\n        }\n        k = k + i;\n    }\n    println(k.to_string());\n    let n = 4;\n    let mut t = 0;\n    for i in 0..n {\n        t = t + i;\n    }\n    println(t.to_string());\n}",
+    // Slice 52: IF-LET — `if let PAT = VALUE { THEN } else ELSE`. A PARSER
+    // slice: the port desugars if-let at parse time into `match VALUE { PAT
+    // => { THEN } _ => ELSE }` (no new AST node — reuses the fully-supported
+    // match machinery), so the emitter needs zero change. Covers Some-bind,
+    // None-skip, else branches, String payloads, Option-from-fn, and USER
+    // enums with i64/String payloads plus a miss to the wildcard.
+    // NOTE: the owned-variable user-enum String-payload if-let
+    // (`let e = E.B(s); if let B(t) = e`) surfaced a SEED double-free
+    // (B-2026-07-23-13) — the seed's own native if-let lowering skipped the
+    // source-payload cleanup suppression the match path does; fixed in the
+    // same change, so this shape is a live differential entry (and a
+    // regression guard for that seed fix via the `karac run` reference leg).
+    "enum E { A(i64), B(String), C }\nfn f(n: i64) -> Option[i64] {\n    if n > 0 {\n        return Some(n * 2);\n    }\n    return None;\n}\nfn main() {\n    let o = Some(5);\n    if let Some(x) = o {\n        println(x.to_string());\n    }\n    let z: Option[i64] = None;\n    if let Some(x) = z {\n        println(x.to_string());\n    } else {\n        println(\"empty\");\n    }\n    let s = Some(\"hi\".to_string());\n    if let Some(w) = s {\n        println(w);\n    }\n    if let Some(v) = f(4) {\n        println(v.to_string());\n    } else {\n        println(\"neg\");\n    }\n    if let Some(v) = f(0) {\n        println(v.to_string());\n    } else {\n        println(\"neg\");\n    }\n    let e = E.A(9);\n    if let A(n) = e {\n        println(n.to_string());\n    } else {\n        println(\"other\");\n    }\n    let e2 = E.B(\"bee\".to_string());\n    if let B(t) = e2 {\n        println(t);\n    } else {\n        println(\"other\");\n    }\n    let e3 = E.C;\n    if let A(n) = e3 {\n        println(n.to_string());\n    } else {\n        println(\"nope\");\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
