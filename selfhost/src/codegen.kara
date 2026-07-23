@@ -4599,15 +4599,30 @@ impl Emitter {
                 let UnaryExpr { op, operand, span } = u;
                 let inner = self.emit_value(operand);
                 let Val { op: iop, kind: ik, heap: ih } = inner;
-                let is_not = match op {
-                    Not => true,
-                    _ => false,
+                // ONE match on `op` (UnaryOp is not Copy, same as BinOp): `not
+                // b` (Slice 4) xors the i1 with true; `-x` (Slice 54) is `sub
+                // i64 0, x`. WITHOUT the Neg arm, negation was a silent NO-OP —
+                // `-1` emitted `1`, `-x` emitted `x` — a corpus blind spot,
+                // since only BINARY `0 - n` had ever been exercised (unary `-`
+                // never appeared in a differential entry). `~`/`*` cannot be
+                // produced by the port parser (Neg/Not only) and pass through.
+                let uk = match op {
+                    Neg => 0,
+                    Not => 1,
+                    BitNot => 2,
+                    Deref => 2,
                 };
-                if is_not {
+                if uk == 1 {
                     let r = self.fresh();
                     self.body =
                         self.body + "  " + r.clone() + " = xor i1 " + iop + ", true\n";
                     return Val { op: r, kind: 1, heap: false };
+                }
+                if uk == 0 {
+                    let r = self.fresh();
+                    self.body =
+                        self.body + "  " + r.clone() + " = sub i64 0, " + iop + "\n";
+                    return Val { op: r, kind: 0, heap: false };
                 }
                 Val { op: iop, kind: ik, heap: false }
             }

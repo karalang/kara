@@ -454,6 +454,20 @@ const CORPUS: &[&str] = &[
     // lexer byte-cast shape `(c as i64) - (48 as i64)`, and a trailing-stmt
     // guard (statements after the loop must run ONCE).
     "fn hexish(c: i64) -> i64 {\n    if c >= 48 and c <= 57 {\n        return (c as i64) - (48 as i64);\n    }\n    return -1;\n}\nfn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(10);\n    v.push(20);\n    v.push(12);\n    let mut s = 0;\n    let mut i = 0;\n    while i < v.len() as i64 {\n        s = s + v[i as i64];\n        i = i + 1;\n    }\n    println(s.to_string());\n    println(\"A\");\n    println(\"B\");\n    let x = 5;\n    println((x as i64 - 2).to_string());\n    println(hexish(55).to_string());\n}",
+    // Slice 54: UNARY NEGATION `-x` — an EMITTER slice. The `Unary` arm only
+    // handled `not b` (Slice 4); the `Neg` case fell through and returned the
+    // operand UNCHANGED, so every unary minus was a silent NO-OP: `-1` emitted
+    // `1`, `-x` emitted `x`, `-1 * 2` emitted `2`. A glaring corpus BLIND SPOT
+    // — negatives had only ever been tested as BINARY subtraction (`0 - 5`),
+    // never the unary operator — even though `return -1` sentinels are
+    // everywhere in real self-host code (the lexer's `hex_val`, resolver
+    // "not found", etc.). B-2026-07-23-18. Fix: a `Neg` leg emitting `sub i64
+    // 0, x` (kind 0), folded into the existing single `op` match (UnaryOp is
+    // not Copy). Covers a bare `return -1`, a negated variable `-x`, negation
+    // inside an arithmetic expr, the guard-clause `if … { return X; } return
+    // -1;` shape (where the bug first surfaced, masquerading as an `and`/`if`
+    // fault), and a `not` regression guard.
+    "fn hexval(c: i64) -> i64 {\n    if c >= 48 and c <= 57 {\n        return c - 48;\n    }\n    return -1;\n}\nfn neg(x: i64) -> i64 {\n    return -x;\n}\nfn main() {\n    let a = -1;\n    println(a.to_string());\n    println((-5).to_string());\n    println(neg(7).to_string());\n    println((-2 * 3).to_string());\n    println(hexval(55).to_string());\n    println(hexval(200).to_string());\n    let b = true;\n    if not b {\n        println(\"t\");\n    } else {\n        println(\"f\");\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
