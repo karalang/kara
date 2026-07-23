@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 22 | 0 |
-| diagnostics | 14 | 0 |
+| diagnostics | 15 | 0 |
 | use-after-free | 5 | 0 |
 | other | 3 | 0 |
 
@@ -118,21 +118,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 16 | 0 |
 | runtime | 14 | 0 |
 | cli | 12 | 0 |
-| resolver | 10 | 0 |
+| resolver | 11 | 0 |
 | parser | 4 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **658 surfaced · 0 open · 653 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **659 surfaced · 0 open · 654 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (653)
+### Fixed (654)
 
-<details><summary>653 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>654 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -789,6 +789,7 @@ _None — the ledger is fully drained._
 | B-2026-07-23-14 | codegen | medium | Returning a `Map`/`Set`(-family) value moved OUT of an enum payload fails codegen module verification: `fn unwrap(v: V) -> Map[K,V] { match v { Table… | 178a193 |
 | B-2026-07-23-15 | parser | high | SELFHOST PARSER (parser.kara, Phase-12 port): the `expr as TYPE` cast operator was UNHANDLED in `parse_expr_bp` (only import-alias `as` existed) | 3afd613 |
 | B-2026-07-23-16 | codegen | high | A PLAIN struct pattern whose field sub-pattern is an enum-variant pattern — `match it { Item { shape: Shape.Circle(r), . | df1b68c |
+| B-2026-07-23-17 | resolver | medium | An undefined name inside a `requires`/`ensures` contract expression passes `karac check` and ICEs at runtime ('variable … not found … should be caugh… | e2fd788 |
 
 </details>
 
