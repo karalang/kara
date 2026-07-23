@@ -24,6 +24,43 @@ something that *looks* like O(1)). Kāra refuses to guess. Instead you pick a
 Algorithmic code over ASCII almost always wants the byte view; text that has to
 respect non-ASCII characters wants the character view.
 
+## Substrings — a *range* index copies
+
+Scalar indexing is out, but a **range** index is in — and it means something
+different from range-indexing a `Vec`. `s[a..b]` returns a **fresh, owned
+`String`** holding a copy of the bytes in that range (not a borrowed `Slice`,
+and not a `StringSlice` view):
+
+```kara,ignore
+let s = "HelloWorld";
+let head = s[0..5];       // "Hello" — a new String
+let tail = s[5..];        // "World"
+let all  = s[..];         // "HelloWorld" (a full copy)
+```
+
+Every range form works — `a..b`, `a..=b`, `a..`, `..b`, `..`. The method
+spelling `s.substring(a, b)` is identical in behaviour to `s[a..b]`.
+
+Two things to keep in mind:
+
+- **The offsets are byte positions, not character positions** — the same units
+  as `s.bytes()`. For ASCII the two coincide; for text with multi-byte
+  characters they don't.
+- **A range must land on UTF-8 character boundaries.** Slicing through the
+  middle of a multi-byte character panics at runtime
+  (`E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY`) rather than handing back invalid
+  UTF-8:
+
+  ```kara,ignore
+  let s = "héllo";         // 'é' occupies bytes 1..3
+  let bad = s[0..2];        // panics — byte 2 is mid-character
+  ```
+
+Because the result is an owned `String`, it outlives the source and can be
+pushed, returned, or stored freely. When you only need to *read* a borrowed
+window without copying, reach for a `StringSlice` via `s.slice(a, b)` instead
+(see [Variables and Types](./ch02-variables-and-types.md#strings)).
+
 ## The character view
 
 `for c in s` and `s.chars()` both yield `char` — one Unicode scalar value at a
@@ -185,6 +222,8 @@ fn digit_char(d: i64) -> char {
 | Iterate characters once | `for c in s.chars()` | O(n) total | `char` |
 | Random access by character index | `s.chars().collect()` → `Vec[char]` | O(n) once, O(1) after | `char` |
 | One-off i-th character | `s.char_at(i)` | O(n) | `Option[char]` |
+| A copied substring (byte range) | `s[a..b]` / `s.substring(a, b)` | O(k) copy | `String` |
+| A borrowed substring view | `s.slice(a, b)` | O(1) | `StringSlice` |
 | Build up output | `String.new()` + `push` / `push_str` | amortized O(1) per push | — |
 
 The rule of thumb: **read as bytes, build with chars.** Byte scanning keeps the
