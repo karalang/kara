@@ -393,7 +393,7 @@ const CORPUS: &[&str] = &[
     // selfhost code uses (the corpus had only while-index loops).
     // emit_for_vec loops [0,len) loading each element as a BORROW into
     // the var slot; works for Vec[i64]/Vec[String]/Vec[struct]. (Range
-    // for-loops `0..n` are parser-blocked — parser.kara has no `..`.)
+    // for-loops `0..n` land in Slice 51 once the parser gains `..`.)
     "struct Pt { x: i64, tag: String }\nfn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(3);\n    v.push(4);\n    v.push(5);\n    let mut t = 0;\n    for x in v {\n        t = t + x;\n    }\n    println(t.to_string());\n    let mut ws: Vec[String] = Vec.new();\n    ws.push(\"al\".to_string());\n    ws.push(\"be\".to_string());\n    let mut acc = \"\".to_string();\n    for w in ws {\n        acc = acc + w + \"|\";\n    }\n    println(acc);\n    let mut ps: Vec[Pt] = Vec.new();\n    ps.push(Pt { x: 10, tag: \"a\".to_string() });\n    ps.push(Pt { x: 20, tag: \"b\".to_string() });\n    for p in ps {\n        println(p.tag + \":\" + p.x.to_string());\n    }\n}",
     // Slice 47: `loop {}` + `break` + `continue` — loop control the
     // parser.kara uses heavily (loop with break). A loop-label STACK
@@ -414,8 +414,17 @@ const CORPUS: &[&str] = &[
     // had matched only the FIRST alternative's tag (so `A | B` behaved
     // like `A`); now each alt's variant tag ORs into the branch
     // condition. Unit-variant alts (payload-binding or-alts out of
-    // surface). (if-let and range for-loops remain selfhost-PARSER gaps.)
+    // surface). (if-let remains a selfhost-PARSER gap; ranges land Slice 51.)
     "enum Tok { Fn, Let, If, Else, Plus, Minus, Star, Ident(String), Eof }\nfn is_kw(t: ref Tok) -> bool {\n    match t {\n        Fn | Let | If | Else => {\n            return true;\n        }\n        _ => {\n            return false;\n        }\n    }\n    return false;\n}\nfn is_op(t: ref Tok) -> bool {\n    match t {\n        Plus | Minus | Star => {\n            return true;\n        }\n        Ident(name) => {\n            return false;\n        }\n        _ => {\n            return false;\n        }\n    }\n    return false;\n}\nfn cat(t: ref Tok) -> i64 {\n    match t {\n        Fn | Let | If | Else => {\n            return 1;\n        }\n        Plus | Minus | Star => {\n            return 2;\n        }\n        Ident(n) => {\n            return 3;\n        }\n        Eof => {\n            return 0;\n        }\n    }\n    return 0 - 1;\n}\nfn main() {\n    println(is_kw(Tok.Let).to_string());\n    println(is_kw(Tok.Plus).to_string());\n    println(is_op(Tok.Star).to_string());\n    println(is_op(Tok.Ident(\"x\".to_string())).to_string());\n    println(cat(Tok.If).to_string());\n    println(cat(Tok.Minus).to_string());\n    println(cat(Tok.Ident(\"y\".to_string())).to_string());\n    println(cat(Tok.Eof).to_string());\n}",
+    // Slice 51: RANGE FOR-LOOPS — `for i in lo..hi`. The parser gained the
+    // `..` infix operator (Binary { op: Range }, binding power 5, mirroring
+    // the seed's `range_bp`); this finally REACHES the codegen range leg
+    // (written in Slice 46 but until now parser-blocked → dead code). Only
+    // the two-bound exclusive form is surfaced (`..=` / open ranges stay
+    // parser-blocked — no emitter leg, so no miscompile risk). Covers a
+    // literal-bound loop, nested ranges, break/continue routing through the
+    // increment block, and a variable upper bound.
+    "fn main() {\n    let mut s = 0;\n    for i in 0..5 {\n        s = s + i;\n    }\n    println(s.to_string());\n    let mut c = 0;\n    for i in 0..3 {\n        for j in 0..3 {\n            c = c + 1;\n        }\n    }\n    println(c.to_string());\n    let mut b = 0;\n    for i in 0..10 {\n        if i == 4 {\n            break;\n        }\n        b = b + i;\n    }\n    println(b.to_string());\n    let mut k = 0;\n    for i in 0..6 {\n        if i % 2 == 0 {\n            continue;\n        }\n        k = k + i;\n    }\n    println(k.to_string());\n    let n = 4;\n    let mut t = 0;\n    for i in 0..n {\n        t = t + i;\n    }\n    println(t.to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

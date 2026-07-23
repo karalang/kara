@@ -1247,6 +1247,19 @@ impl Parser {
                     l_bp = 22;
                     r_bp = 23;
                 }
+                DotDot => {
+                    // Exclusive range `lo..hi` (Slice 51). Lowered to a
+                    // `Binary { op: Range }` node — the port-local shape the
+                    // codegen for-loop range leg (Slice 46) already consumes.
+                    // Binding power 5, looser than `Or` (6): mirrors the seed's
+                    // `range_bp = 5`, rhs parsed at `range_bp + 1`. Only the
+                    // two-bound exclusive form is surfaced; `..=` / open-ended
+                    // ranges stay parser-blocked (no emitter leg for them yet),
+                    // so we never produce a shape codegen would miscompile.
+                    op = BinOp.Range;
+                    l_bp = 5;
+                    r_bp = 6;
+                }
                 _ => {
                     found = false;
                 }
