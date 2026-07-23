@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
 | soundness | 25 | 0 |
-| perf | 22 | 0 |
+| perf | 23 | 1 |
 | diagnostics | 15 | 0 |
 | use-after-free | 5 | 0 |
 | other | 3 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 70 | 0 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
-| autopar | 17 | 0 |
+| autopar | 18 | 1 |
 | runtime | 14 | 0 |
 | cli | 12 | 0 |
 | resolver | 11 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **666 surfaced · 1 open · 660 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **667 surfaced · 2 open · 660 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-23-24 | 2026-07-23 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): `Vec[bool]` has NO distinct element kind — it is conflated with `Vec[i64]` (kind 3), so the i1/i64 lane is mishandled at BOTH ends: `push(false)` emits `store i64 false` (an i1 constant into an i64 store → module verification failure), and a read `v[i]` returns i64 while `if v[i]` needs i1 (`br i1 <i64>` type error). Vec[bool] cannot be constructed or read. | — |
+| B-2026-07-23-25 | 2026-07-23 | autopar | medium | Auto-par over-parallelizes a fine-grained inner loop, making the DEFAULT `karac build` catastrophically slow (~1000x) while output stays CORRECT. A punch/reduction loop that per pass rebuilds a small array and insertion-sorts it under an integer concatenation comparator runs ~0.00s sequentially but ~15s under auto-par (measured at 5 of 400 passes) due to per-task scheduling overhead dwarfing the trivial per-iteration work. Not a race (deterministic, byte-correct) and distinct from the now-fixed B-2026-07-23-20 soundness race: this is an auto-par COST-MODEL gap (parallelizing a loop whose body is too light to amortize task spawn). | — |
 
 ### Fixed (660)
 
