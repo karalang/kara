@@ -63,6 +63,9 @@ COMMANDS:
                         closures       - capture-mode inference + the
                                          own / ref / mut ref prefixes
     fmt <file>        Format a .kara file
+    debug <crash>     Render a std.panic crash report (JSON file, or `-` for
+                      stdin) as a human-readable report; --output=json
+                      re-emits the structured form.
     fix <file>        Apply machine-applicable suggestions (e.g. resolver
                       `did you mean` corrections) to a .kara file. Use
                       --dry-run to preview without writing.
@@ -482,6 +485,28 @@ USAGE:
     karac fmt <file.kara>
 
 OPTIONS:
+    -h, --help         Print this message"
+        }
+        "debug" => {
+            "\
+karac debug - Render a std.panic crash report
+
+USAGE:
+    karac debug <crash.json> [--output=json|text]
+    karac debug -                       (read the report from stdin)
+
+DETAILS:
+    Reads the structured JSON crash report a Kāra program's std.panic
+    handler writes on a panic (docs/design.md § 4. Crash Report Format) and
+    renders it for a human: panic site + kind + message, the effect set in
+    compact form, the logical stack, parallel context (which par branch
+    panicked, which siblings were cancelled), provider stack, and any
+    RC-fallback annotations, with a build-metadata footer.
+
+OPTIONS:
+    --output=text      Human-readable report (default; TTY-aware colour,
+                       honours NO_COLOR).
+    --output=json      Re-emit the structured JSON, pretty-printed.
     -h, --help         Print this message"
         }
         "fix" => {

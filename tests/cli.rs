@@ -84,6 +84,67 @@ fn test_version_output() {
     assert!(stdout.contains("karac 0.1.0"));
 }
 
+// ── karac debug (crash-report renderer) ─────────────────────────
+
+const CRASH_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/examples/crash/user_dashboard_panic.json"
+);
+
+#[test]
+fn test_debug_renders_human_crash_report() {
+    let out = karac_bin()
+        .arg("debug")
+        .arg(CRASH_FIXTURE)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Kāra crash report"));
+    assert!(stdout.contains("panic: index out of bounds"));
+    assert!(stdout.contains("src/handlers.kara:42:18"));
+    // Effect set renders through the shared compact form (canonical order).
+    assert!(stdout.contains("effects: reads(UserDB) + sends(Network)"));
+    assert!(stdout.contains("par@spawn_site_42"));
+    assert!(stdout.contains("PostgresPool"));
+    assert!(stdout.contains("`session` became RC"));
+    assert!(stdout.contains("x86_64-unknown-linux-gnu"));
+    // Piped (non-TTY) output is uncoloured under ColorChoice::Auto.
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "piped output must not carry ANSI"
+    );
+}
+
+#[test]
+fn test_debug_json_reemit_is_valid_json() {
+    let out = karac_bin()
+        .arg("debug")
+        .arg(CRASH_FIXTURE)
+        .arg("--output=json")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("re-emit must be valid JSON");
+    assert_eq!(v["panic_kind"], "index_out_of_bounds");
+}
+
+#[test]
+fn test_debug_missing_arg_errors() {
+    let out = karac_bin().arg("debug").output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("requires a crash-report file"));
+}
+
+#[test]
+fn test_debug_listed_in_help() {
+    let out = karac_bin().arg("help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("debug"));
+}
+
 #[test]
 fn test_no_args_shows_help() {
     let out = karac_bin().output().unwrap();

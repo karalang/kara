@@ -372,6 +372,14 @@ pub enum Command {
     Fmt {
         file: String,
     },
+    /// Render a `std.panic` crash report (`docs/design.md § 4. Crash Report
+    /// Format`). `input` is a JSON file path or `-` for stdin; the default
+    /// output is the human-readable form, `--output=json` re-emits the parsed
+    /// structured JSON (pretty-printed). Track 6 § CLI surface.
+    Debug {
+        input: String,
+        output: OutputMode,
+    },
     /// Apply machine-applicable suggestions back into the source file.
     /// v1 covers `did you mean` corrections on undefined names / types
     /// emitted by the resolver. With `--dry-run`, prints the would-be
@@ -812,6 +820,7 @@ pub fn execute(cmd: Command) {
             function,
         } => cmd_query(kind, &file, &function),
         Command::Fmt { file } => cmd_fmt(&file),
+        Command::Debug { input, output } => cmd_debug(&input, output),
         Command::Fix { file, dry_run } => cmd_fix(&file, dry_run),
         Command::Init {
             directory,
@@ -10602,6 +10611,66 @@ fn cmd_fmt(filename: &str) {
     }
     let formatted = crate::formatter::format_program(&parsed.program);
     print!("{formatted}");
+}
+
+/// `karac debug <crash.json>` — render a `std.panic` crash report
+/// (`docs/design.md § 4. Crash Report Format`). `input` is a file path or `-`
+/// for stdin. Default output is the human-readable form (TTY-aware colour);
+/// `--output=json` re-emits the parsed structured JSON, pretty-printed — a
+/// faithful, additive-safe passthrough that also validates the file is
+/// well-formed JSON. Track 6 § CLI surface.
+fn cmd_debug(input: &str, output: OutputMode) {
+    use std::io::Read as _;
+
+    let raw = if input == "-" {
+        let mut buf = String::new();
+        if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+            eprintln!("error: reading crash report from stdin: {e}");
+            process::exit(1);
+        }
+        buf
+    } else {
+        match std::fs::read_to_string(input) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: reading crash report '{input}': {e}");
+                process::exit(1);
+            }
+        }
+    };
+
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: '{input}' is not valid JSON: {e}");
+            process::exit(1);
+        }
+    };
+
+    match output {
+        // Structured re-emit: pretty-print the parsed JSON verbatim. Preserves
+        // any additive fields this `karac` doesn't model, and normalises
+        // formatting for downstream tooling / diffing.
+        OutputMode::Json | OutputMode::Jsonl => match serde_json::to_string_pretty(&value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("error: re-serializing crash report: {e}");
+                process::exit(1);
+            }
+        },
+        OutputMode::Text => match crate::crash_report::CrashReport::from_value(&value) {
+            Ok(report) => {
+                print!(
+                    "{}",
+                    crate::crash_report::render(&report, crate::effect_render::ColorChoice::Auto)
+                );
+            }
+            Err(e) => {
+                eprintln!("error: '{input}' is not a crash report: {e}");
+                process::exit(1);
+            }
+        },
+    }
 }
 
 /// Apply machine-applicable suggestions back into the source file.

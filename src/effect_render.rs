@@ -114,6 +114,26 @@ pub fn verb_keyword(verb: &EffectVerbKind) -> &str {
     }
 }
 
+/// Inverse of [`verb_keyword`]: map a keyword back to its [`EffectVerbKind`].
+/// The eight built-ins match exactly; anything else is a user-defined verb
+/// (`UserDefined(kw)`). Used when reconstructing effect sets from a serialized
+/// wire form — e.g. the `{verb, resource}` pairs in a `std.panic` crash report
+/// — so the reconstructed set renders through the same canonical machinery as
+/// a freshly-inferred one.
+pub fn verb_from_keyword(kw: &str) -> EffectVerbKind {
+    match kw {
+        "reads" => EffectVerbKind::Reads,
+        "writes" => EffectVerbKind::Writes,
+        "sends" => EffectVerbKind::Sends,
+        "receives" => EffectVerbKind::Receives,
+        "allocates" => EffectVerbKind::Allocates,
+        "panics" => EffectVerbKind::Panics,
+        "blocks" => EffectVerbKind::Blocks,
+        "suspends" => EffectVerbKind::Suspends,
+        other => EffectVerbKind::UserDefined(other.to_string()),
+    }
+}
+
 /// Canonical sort rank for the eight built-in verbs; user-defined verbs share
 /// the last rank and are disambiguated by keyword at the call sites that build
 /// the ordered map (so two distinct user verbs never collide).
@@ -325,6 +345,27 @@ mod tests {
     }
     fn refs(v: &[(EffectVerbKind, String)]) -> Vec<(&EffectVerbKind, &str)> {
         v.iter().map(|(k, r)| (k, r.as_str())).collect()
+    }
+
+    #[test]
+    fn verb_from_keyword_round_trips_builtins_and_maps_user_verbs() {
+        for verb in [
+            EffectVerbKind::Reads,
+            EffectVerbKind::Writes,
+            EffectVerbKind::Sends,
+            EffectVerbKind::Receives,
+            EffectVerbKind::Allocates,
+            EffectVerbKind::Panics,
+            EffectVerbKind::Blocks,
+            EffectVerbKind::Suspends,
+        ] {
+            assert_eq!(verb_from_keyword(verb_keyword(&verb)), verb);
+        }
+        // Any non-builtin keyword becomes a user-defined verb of that name.
+        assert_eq!(
+            verb_from_keyword("audits"),
+            EffectVerbKind::UserDefined("audits".to_string())
+        );
     }
 
     #[test]

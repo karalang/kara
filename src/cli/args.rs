@@ -52,6 +52,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 file: args[2].clone(),
             }
         }
+        "debug" => parse_debug_command(args),
         "fix" => parse_fix_command(args),
         "migrate" => parse_migrate_command(args),
         "init" => parse_init_command(args),
@@ -1482,6 +1483,44 @@ fn parse_fix_command(args: &[String]) -> Command {
         process::exit(1);
     };
     Command::Fix { file, dry_run }
+}
+
+/// Parser for `karac debug <crash.json> [--output=json|text]`. The positional
+/// is a JSON file path or `-` for stdin. `--output=text` (default) renders the
+/// human-readable report; `--output=json` re-emits the structured JSON.
+fn parse_debug_command(args: &[String]) -> Command {
+    let mut input: Option<String> = None;
+    let mut output = OutputMode::Text;
+    for arg in args.iter().skip(2) {
+        match arg.as_str() {
+            "--output=json" => output = OutputMode::Json,
+            "--output=text" => output = OutputMode::Text,
+            // `-` is the stdin sentinel, not a flag — accept it as the input.
+            "-" => {
+                if input.is_some() {
+                    eprintln!("error: `karac debug` takes at most one input argument");
+                    process::exit(1);
+                }
+                input = Some("-".to_string());
+            }
+            flag if flag.starts_with("--") => {
+                eprintln!("error: unknown flag '{flag}' for `karac debug`");
+                process::exit(1);
+            }
+            other => {
+                if input.is_some() {
+                    eprintln!("error: `karac debug` takes at most one input argument");
+                    process::exit(1);
+                }
+                input = Some(other.to_string());
+            }
+        }
+    }
+    let Some(input) = input else {
+        eprintln!("error: `karac debug` requires a crash-report file (or `-` for stdin)");
+        process::exit(1);
+    };
+    Command::Debug { input, output }
 }
 
 /// Parser for `karac catalog <file.kara>`. Takes a single positional file

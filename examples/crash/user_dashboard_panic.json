@@ -1,0 +1,69 @@
+{
+  "panic_site": {
+    "file": "src/handlers.kara",
+    "line": 42,
+    "column": 18,
+    "function": "fetch_user_dashboard",
+    "instruction_pointer": "0x0000000100401040"
+  },
+  "panic_kind": "index_out_of_bounds",
+  "message": "index out of bounds: the len is 3 but the index is 99",
+  "logical_stack": [
+    {
+      "function": "fetch_user_dashboard",
+      "file": "src/handlers.kara",
+      "line": 42,
+      "column": 18,
+      "effects": [
+        { "verb": "sends", "resource": "Network" },
+        { "verb": "reads", "resource": "UserDB" }
+      ]
+    },
+    {
+      "function": "handle_request",
+      "file": "src/server.kara",
+      "line": 88,
+      "column": 5,
+      "effects": [
+        { "verb": "reads", "resource": "UserDB" }
+      ]
+    },
+    {
+      "function": "main",
+      "file": "src/main.kara",
+      "line": 12,
+      "column": 3,
+      "effects": []
+    }
+  ],
+  "provider_stack": [
+    {
+      "resource": "Db",
+      "provider": "PostgresPool",
+      "bound_at": { "file": "src/main.kara", "line": 8, "column": 3 }
+    }
+  ],
+  "rc_fallback": [
+    {
+      "binding": "session",
+      "chosen_at": { "file": "src/handlers.kara", "line": 40, "column": 9 },
+      "reason": "captured by closure with subsequent outer use"
+    }
+  ],
+  "parallel_context": {
+    "spawn_site_id": 42,
+    "worker_index": 3,
+    "panicked_branch": "par@spawn_site_42",
+    "siblings_running": ["render_sidebar", "load_notifications"],
+    "siblings_cancelled": [
+      { "name": "fetch_activity", "effect_boundary": "sends" }
+    ]
+  },
+  "build_metadata": {
+    "kara_version": "0.1.0",
+    "compiler_commit": "abc1234",
+    "target_triple": "x86_64-unknown-linux-gnu",
+    "profile": "release",
+    "edition": "2026"
+  }
+}
