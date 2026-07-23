@@ -286,16 +286,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 let fn_val = self.current_fn.unwrap();
                 let elem_slot = self.create_entry_alloca(fn_val, "set.contains.elem", elem_ty);
                 self.builder.build_store(elem_slot, elem_val).unwrap();
-                let found = self
-                    .builder
-                    .build_call(
-                        self.karac_map_contains_fn,
-                        &[set_handle.into(), elem_slot.into()],
-                        "set.contains",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic();
+                // Scalar-key fast path: a monomorphized `karac_set_<K>_contains`
+                // inlines the FNV hash + linear probe (value-passed key), skipping
+                // the erased runtime's indirect `hash_fn`/`eq_fn` calls. The mono
+                // contains hashes identically to the Set's stored `hash_fn`
+                // pointer, so it agrees with erased inserts on bucket placement.
+                // Gate on the compiled value type matching `elem_ty` (mono's
+                // value-pass convention verifier-errors on a mismatch, while the
+                // erased pointer path tolerates shape drift).
+                let found =
+                    if self.should_use_mono_set_for(elem_ty) && elem_val.get_type() == elem_ty {
+                        let contains_fn = self.get_or_emit_set_mono_contains(elem_ty);
+                        self.builder
+                            .build_call(
+                                contains_fn,
+                                &[set_handle.into(), elem_val.into()],
+                                "set.contains",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                    } else {
+                        self.builder
+                            .build_call(
+                                self.karac_map_contains_fn,
+                                &[set_handle.into(), elem_slot.into()],
+                                "set.contains",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                    };
                 // Lookup-only: `karac_map_contains` hashes/compares but never
                 // stores the incoming element, so free a fresh-owned-temp element
                 // (B-2026-06-20-12, mirrors `Map.contains_key` B-2026-06-20-9).

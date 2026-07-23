@@ -2874,6 +2874,20 @@ impl<'ctx> super::Codegen<'ctx> {
     const KARAC_MAP_CAPACITY_OFFSET: u64 = 16;
     const KARAC_MAP_LEN_OFFSET: u64 = 24;
     const KARAC_MAP_TOMBSTONES_OFFSET: u64 = 32;
+    /// `val_size` field (offset 48): after status, kv, capacity, len,
+    /// tombstones, key_size (5*8 + 2*8 = 48). Read by the Set contains probe to
+    /// recover the true bucket stride `key_size + val_size` — a `Set.new()` map
+    /// has `val_size = 0`, but a *cloned* Set has `val_size = 8` (its unit value
+    /// type lowers to an i64-sized slot in `emit_map_clone_fn`), so the stride
+    /// is not constant across Set instances and must be read at runtime.
+    const KARAC_MAP_VAL_SIZE_OFFSET: u64 = 48;
+    /// `hash_fn` pointer field: after status, kv (2 ptrs) + capacity, len,
+    /// tombstones, key_size, val_size (5 usizes) = 8*2 + 8*5 = 56. Used by
+    /// [`emit_mono_set_contains_body`] to call the Set's *actual* stored hash
+    /// rather than a hardcoded one — different Set creation paths (`Set.new`
+    /// vs `clone`/set-ops) may store different-but-self-consistent hashes, so
+    /// the mono probe must hash the same way the buckets were filled.
+    const KARAC_MAP_HASH_FN_OFFSET: u64 = 56;
     /// Bucket status-byte sentinels for the monomorphized probe
     /// loop. Must match the runtime's `BUCKET_EMPTY` /
     /// `BUCKET_OCCUPIED` / `BUCKET_TOMBSTONE` constants in
@@ -3703,6 +3717,300 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         // ── not.found: return false, out_val untouched ───────────
+        self.builder.position_at_end(not_found_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_zero()))
+            .unwrap();
+    }
+
+    /// Sibling of [`should_use_mono_map_for`] for Set membership: a Set lowers
+    /// to a `val_size = 0` key-only map, so there is no value type to gate on —
+    /// only the key must be an `i32`/`i64` scalar (identical hashing across the
+    /// erased-insert and mono-contains paths, the same guarantee the Map mono
+    /// path relies on).
+    pub(super) fn should_use_mono_set_for(&self, key_ty: BasicTypeEnum<'ctx>) -> bool {
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        matches!(key_ty, BasicTypeEnum::IntType(t) if t == i32_t || t == i64_t)
+    }
+
+    /// Set membership fast path: emit (or reuse) a monomorphized
+    /// `karac_set_<K>_contains(map, key) -> bool` that inlines the linear probe
+    /// and the key `icmp eq` directly against the runtime `KaracMap`, skipping
+    /// the erased runtime's FFI boundary and its indirect per-probe `eq_fn`
+    /// call. Semantically `karac_map_get(...).is_some()` with no value slot.
+    /// Only valid for [`should_use_mono_set_for`] keys. The hash and the bucket
+    /// stride are BOTH read from the map struct at runtime (the stored `hash_fn`
+    /// pointer and the `val_size` field) rather than hardcoded, because Set
+    /// instances are not uniform: `Set.new()` and `clone`/set-ops can register
+    /// different hashes and different `val_size`s, and the probe must match how
+    /// the buckets were actually filled.
+    pub(super) fn get_or_emit_set_mono_contains(
+        &mut self,
+        key_ty: BasicTypeEnum<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let mangle = self.llvm_type_to_mangle_str(key_ty);
+        let fn_name = format!("karac_set_{mangle}_contains");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let saved_bb = self.builder.get_insert_block();
+        let fn_ty = bool_t.fn_type(&[ptr_ty.into(), key_ty.into()], false);
+        let f = self
+            .module
+            .add_function(&fn_name, fn_ty, Some(Linkage::LinkOnceODR));
+        self.emit_mono_set_contains_body(f, key_ty);
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Body for [`get_or_emit_set_mono_contains`]. Mirrors
+    /// [`emit_mono_map_get_body`] with two changes: no `out_val` out-param
+    /// (Sets carry no value), and the bucket stride is `key_size` (`val_size =
+    /// 0`). A match returns `true` without loading a value; a miss returns
+    /// `false`.
+    fn emit_mono_set_contains_body(&mut self, f: FunctionValue<'ctx>, key_ty: BasicTypeEnum<'ctx>) {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let key_int_ty = key_ty.into_int_type();
+        // Key occupies the first `key_size` bytes of each bucket. The bucket
+        // STRIDE, however, is `key_size + val_size`, and `val_size` is NOT
+        // constant across Set instances: `Set.new()` uses 0, but a cloned Set
+        // carries an 8-byte unit value slot (see `emit_map_clone_fn`). So the
+        // stride is read from the map's `val_size` field at runtime below.
+        let key_size_bytes = (key_int_ty.get_bit_width() as u64).div_ceil(8);
+
+        let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
+        let key_arg = f.get_nth_param(1).unwrap().into_int_value();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Signature of the runtime's stored `hash_fn`: `fn(*const key) -> u64`.
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+
+        let entry_bb = self.context.append_basic_block(f, "entry");
+        let probe_cond_bb = self.context.append_basic_block(f, "probe.cond");
+        let probe_body_bb = self.context.append_basic_block(f, "probe.body");
+        let check_occupied_bb = self.context.append_basic_block(f, "check.occupied");
+        let eq_check_bb = self.context.append_basic_block(f, "eq.check");
+        let match_found_bb = self.context.append_basic_block(f, "match.found");
+        let not_found_bb = self.context.append_basic_block(f, "not.found");
+
+        // ── entry: load cap / status / kv, compute hash and start ─
+        self.builder.position_at_end(entry_bb);
+        let cap_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_CAPACITY_OFFSET, false)],
+                    "cap.p",
+                )
+                .unwrap()
+        };
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_p, "cap")
+            .unwrap()
+            .into_int_value();
+        let status_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_STATUS_OFFSET, false)],
+                    "status.pp",
+                )
+                .unwrap()
+        };
+        let status_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                status_pp,
+                "status",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let kv_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_KV_OFFSET, false)],
+                    "kv.pp",
+                )
+                .unwrap()
+        };
+        let kv_ptr = self
+            .builder
+            .build_load(self.context.ptr_type(AddressSpace::default()), kv_pp, "kv")
+            .unwrap()
+            .into_pointer_value();
+        // Runtime bucket stride = key_size + val_size (val_size read from the
+        // struct — 0 for a fresh Set, 8 for a cloned one).
+        let val_size_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_VAL_SIZE_OFFSET, false)],
+                    "val.size.p",
+                )
+                .unwrap()
+        };
+        let val_size = self
+            .builder
+            .build_load(i64_t, val_size_p, "val.size")
+            .unwrap()
+            .into_int_value();
+        let stride = self
+            .builder
+            .build_int_add(
+                i64_t.const_int(key_size_bytes, false),
+                val_size,
+                "bucket.stride",
+            )
+            .unwrap();
+        // Load the Set's stored `hash_fn` pointer and call it indirectly — the
+        // buckets were filled with this exact function (`Set.new` and
+        // `clone`/set-ops may register different-but-self-consistent hashes), so
+        // hardcoding one here would probe the wrong bucket for a Set whose
+        // stored hash differs. The probe + key eq below stay inlined; only the
+        // hash is an indirect call (as on the erased path too), and the win
+        // comes from dropping the erased-runtime FFI boundary + inlining eq.
+        let hash_fn_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
+                    "hash.fn.pp",
+                )
+                .unwrap()
+        };
+        let hash_fn_ptr = self
+            .builder
+            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
+            .unwrap()
+            .into_pointer_value();
+        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
+        self.builder.build_store(hash_key_slot, key_arg).unwrap();
+        let hash = self
+            .builder
+            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[hash_key_slot.into()], "hash")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let mask = self
+            .builder
+            .build_int_sub(cap, i64_t.const_int(1, false), "mask")
+            .unwrap();
+        let start = self.builder.build_and(hash, mask, "start").unwrap();
+        self.builder
+            .build_unconditional_branch(probe_cond_bb)
+            .unwrap();
+
+        // ── probe.cond: PHI for i; bound-check vs cap ─────────────
+        self.builder.position_at_end(probe_cond_bb);
+        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let bound_done = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bound_done, not_found_bb, probe_body_bb)
+            .unwrap();
+
+        // ── probe.body: load status, branch on empty ──────────────
+        self.builder.position_at_end(probe_body_bb);
+        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
+        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        let status_slot_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
+                .unwrap()
+        };
+        let status_byte = self
+            .builder
+            .build_load(i8_t, status_slot_p, "status.byte")
+            .unwrap()
+            .into_int_value();
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_EMPTY, false),
+                "is.empty",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, not_found_bb, check_occupied_bb)
+            .unwrap();
+
+        // ── check.occupied: tombstone → continue, occupied → eq ──
+        self.builder.position_at_end(check_occupied_bb);
+        let is_occupied = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
+                "is.occupied",
+            )
+            .unwrap();
+        let tomb_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
+            .unwrap();
+        i_phi.add_incoming(&[(&tomb_i_next, check_occupied_bb)]);
+        self.builder
+            .build_conditional_branch(is_occupied, eq_check_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── eq.check: inline icmp eq on K key ────────────────────
+        self.builder.position_at_end(eq_check_bb);
+        let slot_off = self
+            .builder
+            .build_int_mul(slot, stride, "slot.off")
+            .unwrap();
+        let slot_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "slot.kv.p")
+                .unwrap()
+        };
+        let slot_key = self
+            .builder
+            .build_load(key_int_ty, slot_kv_p, "slot.key")
+            .unwrap()
+            .into_int_value();
+        let key_match = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, slot_key, key_arg, "key.match")
+            .unwrap();
+        let nomatch_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.nomatch")
+            .unwrap();
+        i_phi.add_incoming(&[(&nomatch_i_next, eq_check_bb)]);
+        self.builder
+            .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── match.found: return true (no value to load) ──────────
+        self.builder.position_at_end(match_found_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // ── not.found: return false ──────────────────────────────
         self.builder.position_at_end(not_found_bb);
         self.builder
             .build_return(Some(&bool_t.const_zero()))
