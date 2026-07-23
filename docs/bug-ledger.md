@@ -93,12 +93,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 167 | 1 |
-| leak | 95 | 0 |
+| leak | 96 | 1 |
 | double-free | 79 | 1 |
-| codegen-gap | 74 | 2 |
+| codegen-gap | 74 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 41 | 0 |
-| run-vs-build | 39 | 0 |
+| run-vs-build | 40 | 1 |
 | crash | 28 | 0 |
 | soundness | 24 | 0 |
 | perf | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 476 | 4 |
+| codegen | 477 | 3 |
 | typecheck | 84 | 0 |
-| interp | 69 | 0 |
+| interp | 70 | 1 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
 | autopar | 16 | 0 |
@@ -124,20 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **652 surfaced · 4 open · 643 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **654 surfaced · 4 open · 645 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-23-2 | 2026-07-23 | codegen | medium | F32/F64 total-order wrapper: `.value` field access on a match-arm binding extracted from a USER-ENUM payload falls through to the const-0 tail -> malformed IR / module-verification failure under `karac build` (interp correct). Followup to B-2026-07-22-11. | — |
-| B-2026-07-23-3 | 2026-07-23 | codegen | medium | A `Map`/`Set` value bound out of a USER-ENUM variant payload loses its container type for codegen method dispatch: `match v { Table(m) => m.len() }` fails 'no handler for method len on variable m' under `karac build` (interp correct). `Vec` payloads work. | — |
 | B-2026-07-23-4 | 2026-07-23 | codegen | high | Matching a fresh-temp `Result[_, _]` (a direct function-call return) whose extracted payload is a STRUCT with a heap field (String/Vec), and reading that field (`match f() { Ok(w) => println(w.s) }`), double-frees the field's buffer under `karac build` — a memory-safety bug in an extremely common pattern. interp is clean. | — |
 | B-2026-07-23-5 | 2026-07-23 | codegen | medium | A generic fn whose return type PERMUTES the struct's type params — `fn swap[A,B](p: Pair[A,B]) -> Pair[B,A] { Pair { first: p.second, second: p.first } }` — miscompiles: the mono builds the returned struct literal with the INPUT layout `Pair[A,B]` instead of `Pair[B,A]`, failing LLVM module verification when A and B have different sizes. | — |
+| B-2026-07-23-11 | 2026-07-23 | codegen | medium | A user enum carrying a `Map`/`Set`(-family) payload leaks the handle at scope-exit drop: the enum drop walker has no Map/Set arm, so the whole kv-table is definitely-lost under valgrind. `Vec`/`String` payloads free correctly. | — |
+| B-2026-07-23-12 | 2026-07-23 | interp | low | `mut ref` enum-payload `Map` mutation does not write through in the interpreter (interp keeps the pre-mutation size) while codegen writes through correctly — interp/codegen divergence for `match v (mut ref V) { Table(m) => m.insert(..) }`. | — |
 
-### Fixed (643)
+### Fixed (645)
 
-<details><summary>643 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>645 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -779,6 +779,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **652 surfaced 
 | B-2026-07-22-13 | ownership | low | Spurious `rc-fallback` (perf false-positive) for a `match`/`if let` binding that is CONSUMED EXACTLY ONCE, when the match sits inside a loop: `while… | 042f848 |
 | B-2026-07-22-14 | autopar | medium | Auto-par false-negative REGRESSION from B-2026-07-22-9: the new producer-side move-hazard guard de-parallelizes a heap-owning producer whose binding… | 7a73b9d |
 | B-2026-07-23-1 | codegen | medium | An early `return` out of a `for (k, v) in map` / `for x in set` loop leaks the `karac_map_iter_new` iterator handle | 1dea868 |
+| B-2026-07-23-2 | codegen | medium | F32/F64 total-order wrapper: `.value` field access on a match-arm binding extracted from a USER-ENUM payload falls through to the const-0 tail -> mal… | 054b1be |
+| B-2026-07-23-3 | codegen | medium | A `Map`/`Set` value bound out of a USER-ENUM variant payload loses its container type for codegen method dispatch: `match v { Table(m) => m.len() }`… | 054b1be |
 | B-2026-07-23-6 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (selfhost/src/codegen.kara emitter, NOT the seed): OR-PATTERNS `A \| B \| C =>` matched only the FIRST a… | 990ba16 |
 | B-2026-07-23-7 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): MATCH GUARDS `Pat if <cond> =>` were IGNORED entirely — the emitter always too… | 73b3e69 |
 | B-2026-07-23-8 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): `loop {}`, `break`, and `continue` were UNHANDLED — a `loop { … break }` emitt… | fa25a34 |
