@@ -87,6 +87,43 @@ impl<'a> super::Resolver<'a> {
             self.resolve_type_expr(&param.ty);
         }
 
+        // Resolve contract expressions (requires / ensures) in the function
+        // scope. Previously the resolver skipped contracts entirely, so an
+        // undefined name inside one — including the common typo of writing
+        // `ensures result …` WITHOUT the `(result)` binding — passed
+        // `karac check` and then ICE'd at runtime ("variable '…' not found …
+        // should be caught by resolver"). `requires` sees the params; an
+        // `ensures(result) …` clause additionally binds the result name to the
+        // return value (design.md § Contracts). A synthetic `old` binding lets
+        // the `old(expr)` pre-state form resolve at any nesting depth — the
+        // interpreter intercepts `old` by name through a separate runtime env
+        // and the typechecker enforces its ensures-only restriction, so this
+        // only satisfies name resolution. (B-2026-07-23-17.)
+        for req in &f.requires {
+            self.resolve_expr(req);
+        }
+        for clause in &f.ensures {
+            self.table.push_scope(ScopeKind::Block);
+            let _ = self.table.define(
+                "old".to_string(),
+                SymbolKind::Function {
+                    param_names: vec!["expr".to_string()],
+                },
+                clause.span.clone(),
+                false,
+            );
+            if let Some(binding) = &clause.param {
+                let _ = self.table.define(
+                    binding.clone(),
+                    SymbolKind::Variable { is_mut: false },
+                    clause.span.clone(),
+                    false,
+                );
+            }
+            self.resolve_expr(&clause.body);
+            self.table.pop_scope();
+        }
+
         // Resolve return type
         if let Some(ref ret_ty) = f.return_type {
             self.resolve_type_expr(ret_ty);

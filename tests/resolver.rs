@@ -273,6 +273,37 @@ fn test_parameter_in_body() {
 }
 
 #[test]
+fn test_undefined_name_in_ensures_is_a_resolve_error() {
+    // B-2026-07-23-17: the resolver previously skipped `requires`/`ensures`
+    // contract expressions entirely, so an undefined name in one (including
+    // the common typo of `ensures result …` WITHOUT the `(result)` binding)
+    // passed `karac check` and ICE'd at runtime. It must now resolve like any
+    // other expression and report the undefined name.
+    let errors = resolve_errors("fn f(a: i64) -> i64 ensures result == a { a }");
+    assert!(errors.iter().any(|e| e.kind == ResolveErrorKind::UndefinedName
+        && e.message.contains("result")));
+}
+
+#[test]
+fn test_undefined_name_in_requires_is_a_resolve_error() {
+    let errors = resolve_errors("fn f(a: i64) -> i64 requires bogus > 0 { a }");
+    assert!(errors.iter().any(|e| e.kind == ResolveErrorKind::UndefinedName
+        && e.message.contains("bogus")));
+}
+
+#[test]
+fn test_ensures_result_binding_and_old_resolve() {
+    // The `(result)` binding names the return value; `old(expr)` names the
+    // entry snapshot. Both must resolve in the postcondition scope.
+    resolve_ok("fn f(a: i64) -> i64 ensures(result) result == old(a) { a }");
+}
+
+#[test]
+fn test_requires_sees_parameters() {
+    resolve_ok("fn f(a: i64, b: i64) -> i64 requires a > 0 and b != 0 { a / b }");
+}
+
+#[test]
 fn test_shadowing_in_block() {
     resolve_ok(
         "fn main() {\n\
