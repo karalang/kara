@@ -1,0 +1,51 @@
+{
+  "panic_site": {
+    "file": "src/ingest.kara",
+    "line": 54,
+    "column": 12,
+    "function": "parse_shard",
+    "instruction_pointer": "0x0000000100403110"
+  },
+  "panic_kind": "par_fail_fast_cancel",
+  "message": "unwrap on Err value: ParseError { line: 3, msg: \"unexpected end of input\" }",
+  "logical_stack": [
+    {
+      "function": "parse_shard",
+      "file": "src/ingest.kara",
+      "line": 54,
+      "column": 12,
+      "effects": [
+        { "verb": "reads", "resource": "Blob" },
+        { "verb": "panics", "resource": "" }
+      ]
+    },
+    {
+      "function": "ingest_batch",
+      "file": "src/ingest.kara",
+      "line": 40,
+      "column": 3,
+      "effects": [
+        { "verb": "reads", "resource": "Blob" },
+        { "verb": "writes", "resource": "WarehouseDB" }
+      ]
+    }
+  ],
+  "parallel_context": {
+    "spawn_site_id": 17,
+    "worker_index": 2,
+    "panicked_branch": "par@spawn_site_17",
+    "siblings_running": ["parse_shard[0]", "parse_shard[1]", "parse_shard[3]"],
+    "siblings_cancelled": [
+      { "name": "parse_shard[0]", "effect_boundary": "writes" },
+      { "name": "parse_shard[1]", "effect_boundary": "writes" },
+      { "name": "parse_shard[3]", "effect_boundary": "reads" }
+    ]
+  },
+  "build_metadata": {
+    "kara_version": "0.1.0",
+    "compiler_commit": "abc1234",
+    "target_triple": "x86_64-unknown-linux-gnu",
+    "profile": "release",
+    "edition": "2026"
+  }
+}

@@ -131,6 +131,38 @@ fn test_debug_json_reemit_is_valid_json() {
 }
 
 #[test]
+fn test_debug_renders_drop_during_unwind_with_caused_by() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/crash/rc_fallback_drop_panic.json"
+    );
+    let out = karac_bin().arg("debug").arg(fixture).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("panic while unwinding (drop)"));
+    // The original panic is surfaced as `caused by:`.
+    assert!(stdout.contains("caused by:"));
+    assert!(stdout.contains("index out of bounds: the len is 0"));
+    assert!(stdout.contains("`session` became RC"));
+}
+
+#[test]
+fn test_debug_renders_par_fail_fast_cancellations() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/crash/par_fail_fast_panic.json"
+    );
+    let out = karac_bin().arg("debug").arg(fixture).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("parallel fail-fast cancellation"));
+    assert!(stdout.contains("par@spawn_site_17"));
+    // Each cancelled sibling is listed with its effect boundary.
+    assert!(stdout.contains("cancelled: parse_shard[0] at writes boundary"));
+    assert!(stdout.contains("cancelled: parse_shard[3] at reads boundary"));
+}
+
+#[test]
 fn test_debug_missing_arg_errors() {
     let out = karac_bin().arg("debug").output().unwrap();
     assert!(!out.status.success());

@@ -1,0 +1,67 @@
+{
+  "panic_site": {
+    "file": "src/cache.kara",
+    "line": 71,
+    "column": 5,
+    "function": "Session::drop",
+    "instruction_pointer": "0x00000001004022a0"
+  },
+  "panic_kind": "drop_during_unwind",
+  "message": "channel closed: send on a disconnected receiver",
+  "logical_stack": [
+    {
+      "function": "Session::drop",
+      "file": "src/cache.kara",
+      "line": 71,
+      "column": 5,
+      "effects": [
+        { "verb": "sends", "resource": "Metrics" }
+      ]
+    },
+    {
+      "function": "handle_checkout",
+      "file": "src/checkout.kara",
+      "line": 118,
+      "column": 9,
+      "effects": [
+        { "verb": "reads", "resource": "OrderDB" },
+        { "verb": "writes", "resource": "OrderDB" }
+      ]
+    }
+  ],
+  "rc_fallback": [
+    {
+      "binding": "session",
+      "chosen_at": { "file": "src/checkout.kara", "line": 96, "column": 13 },
+      "reason": "captured by a spawned closure with subsequent outer use — RC keeps it alive across the task boundary"
+    }
+  ],
+  "caused_by": {
+    "panic_site": {
+      "file": "src/checkout.kara",
+      "line": 122,
+      "column": 20,
+      "function": "handle_checkout"
+    },
+    "panic_kind": "index_out_of_bounds",
+    "message": "index out of bounds: the len is 0 but the index is 0",
+    "logical_stack": [
+      {
+        "function": "handle_checkout",
+        "file": "src/checkout.kara",
+        "line": 122,
+        "column": 20,
+        "effects": [
+          { "verb": "reads", "resource": "OrderDB" }
+        ]
+      }
+    ]
+  },
+  "build_metadata": {
+    "kara_version": "0.1.0",
+    "compiler_commit": "abc1234",
+    "target_triple": "aarch64-apple-darwin",
+    "profile": "release",
+    "edition": "2026"
+  }
+}

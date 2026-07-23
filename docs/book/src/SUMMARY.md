@@ -35,6 +35,10 @@
 - [Kāra as a Library: Additive Interop](./ch18-interop.md)
 - [Handling Secrets](./ch19-secrets.md)
 
+# Operating in Production
+
+- [The 3am Runbook: Debugging Crashes](./ch20-debugging-crashes.md)
+
 # Appendices
 
 - [Appendix A: Keywords](./appendix-a-keywords.md)
