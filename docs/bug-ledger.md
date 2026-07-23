@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 173 | 0 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
-| codegen-gap | 76 | 1 |
+| codegen-gap | 76 | 0 |
 | missing-feature | 62 | 0 |
 | false-positive | 41 | 0 |
 | run-vs-build | 40 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 484 | 1 |
+| codegen | 484 | 0 |
 | typecheck | 85 | 0 |
 | interp | 70 | 0 |
 | ownership | 27 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **667 surfaced · 1 open · 661 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **667 surfaced · 0 open · 662 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-23-24 | 2026-07-23 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): `Vec[bool]` has NO distinct element kind — it is conflated with `Vec[i64]` (kind 3), so the i1/i64 lane is mishandled at BOTH ends: `push(false)` emits `store i64 false` (an i1 constant into an i64 store → module verification failure), and a read `v[i]` returns i64 while `if v[i]` needs i1 (`br i1 <i64>` type error). Vec[bool] cannot be constructed or read. | — |
+_None — the ledger is fully drained._
 
-### Fixed (661)
+### Fixed (662)
 
-<details><summary>661 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>662 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -798,6 +796,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **667 surfaced 
 | B-2026-07-23-21 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): the BITWISE and SHIFT operators `& \| ^ << >>` were ALL emitted as `add` | 8a5fec2 |
 | B-2026-07-23-22 | parser | medium | SELFHOST PARSER (parser.kara, Phase-12 port): COMPOUND ASSIGNMENT `x += v` / `-=` / `*=` / `/=` / `%=` is SILENTLY DROPPED — a no-op with no diagnost… | ff05918 |
 | B-2026-07-23-23 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): INDEXED ASSIGNMENT `v[i] = value` was SILENTLY DROPPED | 53f2553 |
+| B-2026-07-23-24 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): `Vec[bool]` has NO distinct element kind — it is conflated with `Vec[i64]` (kind 3), so the i1/i64 la… | 0498e79 |
 | B-2026-07-23-25 | autopar | medium | Auto-par over-parallelizes a fine-grained inner loop, making the DEFAULT `karac build` catastrophically slow (~1000x) while output stays CORRECT | c702d61 |
 
 </details>
