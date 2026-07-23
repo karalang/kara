@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 76 | 1 |
-| missing-feature | 62 | 1 |
+| missing-feature | 62 | 0 |
 | false-positive | 41 | 0 |
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
@@ -119,23 +119,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 14 | 0 |
 | cli | 12 | 0 |
 | resolver | 11 | 0 |
-| parser | 6 | 1 |
+| parser | 6 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **666 surfaced · 2 open · 659 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **666 surfaced · 1 open · 660 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-23-22 | 2026-07-23 | parser | medium | SELFHOST PARSER (parser.kara, Phase-12 port): COMPOUND ASSIGNMENT `x += v` / `-=` / `*=` / `/=` / `%=` is SILENTLY DROPPED — a no-op with no diagnostic. The block statement handler parses the LHS then only checks for a plain `Equal`; a `PlusEqual`(-family) token is neither an assignment nor a recognized infix operator, so the LHS becomes a bare expression-statement and the `OP= value` tail is discarded. `let mut x = 5; x += 3;` leaves x = 5. | — |
 | B-2026-07-23-24 | 2026-07-23 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): `Vec[bool]` has NO distinct element kind — it is conflated with `Vec[i64]` (kind 3), so the i1/i64 lane is mishandled at BOTH ends: `push(false)` emits `store i64 false` (an i1 constant into an i64 store → module verification failure), and a read `v[i]` returns i64 while `if v[i]` needs i1 (`br i1 <i64>` type error). Vec[bool] cannot be constructed or read. | — |
 
-### Fixed (659)
+### Fixed (660)
 
-<details><summary>659 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>660 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -797,6 +796,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **666 surfaced 
 | B-2026-07-23-19 | parser | high | A parenthesized single pattern `(P)` is parsed as a 1-element tuple `Tuple([P])` instead of a grouping, so `x @ (1 \| 2 \| 3)` and top-level `(1 \| 2)`… | b85cad8 |
 | B-2026-07-23-20 | autopar | high | Auto-par miscompiles a reduction loop whose body passes a LOOP-INVARIANT shared `mut ref` scratch buffer to a helper | fa53107 |
 | B-2026-07-23-21 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): the BITWISE and SHIFT operators `& \| ^ << >>` were ALL emitted as `add` | 8a5fec2 |
+| B-2026-07-23-22 | parser | medium | SELFHOST PARSER (parser.kara, Phase-12 port): COMPOUND ASSIGNMENT `x += v` / `-=` / `*=` / `/=` / `%=` is SILENTLY DROPPED — a no-op with no diagnost… | ff05918 |
 | B-2026-07-23-23 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): INDEXED ASSIGNMENT `v[i] = value` was SILENTLY DROPPED | 53f2553 |
 
 </details>
