@@ -1583,7 +1583,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         let one = i64_t.const_int(1, false);
-        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        // `nsw` (arith-flags P3): this collection-iteration counter is reached
+        // only under the `cur < len` cond guard, and `len` is a collection
+        // length ≤ isize::MAX, so `cur + 1 ≤ len ≤ i64::MAX` — provably no
+        // signed overflow. Marking the increment `nsw` lets ScalarEvolution
+        // model it as a wrap-free affine recurrence (trip-count / IV-widening /
+        // vectorization), the same sound compiler-generated-counter argument as
+        // the `for i in a..b` induction variable (`compile_for_range_with_step`).
+        let next = self.builder.build_int_nsw_add(cur, one, "incr").unwrap();
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
@@ -1816,7 +1823,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         let one = i64_t.const_int(1, false);
-        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        // `nsw` (arith-flags P3): this collection-iteration counter is reached
+        // only under the `cur < len` cond guard, and `len` is a collection
+        // length ≤ isize::MAX, so `cur + 1 ≤ len ≤ i64::MAX` — provably no
+        // signed overflow. Marking the increment `nsw` lets ScalarEvolution
+        // model it as a wrap-free affine recurrence (trip-count / IV-widening /
+        // vectorization), the same sound compiler-generated-counter argument as
+        // the `for i in a..b` induction variable (`compile_for_range_with_step`).
+        let next = self.builder.build_int_nsw_add(cur, one, "incr").unwrap();
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
@@ -3617,7 +3631,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         let one = i64_t.const_int(1, false);
-        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        // `nsw` (arith-flags P3): this collection-iteration counter is reached
+        // only under the `cur < len` cond guard, and `len` is a collection
+        // length ≤ isize::MAX, so `cur + 1 ≤ len ≤ i64::MAX` — provably no
+        // signed overflow. Marking the increment `nsw` lets ScalarEvolution
+        // model it as a wrap-free affine recurrence (trip-count / IV-widening /
+        // vectorization), the same sound compiler-generated-counter argument as
+        // the `for i in a..b` induction variable (`compile_for_range_with_step`).
+        let next = self.builder.build_int_nsw_add(cur, one, "incr").unwrap();
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 

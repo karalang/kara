@@ -72629,6 +72629,32 @@ fn main() { print(0); }
         );
     }
 
+    #[test]
+    fn for_collection_iteration_counter_nsw() {
+        // arith-flags P3: a `for x in <collection>` loop's synthetic index
+        // counter runs only under `cur < len` (len ≤ isize::MAX), so `cur + 1`
+        // never signed-overflows → `add nsw` (the same wrap-free-affine-IV win
+        // as the for-range induction variable). Covers the Vec and Slice
+        // element-iteration forms.
+        let ir = ir_for(
+            r#"
+fn sum_vec(v: Vec[i64]) -> i64 { let mut s = 0; for x in v { s = s + x; } return s; }
+fn sum_slice(v: mut Slice[i64]) -> i64 { let mut s = 0; for x in v { s = s + x; } return s; }
+fn main() { print(0); }
+"#,
+        );
+        let vec_body = fn_body(&ir, "@sum_vec(");
+        assert!(
+            vec_body.contains("%incr = add nsw i64"),
+            "Vec for-loop counter should be `add nsw`:\n{vec_body}"
+        );
+        let slice_body = fn_body(&ir, "@sum_slice(");
+        assert!(
+            slice_body.contains("%incr = add nsw i64"),
+            "Slice for-loop counter should be `add nsw`:\n{slice_body}"
+        );
+    }
+
     // ── `getelementptr inbounds` on bounds-checked element accesses ──────
     //
     // Element GEPs (Vec / Slice / Array indexing) are reached only with a valid
