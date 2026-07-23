@@ -14,7 +14,9 @@ Legend: ✅ done · 🟡 partial · ⬜ open
 
 ## ⬜ Open
 
-_(none)_
+| spike | status |
+|---|---|
+| [karac-inspect-feasibility.md](karac-inspect-feasibility.md) | ⬜ **blocked, not started (design/feasibility record, 2026-07-23).** `karac inspect <pid>` (Track 6) is gated on **Phase 6.3 suspension tracking**: v1's blocking runtime ships `KaracWaitTarget::None` only and tracks no suspension, so `list_tasks()` is empty *by design* — on the done-when's target (a parked HTTP server) `inspect` would have nothing to report. Records the sound design for when unblocked: a cooperative **responder-thread + signal + dump-file** transport (layout- and async-signal-safe, avoids the `ACTIVE_FRAMES`-lock-in-signal-handler deadlock that rules out the naive ptrace/signal shortcuts), the per-worker cooperation-hook design (shared Gap 2 primitive), the inspect-snapshot schema + an `effect_render`-backed renderer, and the 5-step sequencing. Steps 3–5 (transport/renderer/CLI) are bounded; step 1 (event-loop suspension tracking) is deep, concurrency-critical, and needs real network-load testing — not Track-6-polish work. |
 
 ## 🟡 Partial
 
