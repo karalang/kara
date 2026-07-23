@@ -857,12 +857,19 @@ pub struct HoverInfo {
     /// Human-readable type, e.g. `i32`, `Vec[String]`, `String`.
     pub type_display: String,
     /// Effect signature of the function under the cursor, when the hovered
-    /// expression resolves to one: a rendered effect list (`reads(Network),
-    /// writes(Db)`), `"_"` for a purely-polymorphic `with _`, or `"pure"` for a
-    /// function with no effects. `None` when the cursor is not on a function
-    /// reference (Kāra's effect system is the flagship surface, so a function's
-    /// effects belong right next to its type in hover).
+    /// expression resolves to one, in the shared **compact** form
+    /// (`reads(Network) + writes(Db)`), `"_"` for a purely-polymorphic
+    /// `with _`, or `"pure"` for a function with no effects. `None` when the
+    /// cursor is not on a function reference (Kāra's effect system is the
+    /// flagship surface, so a function's effects belong right next to its type
+    /// in hover).
     pub effect_signature: Option<String>,
+    /// The same effect signature in the shared **grouped** form — one bucket
+    /// per line (`Resource: … / Execution: … / Panic: …`), empty buckets
+    /// omitted, `(pure)` when empty. This is the IDE-hover rendering
+    /// (design.md § Effect-set rendering library › Grouped); the LSP displays
+    /// it, the compact form above stays available for inline uses.
+    pub effect_signature_grouped: Option<String>,
     /// Byte offset of the described expression.
     pub span_offset: usize,
     /// Byte length of the described expression.
@@ -897,9 +904,15 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
         }
     }
     let (span_offset, span_length, ty) = best?;
+    let fn_name = hovered_function_name(byte_offset, &resolved);
     Some(HoverInfo {
         type_display: crate::typechecker::types::type_display(ty),
-        effect_signature: function_effect_signature(byte_offset, &resolved, &effects),
+        effect_signature: fn_name
+            .as_deref()
+            .map(|n| effect_signature_display(n, &effects)),
+        effect_signature_grouped: fn_name
+            .as_deref()
+            .map(|n| effect_signature_display_grouped(n, &effects)),
         span_offset,
         span_length,
     })
@@ -926,14 +939,10 @@ fn analyze_for_hover(source: &str) -> Option<(ResolveResult, TypeCheckResult, Ef
 }
 
 /// If the innermost name reference at `byte_offset` resolves to a **function**,
-/// render its effect signature. `None` otherwise. Declared effects win over
-/// inferred (a public fn shows what it promises); a purely-polymorphic `with _`
-/// renders `"_"`, and no effects renders `"pure"`.
-fn function_effect_signature(
-    byte_offset: usize,
-    resolved: &ResolveResult,
-    effects: &EffectCheckResult,
-) -> Option<String> {
+/// return its name (the key into the effect tables). `None` otherwise. Shared
+/// by the compact and grouped effect-signature renderers so the symbol lookup
+/// happens once.
+fn hovered_function_name(byte_offset: usize, resolved: &ResolveResult) -> Option<String> {
     let mut best: Option<(usize, crate::resolver::SymbolId)> = None;
     for (key, sid) in &resolved.resolutions {
         let (start, len) = (key.0, key.1);
@@ -949,11 +958,12 @@ fn function_effect_signature(
     if !matches!(sym.kind, crate::resolver::SymbolKind::Function { .. }) {
         return None;
     }
-    Some(effect_signature_display(&sym.name, effects))
+    Some(sym.name.clone())
 }
 
-/// Render a function's effect signature for hover. Declared effects (what a
-/// public fn promises) take precedence over inferred.
+/// Render a function's effect signature for hover in the **compact** form.
+/// Declared effects (what a public fn promises) take precedence over inferred;
+/// a purely-polymorphic `with _` renders `"_"`, `"pure"` for no effects.
 fn effect_signature_display(fn_name: &str, effects: &EffectCheckResult) -> String {
     use crate::effectchecker::DeclaredEffects;
     match effects.declared_effects.get(fn_name) {
@@ -975,6 +985,33 @@ fn effect_signature_display(fn_name: &str, effects: &EffectCheckResult) -> Strin
     }
 }
 
+/// Render a function's effect signature for hover in the **grouped** form —
+/// the IDE-hover rendering (design.md § Effect-set rendering library ›
+/// Grouped). Same declared-over-inferred precedence as the compact form;
+/// purely-polymorphic renders `"_"`, no effects renders `"(pure)"`, and a
+/// polymorphic-with-fixed set appends a `(plus polymorphic effects)` line under
+/// the grouped buckets.
+fn effect_signature_display_grouped(fn_name: &str, effects: &EffectCheckResult) -> String {
+    use crate::effectchecker::DeclaredEffects;
+    match effects.declared_effects.get(fn_name) {
+        Some(DeclaredEffects::Explicit(set)) => render_effect_set_grouped(set),
+        Some(DeclaredEffects::Polymorphic) => "_".to_string(),
+        Some(DeclaredEffects::PolymorphicWithFixed(set)) => {
+            let fixed = render_effect_set_grouped(set);
+            if fixed == "(pure)" {
+                "_".to_string()
+            } else {
+                format!("{fixed}\n(plus polymorphic effects)")
+            }
+        }
+        Some(DeclaredEffects::None) | None => effects
+            .inferred_effects
+            .get(fn_name)
+            .map(render_effect_set_grouped)
+            .unwrap_or_else(|| "(pure)".to_string()),
+    }
+}
+
 /// Render an [`crate::effectchecker::EffectSet`] for hover via the shared
 /// [`crate::effect_render`] compact form: `reads(Db) + writes(Log) + panics`,
 /// in canonical group-first-then-alphabetical order (matching `karac query
@@ -987,6 +1024,19 @@ fn render_effect_set(set: &crate::effectchecker::EffectSet) -> String {
         return "pure".to_string();
     }
     crate::effect_render::render_compact(
+        set.effects
+            .iter()
+            .map(|te| (&te.effect.verb, te.effect.resource.as_str())),
+        crate::effect_render::ColorChoice::Never,
+    )
+}
+
+/// Render an [`crate::effectchecker::EffectSet`] for hover via the shared
+/// [`crate::effect_render`] **grouped** form (`Resource: … / Execution: … /
+/// Panic: …`, empty buckets omitted). Empty → `"(pure)"`. Uncolored — the LSP
+/// wraps this in Markdown, not ANSI.
+fn render_effect_set_grouped(set: &crate::effectchecker::EffectSet) -> String {
+    crate::effect_render::render_grouped(
         set.effects
             .iter()
             .map(|te| (&te.effect.verb, te.effect.resource.as_str())),
@@ -1417,6 +1467,12 @@ mod playground_tests {
             info.effect_signature.as_deref(),
             Some("reads(Cache) + writes(Db) + panics")
         );
+        // Grouped form buckets the same set: resource verbs on one line,
+        // `panics` under Panic; empty Execution bucket omitted.
+        assert_eq!(
+            info.effect_signature_grouped.as_deref(),
+            Some("Resource: reads(Cache) + writes(Db)\nPanic: panics")
+        );
     }
 
     #[test]
@@ -1425,6 +1481,7 @@ mod playground_tests {
         let call = src.rfind("add").unwrap();
         let info = hover_at(src, call).expect("expected hover");
         assert_eq!(info.effect_signature.as_deref(), Some("pure"));
+        assert_eq!(info.effect_signature_grouped.as_deref(), Some("(pure)"));
     }
 
     #[test]

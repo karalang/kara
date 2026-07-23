@@ -108,11 +108,22 @@ pub fn hover(text: &str, position: Position) -> Option<Hover> {
         }
     };
     // Type in a fenced `kara` block; for a function reference, its effect
-    // signature on a line below (Kāra's flagship surface — effects belong next
-    // to the type).
+    // signature below (Kāra's flagship surface — effects belong next to the
+    // type). The signature uses the shared *grouped* rendering
+    // (`Resource: … / Execution: … / Panic: …`) — the IDE-hover form per
+    // design.md § Effect-set rendering library. A single-line signature
+    // (`(pure)` / `_`) renders inline; the multi-line bucketed form renders as
+    // a Markdown list so each bucket is its own line in the editor.
     let mut value = format!("```kara\n{}\n```", info.type_display);
-    if let Some(sig) = &info.effect_signature {
-        value.push_str(&format!("\n\n**effects:** {sig}"));
+    if let Some(sig) = &info.effect_signature_grouped {
+        if sig.contains('\n') || sig.contains(": ") {
+            value.push_str("\n\n**effects:**");
+            for line in sig.lines() {
+                value.push_str(&format!("\n- {line}"));
+            }
+        } else {
+            value.push_str(&format!("\n\n**effects:** {sig}"));
+        }
     }
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -434,18 +445,50 @@ mod tests {
     }
 
     #[test]
-    fn hover_renders_effect_signature_for_a_function() {
-        let src =
-            "effect resource Db;\nfn save(x: i64) with writes(Db) { }\nfn main() { save(1); }";
+    fn hover_renders_grouped_effect_signature_for_a_function() {
+        // Multiple groups so the grouped list rendering is exercised: a
+        // resource verb and `panics` (its own bucket), empty Execution omitted.
+        let src = "effect resource Db;\nfn save(x: i64) with writes(Db) panics { }\nfn main() { save(1); }";
         let idx = LineIndex::new(src);
         let call = src.rfind("save").unwrap();
         let h = hover(src, idx.position(call)).expect("expected hover");
         match h.contents {
             HoverContents::Markup(m) => {
                 assert!(m.value.contains("```kara"));
+                // Grouped form: one Markdown list item per non-empty bucket.
                 assert!(
-                    m.value.contains("**effects:** writes(Db)"),
-                    "effects line missing: {:?}",
+                    m.value.contains("**effects:**"),
+                    "effects heading missing: {:?}",
+                    m.value
+                );
+                assert!(
+                    m.value.contains("- Resource: writes(Db)"),
+                    "grouped resource line missing: {:?}",
+                    m.value
+                );
+                assert!(
+                    m.value.contains("- Panic: panics"),
+                    "grouped panic line missing: {:?}",
+                    m.value
+                );
+            }
+            other => panic!("expected markup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hover_renders_pure_effect_signature_inline() {
+        // A single-line signature ((pure)/`_`) has no group label, so it stays
+        // inline rather than becoming a list.
+        let src = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { let _ = add(1, 2); }";
+        let idx = LineIndex::new(src);
+        let call = src.rfind("add").unwrap();
+        let h = hover(src, idx.position(call)).expect("expected hover");
+        match h.contents {
+            HoverContents::Markup(m) => {
+                assert!(
+                    m.value.contains("**effects:** (pure)"),
+                    "got: {:?}",
                     m.value
                 );
             }
