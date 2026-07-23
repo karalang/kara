@@ -341,6 +341,40 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
 
+                // B-2026-07-23-14: a `Map`/`Set`(-family) payload word carries the
+                // handle bit-cast to i64 (ptrtoint at construction). Restore the
+                // `ptr` shape BEFORE the generic alloca below so the binding's slot
+                // is pointer-typed: a bare use that demands the handle type —
+                // returning the moved-out Map from a match arm,
+                // `fn unwrap(v: V) -> Map[K,V] { match v { Table(m) => m } }` —
+                // otherwise trips module verification on the raw i64 (`ret i64` for
+                // a `ptr` return). Method dispatch (`m.len()`) already reinterprets
+                // the i64, so those paths were clean; only a bare return/forward of
+                // the handle exposed the mismatch. Unlike the shared/File/DataFrame
+                // arms above this only re-types the value — the Map ownership +
+                // dispatch registration (`track_map_var` / `register_var_from_type_expr`)
+                // in the generic block below keys on the alloca, not its element
+                // type, so it runs unchanged.
+                let scrut = {
+                    let key = (pattern.span.offset, pattern.span.length);
+                    match (
+                        scrut,
+                        self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+                    ) {
+                        (
+                            BasicValueEnum::IntValue(iv),
+                            Some("Map" | "Set" | "SortedMap" | "SortedSet"),
+                        ) => {
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            self.builder
+                                .build_int_to_ptr(iv, ptr_ty, &format!("{name}.map.ptr"))
+                                .unwrap()
+                                .into()
+                        }
+                        _ => scrut,
+                    }
+                };
+
                 let alloca = self.create_entry_alloca(fn_val, name, scrut.get_type());
                 self.builder.build_store(alloca, scrut).unwrap();
                 self.variables.insert(

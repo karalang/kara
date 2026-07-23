@@ -17532,6 +17532,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_enum_map_payload_moved_out_and_returned_no_leak_no_double_free() {
+        // B-2026-07-23-14: a `Map` moved OUT of an enum payload and RETURNED from
+        // a function (`fn unwrap(v: V) -> Map[K,V] { match v { Table(m) => m } }`).
+        // The build previously failed module verification (`ret i64` for a `ptr`
+        // return); once that is fixed, the ownership must also be right — the
+        // returned handle transfers to the caller (`m2`), the source `v` is
+        // move-suppressed, and the caller frees it exactly once. Loops so any
+        // per-iteration imbalance (a missed free on the returned binding, or a
+        // double-free from the suppressed source) accumulates into a fault under
+        // LeakSanitizer / AddressSanitizer.
+        assert_clean_asan_run(
+            r#"
+enum V { Table(Map[String, i64]) }
+fn unwrap(v: V) -> Map[String, i64] { match v { Table(m) => m } }
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 0;
+    while i < 40 {
+        let mut mp: Map[String, i64] = Map.new();
+        mp.insert("a", 1);
+        mp.insert("b", 2);
+        let t = V.Table(mp);
+        let m2 = unwrap(t);
+        total = total + (m2.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["80"],
+            "enum_map_payload_moved_out_and_returned_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_inline_enum_ctor_call_arg_no_leak_no_double_free() {
         // B-2026-06-12-10: an inline enum-variant constructor passed by value as
         // a call argument (`wrap(Tok.V(mk()))`) — and the method form

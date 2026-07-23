@@ -25120,6 +25120,35 @@ fn main() {
         );
     }
 
+    #[test]
+    fn e2e_return_map_moved_out_of_enum_payload() {
+        // B-2026-07-23-14: returning a `Map`/`Set` value moved OUT of an enum
+        // payload (`fn unwrap(v: V) -> Map[K,V] { match v { Table(m) => m } }`)
+        // failed codegen module verification with `ret i64 %matchval` for a
+        // `ptr`-typed return — the Map handle extracted from the enum's i64
+        // payload word was bound as a raw i64 alloca and never `inttoptr`'d, so a
+        // bare return tripped the verifier (method dispatch tolerated the i64).
+        // Fix: the pattern-binding path now int-to-ptrs a `Map`/`Set`(-family)
+        // payload word so the binding slot is pointer-typed, mirroring the
+        // shared/File/DataFrame arms. Assert build succeeds AND ownership
+        // transfers correctly (10 allocs = 10 frees is checked in the ASAN
+        // sibling; here we pin the value).
+        if let Some(out) = run_program(
+            "enum V { Table(Map[String, i64]) }\n\
+             fn unwrap(v: V) -> Map[String, i64] { match v { Table(m) => m } }\n\
+             fn main() {\n\
+                 let mut mp: Map[String, i64] = Map.new();\n\
+                 let _ = mp.insert(\"a\", 1);\n\
+                 let _ = mp.insert(\"b\", 2);\n\
+                 let t = V.Table(mp);\n\
+                 let m2 = unwrap(t);\n\
+                 println(m2.len() as i64);\n\
+             }",
+        ) {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
     // ── Prereq.2 user-`impl Drop` dispatch — drop-glue wrapper emission ──
     //
     // The wrapper `karac_drop_<Type>` is synthesised for every user type
