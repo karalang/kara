@@ -1650,6 +1650,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_pool_acquire_release_reuse_and_drop_no_leak() {
+        // Pool[T] codegen (phase-8): a 40-iteration loop that mints a connection,
+        // reads it, releases it (explicit) AND lets the binding drop (idempotent
+        // return), then re-acquires — reusing the idle slot. Verifies (1) the
+        // `KaracPool` is freed at the `Pool` binding's scope exit (`Pool.drop` →
+        // `karac_runtime_pool_drop`) rather than leaked, and (2) the explicit
+        // `release` + scope-exit `PooledConnection.drop` hand the slot back
+        // exactly once (release is idempotent on `conn_id`) — a missed free
+        // leaks the pool, a double return would be caught by the reuse-count
+        // assertion, and any slot double-free trips ASAN.
+        assert_clean_asan_run(
+            r#"
+fn make_conn() -> i64 { 100i64 }
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let pool: Pool[i64] = Pool.new(make_conn, 1i64, 2i64);
+        match pool.acquire(0i64) {
+            Ok(c) => { total = total + c.val; pool.release(c); }
+            Err(_e) => {}
+        }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * 100 = 4000
+            &["4000"],
+            "pool_acquire_release_reuse_and_drop_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_result_struct_field_println_no_double_free() {
         // B-2026-07-23-4: matching a FRESH-TEMP `Result[W, _]` (a direct `f()`
         // return, not a bound local) whose `Ok(w)` struct payload has a heap

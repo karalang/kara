@@ -2479,6 +2479,7 @@ mod tests {
         const AUDITED: &[&str] = &[
             "BoundedChannel",
             "CriticalSectionGuard",
+            "Pool",
             "PooledConnection",
             "RateLimiter",
             "Semaphore",

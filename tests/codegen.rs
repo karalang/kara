@@ -8951,6 +8951,48 @@ fn main() {
     }
 
     #[test]
+    fn e2e_pool_acquire_reuse_at_cap_and_struct_element() {
+        // `Pool[T]` codegen (phase-8 backend platform). `Pool.new(create_fn,
+        // max, waiters)` stores the bare-fn `create_fn` fat pointer in the
+        // runtime; `acquire` mints via a codegen-orchestrated indirect call
+        // (runtime hands the fat pointer back), reuses a released idle slot, or
+        // fails at cap with `Err(Timeout)`. Covers i64 and a POD-struct element.
+        // Byte-identical to `karac run --interp`.
+        if let Some(out) = run_program(
+            "fn make_int() -> i64 { 42i64 }\n\
+             struct Conn { fd: i64, port: i64 }\n\
+             fn make_conn() -> Conn { Conn { fd: 3i64, port: 8080i64 } }\n\
+             fn main() {\n\
+             \x20   let p: Pool[i64] = Pool.new(make_int, 1i64, 2i64);\n\
+             \x20   match p.acquire(0i64) {\n\
+             \x20       Ok(c1) => { println(c1.val.to_string()); p.release(c1); }\n\
+             \x20       Err(_e) => println(\"t1\"),\n\
+             \x20   }\n\
+             \x20   match p.acquire(0i64) {\n\
+             \x20       Ok(c2) => {\n\
+             \x20           match p.acquire(0i64) {\n\
+             \x20               Ok(_c3) => println(\"unexpected\"),\n\
+             \x20               Err(_e) => println(\"atcap\"),\n\
+             \x20           }\n\
+             \x20           println(c2.val.to_string());\n\
+             \x20           p.release(c2);\n\
+             \x20       }\n\
+             \x20       Err(_e) => println(\"t2\"),\n\
+             \x20   }\n\
+             \x20   let sp: Pool[Conn] = Pool.new(make_conn, 2i64, 4i64);\n\
+             \x20   match sp.acquire(0i64) {\n\
+             \x20       Ok(sc) => { let cv: Conn = sc.val; println(cv.fd.to_string()); println(cv.port.to_string()); }\n\
+             \x20       Err(_e) => println(\"t3\"),\n\
+             \x20   }\n\
+             }",
+        ) {
+            // acquire mints 42; release; re-acquire reuses 42; nested acquire at
+            // cap=1 → atcap; struct pool mints Conn{3,8080}.
+            assert_eq!(out, "42\natcap\n42\n3\n8080\n");
+        }
+    }
+
+    #[test]
     fn e2e_fstring_binary_center_and_fill_specs() {
         // Binary `b`, center align `^`, and custom (non-space) fill — the
         // format specs `snprintf` can't express, routed through the shared

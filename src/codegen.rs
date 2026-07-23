@@ -72,6 +72,7 @@ mod once;
 mod par_blocks;
 mod param_own;
 mod pattern_binding;
+mod pool;
 mod process;
 mod provider;
 mod reduce;

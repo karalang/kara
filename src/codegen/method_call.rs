@@ -1482,6 +1482,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // `Pool.acquire` / `Pool.release` (`src/codegen/pool.rs`, phase-8).
+        // Self-gating on the receiver's static type name.
+        if let Some(v) = self.try_compile_pool_method(object, method, args, call_span)? {
+            return Ok(v);
+        }
+
         // Tensor shape-transform family (`reshape` / `permute` / `slice`
         // / `squeeze`, phase-11 numerical stdlib — `src/codegen/tensor.rs`).
         // Handled here (before the rest of dispatch) so both identifier

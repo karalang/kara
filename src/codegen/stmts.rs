@@ -3999,10 +3999,31 @@ impl<'ctx> super::Codegen<'ctx> {
                             // is strictly better: deterministic-unregistered
                             // (a stable, debuggable failure at the use site)
                             // beats randomly-right.
+                            // Exclude types that carry a `Drop` impl (handle /
+                            // guard types — `PooledConnection`, `Pool`,
+                            // `BoundedChannel`, `Semaphore`, …). Their
+                            // `struct_types` entry may spuriously match an
+                            // unrelated same-shape value — a `(i64, i64, i64)`
+                            // tuple (`v.get(i).unwrap()`) matched
+                            // `PooledConnection`'s `T`-erased `{i64, i64, i64}`
+                            // base and was then dropped via
+                            // `karac_drop_PooledConnection`, whose hand-rolled body
+                            // calls `pool_release` on a garbage pointer → crash.
+                            // A mislabel is only *dangerous* for a type whose drop
+                            // does real work; and a genuine value of such a type
+                            // always gets its name authoritatively from its typed
+                            // constructor (`Pool.acquire` / `Semaphore.new` /
+                            // …resolved via `ast_hint` above), never from this
+                            // last-resort shape fallback.
+                            let drop_types: std::collections::HashSet<String> = self
+                                .program_snapshot
+                                .as_deref()
+                                .map(|p| p.drop_method_keys.keys().cloned().collect())
+                                .unwrap_or_default();
                             let mut same_shape = self
                                 .struct_types
                                 .iter()
-                                .filter(|(_, ty)| **ty == st)
+                                .filter(|(n, ty)| **ty == st && !drop_types.contains(n.as_str()))
                                 .map(|(n, _)| n.clone());
                             let first_struct = same_shape.next();
                             let struct_ambiguous = same_shape.next().is_some();

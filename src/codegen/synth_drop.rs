@@ -4240,6 +4240,18 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_handle_drop_body("RateLimiter", "karac_runtime_rate_limiter_drop");
         }
 
+        // `Pool.drop` — single-owner handle-free (same shape as Semaphore).
+        // `PooledConnection.drop` — the drop-releases-automatically contract:
+        // return the checked-out slot to its source pool at scope exit. Both
+        // land when `std.Pool`'s prelude `impl Drop`s are in scope
+        // (`src/codegen/pool.rs`).
+        if program.drop_method_keys.contains_key("Pool") {
+            self.emit_handle_drop_body("Pool", "karac_runtime_pool_drop");
+        }
+        if program.drop_method_keys.contains_key("PooledConnection") {
+            self.emit_pooled_connection_drop_body();
+        }
+
         // `CriticalSectionGuard.drop` (design.md § Critical sections). Loads
         // `self.restore_token` (`{i64}` field 0) and calls
         // `karac_critical_section_release(token)` to re-enable interrupts to
@@ -4407,6 +4419,94 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder
             .build_call(free_fn, &[obj_ptr.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    /// Hand-roll `@PooledConnection.drop(ptr self) -> void` — the
+    /// drop-releases-automatically contract. `self` points to a
+    /// `PooledConnection { i64 pool_handle_id, i64 conn_id, T val }`; the drop
+    /// loads the pool handle (field 0) + `conn_id` (field 1) and calls
+    /// `karac_runtime_pool_release(pool, conn_id, &val)`. The runtime already
+    /// knows `elem_size`, so the drop needs only the POINTER to `val` — it never
+    /// touches `T`'s layout, so ONE body serves every monomorph. The `val`
+    /// pointer is field 2, at byte offset 16 (after two i64s), aligned for any
+    /// POD `T` (v1 scope). Release is idempotent on `conn_id`, so an explicit
+    /// `pool.release(conn)` followed by this scope-exit drop hands the slot back
+    /// exactly once. A null pool handle (a hand-rolled `PooledConnection`) is a
+    /// runtime no-op.
+    fn emit_pooled_connection_drop_body(&mut self) {
+        let fn_name = "PooledConnection.drop";
+        if self.module.get_function(fn_name).is_some() {
+            return;
+        }
+        let release_fn = match self.module.get_function("karac_runtime_pool_release") {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let i8_ty = self.context.i8_type();
+        let void_ty = self.context.void_type();
+        // Prefix type `{i64 pool_handle_id, i64 conn_id}` for the two scalar
+        // header fields; `val` follows at byte offset 16.
+        let hdr_ty = self
+            .context
+            .struct_type(&[i64_ty.into(), i64_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(fn_name, drop_fn_ty, Some(Linkage::Internal));
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let h_ptr = self
+            .builder
+            .build_struct_gep(hdr_ty, self_ptr, 0, "pc.h.ptr")
+            .unwrap();
+        let pool_handle = self
+            .builder
+            .build_load(i64_ty, h_ptr, "pc.h")
+            .unwrap()
+            .into_int_value();
+        let c_ptr = self
+            .builder
+            .build_struct_gep(hdr_ty, self_ptr, 1, "pc.c.ptr")
+            .unwrap();
+        let conn_id = self
+            .builder
+            .build_load(i64_ty, c_ptr, "pc.c")
+            .unwrap()
+            .into_int_value();
+        let pool_ptr = self
+            .builder
+            .build_int_to_ptr(pool_handle, ptr_ty, "pc.pool")
+            .unwrap();
+        // val pointer = self + 16 bytes (T-agnostic; runtime knows elem_size).
+        let val_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_ty,
+                    self_ptr,
+                    &[i64_ty.const_int(16, false)],
+                    "pc.val.ptr",
+                )
+                .unwrap()
+        };
+        self.builder
+            .build_call(
+                release_fn,
+                &[pool_ptr.into(), conn_id.into(), val_ptr.into()],
+                "",
+            )
             .unwrap();
         self.builder.build_return(None).unwrap();
 

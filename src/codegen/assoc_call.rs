@@ -616,6 +616,89 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result.into());
         }
 
+        // `Pool.new(create_fn: Fn() -> T, max_connections, max_waiters) ->
+        // Pool[T]` (`src/codegen/pool.rs` slice 2). Store the `create_fn` fat
+        // pointer + bounds in a runtime `KaracPool` and wrap the pointer as
+        // `Pool { handle_id: <i64> }`. The runtime never calls `create_fn` — it
+        // hands the fat pointer BACK to `acquire`'s codegen on a mint. v1 gates
+        // `create_fn` to a BARE free fn (a null env — a capturing closure needs
+        // the escaping-heap-env machinery); its return type gives `T`, whose
+        // store size sizes each runtime slot.
+        if type_name == "Pool" && method == "new" && _args.len() == 3 {
+            let crate::ast::ExprKind::Identifier(fn_name) = &_args[0].value.kind else {
+                return Err(
+                    "Pool.new: `create_fn` must be a bare function name under `karac build` \
+                     (a capturing closure is not yet supported — pass a top-level `fn`)"
+                        .to_string(),
+                );
+            };
+            let (fat, tramp_ty) = self.reify_named_fn_value(fn_name).ok_or_else(|| {
+                format!("Pool.new: `{fn_name}` does not name a free function usable as `create_fn`")
+            })?;
+            // `T` = the trampoline's return type (env-first `T (ptr env)`).
+            let elem_ty = tramp_ty.get_return_type().ok_or_else(|| {
+                "Pool.new: `create_fn` must return a value (its return type is `T`)".to_string()
+            })?;
+            let elem_size = self.ensure_target_data()?.get_store_size(&elem_ty);
+
+            let i64_ty = self.context.i64_type();
+            let fat_sv = fat.into_struct_value();
+            let fn_ptr = self
+                .builder
+                .build_extract_value(fat_sv, 0, "pool.new.fn")
+                .unwrap()
+                .into_pointer_value();
+            let env_ptr = self
+                .builder
+                .build_extract_value(fat_sv, 1, "pool.new.env")
+                .unwrap()
+                .into_pointer_value();
+            let fn_i64 = self
+                .builder
+                .build_ptr_to_int(fn_ptr, i64_ty, "pool.new.fni")
+                .unwrap();
+            let env_i64 = self
+                .builder
+                .build_ptr_to_int(env_ptr, i64_ty, "pool.new.envi")
+                .unwrap();
+            let max_conn = self.compile_expr(&_args[1].value)?.into_int_value();
+            let max_wait = self.compile_expr(&_args[2].value)?.into_int_value();
+            let size_c = i64_ty.const_int(elem_size, false);
+
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_pool_new")
+                .expect("karac_runtime_pool_new declared in Codegen::new");
+            let pool_ptr = self
+                .builder
+                .build_call(
+                    new_fn,
+                    &[
+                        fn_i64.into(),
+                        env_i64.into(),
+                        size_c.into(),
+                        max_conn.into(),
+                        max_wait.into(),
+                    ],
+                    "__pool_new",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let handle = self
+                .builder
+                .build_ptr_to_int(pool_ptr, i64_ty, "pool.handle")
+                .unwrap();
+            let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+            let result = self
+                .builder
+                .build_insert_value(struct_ty.get_undef(), handle, 0, "pool")
+                .unwrap()
+                .into_struct_value();
+            return Ok(result.into());
+        }
+
         // `Regex.compile(pattern: String) -> Result[Regex, RegexError]`
         // (B-2026-07-14-19) — the AOT backend for `runtime/stdlib/regex.kara`'s
         // `#[compiler_builtin]` stub, matching the interpreter's

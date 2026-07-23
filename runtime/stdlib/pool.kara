@@ -184,3 +184,20 @@ impl[T] Drop for PooledConnection[T] {
     #[compiler_builtin]
     fn drop(mut ref self) {}
 }
+
+// Free the pool's runtime state at the owning binding's scope exit. `Pool` has
+// no `clone` (single owner), so this fires exactly once. Interpreter-side the
+// pool_table entry is left to process teardown (no destructor plumbing needed);
+// under codegen the `#[compiler_builtin]` body is replaced by a hand-rolled
+// `karac_runtime_pool_drop` call (`src/codegen/synth_drop.rs`) so an AOT/JIT
+// binary frees the `KaracPool` (and its idle slots) rather than leaking it.
+//
+// Drop-skip-sound: if this Drop never runs, the pool's runtime state leaks
+// until process exit — a memory leak, never UB or a type-system violation. No
+// aliasing hazard (single owner, no reissue). Soundness derives from the type
+// system; this destructor only reclaims memory (design.md § Drop >
+// Destructors are NOT soundness mechanisms).
+impl[T] Drop for Pool[T] {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

@@ -23246,6 +23246,7 @@ fn drop_method_keys_empty_when_no_drop_impl() {
         "TaskGroup",
         "TlsListener",
         "TlsStream",
+        "Pool",
         "PooledConnection",
         "BoundedChannel",
         "CriticalSectionGuard",
