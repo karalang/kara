@@ -438,6 +438,22 @@ const CORPUS: &[&str] = &[
     // same change, so this shape is a live differential entry (and a
     // regression guard for that seed fix via the `karac run` reference leg).
     "enum E { A(i64), B(String), C }\nfn f(n: i64) -> Option[i64] {\n    if n > 0 {\n        return Some(n * 2);\n    }\n    return None;\n}\nfn main() {\n    let o = Some(5);\n    if let Some(x) = o {\n        println(x.to_string());\n    }\n    let z: Option[i64] = None;\n    if let Some(x) = z {\n        println(x.to_string());\n    } else {\n        println(\"empty\");\n    }\n    let s = Some(\"hi\".to_string());\n    if let Some(w) = s {\n        println(w);\n    }\n    if let Some(v) = f(4) {\n        println(v.to_string());\n    } else {\n        println(\"neg\");\n    }\n    if let Some(v) = f(0) {\n        println(v.to_string());\n    } else {\n        println(\"neg\");\n    }\n    let e = E.A(9);\n    if let A(n) = e {\n        println(n.to_string());\n    } else {\n        println(\"other\");\n    }\n    let e2 = E.B(\"bee\".to_string());\n    if let B(t) = e2 {\n        println(t);\n    } else {\n        println(\"other\");\n    }\n    let e3 = E.C;\n    if let A(n) = e3 {\n        println(n.to_string());\n    } else {\n        println(\"nope\");\n    }\n}",
+    // Slice 53: `expr as TYPE` CAST — a PARSER slice. `as` had NO handler in
+    // the port's expression parser (only import-alias `as`), so it was an
+    // unhandled infix token: `parse_expr_bp` stopped at it. A no-op cast with
+    // nothing trailing (`return len() as i64`) happened to parse fine — the
+    // stranded `as i64` was harmless at a statement/`]` boundary — which is
+    // why casts looked supported. But `while i < x as i64 { … }` stranded
+    // `as i64` between the condition and the body `{`, so `parse_block`
+    // mis-recovered and SWALLOWED every following statement into the loop body
+    // (they then ran once per iteration). B-2026-07-23-15. Fix: parse `as` at
+    // the seed's `l_bp = 23` and DROP it (parse the type to advance the
+    // cursor, keep the operand) — correct because every in-surface cast is a
+    // widening `<int> as i64` no-op in the emitter's i64 scalar model. Covers
+    // the while-condition cast (the bug), cast precedence vs `-`/`<`, the real
+    // lexer byte-cast shape `(c as i64) - (48 as i64)`, and a trailing-stmt
+    // guard (statements after the loop must run ONCE).
+    "fn hexish(c: i64) -> i64 {\n    if c >= 48 and c <= 57 {\n        return (c as i64) - (48 as i64);\n    }\n    return -1;\n}\nfn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(10);\n    v.push(20);\n    v.push(12);\n    let mut s = 0;\n    let mut i = 0;\n    while i < v.len() as i64 {\n        s = s + v[i as i64];\n        i = i + 1;\n    }\n    println(s.to_string());\n    println(\"A\");\n    println(\"B\");\n    let x = 5;\n    println((x as i64 - 2).to_string());\n    println(hexish(55).to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

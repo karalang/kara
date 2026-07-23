@@ -1211,6 +1211,32 @@ impl Parser {
             if did_postfix {
                 continue;
             }
+            // `expr as TYPE` cast (Slice 53). The seed gives `as` `l_bp = 23`
+            // (between multiplicative 22/23 and unary 24) and builds an
+            // `ExprKind::Cast`. The port has NO Cast AST node and works in an
+            // i64-centric scalar model, so every in-surface cast is a widening
+            // `<int> as i64` no-op (all real self-host casts are `(c as i64)`
+            // on a byte). We therefore parse the target type only to ADVANCE
+            // the cursor and KEEP the operand unchanged — dropping the cast,
+            // exactly what the emitter does today (it never materializes one).
+            // The min_bp gate reproduces the seed's precedence: `i < x as i64`
+            // parses as `i < (x as i64)` and `x as i64 - 1` as `(x as i64) - 1`.
+            // WITHOUT this, `as` was an unhandled infix token: `parse_expr_bp`
+            // stopped at it, stranding `as i64` between a `while` condition and
+            // its body `{`, so `parse_block` mis-recovered and swallowed every
+            // following statement into the loop body (B-2026-07-23-15).
+            let at_as = match self.tokens[self.pos].token {
+                As => true,
+                _ => false,
+            };
+            if at_as {
+                if 23 < min_bp {
+                    break;
+                }
+                self.advance(); // as
+                let _dropped = self.parse_type();
+                continue;
+            }
             let mut found = true;
             let mut op = BinOp.Add;
             let mut l_bp = 0;
