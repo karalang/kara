@@ -3078,6 +3078,72 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(tru.into())
             }
+            // Plain struct pattern `S { f0: p0, f1: p1, .. }` (the enum-variant
+            // struct case is handled by the guarded arm above; this unguarded
+            // arm is only reached when that guard is false — i.e. `S` is a plain
+            // struct, not an enum variant). Extract each field and AND its
+            // sub-pattern's condition — recursively, so a nested enum-variant /
+            // literal / range field emits its own discriminating test. Without
+            // this arm the whole struct pattern fell through to the catch-all
+            // `_ => true` below, so EVERY field sub-pattern's test was dropped:
+            // `Item { shape: Shape.Circle(r), .. }` matched a `Rect` / `Point`
+            // item too, binding garbage — the struct sibling of the tuple
+            // "no discriminating test emitted" class (B-2026-07-12-13). A
+            // binding / wildcard field recurses to an always-true leaf, so
+            // `S { x: 0, y: _ }` correctly tests only `x`.
+            PatternKind::Struct { path, fields, .. } => {
+                let Some(struct_name) = path.last() else {
+                    return Ok(tru.into());
+                };
+                let Some(field_names) = self.struct_field_names.get(struct_name.as_str()).cloned()
+                else {
+                    // Not a known plain struct (should not happen post-resolve);
+                    // match conservatively rather than mis-extract.
+                    return Ok(tru.into());
+                };
+                let struct_ty = self.struct_types.get(struct_name.as_str()).copied();
+                let mut cond = tru;
+                for fp in fields {
+                    // Field shorthand (`S { x }`) binds `x` and adds no test.
+                    let Some(sub) = &fp.pattern else { continue };
+                    let Some(idx) = field_names.iter().position(|n| n == &fp.name) else {
+                        continue;
+                    };
+                    // Pull the field value in whichever form the scrutinee is:
+                    // a loaded struct value (owned) → extractvalue; a pointer
+                    // (a `ref`/borrowed struct) → GEP + load. Loading yields the
+                    // right shape for the recursion (an inline enum field loads
+                    // as a StructValue; a shared/boxed enum field as a pointer),
+                    // both of which `extract_enum_tag` handles.
+                    let field_val: BasicValueEnum<'ctx> = match scrut {
+                        BasicValueEnum::StructValue(sv) => self
+                            .builder
+                            .build_extract_value(sv, idx as u32, "struct.cond.field")
+                            .unwrap(),
+                        BasicValueEnum::PointerValue(ptr) => {
+                            let Some(st) = struct_ty else {
+                                continue;
+                            };
+                            let Ok(field_ptr) =
+                                self.builder
+                                    .build_struct_gep(st, ptr, idx as u32, "struct.cond.fp")
+                            else {
+                                continue;
+                            };
+                            let Some(field_ty) = st.get_field_type_at_index(idx as u32) else {
+                                continue;
+                            };
+                            self.builder
+                                .build_load(field_ty, field_ptr, "struct.cond.load")
+                                .unwrap()
+                        }
+                        _ => continue,
+                    };
+                    let sub_cond = self.compile_pattern_condition(sub, field_val)?.into_int_value();
+                    cond = self.builder.build_and(cond, sub_cond, "struct.and").unwrap();
+                }
+                Ok(cond.into())
+            }
             // `name @ subpattern` — the alias binding is irrefutable, so
             // the match condition is exactly the sub-pattern's condition
             // (`code @ 500..=599` tests the range; `whole @ Some(x)` tests

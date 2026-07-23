@@ -10195,6 +10195,64 @@ fn main() {
     }
 
     #[test]
+    fn e2e_plain_struct_pattern_with_nested_enum_field_checks_discriminant() {
+        // Regression: a PLAIN struct pattern whose field sub-pattern is an
+        // enum-variant pattern (`Item { shape: Shape.Circle(r), .. }`) must
+        // check the nested enum's discriminant. Pre-fix the plain struct
+        // pattern fell through `compile_pattern_condition`'s `_ => true`
+        // catch-all, dropping every field sub-pattern's test, so a `Rect` /
+        // `Point` item matched the first `Circle(r)` arm and bound garbage
+        // (`karac build` printed `circle r=3` / `circle r=0` where `karac run
+        // --interp` printed `rect 3x6` / `point`). Struct sibling of the tuple
+        // "no discriminating test" class (B-2026-07-12-13). Scrutinee is
+        // `ref Item` so the fix's pointer-GEP-and-load path is exercised.
+        if let Some(out) = run_program(
+            "enum Shape { Circle(f64), Rect(f64, f64), Point }\n\
+             struct Item { shape: Shape, count: i64 }\n\
+             fn classify(it: ref Item) -> String {\n\
+                 match it {\n\
+                     Item { shape: Shape.Circle(r), count: _ } => f\"circle r={r}\",\n\
+                     Item { shape: Shape.Rect(w, h), count: _ } => f\"rect {w}x{h}\",\n\
+                     Item { shape: Shape.Point, count: _ } => \"point\",\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(classify(Item { shape: Shape.Circle(5.0), count: 1 }));\n\
+                 println(classify(Item { shape: Shape.Rect(3.0, 6.0), count: 1 }));\n\
+                 println(classify(Item { shape: Shape.Point, count: 9 }));\n\
+             }",
+        ) {
+            assert_eq!(out, "circle r=5\nrect 3x6\npoint\n");
+        }
+    }
+
+    #[test]
+    fn e2e_plain_struct_pattern_with_literal_field_checks_value() {
+        // Companion: a plain struct pattern with a LITERAL field sub-pattern
+        // (`P { x: 0, y }`) must test the literal, not fall through to always-
+        // match. Owned (by-value) struct scrutinee → the extractvalue path.
+        if let Some(out) = run_program(
+            "struct P { x: i64, y: i64 }\n\
+             fn name(p: P) -> String {\n\
+                 match p {\n\
+                     P { x: 0, y: 0 } => \"origin\",\n\
+                     P { x: 0, y: _ } => \"y-axis\",\n\
+                     P { x: _, y: 0 } => \"x-axis\",\n\
+                     P { x: _, y: _ } => \"other\",\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(name(P { x: 0, y: 0 }));\n\
+                 println(name(P { x: 0, y: 5 }));\n\
+                 println(name(P { x: 5, y: 0 }));\n\
+                 println(name(P { x: 5, y: 5 }));\n\
+             }",
+        ) {
+            assert_eq!(out, "origin\ny-axis\nx-axis\nother\n");
+        }
+    }
+
+    #[test]
     fn e2e_unqualified_struct_variant_impl_display_round_trip() {
         // B-2026-06-13-7 (the GAP-W4 origin): a user `impl Display` whose
         // `to_string` matches struct variants with UNQUALIFIED patterns —
