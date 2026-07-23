@@ -17,7 +17,6 @@
 
 use std::fmt::Write as _;
 
-use crate::ast::EffectVerbKind;
 use crate::call_graph::CallGraph;
 use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency, SerializationCause};
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectSet};
@@ -46,19 +45,11 @@ fn json_string(s: &str) -> String {
     out
 }
 
-fn effect_verb_str(v: &EffectVerbKind) -> &str {
-    match v {
-        EffectVerbKind::Reads => "reads",
-        EffectVerbKind::Writes => "writes",
-        EffectVerbKind::Sends => "sends",
-        EffectVerbKind::Receives => "receives",
-        EffectVerbKind::Allocates => "allocates",
-        EffectVerbKind::Panics => "panics",
-        EffectVerbKind::Blocks => "blocks",
-        EffectVerbKind::Suspends => "suspends",
-        EffectVerbKind::UserDefined(s) => s.as_str(),
-    }
-}
+// The verb→keyword spelling lives once, in `effect_render`; this wasm-safe
+// JSON emitter shares it so the CLI/browser-studio graph stays byte-identical
+// to every other rendering. (Kept as a module-local alias so the many call
+// sites below read unchanged.)
+use crate::effect_render::verb_keyword as effect_verb_str;
 
 /// Render a source span as a `{"file","line","column"}` JSON object.
 /// Mirrors `cli::span_to_json`'s field shape (kept module-local so this

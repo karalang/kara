@@ -871,17 +871,8 @@ fn render_effects(effects: Option<&EffectList>) -> Option<String> {
 }
 
 fn verb_name(kind: &EffectVerbKind) -> String {
-    match kind {
-        EffectVerbKind::Reads => "reads".to_string(),
-        EffectVerbKind::Writes => "writes".to_string(),
-        EffectVerbKind::Sends => "sends".to_string(),
-        EffectVerbKind::Receives => "receives".to_string(),
-        EffectVerbKind::Allocates => "allocates".to_string(),
-        EffectVerbKind::Panics => "panics".to_string(),
-        EffectVerbKind::Blocks => "blocks".to_string(),
-        EffectVerbKind::Suspends => "suspends".to_string(),
-        EffectVerbKind::UserDefined(n) => n.clone(),
-    }
+    // Single source of truth for the verb→keyword spelling (`effect_render`).
+    crate::effect_render::verb_keyword(kind).to_string()
 }
 
 /// True iff `ty` is the unit type (`()`), which maps to a `void` return.

@@ -289,17 +289,8 @@ pub(super) fn needs_raw_escape(name: &str) -> bool {
 }
 
 pub(super) fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
-    match v {
-        EffectVerbKind::Reads => "reads".to_string(),
-        EffectVerbKind::Writes => "writes".to_string(),
-        EffectVerbKind::Sends => "sends".to_string(),
-        EffectVerbKind::Receives => "receives".to_string(),
-        EffectVerbKind::Allocates => "allocates".to_string(),
-        EffectVerbKind::Panics => "panics".to_string(),
-        EffectVerbKind::Blocks => "blocks".to_string(),
-        EffectVerbKind::Suspends => "suspends".to_string(),
-        EffectVerbKind::UserDefined(s) => s.clone(),
-    }
+    // Single source of truth for the verb→keyword spelling (`effect_render`).
+    crate::effect_render::verb_keyword(v).to_string()
 }
 
 pub(super) fn impl_item_name(item: &ImplItem) -> &str {

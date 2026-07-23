@@ -1322,17 +1322,8 @@ fn format_with_clause(display: &EffectDisplay) -> Option<String> {
 }
 
 fn effect_verb_name(v: &EffectVerbKind) -> &str {
-    match v {
-        EffectVerbKind::Reads => "reads",
-        EffectVerbKind::Writes => "writes",
-        EffectVerbKind::Sends => "sends",
-        EffectVerbKind::Receives => "receives",
-        EffectVerbKind::Allocates => "allocates",
-        EffectVerbKind::Panics => "panics",
-        EffectVerbKind::Blocks => "blocks",
-        EffectVerbKind::Suspends => "suspends",
-        EffectVerbKind::UserDefined(s) => s.as_str(),
-    }
+    // Single source of truth for the verb→keyword spelling (`effect_render`).
+    crate::effect_render::verb_keyword(v)
 }
 
 fn html_escape(s: &str) -> String {

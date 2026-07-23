@@ -27,7 +27,6 @@
 
 use crate::ast::EffectVerbKind;
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 
 /// Display bucket for the grouped rendering. Note this is a *rendering*
 /// grouping, not the effect model's verb classification: `panics` is a
@@ -62,12 +61,26 @@ impl ColorChoice {
         match self {
             ColorChoice::Always => true,
             ColorChoice::Never => false,
-            // NO_COLOR (https://no-color.org): any value, even empty, disables.
-            ColorChoice::Auto => {
-                std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
-            }
+            ColorChoice::Auto => auto_color_enabled(),
         }
     }
+}
+
+/// TTY + `NO_COLOR` auto-detection for `ColorChoice::Auto`. Split out and
+/// cfg-gated so this module stays wasm-safe: the wasm hosts that compile the
+/// compiler lib (the browser studio, which reaches `effect_render` through
+/// `effect_graph`) have no terminal and no `std::io::IsTerminal` fd substrate,
+/// so `Auto` resolves to "no color" there without touching either.
+#[cfg(not(target_family = "wasm"))]
+fn auto_color_enabled() -> bool {
+    use std::io::IsTerminal;
+    // NO_COLOR (https://no-color.org): any value, even empty, disables.
+    std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
+
+#[cfg(target_family = "wasm")]
+fn auto_color_enabled() -> bool {
+    false
 }
 
 // ANSI SGR codes. Resource cyan, execution yellow, panic red — per the

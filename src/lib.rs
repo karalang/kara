@@ -974,28 +974,23 @@ fn effect_signature_display(fn_name: &str, effects: &EffectCheckResult) -> Strin
     }
 }
 
-/// Render an [`crate::effectchecker::EffectSet`] as a sorted, deduped list —
-/// `verb(resource)` for resource verbs, bare `verb` for the resource-less
-/// execution verbs (`blocks` / `suspends`). Empty → `"pure"`.
+/// Render an [`crate::effectchecker::EffectSet`] for hover via the shared
+/// [`crate::effect_render`] compact form: `reads(Db) + writes(Log) + panics`,
+/// in canonical group-first-then-alphabetical order (matching `karac query
+/// effects`, the doc generator, and the crash renderer, so effect text reads
+/// identically everywhere). Empty → `"pure"` (hover's convention; the shared
+/// renderer's own empty form is `(none)`, which the caller never reaches).
+/// Uncolored — the LSP wraps this in Markdown, not ANSI.
 fn render_effect_set(set: &crate::effectchecker::EffectSet) -> String {
     if set.effects.is_empty() {
         return "pure".to_string();
     }
-    let mut parts: Vec<String> = set
-        .effects
-        .iter()
-        .map(|te| {
-            let verb = crate::effectchecker::verb_name(&te.effect.verb);
-            if te.effect.resource.is_empty() {
-                verb
-            } else {
-                format!("{verb}({})", te.effect.resource)
-            }
-        })
-        .collect();
-    parts.sort();
-    parts.dedup();
-    parts.join(", ")
+    crate::effect_render::render_compact(
+        set.effects
+            .iter()
+            .map(|te| (&te.effect.verb, te.effect.resource.as_str())),
+        crate::effect_render::ColorChoice::Never,
+    )
 }
 
 /// Parse + desugar + resolve `source`, returning the program and resolve result
@@ -1405,6 +1400,22 @@ mod playground_tests {
         let call = src.rfind("save").unwrap();
         let info = hover_at(src, call).expect("expected hover");
         assert_eq!(info.effect_signature.as_deref(), Some("writes(Db)"));
+    }
+
+    #[test]
+    fn hover_at_renders_multi_effect_signature_in_canonical_order() {
+        // Effects declared out of canonical order (panics, then writes, then
+        // reads); the shared `effect_render` compact form re-sorts them
+        // group-first-then-alphabetical and joins with ` + ` — so hover reads
+        // identically to `karac query effects` and the doc generator, not the
+        // old ad-hoc alphabetical `, `-join.
+        let src = "effect resource Db;\neffect resource Cache;\npub fn save(x: i64) with panics writes(Db) reads(Cache) { }\nfn main() { save(1); }";
+        let call = src.rfind("save").unwrap();
+        let info = hover_at(src, call).expect("expected hover");
+        assert_eq!(
+            info.effect_signature.as_deref(),
+            Some("reads(Cache) + writes(Db) + panics")
+        );
     }
 
     #[test]
