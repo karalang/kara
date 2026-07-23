@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 41 | 0 |
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
-| soundness | 24 | 0 |
+| soundness | 25 | 1 |
 | perf | 22 | 0 |
 | diagnostics | 15 | 0 |
 | use-after-free | 5 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 70 | 0 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
-| autopar | 16 | 0 |
+| autopar | 17 | 1 |
 | runtime | 14 | 0 |
 | cli | 12 | 0 |
 | resolver | 11 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **661 surfaced · 0 open · 656 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **662 surfaced · 1 open · 656 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-23-20 | 2026-07-23 | autopar | high | Auto-par miscompiles a reduction loop whose body passes a LOOP-INVARIANT shared `mut ref` scratch buffer to a helper. `while w < n { sink = sink + f(..., mut scratch, ...); w += 1 }` is parallelized as a `sink` reduction, but `scratch` (a binding declared OUTSIDE the loop, written every iteration inside `f`) makes the iterations dependent, so parallel workers race on it -> nondeterministic WRONG output from the DEFAULT `karac build` (and `karac run` JIT), while `KARAC_AUTO_PAR=0` is stable and correct. A/B run==build violation; auto-par safety analysis is unsound for this shape. | — |
 
 ### Fixed (656)
 
