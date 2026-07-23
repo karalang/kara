@@ -1194,6 +1194,33 @@ fn param_is_borrow(params: Option<&[Param]>, i: usize) -> bool {
     })
 }
 
+/// True iff the callee's parameter at position `i` is a MUTABLE borrow
+/// (`mut ref T` / `mut Slice[T]` — NOT the read-only `ref T`). An argument
+/// passed there is written through the callee, so if its place-root is a
+/// loop-invariant binding the loop's iterations are not independent
+/// (B-2026-07-23-20). A read-only `ref T` shares immutable data and is
+/// parallel-safe, so it is deliberately excluded.
+fn param_is_mut_borrow(params: Option<&[Param]>, i: usize) -> bool {
+    params
+        .and_then(|ps| ps.get(i))
+        .is_some_and(|p| matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
+}
+
+/// The root binding name of a place expression — the identifier at the base of
+/// an `Index` / `FieldAccess` / `TupleIndex` chain (`a` for `a`, `a[i]`,
+/// `a.f.g`, `a[i].f`), or the canonical `"self"` for a `self`-rooted place.
+/// `None` for a non-place root (a literal, a call result, an arithmetic expr).
+fn place_root(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::SelfValue => Some("self".to_string()),
+        ExprKind::Index { object, .. }
+        | ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. } => place_root(object),
+        _ => None,
+    }
+}
+
 /// A2b-2 Phase 2 Slice 3: resolve a parameterized-resource key expression
 /// (`Db[<param>]`) to a compile-time-LITERAL partition key at a call site, or
 /// `None` if it does not reduce to a literal here. The declared key `param` is
@@ -1954,6 +1981,14 @@ impl<'a> ConcurrencyChecker<'a> {
                 // explicit `spawn` capture does; decline the reduction (the
                 // loop lowers sequentially) when it doesn't.
                 if !self.loop_body_types_cross_task_safe(body) {
+                    continue;
+                }
+                // B-2026-07-23-20 soundness gate: decline when the body passes a
+                // `mut ref`/`mut Slice` (or `mut ref self`) to a loop-invariant
+                // shared buffer — parallel workers would race on it (the direct-
+                // write gates below can't see a mutation performed inside the
+                // callee).
+                if self.loop_body_shares_outer_mut_borrow(body) {
                     continue;
                 }
                 // A reduction whose per-iteration delta recurses into the
@@ -4818,6 +4853,304 @@ impl<'a> ConcurrencyChecker<'a> {
             (key == method || key.ends_with(&suffix))
                 && matches!(f.self_param, Some(SelfParam::MutRef))
         })
+    }
+
+    /// Resolve a call's callee expression to its declared parameter list, using
+    /// the same free-fn / associated-fn rule as `stmt_fanout_args_safe`. `None`
+    /// for a computed callee or an extern one (body absent from this program).
+    fn resolve_callee_params(&self, callee: &Expr) -> Option<&[Param]> {
+        match &callee.kind {
+            ExprKind::Identifier(n) => self.function_bodies.get(n).map(|f| f.params.as_slice()),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => self
+                .function_bodies
+                .get(&segments[0])
+                .map(|f| f.params.as_slice()),
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                resolve_assoc_callee(segments, &self.method_bodies).map(|f| f.params.as_slice())
+            }
+            _ => None,
+        }
+    }
+
+    /// B-2026-07-23-20 reduction soundness gate. The reduction lowering runs the
+    /// loop body on MULTIPLE worker threads concurrently. A call that passes a
+    /// `mut ref` / `mut Slice` argument (or invokes a `mut ref self` method)
+    /// whose place-root is a binding declared OUTSIDE the loop is a
+    /// LOOP-INVARIANT SHARED MUTABLE: every iteration writes the same buffer
+    /// *through the callee*, so the iterations are NOT independent and parallel
+    /// workers race on it — nondeterministic WRONG output from the default
+    /// `karac build` (the `while w < n { sink = sink + kern(base, w, width, mut
+    /// a, mut b) }` KMP-scratch shape, where `a`/`b` are allocated once before
+    /// the loop). The existing reduction gates only see DIRECT `Assign` writes
+    /// (`collect_expr_inner_writes`); a mutation performed inside the callee is
+    /// invisible to them, which is the soundness hole. Decline the reduction
+    /// (the loop lowers sequentially) when the body has such a call.
+    ///
+    /// A mutable borrow rooted at a PER-ITERATION-FRESH binding (`let mut tmp`
+    /// declared inside the loop body) is safe — each worker owns its own copy —
+    /// so `locals` is threaded in statement order and only outside-the-body
+    /// roots disqualify. Read-only `ref T` arguments (immutable shared data,
+    /// e.g. `base`) are deliberately NOT flagged: every worker only reads them.
+    fn loop_body_shares_outer_mut_borrow(&self, body: &Block) -> bool {
+        self.block_shares_outer_mut_borrow(body, &HashSet::new())
+    }
+
+    fn block_shares_outer_mut_borrow(&self, block: &Block, outer: &HashSet<String>) -> bool {
+        let mut locals = outer.clone();
+        for stmt in &block.stmts {
+            if self.stmt_shares_outer_mut_borrow(stmt, &locals) {
+                return true;
+            }
+            // Extend scope AFTER checking the statement's own exprs: a `let x =
+            // f(mut outer)` RHS is evaluated before `x` is in scope, and a body-
+            // local `let a` that shadows an outer `a` must not retroactively make
+            // an EARLIER `mut a` call look local.
+            match &stmt.kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    self.collect_pattern_bindings(pattern, &mut locals);
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    locals.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        if let Some(fe) = &block.final_expr {
+            if self.expr_shares_outer_mut_borrow(fe, &locals) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn stmt_shares_outer_mut_borrow(&self, stmt: &Stmt, locals: &HashSet<String>) -> bool {
+        match &stmt.kind {
+            StmtKind::Expr(e) => self.expr_shares_outer_mut_borrow(e, locals),
+            StmtKind::Let { value, .. } => self.expr_shares_outer_mut_borrow(value, locals),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                self.expr_shares_outer_mut_borrow(value, locals)
+                    || self.block_shares_outer_mut_borrow(else_block, locals)
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                self.expr_shares_outer_mut_borrow(target, locals)
+                    || self.expr_shares_outer_mut_borrow(value, locals)
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.block_shares_outer_mut_borrow(body, locals)
+            }
+            _ => false,
+        }
+    }
+
+    /// Comprehensive recursive walk — mirrors `collect_expr_reads`'s traversal
+    /// so no call position is missed (a missed call would leave a genuine race
+    /// parallelized). At each `Call`/`MethodCall` node, flag a mutable borrow of
+    /// an outside-the-loop place-root; then recurse into children, threading
+    /// `locals` through binding-introducing forms (loop patterns, match arms,
+    /// closure params, nested blocks).
+    fn expr_shares_outer_mut_borrow(&self, expr: &Expr, locals: &HashSet<String>) -> bool {
+        let root_is_outer = |arg: &Expr| -> bool {
+            match place_root(arg) {
+                Some(root) => !locals.contains(&root),
+                None => false,
+            }
+        };
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                let params = self.resolve_callee_params(callee);
+                for (i, arg) in args.iter().enumerate() {
+                    if (arg.mut_marker || param_is_mut_borrow(params, i))
+                        && root_is_outer(&arg.value)
+                    {
+                        return true;
+                    }
+                }
+                if self.expr_shares_outer_mut_borrow(callee, locals) {
+                    return true;
+                }
+                args.iter()
+                    .any(|a| self.expr_shares_outer_mut_borrow(&a.value, locals))
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                if self.method_receiver_is_mut_ref(method) && root_is_outer(object) {
+                    return true;
+                }
+                if args.iter().any(|a| a.mut_marker && root_is_outer(&a.value)) {
+                    return true;
+                }
+                if self.expr_shares_outer_mut_borrow(object, locals) {
+                    return true;
+                }
+                args.iter()
+                    .any(|a| self.expr_shares_outer_mut_borrow(&a.value, locals))
+            }
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Pipe { left, right }
+            | ExprKind::NilCoalesce { left, right } => {
+                self.expr_shares_outer_mut_borrow(left, locals)
+                    || self.expr_shares_outer_mut_borrow(right, locals)
+            }
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+                self.expr_shares_outer_mut_borrow(operand, locals)
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.expr_shares_outer_mut_borrow(object, locals)
+            }
+            ExprKind::Index { object, index } => {
+                self.expr_shares_outer_mut_borrow(object, locals)
+                    || self.expr_shares_outer_mut_borrow(index, locals)
+            }
+            ExprKind::OptionalChain { object, args, .. } => {
+                self.expr_shares_outer_mut_borrow(object, locals)
+                    || args.iter().flatten().any(|a| {
+                        (a.mut_marker && root_is_outer(&a.value))
+                            || self.expr_shares_outer_mut_borrow(&a.value, locals)
+                    })
+            }
+            ExprKind::Block(block)
+            | ExprKind::Comptime(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::Try(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Par(block) => self.block_shares_outer_mut_borrow(block, locals),
+            ExprKind::Lock { body, .. } => self.block_shares_outer_mut_borrow(body, locals),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.expr_shares_outer_mut_borrow(condition, locals)
+                    || self.block_shares_outer_mut_borrow(then_block, locals)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| self.expr_shares_outer_mut_borrow(e, locals))
+            }
+            ExprKind::IfLet {
+                value,
+                pattern,
+                then_block,
+                else_branch,
+            } => {
+                if self.expr_shares_outer_mut_borrow(value, locals) {
+                    return true;
+                }
+                let mut inner = locals.clone();
+                self.collect_pattern_bindings(pattern, &mut inner);
+                self.block_shares_outer_mut_borrow(then_block, &inner)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| self.expr_shares_outer_mut_borrow(e, locals))
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                if self.expr_shares_outer_mut_borrow(scrutinee, locals) {
+                    return true;
+                }
+                arms.iter().any(|arm| {
+                    let mut inner = locals.clone();
+                    self.collect_pattern_bindings(&arm.pattern, &mut inner);
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|g| self.expr_shares_outer_mut_borrow(g, &inner))
+                        || self.expr_shares_outer_mut_borrow(&arm.body, &inner)
+                })
+            }
+            ExprKind::While {
+                condition: head,
+                body,
+                ..
+            }
+            | ExprKind::For {
+                iterable: head,
+                body,
+                ..
+            } => {
+                if self.expr_shares_outer_mut_borrow(head, locals) {
+                    return true;
+                }
+                let mut inner = locals.clone();
+                if let ExprKind::For { pattern, .. } = &expr.kind {
+                    self.collect_pattern_bindings(pattern, &mut inner);
+                }
+                self.block_shares_outer_mut_borrow(body, &inner)
+            }
+            ExprKind::WhileLet {
+                value,
+                pattern,
+                body,
+                ..
+            } => {
+                if self.expr_shares_outer_mut_borrow(value, locals) {
+                    return true;
+                }
+                let mut inner = locals.clone();
+                self.collect_pattern_bindings(pattern, &mut inner);
+                self.block_shares_outer_mut_borrow(body, &inner)
+            }
+            ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+                self.block_shares_outer_mut_borrow(body, locals)
+            }
+            ExprKind::Closure { params, body, .. } => {
+                let mut inner = locals.clone();
+                for p in params {
+                    self.collect_pattern_bindings(&p.pattern, &mut inner);
+                }
+                self.expr_shares_outer_mut_borrow(body, &inner)
+            }
+            ExprKind::Return(Some(inner))
+            | ExprKind::Break {
+                value: Some(inner), ..
+            } => self.expr_shares_outer_mut_borrow(inner, locals),
+            ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => exprs
+                .iter()
+                .any(|e| self.expr_shares_outer_mut_borrow(e, locals)),
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.expr_shares_outer_mut_borrow(value, locals)
+                    || self.expr_shares_outer_mut_borrow(count, locals)
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => items
+                .iter()
+                .any(|e| self.expr_shares_outer_mut_borrow(e, locals)),
+            ExprKind::MapLiteral(entries) => entries.iter().any(|(k, v)| {
+                self.expr_shares_outer_mut_borrow(k, locals)
+                    || self.expr_shares_outer_mut_borrow(v, locals)
+            }),
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                fields
+                    .iter()
+                    .any(|f| self.expr_shares_outer_mut_borrow(&f.value, locals))
+                    || spread
+                        .as_ref()
+                        .is_some_and(|s| self.expr_shares_outer_mut_borrow(s, locals))
+            }
+            ExprKind::Cast { expr: inner, .. } => self.expr_shares_outer_mut_borrow(inner, locals),
+            ExprKind::Range { start, end, .. } => {
+                start
+                    .as_ref()
+                    .is_some_and(|s| self.expr_shares_outer_mut_borrow(s, locals))
+                    || end
+                        .as_ref()
+                        .is_some_and(|e| self.expr_shares_outer_mut_borrow(e, locals))
+            }
+            ExprKind::Providers { bindings, body } => {
+                bindings
+                    .iter()
+                    .any(|b| self.expr_shares_outer_mut_borrow(&b.value, locals))
+                    || self.block_shares_outer_mut_borrow(body, locals)
+            }
+            ExprKind::InterpolatedStringLit(parts) => parts.iter().any(|part| {
+                matches!(part, ParsedInterpolationPart::Expr(inner, _)
+                    if self.expr_shares_outer_mut_borrow(inner, locals))
+            }),
+            // Leaf / no-call forms.
+            _ => false,
+        }
     }
 
     /// Walk a block's statements and record any outer-scope names

@@ -2848,6 +2848,134 @@ fn main() {
         );
     }
 
+    /// B-2026-07-23-20 (HIGH soundness): a reduction whose body passes a
+    /// LOOP-INVARIANT shared `mut ref` scratch buffer to a helper must NOT be
+    /// parallelized — every iteration writes the same buffer inside the callee,
+    /// so parallel workers race on it (nondeterministic WRONG output from the
+    /// default build; `KARAC_AUTO_PAR=0` was stable). The direct-write gates
+    /// only see `Assign` targets, not a mutation performed inside the callee,
+    /// which was the soundness hole. `a`/`b` are the KMP scratch buffers,
+    /// allocated ONCE before the `while w < n` loop and rewritten every
+    /// iteration inside `kern` (the `b[len-1]` read-back is what makes the
+    /// iterations genuinely dependent). The reduction must now be declined:
+    /// no Add+i64 reduce combine helper is synthesized for the `sink` loop, and
+    /// the built binary prints the exact sequential answer.
+    #[test]
+    fn test_reduction_declined_for_loop_invariant_shared_mut_ref_scratch() {
+        let src = r#"
+fn kern(base: ref Vec[i64], w: i64, width: i64, a: mut ref Vec[i64], b: mut ref Vec[i64]) -> i64 {
+    let m = 2i64 * width;
+    let mut i = 0i64;
+    while i < m { a[i] = base[w + (i % width)]; i = i + 1i64; }
+    let mut len = 0i64;
+    let mut j = 1i64;
+    b[0] = 0i64;
+    while j < m {
+        if a[j] == a[len] { len = len + 1i64; b[j] = len; j = j + 1i64; }
+        else if len > 0i64 { len = b[len - 1i64]; }
+        else { b[j] = 0i64; j = j + 1i64; }
+    }
+    return b[m - 1i64];
+}
+fn main() {
+    let width = 40i64;
+    let n = 4000i64;
+    let mut base: Vec[i64] = Vec.new();
+    let mut seed = 12345i64;
+    let mut k = 0i64;
+    while k < n + width { seed = (seed * 1103515245i64 + 12345i64) % 2147483648i64; base.push(seed % 97i64); k = k + 1i64; }
+    let m = 2i64 * width;
+    let mut a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    let mut t = 0i64;
+    while t < m { a.push(0i64); b.push(0i64); t = t + 1i64; }
+    let mut sink = 0i64;
+    let mut w = 0i64;
+    while w < n { sink = sink + kern(base, w, width, mut a, mut b); w = w + 1i64; }
+    println(sink);
+}
+"#;
+        // Structural: the `sink = sink + kern(..)` add-reduction is the only
+        // Add+i64 reduction candidate; the gate must decline it, so its combine
+        // helper is never synthesized. (The `base.push` fill is a Collect, which
+        // uses different helpers, so this assertion targets the sink loop alone.)
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("@__karac_reduce_combine_add_i64"),
+            "the loop-invariant shared mut-ref scratch reduction must be declined \
+             (no Add+i64 reduce helper for the `sink` loop); got:\n{ir}"
+        );
+
+        // End-to-end: the built binary (auto-par ON) must print the exact
+        // sequential answer. Before the fix this raced to a nondeterministic
+        // wrong value; now the loop is sequential and stable.
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "160000");
+        }
+    }
+
+    /// Positive control for the B-2026-07-23-20 gate: a mutable-borrow argument
+    /// rooted at a PER-ITERATION-FRESH binding (`let mut buf` INSIDE the loop
+    /// body) must STILL parallelize — each worker owns its own buffer, so there
+    /// is no cross-iteration sharing. Guards against the gate over-declining.
+    #[test]
+    fn test_reduction_allowed_for_per_iteration_fresh_mut_ref_buffer() {
+        let src = r#"
+fn fill(out: mut ref Vec[i64], i: i64) -> i64 {
+    let mut s = 0i64;
+    let mut k = 0i64;
+    while k < 40i64 { out[k] = (i + k) % 13i64; s = s + out[k]; k = k + 1i64; }
+    return s;
+}
+fn main() {
+    let mut sum = 0i64;
+    let mut i = 0i64;
+    while i < 100000i64 {
+        let mut buf: Vec[i64] = Vec.new();
+        let mut t = 0i64;
+        while t < 40i64 { buf.push(0i64); t = t + 1i64; }
+        sum = sum + fill(mut buf, i);
+        i = i + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "a fresh per-iteration mut-ref buffer must NOT block reduction \
+             parallelization; got:\n{ir}"
+        );
+    }
+
     /// B-2026-07-18-1: `KARAC_AUTO_PAR=0` (`auto_par_disabled`) must disable the
     /// PARALLEL reduce lowering too, not only the parallel-group dispatch.
     /// Before the fix the gate lived only in `compile_function_body`, but the
