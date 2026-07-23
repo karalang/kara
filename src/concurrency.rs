@@ -1534,9 +1534,25 @@ impl<'a> ConcurrencyChecker<'a> {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let mut set = self.stmt_consuming_hazard_reads(s, &move_hazards);
+                let mut set = self.stmt_consuming_hazard_reads(s, &move_hazards, true);
                 // Names the stmt itself introduces are its own to consume —
                 // the branch-local move machinery is complete for those.
+                for n in &stmt_infos[i].let_introduced {
+                    set.remove(n);
+                }
+                set
+            })
+            .collect();
+        // B-2026-07-22-9 producer guard uses a NARROWER set: wrapper-combinator
+        // consumption (`a.unwrap_or(..)`) of a published slot is round-trip-safe
+        // (B-2026-07-17-4), so it must not de-parallelize the PRODUCER of that
+        // binding — only genuine MOVES do. (The consumer of such a call is still
+        // gated by `consuming_hazard_reads` above.)
+        let moving_hazard_reads: Vec<HashSet<String>> = stmts
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let mut set = self.stmt_consuming_hazard_reads(s, &move_hazards, false);
                 for n in &stmt_infos[i].let_introduced {
                     set.remove(n);
                 }
@@ -1549,6 +1565,7 @@ impl<'a> ConcurrencyChecker<'a> {
             total_statements,
             &container_locals,
             &consuming_hazard_reads,
+            &moving_hazard_reads,
             &func.name,
         );
 
@@ -3549,10 +3566,21 @@ impl<'a> ConcurrencyChecker<'a> {
     ///
     /// Names introduced by the statement itself are the caller's job to
     /// subtract (see `analyze_function`).
+    ///
+    /// `count_wrapper_method_receiver` gates the `Option`/`Result` combinator-
+    /// method-receiver case (`a.unwrap_or(..)` consumes `a`). The CONSUMER
+    /// guard passes `true` (it must not enter a par group). The PRODUCER guard
+    /// (B-2026-07-22-9) passes `false`: a published slot consumed by a wrapper
+    /// combinator is made round-trip-safe by B-2026-07-17-4's branch-side
+    /// publish suppression + parent re-registration, so its producer stays
+    /// parallelizable — only genuine alias/owned MOVES of the published binding
+    /// (`let c = a`, owned-arg, aggregate element, for-iterable) double-free
+    /// with the writeback and must de-parallelize the producer.
     fn stmt_consuming_hazard_reads(
         &self,
         stmt: &Stmt,
         hazards: &HashMap<String, bool>,
+        count_wrapper_method_receiver: bool,
     ) -> HashSet<String> {
         fn bare_name(e: &Expr) -> Option<&str> {
             match &e.kind {
@@ -3563,6 +3591,7 @@ impl<'a> ConcurrencyChecker<'a> {
         struct W<'a> {
             this: &'a ConcurrencyChecker<'a>,
             hazards: &'a HashMap<String, bool>,
+            count_wrapper_method_receiver: bool,
             out: HashSet<String>,
         }
         impl W<'_> {
@@ -3662,8 +3691,13 @@ impl<'a> ConcurrencyChecker<'a> {
                     ExprKind::MethodCall { object, args, .. } => {
                         if let Some(n) = bare_name(object) {
                             // Wrapper (`Option`/`Result`) receivers: the
-                            // combinator family consumes self.
-                            if self.hazards.get(n).copied() == Some(true) {
+                            // combinator family consumes self. Counted for the
+                            // consumer guard; excluded for the producer guard
+                            // (B-2026-07-17-4 makes the published-slot round-
+                            // trip safe — see the fn doc comment).
+                            if self.count_wrapper_method_receiver
+                                && self.hazards.get(n).copied() == Some(true)
+                            {
                                 self.out.insert(n.to_string());
                             }
                         }
@@ -3772,12 +3806,14 @@ impl<'a> ConcurrencyChecker<'a> {
         let mut w = W {
             this: self,
             hazards,
+            count_wrapper_method_receiver,
             out: HashSet::new(),
         };
         w.stmt(stmt);
         w.out
     }
 
+    #[allow(clippy::too_many_arguments)] // B-2026-07-22-9 fix threads a second (producer-only) hazard set
     fn find_parallel_groups(
         &self,
         infos: &[StmtInfo],
@@ -3785,6 +3821,7 @@ impl<'a> ConcurrencyChecker<'a> {
         n: usize,
         container_locals: &HashSet<String>,
         consuming_hazard_reads: &[HashSet<String>],
+        moving_hazard_reads: &[HashSet<String>],
         enclosing_fn: &str,
     ) -> Vec<ParallelGroup> {
         let mut groups: Vec<ParallelGroup> = Vec::new();
@@ -3811,10 +3848,13 @@ impl<'a> ConcurrencyChecker<'a> {
         let mut hazard_producer = vec![false; n];
         for i in 0..n {
             let produces_consumed_hazard = infos[i].let_introduced.iter().any(|name| {
-                // Consumed-by-move by any LATER statement (the writeback +
+                // Consumed-by-MOVE by any LATER statement (the writeback +
                 // move race is strictly forward: the producer's value is
                 // handed to the parent, then a subsequent stmt moves it).
-                ((i + 1)..n).any(|j| consuming_hazard_reads[j].contains(name))
+                // Uses `moving_hazard_reads`, not `consuming_hazard_reads`:
+                // wrapper-combinator consumption of a published slot is safe
+                // (B-2026-07-17-4) and must not de-parallelize the producer.
+                ((i + 1)..n).any(|j| moving_hazard_reads[j].contains(name))
             });
             hazard_producer[i] = produces_consumed_hazard;
         }
