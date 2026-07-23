@@ -482,6 +482,21 @@ const CORPUS: &[&str] = &[
     // mask loop that exercises `ashr` sign-extension (seed-parity), plus a
     // logical-`and`/`or` short-circuit regression guard.
     "fn nib(bits: i64, i: i64) -> i64 {\n    return (bits >> (i * 4)) & 15;\n}\nfn main() {\n    println((12 & 10).to_string());\n    println((12 | 10).to_string());\n    println((12 ^ 10).to_string());\n    println((1 << 4).to_string());\n    println((256 >> 2).to_string());\n    println(nib(250, 0).to_string());\n    println(nib(250, 1).to_string());\n    let mut acc = 0;\n    let bits = 0 - 1;\n    let mut i = 0;\n    while i < 4 {\n        acc = acc + nib(bits, i);\n        i = i + 1;\n    }\n    println(acc.to_string());\n    let x = 5;\n    if x > 0 and x < 10 {\n        println(\"y\");\n    } else {\n        println(\"n\");\n    }\n}",
+    // Slice 56: INDEXED ASSIGNMENT `v[i] = value` — an EMITTER slice. The
+    // `Assign` statement handler matched only `Field` and `Ident` targets;
+    // an `Index` target fell through the `_ =>` catch-all and was SILENTLY
+    // DROPPED, so `v[0] = 99` was a no-op (v[0] stayed 1). Fundamental for
+    // array mutation, and the port's own codegen.kara uses it
+    // (`self.locals_heap[idx] = vh`). B-2026-07-23-23. Fix: an `Index` arm
+    // mirroring the read-side address computation (extractvalue the buffer
+    // ptr, GEP by element type) then STORING the RHS through the live heap
+    // buffer the slot also points at. Vec[i64] (kind 3) and Vec[String]
+    // (kind 4 — frees the OLD element string before the store, so a
+    // reassign-in-loop is leak-clean under the oracle's valgrind leg) are
+    // surfaced; Vec[bool] (needs a distinct i1-lane element kind) and
+    // Vec-of-struct/enum are out. Covers a scalar store, a compute-into-slot
+    // loop `v[j] = j * j`, and a String reassign-in-loop (leak guard).
+    "fn main() {\n    let mut v: Vec[i64] = Vec.new();\n    let mut i = 0;\n    while i < 5 {\n        v.push(0);\n        i = i + 1;\n    }\n    let mut j = 0;\n    while j < 5 {\n        v[j] = j * j;\n        j = j + 1;\n    }\n    println((v[0] + v[2] + v[4]).to_string());\n    v[0] = 99;\n    println(v[0].to_string());\n    let mut s: Vec[String] = Vec.new();\n    s.push(\"old\".to_string());\n    s.push(\"keep\".to_string());\n    let mut k = 0;\n    while k < 3 {\n        s[0] = \"new\".to_string();\n        k = k + 1;\n    }\n    println(s[0]);\n    println(s[1]);\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

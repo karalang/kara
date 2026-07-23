@@ -1460,6 +1460,91 @@ impl Emitter {
                                 + ", align 8\n";
                         }
                     }
+                    Index(ixa) => {
+                        // INDEXED assignment `v[i] = value` (Slice 56). Mirror
+                        // the read-side Index address computation (extractvalue
+                        // the Vec's buffer ptr, GEP by element type) but STORE
+                        // the RHS instead of loading. The store writes through
+                        // the live heap buffer the slot's {ptr,len,cap} also
+                        // points at, so it is visible on the next read. WITHOUT
+                        // this arm `v[i] = x` hit the `_ =>` no-op (silent drop).
+                        // Vec[i64] (kind 3) and Vec[String] (kind 4, freeing the
+                        // old element) are surfaced; Vec[bool] needs a distinct
+                        // element kind (i1 read-trunc + i64 store-zext, a
+                        // separate slice — B-2026-07-23-24) and Vec-of-struct/
+                        // enum targets have no port site. B-2026-07-23-23.
+                        let IndexExpr { object: aobj, index: aidx, span: aisp } = ixa;
+                        let aov = self.emit_value(aobj);
+                        let Val { op: aoop, kind: aok, heap: aoh } = aov;
+                        let aiv = self.emit_value(aidx);
+                        let Val { op: aiop, kind: aik, heap: aih } = aiv;
+                        if aok == 3 {
+                            let apr = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + apr.clone()
+                                + " = extractvalue { ptr, i64, i64 } "
+                                + aoop
+                                + ", 0\n";
+                            let aep = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + aep.clone()
+                                + " = getelementptr i64, ptr "
+                                + apr
+                                + ", i64 "
+                                + aiop
+                                + "\n";
+                            let arv = self.emit_value(value);
+                            let Val { op: arop, kind: ark, heap: arh } = arv;
+                            self.body = self.body
+                                + "  store i64 "
+                                + arop
+                                + ", ptr "
+                                + aep
+                                + ", align 8\n";
+                        }
+                        if aok == 4 {
+                            let bpr = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + bpr.clone()
+                                + " = extractvalue { ptr, i64, i64 } "
+                                + aoop
+                                + ", 0\n";
+                            let bep = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + bep.clone()
+                                + " = getelementptr { ptr, i64 }, ptr "
+                                + bpr
+                                + ", i64 "
+                                + aiop
+                                + "\n";
+                            let boldv = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + boldv.clone()
+                                + " = load { ptr, i64 }, ptr "
+                                + bep.clone()
+                                + ", align 8\n";
+                            self.emit_free_val(boldv);
+                            let brv = self.emit_value(value);
+                            let Val { op: brop0, kind: brk, heap: brh } = brv;
+                            let mut brop = brop0;
+                            if not brh {
+                                let bmv = self.emit_materialize(brop.clone());
+                                let Val { op: bmop, kind: bmk, heap: bmh } = bmv;
+                                brop = bmop;
+                            }
+                            self.body = self.body
+                                + "  store { ptr, i64 } "
+                                + brop
+                                + ", ptr "
+                                + bep
+                                + ", align 8\n";
+                        }
+                    }
                     _ => {}
                 }
             }
