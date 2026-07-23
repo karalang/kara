@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 167 | 1 |
 | leak | 96 | 1 |
-| double-free | 79 | 0 |
+| double-free | 80 | 0 |
 | codegen-gap | 74 | 0 |
 | missing-feature | 61 | 0 |
 | false-positive | 41 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 477 | 2 |
+| codegen | 478 | 2 |
 | typecheck | 84 | 0 |
 | interp | 70 | 1 |
 | ownership | 27 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **654 surfaced · 3 open · 646 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **655 surfaced · 3 open · 647 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **654 surfaced 
 | B-2026-07-23-11 | 2026-07-23 | codegen | medium | A user enum carrying a `Map`/`Set`(-family) payload leaks the handle at scope-exit drop: the enum drop walker has no Map/Set arm, so the whole kv-table is definitely-lost under valgrind. `Vec`/`String` payloads free correctly. | — |
 | B-2026-07-23-12 | 2026-07-23 | interp | low | `mut ref` enum-payload `Map` mutation does not write through in the interpreter (interp keeps the pre-mutation size) while codegen writes through correctly — interp/codegen divergence for `match v (mut ref V) { Table(m) => m.insert(..) }`. | — |
 
-### Fixed (646)
+### Fixed (647)
 
-<details><summary>646 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>647 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -786,6 +786,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **654 surfaced 
 | B-2026-07-23-8 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): `loop {}`, `break`, and `continue` were UNHANDLED — a `loop { … break }` emitt… | fa25a34 |
 | B-2026-07-23-9 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): `for x in <vec>` element iteration was UNHANDLED — the loop emitted nothing/0… | 57ea46e |
 | B-2026-07-23-10 | codegen | medium | CODEGEN-GAP in the selfhost codegen PORT (codegen.kara emitter): `i64.to_f64()` was unimplemented — the method returned the i64 receiver unchanged (k… | e2aaaa9 |
+| B-2026-07-23-13 | codegen | high | SEED codegen double-free: `if let Variant(t) = e` over an OWNED-VARIABLE user-enum scrutinee with a heap (String/Vec) payload re-freed the payload | 5e9bdd0 |
 
 </details>
 
