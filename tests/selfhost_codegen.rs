@@ -395,6 +395,13 @@ const CORPUS: &[&str] = &[
     // the var slot; works for Vec[i64]/Vec[String]/Vec[struct]. (Range
     // for-loops `0..n` are parser-blocked — parser.kara has no `..`.)
     "struct Pt { x: i64, tag: String }\nfn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(3);\n    v.push(4);\n    v.push(5);\n    let mut t = 0;\n    for x in v {\n        t = t + x;\n    }\n    println(t.to_string());\n    let mut ws: Vec[String] = Vec.new();\n    ws.push(\"al\".to_string());\n    ws.push(\"be\".to_string());\n    let mut acc = \"\".to_string();\n    for w in ws {\n        acc = acc + w + \"|\";\n    }\n    println(acc);\n    let mut ps: Vec[Pt] = Vec.new();\n    ps.push(Pt { x: 10, tag: \"a\".to_string() });\n    ps.push(Pt { x: 20, tag: \"b\".to_string() });\n    for p in ps {\n        println(p.tag + \":\" + p.x.to_string());\n    }\n}",
+    // Slice 47: `loop {}` + `break` + `continue` — loop control the
+    // parser.kara uses heavily (loop with break). A loop-label STACK
+    // (loop_break/loop_cont, innermost last) resolves break/continue to
+    // the enclosing loop; for-loops route continue through an increment
+    // block so it skips the body remainder but NOT the step. Covers
+    // loop/while + break/continue inside vec-for and byte-for.
+    "fn main() {\n    let mut i = 0;\n    let mut sum = 0;\n    loop {\n        if i >= 5 {\n            break;\n        }\n        sum = sum + i;\n        i = i + 1;\n    }\n    println(sum.to_string());\n    let mut j = 0;\n    let mut evens = 0;\n    while j < 10 {\n        j = j + 1;\n        if j % 2 == 1 {\n            continue;\n        }\n        evens = evens + j;\n    }\n    println(evens.to_string());\n    let mut v: Vec[i64] = Vec.new();\n    v.push(1);\n    v.push(2);\n    v.push(3);\n    v.push(4);\n    v.push(5);\n    let mut acc = 0;\n    for x in v {\n        if x == 4 {\n            break;\n        }\n        if x % 2 == 0 {\n            continue;\n        }\n        acc = acc + x;\n    }\n    println(acc.to_string());\n    let src = \"abcdef\";\n    let mut cnt = 0;\n    for b in src.bytes() {\n        if b == 100 {\n            break;\n        }\n        cnt = cnt + 1;\n    }\n    println(cnt.to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

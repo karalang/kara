@@ -63,6 +63,9 @@ import ast.{
     MatchExpr,
     MatchArm,
     ForExpr,
+    LoopExpr,
+    BreakExpr,
+    ContinueExpr,
     WrapType,
     TupleVariantPattern,
     EnumDefNode,
@@ -178,6 +181,11 @@ struct Emitter {
     // payload kind (slot 4), -1 if the enum has 0 or 1 aggregate types. Two
     // slots cover the real token.kara (CStr struct + Vec[InterpPart]).
     en_extra2: Vec[i64],
+    // Loop-control label stack (Slice 47): the break/continue target labels
+    // of the enclosing loops, innermost last. `break` jumps to the top
+    // break label, `continue` to the top continue label.
+    loop_break: Vec[String],
+    loop_cont: Vec[String],
     en_off: Vec[i64],
     en_cnt: Vec[i64],
 }
@@ -220,6 +228,8 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         en_var_pl2: Vec.new(),
         en_extra: Vec.new(),
         en_extra2: Vec.new(),
+        loop_break: Vec.new(),
+        loop_cont: Vec.new(),
         en_off: Vec.new(),
         en_cnt: Vec.new(),
     };
@@ -295,7 +305,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_extra, en_extra2, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_extra, en_extra2, loop_break, loop_cont, en_off, en_cnt } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -1107,6 +1117,7 @@ impl Emitter {
         self.nlbl = self.nlbl + 1;
         let lh = "vfor" + lid.to_string();
         let lb = "vforb" + lid.to_string();
+        let lc = "vforc" + lid.to_string();
         let le = "vfore" + lid.to_string();
         self.body = self.body + "  br label %" + lh.clone() + "\n";
         self.body = self.body + lh.clone() + ":\n";
@@ -1145,7 +1156,14 @@ impl Emitter {
             + ", ptr %v"
             + vidx.to_string()
             + ", align 8\n";
+        // continue → the increment block (lc); break → the end (le).
+        self.loop_cont.push(lc.clone());
+        self.loop_break.push(le.clone());
         self.emit_block(fbody);
+        self.loop_cont.pop();
+        self.loop_break.pop();
+        self.body = self.body + "  br label %" + lc.clone() + "\n";
+        self.body = self.body + lc + ":\n";
         let nx = self.fresh();
         self.body = self.body + "  " + nx.clone() + " = add i64 " + iv + ", 1\n";
         self.body = self.body + "  store i64 " + nx + ", ptr " + islot + ", align 8\n";
@@ -2231,7 +2249,14 @@ impl Emitter {
                         + le.clone()
                         + "\n";
                     self.body = self.body + lb + ":\n";
+                    let lc = "rforc" + lid.to_string();
+                    self.loop_cont.push(lc.clone());
+                    self.loop_break.push(le.clone());
                     self.emit_block(fbody);
+                    self.loop_cont.pop();
+                    self.loop_break.pop();
+                    self.body = self.body + "  br label %" + lc.clone() + "\n";
+                    self.body = self.body + lc + ":\n";
                     let iv2 = self.fresh();
                     self.body =
                         self.body + "  " + iv2.clone() + " = load i64, ptr %v" + vidx.to_string() + ", align 8\n";
@@ -2334,7 +2359,14 @@ impl Emitter {
                         + ", ptr %v"
                         + vidx.to_string()
                         + ", align 8\n";
+                    let lc = "bforc" + lid.to_string();
+                    self.loop_cont.push(lc.clone());
+                    self.loop_break.push(le.clone());
                     self.emit_block(fbody);
+                    self.loop_cont.pop();
+                    self.loop_break.pop();
+                    self.body = self.body + "  br label %" + lc.clone() + "\n";
+                    self.body = self.body + lc + ":\n";
                     let nx = self.fresh();
                     self.body = self.body + "  " + nx.clone() + " = add i64 " + iv + ", 1\n";
                     self.body =
@@ -2369,9 +2401,56 @@ impl Emitter {
                     + lend.clone()
                     + "\n";
                 self.body = self.body + lbody + ":\n";
+                // continue → re-eval the condition (lhead); break → lend.
+                self.loop_cont.push(lhead.clone());
+                self.loop_break.push(lend.clone());
                 self.emit_block(body);
+                self.loop_cont.pop();
+                self.loop_break.pop();
                 self.body = self.body + "  br label %" + lhead + "\n";
                 self.body = self.body + lend + ":\n";
+            }
+            Loop(ln) => {
+                // `loop { body }` (Slice 47): an unconditional loop exited only
+                // by `break`. Header → body → back to header.
+                let LoopExpr { label, body, span } = ln;
+                let lid = self.nlbl;
+                self.nlbl = self.nlbl + 1;
+                let lhead = "iloop" + lid.to_string();
+                let lend = "iendloop" + lid.to_string();
+                self.body = self.body + "  br label %" + lhead.clone() + "\n";
+                self.body = self.body + lhead.clone() + ":\n";
+                self.loop_cont.push(lhead.clone());
+                self.loop_break.push(lend.clone());
+                self.emit_block(body);
+                self.loop_cont.pop();
+                self.loop_break.pop();
+                self.body = self.body + "  br label %" + lhead + "\n";
+                self.body = self.body + lend + ":\n";
+            }
+            Break(bn) => {
+                // `break` (Slice 47): jump to the innermost loop's end, then
+                // open a fresh dead block (a terminator ends the current one).
+                let BreakExpr { label, value, span } = bn;
+                let n = self.loop_break.len();
+                if n > 0 {
+                    self.body = self.body + "  br label %" + self.loop_break[n - 1] + "\n";
+                    let did = self.nlbl;
+                    self.nlbl = self.nlbl + 1;
+                    self.body = self.body + "brkdead" + did.to_string() + ":\n";
+                }
+            }
+            Continue(cn) => {
+                // `continue` (Slice 47): jump to the innermost loop's continue
+                // target (the condition header for while/loop), then dead block.
+                let ContinueExpr { label, span } = cn;
+                let n = self.loop_cont.len();
+                if n > 0 {
+                    self.body = self.body + "  br label %" + self.loop_cont[n - 1] + "\n";
+                    let did = self.nlbl;
+                    self.nlbl = self.nlbl + 1;
+                    self.body = self.body + "contdead" + did.to_string() + ":\n";
+                }
             }
             Blk(b) => {
                 self.emit_block(b);
