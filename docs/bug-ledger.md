@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 169 | 1 |
+| miscompile | 169 | 0 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 75 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 480 | 1 |
-| typecheck | 84 | 0 |
+| codegen | 480 | 0 |
+| typecheck | 85 | 0 |
 | interp | 70 | 0 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **658 surfaced · 1 open · 652 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **658 surfaced · 0 open · 653 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-23-5 | 2026-07-23 | codegen | medium | A generic fn whose return type PERMUTES the struct's type params — `fn swap[A,B](p: Pair[A,B]) -> Pair[B,A] { Pair { first: p.second, second: p.first } }` — miscompiles: the mono builds the returned struct literal with the INPUT layout `Pair[A,B]` instead of `Pair[B,A]`, failing LLVM module verification when A and B have different sizes. | — |
+_None — the ledger is fully drained._
 
-### Fixed (652)
+### Fixed (653)
 
-<details><summary>652 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>653 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -779,6 +777,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **658 surfaced 
 | B-2026-07-23-2 | codegen | medium | F32/F64 total-order wrapper: `.value` field access on a match-arm binding extracted from a USER-ENUM payload falls through to the const-0 tail -> mal… | 054b1be |
 | B-2026-07-23-3 | codegen | medium | A `Map`/`Set` value bound out of a USER-ENUM variant payload loses its container type for codegen method dispatch: `match v { Table(m) => m.len() }`… | 054b1be |
 | B-2026-07-23-4 | codegen | high | Matching a fresh-temp `Result[_, _]` (a direct function-call return) whose extracted payload is a STRUCT with a heap field (String/Vec), and reading… | 45a501a |
+| B-2026-07-23-5 | typecheck+codegen | medium | A generic fn whose return type PERMUTES the struct's type params — `fn swap[A,B](p: Pair[A,B]) -> Pair[B,A] { Pair { first: p.second, second: p.first… | a0f12e9 |
 | B-2026-07-23-6 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (selfhost/src/codegen.kara emitter, NOT the seed): OR-PATTERNS `A \| B \| C =>` matched only the FIRST a… | 990ba16 |
 | B-2026-07-23-7 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): MATCH GUARDS `Pat if <cond> =>` were IGNORED entirely — the emitter always too… | 73b3e69 |
 | B-2026-07-23-8 | codegen | high | SILENT MISCOMPILE in the selfhost codegen PORT (codegen.kara emitter): `loop {}`, `break`, and `continue` were UNHANDLED — a `loop { … break }` emitt… | fa25a34 |
