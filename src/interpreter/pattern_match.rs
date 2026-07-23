@@ -20,6 +20,7 @@ impl<'a> super::Interpreter<'a> {
 
     pub(crate) fn eval_match(
         &mut self,
+        scrutinee_place: Option<&Expr>,
         scrutinee: &Value,
         arms: &[MatchArm],
         span: &Span,
@@ -39,6 +40,28 @@ impl<'a> super::Interpreter<'a> {
                 self.env.push_scope();
                 self.bind_pattern(&arm.pattern, scrutinee.clone());
                 let result = self.eval_expr_inner(&arm.body);
+                // B-2026-07-23-12: write-through for a mutable-place scrutinee.
+                // The interpreter binds a match payload BY VALUE (a clone of the
+                // scrutinee), so an in-arm mutation of a bound payload —
+                // `match v { Table(m) => m.insert(..) }` where `m` is a `Map`
+                // stored by value — updates only the arm-local `m`, never `v`.
+                // Codegen writes through correctly; this closes the divergence.
+                // After the arm body runs, reconstruct the scrutinee value with
+                // each DIRECTLY-bound payload position replaced by its current
+                // (possibly mutated) binding, and store it back to the scrutinee
+                // place. Done BEFORE `pop_scope` so the arm bindings are still
+                // live. Gated to bare-identifier / `self` places (the `mut ref`
+                // param and receiver cases the bug reports); the CICO write-back
+                // in `eval_call` then propagates a `mut ref` param back to the
+                // caller. A non-place scrutinee (`match f() { .. }`) or a pattern
+                // with no direct value binding leaves the scrutinee untouched.
+                if let Some(place) = scrutinee_place {
+                    if Self::match_place_is_writable(place) {
+                        if let Some(patched) = self.patch_arm_bindings(&arm.pattern, scrutinee) {
+                            self.write_back_receiver(place, patched);
+                        }
+                    }
+                }
                 self.env.pop_scope();
                 return result;
             }
@@ -57,6 +80,123 @@ impl<'a> super::Interpreter<'a> {
             ),
             span,
         )
+    }
+
+    /// B-2026-07-23-12: is `place` a bare-identifier / `self` scrutinee whose
+    /// storage a match write-through can update in place? Restricted to these
+    /// two forms (not field / index projections) so the write-back never
+    /// re-evaluates a projection base with side effects — the `mut ref` param
+    /// and receiver cases the divergence reports are both bare identifiers.
+    fn match_place_is_writable(place: &Expr) -> bool {
+        matches!(&place.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+    }
+
+    /// B-2026-07-23-12: rebuild `original` (a match scrutinee value) with each
+    /// DIRECTLY value-bound payload position replaced by its current binding
+    /// value read from the arm scope, so an in-arm mutation writes through to
+    /// the scrutinee place. Returns `Some(patched)` only when at least one
+    /// direct value binding was patched (an enum-variant tuple/struct payload
+    /// or a plain-struct field); `None` for patterns with no direct value
+    /// binding (wildcard, literal, nested destructure) so the scrutinee is left
+    /// untouched. Only lowercase (snake_case) binding names are patched — the
+    /// case-class invariant makes those unambiguous value bindings, never
+    /// unit-variant tests, so a `Table(Left)` variant sub-pattern is never
+    /// mistaken for a binding.
+    fn patch_arm_bindings(&self, pattern: &Pattern, original: &Value) -> Option<Value> {
+        match (&pattern.kind, original) {
+            (
+                PatternKind::TupleVariant { patterns, .. },
+                Value::EnumVariant {
+                    enum_name,
+                    variant,
+                    data: EnumData::Tuple(vals),
+                },
+            ) => {
+                let mut new_vals = vals.clone();
+                let mut any = false;
+                for (i, sub) in patterns.iter().enumerate() {
+                    if let PatternKind::Binding(name) = &sub.kind {
+                        if !Self::is_patch_binding_name(name) {
+                            continue;
+                        }
+                        if let (Some(cur), Some(slot)) = (self.env.get(name), new_vals.get_mut(i)) {
+                            *slot = cur;
+                            any = true;
+                        }
+                    }
+                }
+                any.then(|| Value::EnumVariant {
+                    enum_name: enum_name.clone(),
+                    variant: variant.clone(),
+                    data: EnumData::Tuple(new_vals),
+                })
+            }
+            (
+                PatternKind::Struct { fields, .. },
+                Value::EnumVariant {
+                    enum_name,
+                    variant,
+                    data: EnumData::Struct(map),
+                },
+            ) => {
+                let (m, any) = self.patch_struct_fields(fields, map);
+                any.then(|| Value::EnumVariant {
+                    enum_name: enum_name.clone(),
+                    variant: variant.clone(),
+                    data: EnumData::Struct(m),
+                })
+            }
+            (PatternKind::Struct { fields, .. }, Value::Struct { name, fields: map }) => {
+                let (m, any) = self.patch_struct_fields(fields, map);
+                any.then(|| Value::Struct {
+                    name: name.clone(),
+                    fields: m,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Patch helper for a struct / struct-variant payload: clone `map` and
+    /// overwrite each field whose sub-pattern is a direct value binding
+    /// (shorthand `{ f }` or `{ f: bind }`) with that binding's current value.
+    /// Returns the (possibly updated) map and whether any field was patched.
+    fn patch_struct_fields(
+        &self,
+        fields: &[FieldPattern],
+        map: &std::collections::HashMap<String, Value>,
+    ) -> (std::collections::HashMap<String, Value>, bool) {
+        let mut m = map.clone();
+        let mut any = false;
+        for fp in fields {
+            let bind_name: Option<&str> = match &fp.pattern {
+                None => Some(fp.name.as_str()),
+                Some(sub) => match &sub.kind {
+                    PatternKind::Binding(n) => Some(n.as_str()),
+                    _ => None,
+                },
+            };
+            if let Some(bn) = bind_name {
+                if !Self::is_patch_binding_name(bn) {
+                    continue;
+                }
+                if let Some(cur) = self.env.get(bn) {
+                    m.insert(fp.name.clone(), cur);
+                    any = true;
+                }
+            }
+        }
+        (m, any)
+    }
+
+    /// A binding name eligible for match write-through patching: a bare
+    /// snake_case (lowercase-initial) identifier. The case-class invariant
+    /// makes these unambiguous value bindings; a PascalCase or dotted name is a
+    /// (possibly unit-variant) type reference and is skipped, so a rare
+    /// uppercase binding just retains the pre-fix (non-write-through) behavior
+    /// rather than risk mis-patching a variant test.
+    fn is_patch_binding_name(name: &str) -> bool {
+        !name.contains('.') && name.chars().next().is_some_and(|c| c.is_lowercase())
     }
 
     // ── Pattern matching ────────────────────────────────────────

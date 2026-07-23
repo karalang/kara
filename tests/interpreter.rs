@@ -13810,6 +13810,76 @@ fn test_mut_ref_scalar_narrow_int_assign_through() {
     assert_eq!(output, "42\n");
 }
 
+// ── Match write-through on a `mut ref` enum payload (B-2026-07-23-12) ──
+// The interpreter binds a match payload BY VALUE, so mutating a bound payload
+// (`match v { Table(m) => m.insert(..) }`) updated only the arm-local copy and
+// the change was lost — codegen writes through correctly. `eval_match` now
+// reconstructs the scrutinee from the (mutated) arm bindings and stores it back
+// to a bare-identifier / `self` place, so the `mut ref` mutation propagates.
+#[test]
+fn test_mut_ref_enum_payload_map_write_through() {
+    // The ledger repro: an insert into a `Map` enum payload through `mut ref V`.
+    let output = run("enum V { Table(Map[String, i64]) }\n\
+         fn add(v: mut ref V) { match v { Table(m) => { m.insert(\"z\", 99); } } }\n\
+         fn size(v: ref V) -> i64 { match v { Table(m) => m.len() as i64 } }\n\
+         fn main() {\n\
+             let mut mp: Map[String, i64] = Map.new();\n\
+             mp.insert(\"a\", 1);\n\
+             let mut t = V.Table(mp);\n\
+             add(mut t);\n\
+             println(size(t));\n\
+         }");
+    assert_eq!(output, "2\n");
+}
+
+#[test]
+fn test_mut_ref_enum_struct_variant_payload_map_write_through() {
+    // Struct-variant payload form of the same write-through.
+    let output = run("enum V { Table { m: Map[String, i64], tag: i64 } }\n\
+         fn add(v: mut ref V) { match v { Table { m, tag } => { m.insert(\"z\", 99); } } }\n\
+         fn size(v: ref V) -> i64 { match v { Table { m, tag } => m.len() as i64 } }\n\
+         fn main() {\n\
+             let mut mp: Map[String, i64] = Map.new();\n\
+             mp.insert(\"a\", 1);\n\
+             let mut t = V.Table { m: mp, tag: 7 };\n\
+             add(mut t);\n\
+             println(size(t));\n\
+         }");
+    assert_eq!(output, "2\n");
+}
+
+#[test]
+fn test_mut_ref_enum_payload_vec_write_through() {
+    // A `Vec` enum payload (also stored by value in the interpreter) writes
+    // through the same reconstruction path.
+    let output = run("enum V { List(Vec[i64]) }\n\
+         fn add(v: mut ref V) { match v { List(xs) => { xs.push(99); } } }\n\
+         fn size(v: ref V) -> i64 { match v { List(xs) => xs.len() as i64 } }\n\
+         fn main() {\n\
+             let mut xs: Vec[i64] = [1, 2];\n\
+             let mut t = V.List(xs);\n\
+             add(mut t);\n\
+             println(size(t));\n\
+         }");
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_match_readonly_enum_payload_not_corrupted() {
+    // Guard against over-firing: a read-only `ref V` match must leave the
+    // scrutinee unchanged across repeated matches (both reads see size 1).
+    let output = run("enum V { Table(Map[String, i64]) }\n\
+         fn size(v: ref V) -> i64 { match v { Table(m) => m.len() as i64 } }\n\
+         fn main() {\n\
+             let mut mp: Map[String, i64] = Map.new();\n\
+             mp.insert(\"a\", 1);\n\
+             let t = V.Table(mp);\n\
+             println(size(t));\n\
+             println(size(t));\n\
+         }");
+    assert_eq!(output, "1\n1\n");
+}
+
 // ── std.http ──────────────────────────────────────────────────────────────────
 
 #[test]
