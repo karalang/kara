@@ -579,34 +579,15 @@ pub(super) fn render_effect_decls(set: &crate::effectchecker::EffectSet) -> Stri
     parts.join(" ")
 }
 
+// The REPL footer keeps its own space-joined `with`-clause surface, but the
+// verb→keyword map and the canonical ordering are the shared ones
+// (`effect_render`) — no local copy to drift.
 fn verb_keyword(verb: &crate::ast::EffectVerbKind) -> String {
-    use crate::ast::EffectVerbKind;
-    match verb {
-        EffectVerbKind::Reads => "reads".to_string(),
-        EffectVerbKind::Writes => "writes".to_string(),
-        EffectVerbKind::Sends => "sends".to_string(),
-        EffectVerbKind::Receives => "receives".to_string(),
-        EffectVerbKind::Allocates => "allocates".to_string(),
-        EffectVerbKind::Panics => "panics".to_string(),
-        EffectVerbKind::Blocks => "blocks".to_string(),
-        EffectVerbKind::Suspends => "suspends".to_string(),
-        EffectVerbKind::UserDefined(name) => name.clone(),
-    }
+    crate::effect_render::verb_keyword(verb).to_string()
 }
 
 fn verb_emit_order(verb: &crate::ast::EffectVerbKind) -> usize {
-    use crate::ast::EffectVerbKind;
-    match verb {
-        EffectVerbKind::Reads => 0,
-        EffectVerbKind::Writes => 1,
-        EffectVerbKind::Sends => 2,
-        EffectVerbKind::Receives => 3,
-        EffectVerbKind::Allocates => 4,
-        EffectVerbKind::Panics => 5,
-        EffectVerbKind::Blocks => 6,
-        EffectVerbKind::Suspends => 7,
-        EffectVerbKind::UserDefined(_) => 8,
-    }
+    crate::effect_render::verb_order(verb)
 }
 
 /// Cell input shape. The parser only accepts top-level items, so any

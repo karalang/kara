@@ -39,6 +39,7 @@ pub mod dominator;
 pub mod drop_differential;
 pub mod edit_distance;
 pub mod effect_graph;
+pub mod effect_render;
 pub mod effectchecker;
 pub mod exhaustive;
 pub mod fallible_alloc;

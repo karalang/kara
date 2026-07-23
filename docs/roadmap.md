@@ -807,17 +807,17 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 1`](../
 
 #### Effect-set rendering library
 
-- [ ] **Three rendering modes, JSON as structured root:**
+- [x] **Three rendering modes, JSON as structured root:** *(compact + grouped + `effects_json` structured root landed in `src/effect_render.rs`, 2026-07-23; annotated-source view remains the v1.1 IDE deferral below.)*
   - **Compact** (CLI / crash reports): `effects: reads(UserDB) + sends(Network) + panics(IoError)` — one-line, matches source-declaration syntax (`+` is the language's effect-combination operator).
   - **Grouped** (IDE hover): multi-line, categorized into Resource / Execution / Panic. Empty groups omitted (no "Execution: (none)" visual noise).
   - **Annotated source view**: NOT at v1; v1.1 IDE feature (effect markers in gutter, click-to-explore).
-- [ ] **Stable group-first-then-alphabetical ordering** — same effect set always renders identically (load-bearing for diffability, e.g., `karac query effects --diff` between revisions).
-- [ ] **Empty-effects rendering**: `effects: (none)` in compact form; `Effects: (pure)` in grouped form — "pure" carries meaningful information.
-- [ ] **TTY-aware colors** (resource verbs cyan, execution verbs yellow, panic types red); auto-detect via `isatty`; honor `--no-color` flag and `NO_COLOR` env var. JSON output never has color codes.
+- [x] **Stable group-first-then-alphabetical ordering** — same effect set always renders identically (load-bearing for diffability, e.g., `karac query effects --diff` between revisions). *(Keyed by `(verb_order, keyword)` so distinct user-defined verbs never collide — a latent bug in the old rank-only REPL ordering, now fixed by consolidation.)*
+- [x] **Empty-effects rendering**: `(none)` in compact form; `(pure)` in grouped form — "pure" carries meaningful information.
+- [x] **TTY-aware colors** (resource verbs cyan, execution verbs yellow, panic types red); `ColorChoice::Auto` auto-detects via std `IsTerminal` and honors `NO_COLOR`; `Always`/`Never` for explicit control. JSON output never has color codes (asserted).
 
 #### Rendering crate
 
-- [ ] **Rendering logic lives in a workspace crate shared by `karac` binary and LSP server.** Extends the existing structured-diagnostic infrastructure (same machinery as compile-time error rendering: source-span highlighting, color/no-color, terminal width, ANSI). Don't fork; load-bearing primitives are shared between compile-time and runtime diagnostics. API exposes structured + rendered forms together (e.g., `render_crash_report(report, opts) -> String`, `crash_report_to_json(report) -> serde_json::Value`). LSP server calls the same functions and routes output into LSP-shaped responses. **Non-Rust LSP future**: via subprocess + JSON, not FFI; JSON contract is stable, Rust crate is an implementation detail.
+- [~] **Rendering logic lives in a shared crate/module used by `karac` binary and LSP server.** *(Slice 1, 2026-07-23: the logic lives in `src/effect_render.rs` — a module in the compiler lib crate the `lsp` member already depends on, so it is shareable without a separate crate; the REPL footer already consolidated onto it. Remaining: wire the LSP hover + `karac query effects` consumers onto it, and add the crash-report render entrypoints — next slice.)* Original intent: Extends the existing structured-diagnostic infrastructure (same machinery as compile-time error rendering: source-span highlighting, color/no-color, terminal width, ANSI). Don't fork; load-bearing primitives are shared between compile-time and runtime diagnostics. API exposes structured + rendered forms together (e.g., `render_crash_report(report, opts) -> String`, `crash_report_to_json(report) -> serde_json::Value`). LSP server calls the same functions and routes output into LSP-shaped responses. **Non-Rust LSP future**: via subprocess + JSON, not FFI; JSON contract is stable, Rust crate is an implementation detail.
 
 #### `std.tracing` cross-link
 
