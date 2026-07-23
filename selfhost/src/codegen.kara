@@ -2674,6 +2674,25 @@ impl Emitter {
                         + lnext.clone()
                         + "\n";
                     self.body = self.body + lbody + ":\n";
+                    // Guard on an int-literal arm (`5 if cond =>`, Slice 48):
+                    // failure falls to the next arm.
+                    match guard {
+                        Some(g) => {
+                            let gv = self.emit_value(g);
+                            let Val { op: gop, kind: gk, heap: gh } = gv;
+                            let lok = "mgok" + mid.to_string() + "_" + ai.to_string();
+                            self.body = self.body
+                                + "  br i1 "
+                                + gop
+                                + ", label %"
+                                + lok.clone()
+                                + ", label %"
+                                + lnext.clone()
+                                + "\n";
+                            self.body = self.body + lok + ":\n";
+                        }
+                        None => {}
+                    }
                     if want_value {
                         let bv = self.emit_value(body);
                         let Val { op: bop, kind: bk, heap: bh } = bv;
@@ -2706,6 +2725,26 @@ impl Emitter {
                                 + idx.to_string()
                                 + ", align 8\n";
                         }
+                        let ldead = "mdead" + mid.to_string() + "_" + ai.to_string();
+                        // Guarded int catch-all (`x if cond =>`, Slice 48):
+                        // failure flows to ldead → the next arm continues.
+                        match guard {
+                            Some(g) => {
+                                let gv = self.emit_value(g);
+                                let Val { op: gop, kind: gk, heap: gh } = gv;
+                                let lok = "mgok" + mid.to_string() + "_" + ai.to_string();
+                                self.body = self.body
+                                    + "  br i1 "
+                                    + gop
+                                    + ", label %"
+                                    + lok.clone()
+                                    + ", label %"
+                                    + ldead.clone()
+                                    + "\n";
+                                self.body = self.body + lok + ":\n";
+                            }
+                            None => {}
+                        }
                         if want_value {
                             let bv = self.emit_value(body);
                             let Val { op: bop, kind: bk, heap: bh } = bv;
@@ -2719,7 +2758,6 @@ impl Emitter {
                             self.emit_expr(body);
                         }
                         self.body = self.body + "  br label %" + lend.clone() + "\n";
-                        let ldead = "mdead" + mid.to_string() + "_" + ai.to_string();
                         self.body = self.body + ldead + ":\n";
                     }
                 }
@@ -3014,6 +3052,28 @@ impl Emitter {
                             + ", align 8\n";
                     }
                 }
+                // GUARD (Slice 48): `Variant(x) if <cond> =>`. Evaluated AFTER
+                // the payload binds (the guard reads bound vars); on failure
+                // fall through to the NEXT arm (which may re-match the same
+                // tag with a different guard/no guard). The payload slots
+                // stay allocated — harmless, re-bound by the matching arm.
+                match guard {
+                    Some(g) => {
+                        let gv = self.emit_value(g);
+                        let Val { op: gop, kind: gk, heap: gh } = gv;
+                        let lok = "mgok" + mid.to_string() + "_" + ai.to_string();
+                        self.body = self.body
+                            + "  br i1 "
+                            + gop
+                            + ", label %"
+                            + lok.clone()
+                            + ", label %"
+                            + lnext.clone()
+                            + "\n";
+                        self.body = self.body + lok + ":\n";
+                    }
+                    None => {}
+                }
                 if want_value {
                     let bv = self.emit_value(body);
                     let Val { op: bop, kind: bk, heap: bh } = bv;
@@ -3049,6 +3109,27 @@ impl Emitter {
                         + idx.to_string()
                         + ", align 8\n";
                 }
+                let ldead = "mdead" + mid.to_string() + "_" + ai.to_string();
+                // A guarded catch-all (`x if cond`, Slice 48): on failure flow
+                // to `ldead`, from which the NEXT arm's code continues (so a
+                // guarded wildcard before other arms behaves correctly).
+                match guard {
+                    Some(g) => {
+                        let gv = self.emit_value(g);
+                        let Val { op: gop, kind: gk, heap: gh } = gv;
+                        let lok = "mgok" + mid.to_string() + "_" + ai.to_string();
+                        self.body = self.body
+                            + "  br i1 "
+                            + gop
+                            + ", label %"
+                            + lok.clone()
+                            + ", label %"
+                            + ldead.clone()
+                            + "\n";
+                        self.body = self.body + lok + ":\n";
+                    }
+                    None => {}
+                }
                 if want_value {
                     let bv = self.emit_value(body);
                     let Val { op: bop, kind: bk, heap: bh } = bv;
@@ -3062,7 +3143,6 @@ impl Emitter {
                     self.emit_expr(body);
                 }
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
-                let ldead = "mdead" + mid.to_string() + "_" + ai.to_string();
                 self.body = self.body + ldead + ":\n";
             }
             ai = ai + 1;
