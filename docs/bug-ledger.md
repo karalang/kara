@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
 | soundness | 25 | 0 |
-| perf | 24 | 0 |
+| perf | 25 | 1 |
 | diagnostics | 15 | 0 |
 | use-after-free | 5 | 0 |
 | other | 3 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 485 | 0 |
+| codegen | 486 | 1 |
 | typecheck | 85 | 0 |
 | interp | 70 | 0 |
 | ownership | 27 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **668 surfaced · 0 open · 663 fixed** (2026-05-20 → 2026-07-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **669 surfaced · 1 open · 663 fixed** (2026-05-20 → 2026-07-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-24-2 | 2026-07-24 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `keys()` iteration inside a hot loop pays a malloc + full-set copy + free per outer iteration. Rust's `keys()` is a zero-allocation, inlined lazy bucket walk. On LeetCode #170 (Two Sum III), `find` does `for k in ds.counts.keys()` and runs 1.2M times over a ~170-entry map — 1.2M materializations — making the Kāra bench ~1.74x the equal-safety Rust mirror. | — |
 
 ### Fixed (663)
 
