@@ -46,12 +46,23 @@ pub enum HeuristicHint {
 
 // ── Thresholds (node counts) ──────────────────────────────────────
 // Deliberately conservative: `inlinehint` is advisory so a slightly-off
-// SMALL/MEDIUM bound cannot regress correctness, and LARGE is set high enough
-// that `noinline` only lands on functions no sane inliner would pull in anyway.
+// SMALL / LOOP_HOT_CAP bound cannot regress correctness, and LARGE is set high
+// enough that `noinline` only lands on functions no sane inliner would pull in
+// anyway.
 const SMALL: usize = 16;
-const MEDIUM: usize = 48;
 const SINGLE_SITE_CAP: usize = 256;
 const LARGE: usize = 512;
+/// Node cap for the **loop-hot** tier — a function called from inside a loop.
+/// This is a strong inline signal: the call pays its overhead every iteration,
+/// and inlining exposes the caller's range/monotonicity facts to the callee's
+/// body (which is what lets LLVM elide the surviving half-bounds-checks in a
+/// hot index loop — the expand-around-center / rolling-DP shape). The signal is
+/// on par with (arguably stronger than) the single-call-site case, so its cap
+/// sits at half `SINGLE_SITE_CAP` rather than the old, much-tighter value that
+/// left a source-small helper just over the line once lowering's operator
+/// desugaring inflated its node count (`expand` measured 51 post-lower vs a
+/// former cap of 48). Still advisory — LLVM applies its own cost model on top.
+const LOOP_HOT_CAP: usize = 128;
 
 #[derive(Default, Clone, Copy)]
 struct CallInfo {
@@ -123,7 +134,7 @@ pub fn compute(program: &Program) -> HashMap<String, HeuristicHint> {
             // the sole out-of-line copy). `0` covers a helper whose only
             // remaining reference is indirect/dead — still cheap to hint.
             Some(HeuristicHint::Inline)
-        } else if info.any_in_loop && size <= MEDIUM {
+        } else if info.any_in_loop && size <= LOOP_HOT_CAP {
             Some(HeuristicHint::Inline)
         } else if size >= LARGE {
             Some(HeuristicHint::NoInline)
@@ -450,6 +461,42 @@ mod tests {
     fn main_is_never_a_candidate() {
         let h = hints("fn main() { let x = 1; let _ = x; }");
         assert_eq!(h.get("main"), None);
+    }
+
+    #[test]
+    fn medium_loop_hot_helper_gets_inline() {
+        // A helper too big for SMALL and reached from >1 site (so the
+        // single-site tier does not apply), but called from inside a loop and
+        // well under LOOP_HOT_CAP. Regression guard for the expand-around-center
+        // shape: before the loop-hot cap was widened, a ~50-node loop-hot helper
+        // fell just over the old MEDIUM=48 line and silently lost its hint,
+        // leaving it out-of-line and its callee bounds checks un-elided.
+        let src = "\
+            fn work(v: ref Vec[i64], lo0: i64, hi0: i64) -> i64 {\n\
+            \x20   let mut lo = lo0;\n\
+            \x20   let mut hi = hi0;\n\
+            \x20   let n = v.len();\n\
+            \x20   let mut acc = 0i64;\n\
+            \x20   while lo >= 0 and hi < n and v[lo] == v[hi] {\n\
+            \x20       acc = acc + v[lo] + v[hi];\n\
+            \x20       lo = lo - 1;\n\
+            \x20       hi = hi + 1;\n\
+            \x20   }\n\
+            \x20   acc\n\
+            }\n\
+            fn main() {\n\
+            \x20   let v: Vec[i64] = Vec.new();\n\
+            \x20   let mut s = 0i64;\n\
+            \x20   let mut i = 0i64;\n\
+            \x20   while i < 10 {\n\
+            \x20       s = s + work(v, i, i);\n\
+            \x20       s = s + work(v, i, i + 1);\n\
+            \x20       i = i + 1;\n\
+            \x20   }\n\
+            \x20   let _ = s;\n\
+            }\n";
+        let h = hints(src);
+        assert_eq!(h.get("work"), Some(&HeuristicHint::Inline));
     }
 
     #[test]
