@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
 | soundness | 25 | 0 |
-| perf | 23 | 0 |
+| perf | 24 | 0 |
 | diagnostics | 15 | 0 |
 | use-after-free | 5 | 0 |
 | other | 3 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 484 | 0 |
+| codegen | 485 | 0 |
 | typecheck | 85 | 0 |
 | interp | 70 | 0 |
 | ownership | 27 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **667 surfaced · 0 open · 662 fixed** (2026-05-20 → 2026-07-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **668 surfaced · 0 open · 663 fixed** (2026-05-20 → 2026-07-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (662)
+### Fixed (663)
 
-<details><summary>662 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>663 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -798,6 +798,7 @@ _None — the ledger is fully drained._
 | B-2026-07-23-23 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): INDEXED ASSIGNMENT `v[i] = value` was SILENTLY DROPPED | 53f2553 |
 | B-2026-07-23-24 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): `Vec[bool]` has NO distinct element kind — it is conflated with `Vec[i64]` (kind 3), so the i1/i64 la… | 0498e79 |
 | B-2026-07-23-25 | autopar | medium | Auto-par over-parallelizes a fine-grained inner loop, making the DEFAULT `karac build` catastrophically slow (~1000x) while output stays CORRECT | c702d61 |
+| B-2026-07-24-1 | codegen | medium | Compiler-driven inline-hint pass runs on the LOWERED AST but its node-count thresholds are calibrated for RAW-source sizes, so a small loop-hot helpe… | 20d33f7 |
 
 </details>
 
