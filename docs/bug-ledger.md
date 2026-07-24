@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 80 | 0 |
 | codegen-gap | 76 | 0 |
 | missing-feature | 62 | 0 |
-| false-positive | 41 | 0 |
+| false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
 | soundness | 25 | 0 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 486 | 1 |
-| typecheck | 85 | 0 |
-| interp | 70 | 0 |
+| typecheck | 86 | 0 |
+| interp | 71 | 0 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
 | autopar | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **669 surfaced · 1 open · 663 fixed** (2026-05-20 → 2026-07-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **670 surfaced · 1 open · 664 fixed** (2026-05-20 → 2026-07-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **669 surfaced 
 |---|---|---|---|---|---|
 | B-2026-07-24-2 | 2026-07-24 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `keys()` iteration inside a hot loop pays a malloc + full-set copy + free per outer iteration. Rust's `keys()` is a zero-allocation, inlined lazy bucket walk. On LeetCode #170 (Two Sum III), `find` does `for k in ds.counts.keys()` and runs 1.2M times over a ~170-entry map — 1.2M materializations — making the Kāra bench ~1.74x the equal-safety Rust mirror. | — |
 
-### Fixed (663)
+### Fixed (664)
 
-<details><summary>663 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>664 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -801,6 +801,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **669 surfaced 
 | B-2026-07-23-24 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): `Vec[bool]` has NO distinct element kind — it is conflated with `Vec[i64]` (kind 3), so the i1/i64 la… | 0498e79 |
 | B-2026-07-23-25 | autopar | medium | Auto-par over-parallelizes a fine-grained inner loop, making the DEFAULT `karac build` catastrophically slow (~1000x) while output stays CORRECT | c702d61 |
 | B-2026-07-24-1 | codegen | medium | Compiler-driven inline-hint pass runs on the LOWERED AST but its node-count thresholds are calibrated for RAW-source sizes, so a small loop-hot helpe… | 20d33f7 |
+| B-2026-07-24-3 | typecheck+interp | medium | `u8 as char` was rejected at typecheck with E_INT_AS_CHAR even though it is the ONE infallible integer→char cast — every byte (0..=255) is a valid Un… | 6b0c98a |
 
 </details>
 
