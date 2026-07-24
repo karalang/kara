@@ -5682,6 +5682,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !args.is_empty() {
                     return Err(format!("Vec.sort expects 0 arguments, got {}", args.len()));
                 }
+                // Fast path: 8-byte integer elements (`i64`/`u64`/`isize`/…) sort
+                // via the type-specialized runtime `karac_vec_sort_i64_8`, whose
+                // inner compare is the primitive's native `Ord` (Rust
+                // `sort_unstable`) rather than a per-comparison indirect
+                // comparator callback — matching what the Rust mirror does.
+                // Narrower ints, String, floats, and compound elements keep the
+                // comparator-thunk path below.
+                if elem_ty.is_int_type() && elem_ty.into_int_type().get_bit_width() == 64 {
+                    let unsigned = matches!(
+                        self.vec_elem_type_name(var_name).as_deref(),
+                        Some("u8" | "u16" | "u32" | "u64" | "usize" | "uint")
+                    );
+                    let data_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                        .unwrap();
+                    let len_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_ptr_ptr, "data")
+                        .unwrap()
+                        .into_pointer_value();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_ptr, "len")
+                        .unwrap()
+                        .into_int_value();
+                    let sort_fn = self
+                        .module
+                        .get_function("karac_vec_sort_i64_8")
+                        .unwrap_or_else(|| {
+                            let void_t = self.context.void_type();
+                            let fn_ty =
+                                void_t.fn_type(&[ptr_ty.into(), i64_t.into(), i64_t.into()], false);
+                            self.module.add_function(
+                                "karac_vec_sort_i64_8",
+                                fn_ty,
+                                Some(Linkage::External),
+                            )
+                        });
+                    let is_signed = i64_t.const_int(u64::from(!unsigned), false);
+                    self.builder
+                        .build_call(sort_fn, &[data.into(), len.into(), is_signed.into()], "")
+                        .unwrap();
+                    return Ok(i64_t.const_zero().into());
+                }
                 // Bare `sort()` is `sort_by` with the natural ascending order.
                 // Integer elements use the signed-compare thunk; String
                 // elements (the `{ptr,len,cap}` header) use the

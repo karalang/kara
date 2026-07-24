@@ -405,6 +405,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_float_cmp,
         karac_runtime_f64_to_str,
         karac_vec_sort_by,
+        karac_vec_sort_i64_8,
         karac_vec_reverse,
     );
     // par-block + reduce, error-return trace, test-runner outcome bridge,
@@ -8042,6 +8043,31 @@ pub unsafe extern "C" fn karac_vec_sort_by(
     std::alloc::dealloc(idx as *mut u8, idx_layout);
     std::alloc::dealloc(buf as *mut u8, idx_layout);
     std::alloc::dealloc(tmp, tmp_layout);
+}
+
+/// Type-specialized ascending sort for a `Vec` of 8-byte integer elements.
+/// Unlike [`karac_vec_sort_by`], the comparison is the primitive's native
+/// `Ord` — no per-comparison indirect callback — so codegen can lower a plain
+/// `Vec[i64].sort()` / `Vec[u64].sort()` to a call whose inner compare is as
+/// tight as Rust's `sort_unstable()` (which is exactly what this delegates to).
+/// `is_signed != 0` selects the signed (`i64`) ordering; otherwise unsigned
+/// (`u64`), so a high-bit-set `u64` does not sort to the front. Primitive `Ord`
+/// never panics, so `sort_unstable` stays dead-strippable (same basis as the
+/// existing `karac_string_sorted` char sort).
+///
+/// # Safety
+/// `data` must point to `len` contiguous 8-byte integers, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn karac_vec_sort_i64_8(data: *mut u8, len: i64, is_signed: i64) {
+    if data.is_null() || len < 2 {
+        return;
+    }
+    let n = len as usize;
+    if is_signed != 0 {
+        std::slice::from_raw_parts_mut(data as *mut i64, n).sort_unstable();
+    } else {
+        std::slice::from_raw_parts_mut(data as *mut u64, n).sort_unstable();
+    }
 }
 
 /// In-place reverse of a raw byte buffer (`len` elements of `elem_size` bytes).
