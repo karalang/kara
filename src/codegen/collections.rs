@@ -119,22 +119,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 // shared i8 alloca — the runtime store-of-zero-bytes is a
                 // no-op regardless of the byte's contents.
                 let dummy = self.create_entry_alloca(fn_val, "set.dummy", i8_t.into());
-                let existed = self
-                    .builder
-                    .build_call(
-                        self.karac_map_insert_old_fn,
-                        &[
-                            set_handle.into(),
-                            elem_slot.into(),
-                            dummy.into(),
-                            dummy.into(),
-                        ],
-                        "set.insert.existed",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_int_value();
+                // Scalar-key fast path: inlined probe + key write, value-passed
+                // key (mirrors the Set.contains gate). Heap elements
+                // (`Set[String]` / `Set[Vec[T]]`) — the only ones with a
+                // consume-site free dance — never satisfy `should_use_mono_set_for`,
+                // so the mono path only ever runs for leak-free scalar keys.
+                let existed =
+                    if self.should_use_mono_set_for(elem_ty) && elem_val.get_type() == elem_ty {
+                        let insert_fn = self.get_or_emit_set_mono_insert(elem_ty);
+                        self.builder
+                            .build_call(
+                                insert_fn,
+                                &[set_handle.into(), elem_val.into()],
+                                "set.insert.existed",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_int_value()
+                    } else {
+                        self.builder
+                            .build_call(
+                                self.karac_map_insert_old_fn,
+                                &[
+                                    set_handle.into(),
+                                    elem_slot.into(),
+                                    dummy.into(),
+                                    dummy.into(),
+                                ],
+                                "set.insert.existed",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_int_value()
+                    };
                 // Incoming-element NO-ADOPT free (B-2026-06-20-12, mirrors the
                 // `Map.insert` exists-path fix B-2026-06-20-9): on the EXISTS
                 // (duplicate) path `karac_map_insert_old` keeps the bucket's

@@ -4016,4 +4016,417 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_return(Some(&bool_t.const_zero()))
             .unwrap();
     }
+
+    /// Set insert fast path: emit (or reuse) a monomorphized
+    /// `karac_set_<K>_insert(map, key) -> bool` (returns whether the key already
+    /// existed, matching `karac_map_insert_old`'s flag). Mirrors
+    /// [`emit_mono_map_insert_old_body`] with the value half removed: the bucket
+    /// stores only the key, and the load-factor / exhausted slow paths forward
+    /// to the erased `karac_map_insert_old` (with throwaway value / out slots,
+    /// since the runtime copies `val_size` — 0 or 8 — bytes there). Like the Set
+    /// contains path, the hash and the bucket stride are read from the map
+    /// struct at runtime (stored `hash_fn`, `val_size`) so a cloned Set — which
+    /// carries an 8-byte unit value slot — is probed with the right stride.
+    /// Only valid for [`should_use_mono_set_for`] keys.
+    pub(super) fn get_or_emit_set_mono_insert(
+        &mut self,
+        key_ty: BasicTypeEnum<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let mangle = self.llvm_type_to_mangle_str(key_ty);
+        let fn_name = format!("karac_set_{mangle}_insert");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let saved_bb = self.builder.get_insert_block();
+        let fn_ty = bool_t.fn_type(&[ptr_ty.into(), key_ty.into()], false);
+        let f = self
+            .module
+            .add_function(&fn_name, fn_ty, Some(Linkage::LinkOnceODR));
+        self.emit_mono_set_insert_body(f, key_ty);
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Body for [`get_or_emit_set_mono_insert`].
+    fn emit_mono_set_insert_body(&mut self, f: FunctionValue<'ctx>, key_ty: BasicTypeEnum<'ctx>) {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let key_int_ty = key_ty.into_int_type();
+        let key_size_bytes = (key_int_ty.get_bit_width() as u64).div_ceil(8);
+
+        let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
+        let key_arg = f.get_nth_param(1).unwrap().into_int_value();
+        // Runtime `hash_fn` signature: `fn(*const key) -> u64`.
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+
+        let entry_bb = self.context.append_basic_block(f, "entry");
+        let slow_bb = self.context.append_basic_block(f, "slow_path");
+        let fast_bb = self.context.append_basic_block(f, "fast_path");
+        let probe_cond_bb = self.context.append_basic_block(f, "probe.cond");
+        let probe_body_bb = self.context.append_basic_block(f, "probe.body");
+        let case_empty_bb = self.context.append_basic_block(f, "case.empty");
+        let case_tomb_check_bb = self.context.append_basic_block(f, "case.check_tomb");
+        let case_tomb_bb = self.context.append_basic_block(f, "case.tomb");
+        let case_occupied_bb = self.context.append_basic_block(f, "case.occupied");
+        let match_found_bb = self.context.append_basic_block(f, "match.found");
+        let exhausted_bb = self.context.append_basic_block(f, "exhausted");
+
+        // Helper to forward one insert to the erased runtime (slow + exhausted
+        // paths). Throwaway 8-byte val/out slots cover val_size ∈ {0, 8}.
+        let erased_insert = |cg: &mut Self| {
+            let key_slot = cg.builder.build_alloca(key_ty, "erased.key.slot").unwrap();
+            let dummy_val = cg.builder.build_alloca(i64_t, "erased.val.slot").unwrap();
+            let dummy_out = cg.builder.build_alloca(i64_t, "erased.out.slot").unwrap();
+            cg.builder.build_store(key_slot, key_arg).unwrap();
+            let existed = cg
+                .builder
+                .build_call(
+                    cg.karac_map_insert_old_fn,
+                    &[
+                        map_arg.into(),
+                        key_slot.into(),
+                        dummy_val.into(),
+                        dummy_out.into(),
+                    ],
+                    "erased.existed",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+            cg.builder.build_return(Some(&existed)).unwrap();
+        };
+
+        // ── entry: load len/tombs/cap, load-factor check ──────────
+        self.builder.position_at_end(entry_bb);
+        let len_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_LEN_OFFSET, false)],
+                    "len.p",
+                )
+                .unwrap()
+        };
+        let len = self
+            .builder
+            .build_load(i64_t, len_p, "len")
+            .unwrap()
+            .into_int_value();
+        let tomb_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_TOMBSTONES_OFFSET, false)],
+                    "tomb.p",
+                )
+                .unwrap()
+        };
+        let tombs = self
+            .builder
+            .build_load(i64_t, tomb_p, "tombs")
+            .unwrap()
+            .into_int_value();
+        let cap_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_CAPACITY_OFFSET, false)],
+                    "cap.p",
+                )
+                .unwrap()
+        };
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_p, "cap")
+            .unwrap()
+            .into_int_value();
+        // (len + tombs + 1) * 4 > cap * 3 → resize (delegate to runtime).
+        let sum = self.builder.build_int_add(len, tombs, "len+tombs").unwrap();
+        let sum1 = self
+            .builder
+            .build_int_add(sum, i64_t.const_int(1, false), "lt+1")
+            .unwrap();
+        let lhs = self
+            .builder
+            .build_int_mul(sum1, i64_t.const_int(4, false), "lhs")
+            .unwrap();
+        let rhs = self
+            .builder
+            .build_int_mul(cap, i64_t.const_int(3, false), "rhs")
+            .unwrap();
+        let need_resize = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, lhs, rhs, "need_resize")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(need_resize, slow_bb, fast_bb)
+            .unwrap();
+
+        // ── slow_path: forward to erased karac_map_insert_old ─────
+        self.builder.position_at_end(slow_bb);
+        erased_insert(self);
+
+        // ── fast_path: load ptrs, stride, hash, start ────────────
+        self.builder.position_at_end(fast_bb);
+        let status_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_STATUS_OFFSET, false)],
+                    "status.pp",
+                )
+                .unwrap()
+        };
+        let status_ptr = self
+            .builder
+            .build_load(ptr_ty, status_pp, "status")
+            .unwrap()
+            .into_pointer_value();
+        let kv_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_KV_OFFSET, false)],
+                    "kv.pp",
+                )
+                .unwrap()
+        };
+        let kv_ptr = self
+            .builder
+            .build_load(ptr_ty, kv_pp, "kv")
+            .unwrap()
+            .into_pointer_value();
+        // stride = key_size + val_size (val_size read at runtime — 0 fresh, 8 cloned).
+        let val_size_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_VAL_SIZE_OFFSET, false)],
+                    "val.size.p",
+                )
+                .unwrap()
+        };
+        let val_size = self
+            .builder
+            .build_load(i64_t, val_size_p, "val.size")
+            .unwrap()
+            .into_int_value();
+        let stride = self
+            .builder
+            .build_int_add(i64_t.const_int(key_size_bytes, false), val_size, "stride")
+            .unwrap();
+        // hash via the Set's stored hash_fn (see the contains path for why).
+        let hash_fn_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
+                    "hash.fn.pp",
+                )
+                .unwrap()
+        };
+        let hash_fn_ptr = self
+            .builder
+            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
+            .unwrap()
+            .into_pointer_value();
+        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
+        self.builder.build_store(hash_key_slot, key_arg).unwrap();
+        let hash = self
+            .builder
+            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[hash_key_slot.into()], "hash")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let mask = self
+            .builder
+            .build_int_sub(cap, i64_t.const_int(1, false), "mask")
+            .unwrap();
+        let start = self.builder.build_and(hash, mask, "start").unwrap();
+        self.builder
+            .build_unconditional_branch(probe_cond_bb)
+            .unwrap();
+
+        // ── probe.cond: 3-PHI (i, first_tomb, ft_set), bound check ─
+        self.builder.position_at_end(probe_cond_bb);
+        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
+        let ft_phi = self.builder.build_phi(i64_t, "ft").unwrap();
+        let ft_set_phi = self.builder.build_phi(bool_t, "ft_set").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), fast_bb)]);
+        ft_phi.add_incoming(&[(&i64_t.const_zero(), fast_bb)]);
+        ft_set_phi.add_incoming(&[(&bool_t.const_zero(), fast_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let ft_val = ft_phi.as_basic_value().into_int_value();
+        let ft_set_val = ft_set_phi.as_basic_value().into_int_value();
+        let bound_done = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bound_done, exhausted_bb, probe_body_bb)
+            .unwrap();
+
+        // ── probe.body: slot, status, switch ──────────────────────
+        self.builder.position_at_end(probe_body_bb);
+        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
+        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        let status_slot_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
+                .unwrap()
+        };
+        let status_byte = self
+            .builder
+            .build_load(i8_t, status_slot_p, "status.byte")
+            .unwrap()
+            .into_int_value();
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_EMPTY, false),
+                "is.empty",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, case_empty_bb, case_tomb_check_bb)
+            .unwrap();
+
+        // ── case.check_tomb ───────────────────────────────────────
+        self.builder.position_at_end(case_tomb_check_bb);
+        let is_tomb = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_TOMBSTONE, false),
+                "is.tomb",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_tomb, case_tomb_bb, case_occupied_bb)
+            .unwrap();
+
+        // ── case.empty: write key (no value), reuse earlier tomb ──
+        self.builder.position_at_end(case_empty_bb);
+        let target_slot = self
+            .builder
+            .build_select(ft_set_val, ft_val, slot, "target.slot")
+            .unwrap()
+            .into_int_value();
+        let target_off = self
+            .builder
+            .build_int_mul(target_slot, stride, "target.off")
+            .unwrap();
+        let target_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[target_off], "target.kv.p")
+                .unwrap()
+        };
+        self.builder.build_store(target_kv_p, key_arg).unwrap();
+        let target_status_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[target_slot], "target.status.p")
+                .unwrap()
+        };
+        self.builder
+            .build_store(
+                target_status_p,
+                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
+            )
+            .unwrap();
+        let new_len = self
+            .builder
+            .build_int_add(len, i64_t.const_int(1, false), "len.new")
+            .unwrap();
+        self.builder.build_store(len_p, new_len).unwrap();
+        let tombs_dec = self
+            .builder
+            .build_int_sub(tombs, i64_t.const_int(1, false), "tombs.dec")
+            .unwrap();
+        let new_tombs = self
+            .builder
+            .build_select(ft_set_val, tombs_dec, tombs, "tombs.new")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(tomb_p, new_tombs).unwrap();
+        // Fresh insert → key did NOT already exist.
+        self.builder
+            .build_return(Some(&bool_t.const_zero()))
+            .unwrap();
+
+        // ── case.tomb: remember first tombstone, keep probing ─────
+        self.builder.position_at_end(case_tomb_bb);
+        let new_ft = self
+            .builder
+            .build_select(ft_set_val, ft_val, slot, "ft.new")
+            .unwrap()
+            .into_int_value();
+        let tomb_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
+            .unwrap();
+        i_phi.add_incoming(&[(&tomb_i_next, case_tomb_bb)]);
+        ft_phi.add_incoming(&[(&new_ft, case_tomb_bb)]);
+        ft_set_phi.add_incoming(&[(&bool_t.const_int(1, false), case_tomb_bb)]);
+        self.builder
+            .build_unconditional_branch(probe_cond_bb)
+            .unwrap();
+
+        // ── case.occupied: eq-check, found (dup) vs continue ─────
+        self.builder.position_at_end(case_occupied_bb);
+        let slot_off = self
+            .builder
+            .build_int_mul(slot, stride, "slot.off")
+            .unwrap();
+        let slot_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "slot.kv.p")
+                .unwrap()
+        };
+        let slot_key = self
+            .builder
+            .build_load(key_int_ty, slot_kv_p, "slot.key")
+            .unwrap()
+            .into_int_value();
+        let key_match = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, slot_key, key_arg, "key.match")
+            .unwrap();
+        let occ_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.occ")
+            .unwrap();
+        i_phi.add_incoming(&[(&occ_i_next, case_occupied_bb)]);
+        ft_phi.add_incoming(&[(&ft_val, case_occupied_bb)]);
+        ft_set_phi.add_incoming(&[(&ft_set_val, case_occupied_bb)]);
+        self.builder
+            .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── match.found: key already present, nothing to write ───
+        self.builder.position_at_end(match_found_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // ── exhausted: unreachable under resize policy; erased safety
+        self.builder.position_at_end(exhausted_bb);
+        erased_insert(self);
+    }
 }
