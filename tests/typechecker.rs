@@ -7784,6 +7784,19 @@ fn cast_int_as_char_rejected() {
 }
 
 #[test]
+fn cast_u8_as_char_accepted() {
+    // `u8 as char` is the one infallible integer→char cast (every byte is a
+    // valid Latin-1 scalar), so it must typecheck cleanly — unlike the wider
+    // `u32 as char` (see `cast_int_as_char_rejected`).
+    let result = typecheck_ok("fn main() { let _ = 100u8 as char; }");
+    assert!(
+        result.errors.is_empty(),
+        "u8 as char must be accepted, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn cast_int_as_bool_rejected() {
     let errors = typecheck_errors("fn main() { let _ = 1i32 as bool; }");
     assert!(

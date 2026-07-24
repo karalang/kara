@@ -2878,6 +2878,31 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_u8_as_char_builds_the_character() {
+        // `u8 as char` (the one infallible int→char cast) must yield the
+        // CHARACTER, not its codepoint — pushed into a String and printed. Guards
+        // the typecheck carve-out + codegen zext + interpreter cast_value together
+        // (surfaced by the #290 Word Pattern kata: interp printed the code, build
+        // printed the char — a run-vs-build divergence before the fix).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let mut s: String = String.new();\n\
+             \x20   let bytes = \"dog\".bytes();\n\
+             \x20   let mut i = 0i64;\n\
+             \x20   while i < bytes.len() {\n\
+             \x20       s.push(bytes[i] as char);\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             \x20   println(s);\n\
+             \x20   let c = 100u8 as char;\n\
+             \x20   println(f\"{c}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "dog\nd\n");
+        }
+    }
+
+    #[test]
     fn e2e_option_result_display_matches_interpreter() {
         // B-2026-07-08-9: Option[T] / Result[T, E] had NO Display support under
         // codegen (neither f-string nor println) while the interpreter rendered

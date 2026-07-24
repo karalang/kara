@@ -1653,6 +1653,11 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
             "f32" => Value::Float(i as f32 as f64),
             "f64" | "float" => Value::Float(i as f64),
             "bool" => Value::Bool(i != 0),
+            // `u8 as char` — the one infallible integer→char cast the
+            // typechecker permits (every byte is a valid Latin-1 scalar). Mirror
+            // codegen, which yields the character, not its codepoint. `from_u32`
+            // is total on 0..=255; the fallback is unreachable for a u8 source.
+            "char" => Value::Char(char::from_u32(i as u32).unwrap_or('\u{FFFD}')),
             _ => Value::Int(i),
         }
     };

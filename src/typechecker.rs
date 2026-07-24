@@ -3016,7 +3016,14 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Integer → char: rejected (use char.try_from for fallible
-        // construction).
+        // construction) — EXCEPT `u8 as char`, which is infallible: every byte
+        // (0..=255) is a valid Unicode scalar (the Latin-1 block, no surrogates,
+        // far below 0x10FFFF), so it is the one integer→char cast permitted
+        // directly, matching Rust. Codegen lowers it to a plain zero-extend
+        // (`char` is i32, `u8` is unsigned), so no runtime check is needed.
+        if matches!(from_ty, Type::UInt(UIntSize::U8)) && matches!(to_ty, Type::Char) {
+            return;
+        }
         if is_integer(from_ty) && matches!(to_ty, Type::Char) {
             self.type_error(
                 format!(
