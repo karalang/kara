@@ -96,22 +96,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 76 | 0 |
-| missing-feature | 62 | 0 |
+| missing-feature | 63 | 1 |
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
 | soundness | 25 | 0 |
 | perf | 25 | 1 |
 | diagnostics | 15 | 0 |
-| use-after-free | 5 | 0 |
+| use-after-free | 6 | 1 |
 | other | 3 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 486 | 1 |
-| typecheck | 86 | 0 |
+| codegen | 487 | 2 |
+| typecheck | 87 | 1 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **670 surfaced · 1 open · 664 fixed** (2026-05-20 → 2026-07-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **672 surfaced · 3 open · 664 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-24-2 | 2026-07-24 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `keys()` iteration inside a hot loop pays a malloc + full-set copy + free per outer iteration. Rust's `keys()` is a zero-allocation, inlined lazy bucket walk. On LeetCode #170 (Two Sum III), `find` does `for k in ds.counts.keys()` and runs 1.2M times over a ~170-entry map — 1.2M materializations — making the Kāra bench ~1.74x the equal-safety Rust mirror. | — |
+| B-2026-07-25-1 | 2026-07-25 | codegen | high | USE-AFTER-FREE under codegen: a RECURSIVE function taking an OWNED `String` parameter whose argument is an ELEMENT of a `Vec[String]` obtained from a `Map[String, Vec[String]]`, where the parameter is USED AFTER the recursive descent, reads freed String buffers. `karac build` prints garbage bytes for the affected elements; `karac run` (LLJIT) aborts inside `karac_string_clone` with a `ptr::copy_nonoverlapping` unaligned/non-null precondition violation. The tree-walk interpreter is CORRECT, so this is also a run-vs-build divergence. Silent data corruption (no crash) under AOT build makes it high severity. | — |
+| B-2026-07-25-2 | 2026-07-25 | typecheck | low | Match-arm type unification does not bind an unsolved type variable inside a generic: `match m.get(k) { Some(d) => d, None => Vec.new() }` is rejected with "match arms have incompatible types: 'Vec<String>' and 'Vec<?T0>'" instead of solving `?T0 := String` from the sibling arm. An explicit annotation on the enclosing `let` propagates correctly, so only the arm-to-arm direction is missing. | — |
 
 ### Fixed (664)
 
