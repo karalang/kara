@@ -2270,6 +2270,147 @@ impl Emitter {
                         self.body = self.body + "  br label %" + pend.clone() + "\n";
                         self.body = self.body + pend + ":\n";
                     }
+                } else if method == "push_str" {
+                    // `s.push_str(arg)` in STATEMENT position (Slice 58) — the
+                    // port's dominant string-building primitive (700+ sites:
+                    // `out`, `line`, …). Appends arg's bytes to the receiver
+                    // String local IN PLACE: load the slot's {ptr,len}, eval the
+                    // arg {aptr,alen}, `realloc(ptr, len+alen)` (preserves the
+                    // existing [0,len) bytes; realloc(null,·) is malloc for an
+                    // empty `"".to_string()` seed), memcpy the arg bytes at
+                    // +len, store {newptr, len+alen} back. Every push_str'd local
+                    // is an OWNED `.to_string()` buffer, so realloc is safe. A
+                    // heap-temp arg (a fresh concat) is freed after its bytes are
+                    // copied; a borrowed arg (literal global / ident load) is
+                    // not. Receiver must be an Ident String local (the only
+                    // shape the port uses). B-2026-07-23-27.
+                    let mut wslot = 0 - 1;
+                    match object {
+                        Ident(wie) => {
+                            let IdentExpr { name: won, span: wosp } = wie;
+                            wslot = self.local_slot(won);
+                        }
+                        _ => {}
+                    }
+                    let mut wk = 0 - 1;
+                    if wslot >= 0 {
+                        wk = self.locals_kind[wslot];
+                    }
+                    if wk == 2 {
+                        let wsp = "%v" + wslot.to_string();
+                        let wag = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wag.clone()
+                            + " = load { ptr, i64 }, ptr "
+                            + wsp.clone()
+                            + ", align 8\n";
+                        let wptr = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wptr.clone()
+                            + " = extractvalue { ptr, i64 } "
+                            + wag.clone()
+                            + ", 0\n";
+                        let wlen = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wlen.clone()
+                            + " = extractvalue { ptr, i64 } "
+                            + wag
+                            + ", 1\n";
+                        let mut wap = "".to_string();
+                        let mut wal = "".to_string();
+                        let mut wafree = false;
+                        for wma in margs {
+                            let CallArg { label, mut_marker, value, span: wasp } = wma;
+                            let wav = self.emit_value(value);
+                            let Val { op: waop, kind: wak, heap: wah } = wav;
+                            let wap0 = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + wap0.clone()
+                                + " = extractvalue { ptr, i64 } "
+                                + waop.clone()
+                                + ", 0\n";
+                            let wal0 = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + wal0.clone()
+                                + " = extractvalue { ptr, i64 } "
+                                + waop
+                                + ", 1\n";
+                            wap = wap0;
+                            wal = wal0;
+                            wafree = wah;
+                        }
+                        let wnew = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wnew.clone()
+                            + " = add i64 "
+                            + wlen.clone()
+                            + ", "
+                            + wal.clone()
+                            + "\n";
+                        let wbuf = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wbuf.clone()
+                            + " = call ptr @realloc(ptr "
+                            + wptr
+                            + ", i64 "
+                            + wnew.clone()
+                            + ")\n";
+                        let wdst = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wdst.clone()
+                            + " = getelementptr i8, ptr "
+                            + wbuf.clone()
+                            + ", i64 "
+                            + wlen
+                            + "\n";
+                        let wcp = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wcp.clone()
+                            + " = call ptr @memcpy(ptr "
+                            + wdst
+                            + ", ptr "
+                            + wap.clone()
+                            + ", i64 "
+                            + wal
+                            + ")\n";
+                        let wr0 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wr0.clone()
+                            + " = insertvalue { ptr, i64 } undef, ptr "
+                            + wbuf
+                            + ", 0\n";
+                        let wr1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + wr1.clone()
+                            + " = insertvalue { ptr, i64 } "
+                            + wr0
+                            + ", i64 "
+                            + wnew
+                            + ", 1\n";
+                        self.body = self.body
+                            + "  store { ptr, i64 } "
+                            + wr1
+                            + ", ptr "
+                            + wsp
+                            + ", align 8\n";
+                        if wafree {
+                            self.body = self.body
+                                + "  call void @free(ptr "
+                                + wap
+                                + ")\n";
+                        }
+                    }
                 } else {
                     let dv = self.emit_method_value(object, method, margs);
                     let Val { op: dop, kind: dk, heap: dh } = dv;

@@ -528,6 +528,20 @@ const CORPUS: &[&str] = &[
     // a Vec[String] pop (element free), an empty-vec pop, and a
     // push/pop/push loop-stack pattern read back in order.
     "fn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(1);\n    v.push(2);\n    v.push(3);\n    v.pop();\n    v.pop();\n    v.push(99);\n    println(v.len().to_string());\n    println(v[0].to_string());\n    println(v[1].to_string());\n    let mut e: Vec[i64] = Vec.new();\n    e.pop();\n    println(e.len().to_string());\n    let mut s: Vec[String] = Vec.new();\n    s.push(\"a\".to_string());\n    s.push(\"b\".to_string());\n    s.push(\"c\".to_string());\n    s.pop();\n    let mut i = 0;\n    while i < s.len() as i64 {\n        println(s[i as i64]);\n        i += 1;\n    }\n}",
+    // Slice 58: statement-position `s.push_str(arg)` — an EMITTER slice, and
+    // the port's DOMINANT string-building primitive (700+ sites across
+    // codegen/ast_render/lexer/resolver/typechecker: `out.push_str(...)`,
+    // `line.push_str(...)`). It fell through to `emit_method_value` (a no-op),
+    // so every incremental string build produced the empty seed. B-2026-07-23-27.
+    // Fix: an in-place append — load the receiver String local's {ptr,len},
+    // realloc(ptr, len+alen) (preserving [0,len); realloc(null,·)=malloc for an
+    // empty `"".to_string()`), memcpy the arg bytes at +len, store {newptr,
+    // len+alen}. A heap-temp arg (a fresh concat) is freed after the copy; a
+    // borrowed literal/ident arg is not (valgrind leak guard). Covers append to
+    // empty and non-empty seeds, a literal / a variable / a concat-temp arg,
+    // an interleaved sequence, and a loop-accumulated build (the `out.push_str`
+    // idiom the port lives on).
+    "fn main() {\n    let mut out = \"\".to_string();\n    out.push_str(\"ab\");\n    out.push_str(\"c\");\n    println(out);\n    let mut line = \"start\".to_string();\n    let mid = \"-mid-\".to_string();\n    line.push_str(mid);\n    line.push_str(\"end\");\n    println(line);\n    let mut cat = \"\".to_string();\n    let p = \"x\".to_string();\n    cat.push_str(p + \"y\");\n    println(cat);\n    let mut acc = \"\".to_string();\n    let mut i = 0;\n    while i < 4 {\n        acc.push_str(\"ab\");\n        i += 1;\n    }\n    println(acc);\n    println(acc.len().to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
