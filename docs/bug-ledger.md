@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 25 | 0 |
 | perf | 25 | 1 |
 | diagnostics | 15 | 0 |
-| use-after-free | 6 | 0 |
+| use-after-free | 7 | 1 |
 | other | 3 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 488 | 1 |
+| codegen | 489 | 2 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **673 surfaced · 1 open · 667 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **674 surfaced · 2 open · 667 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-24-2 | 2026-07-24 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `keys()` iteration inside a hot loop pays a malloc + full-set copy + free per outer iteration. Rust's `keys()` is a zero-allocation, inlined lazy bucket walk. On LeetCode #170 (Two Sum III), `find` does `for k in ds.counts.keys()` and runs 1.2M times over a ~170-entry map — 1.2M materializations — making the Kāra bench ~1.74x the equal-safety Rust mirror. | — |
+| B-2026-07-25-3 | 2026-07-25 | codegen | high | USE-AFTER-FREE under codegen (sibling of B-2026-07-25-1, NOT closed by it): the natural LeetCode #332 Hierholzer walk over a `Map[String, Vec[String]]` whose KEYS are heap `String`s read out of a `ref Vec[String]` param corrupts the accumulated route. Interior entries are freed-buffer garbage under `karac build`; `karac run` (LLJIT) aborts inside `karac_string_clone`. The tree-walk interpreter is correct, so it is also a run-vs-build divergence. | — |
 
 ### Fixed (667)
 
