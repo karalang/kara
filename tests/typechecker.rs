@@ -7784,6 +7784,44 @@ fn cast_int_as_char_rejected() {
 }
 
 #[test]
+fn match_arms_bind_typevar_from_sibling_arm() {
+    // B-2026-07-25-2: the empty-collection arm yields `Vec[?T0]`; the sibling
+    // arm pins `Vec[String]`. The join must solve `?T0 := String` rather than
+    // report incompatible arms.
+    let result = typecheck_ok(
+        "fn main() {\n\
+         \x20   let m: Map[String, Vec[String]] = Map.new();\n\
+         \x20   let got = match m.get(\"k\") { Some(d) => d, None => Vec.new() };\n\
+         \x20   let _ = got.len();\n\
+         }",
+    );
+    assert!(
+        result.errors.is_empty(),
+        "sibling arm must solve the type var, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn match_arms_with_different_generic_heads_still_rejected() {
+    // Fail-closed guard for B-2026-07-25-2: tolerating unsolved type VARS must
+    // not tolerate a genuinely different head (`Vec` vs `Map`).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+         \x20   let m: Map[String, Vec[String]] = Map.new();\n\
+         \x20   let bad = match m.get(\"k\") { Some(d) => d, None => Map.new() };\n\
+         \x20   let _ = bad.len();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("match arms have incompatible types")),
+        "Vec vs Map must stay rejected, got: {errors:?}"
+    );
+}
+
+#[test]
 fn cast_u8_as_char_accepted() {
     // `u8 as char` is the one infallible integer→char cast (every byte is a
     // valid Latin-1 scalar), so it must typecheck cleanly — unlike the wider

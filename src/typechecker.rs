@@ -3411,8 +3411,59 @@ impl<'a> TypeChecker<'a> {
             // has the concrete instantiation it needs. Only runs on already-
             // compatible types, so it can only sharpen — never widen — the result.
             Some(Self::merge_branch_types(a, b))
+        } else if Self::same_shape_modulo_typevars(a, b) {
+            // B-2026-07-25-2: one branch left an inference variable UNSOLVED
+            // inside a generic — the empty-collection arm of
+            // `match m.get(k) { Some(d) => d, None => Vec.new() }` yields
+            // `Vec[?T0]` against the other arm's `Vec[String]`.
+            // `types_compatible` has a permissive wildcard for `TypeParam` but
+            // none for `TypeVar`, so the invariant generic-arg check rejects the
+            // pair and the match is reported as having incompatible arms.
+            //
+            // Admitting a pair that is structurally identical *except* for
+            // unsolved `TypeVar` positions lets `merge_branch_types` (which
+            // already prefers the concrete side at every leaf) solve the slot
+            // from the sibling arm — exactly the binding the arm-to-arm
+            // direction was missing. Scoped to the branch join (match arms /
+            // if-else) rather than the global `types_compatible` predicate, so
+            // no other check is loosened. Fails closed: a genuine mismatch
+            // (different head, different arity, two concrete leaves) is still
+            // rejected here.
+            Some(Self::merge_branch_types(a, b))
         } else {
             None
+        }
+    }
+
+    /// True when `a` and `b` are the same type *modulo* unsolved inference
+    /// variables: identical structure, with a `TypeVar` on either side matching
+    /// anything in that position. Shape rules mirror [`merge_branch_types`], so
+    /// every pair this admits is one that merge can actually fold (preferring
+    /// the concrete side). See the `B-2026-07-25-2` arm in
+    /// [`join_branch_types`] for why this is scoped to branch joining.
+    fn same_shape_modulo_typevars(a: &Type, b: &Type) -> bool {
+        match (a, b) {
+            // An unsolved slot takes whatever the sibling branch pins it to.
+            (Type::TypeVar(_), _) | (_, Type::TypeVar(_)) => true,
+            (Type::Named { name: na, args: aa }, Type::Named { name: nb, args: ab }) => {
+                na == nb
+                    && aa.len() == ab.len()
+                    && aa
+                        .iter()
+                        .zip(ab.iter())
+                        .all(|(x, y)| Self::same_shape_modulo_typevars(x, y))
+            }
+            (Type::Tuple(ea), Type::Tuple(eb)) => {
+                ea.len() == eb.len()
+                    && ea
+                        .iter()
+                        .zip(eb.iter())
+                        .all(|(x, y)| Self::same_shape_modulo_typevars(x, y))
+            }
+            (Type::Ref(ia), Type::Ref(ib)) | (Type::MutRef(ia), Type::MutRef(ib)) => {
+                Self::same_shape_modulo_typevars(ia, ib)
+            }
+            _ => a == b,
         }
     }
 
