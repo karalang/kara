@@ -3281,6 +3281,176 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
 
+        // B-2026-07-24-2 — INLINE BUCKET WALK for a scalar-halved hash map.
+        //
+        // The lazy runtime iterator below still pays a real `call` to
+        // `karac_map_iter_next` per key: it lives in the runtime archive, so
+        // LLVM cannot inline through it, and each step additionally does two
+        // `copy_nonoverlapping` writes through out-parameters whose lengths are
+        // the RUNTIME-VARIABLE `key_size`/`val_size` read from the map header,
+        // with the iterator's index in a heap `Box` (a load+store per step
+        // rather than a register). Measured at ~8.3 ns/key against Rust's
+        // ~1.13 ns — a 7.4x walk-only gap, and the confirmed dominant cost of
+        // LeetCode #170 (probe: kara-katas/oracle/map-keys-walk-probe/).
+        //
+        // Open-code the scan instead, exactly like
+        // `emit_map_shared_half_rc_dec_walk` and the runtime's own
+        // `karac_map_free_with_drop_vec`: for `slot in 0..capacity`, test
+        // `status[slot] == OCCUPIED`, then load the halves straight out of
+        // `kv[slot*stride]` / `kv[slot*stride + key_size]`. The call, the
+        // memcpys, and the boxed index all disappear together, and — because no
+        // iterator is allocated at all — `break` and early `return` need no
+        // `FreeMapIter` cleanup to stay leak-free.
+        //
+        // Gated to SCALAR key AND value: a heap half would need the per-element
+        // clone/drop the runtime path performs, which is the whole reason the
+        // eager `keys()` materializer exists. Sorted maps returned above.
+        //
+        // Layout offsets are the ones pinned by the runtime-side
+        // `karac_map_field_offsets_match_codegen` unit test; `key_size` /
+        // `val_size` are still loaded at runtime, so the stride stays correct
+        // for any scalar width. Loads are emitted with alignment 1 because a
+        // mixed-width map (`Map[i32, i64]`) puts the value half at a
+        // `key_size` offset that carries no natural alignment guarantee.
+        let halves_scalar = |t: BasicTypeEnum<'ctx>| t.is_int_type() || t.is_float_type();
+        if halves_scalar(key_ty) && halves_scalar(val_ty) {
+            const STATUS_OFFSET: u64 = 0;
+            const KV_OFFSET: u64 = 8;
+            const CAPACITY_OFFSET: u64 = 16;
+            const KEY_SIZE_OFFSET: u64 = 40;
+            const VAL_SIZE_OFFSET: u64 = 48;
+            const BUCKET_OCCUPIED: u64 = 1;
+            let i8_t = self.context.i8_type();
+            let hdr = |cg: &Self, off: u64, ty: BasicTypeEnum<'ctx>, name: &str| {
+                let p = unsafe {
+                    cg.builder
+                        .build_in_bounds_gep(i8_t, map_handle, &[i64_t.const_int(off, false)], name)
+                        .unwrap()
+                };
+                cg.builder.build_load(ty, p, name).unwrap()
+            };
+            let capacity = hdr(self, CAPACITY_OFFSET, i64_t.into(), "mw.cap").into_int_value();
+            let status_ptr =
+                hdr(self, STATUS_OFFSET, ptr_ty.into(), "mw.status").into_pointer_value();
+            let kv_ptr = hdr(self, KV_OFFSET, ptr_ty.into(), "mw.kv").into_pointer_value();
+            let key_size = hdr(self, KEY_SIZE_OFFSET, i64_t.into(), "mw.ksz").into_int_value();
+            let val_size = hdr(self, VAL_SIZE_OFFSET, i64_t.into(), "mw.vsz").into_int_value();
+            let stride = self
+                .builder
+                .build_int_add(key_size, val_size, "mw.stride")
+                .unwrap();
+
+            let idx_slot = self.create_entry_alloca(fn_val, "mw.i", i64_t.into());
+            self.builder
+                .build_store(idx_slot, i64_t.const_zero())
+                .unwrap();
+
+            let loop_bb = self.context.append_basic_block(fn_val, "mw.loop");
+            let scan_bb = self.context.append_basic_block(fn_val, "mw.scan");
+            let body_bb = self.context.append_basic_block(fn_val, "mw.body");
+            let exit_bb = self.context.append_basic_block(fn_val, "mw.exit");
+            self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+            // `continue` targets `loop_bb`: the index is bumped in `scan_bb`
+            // BEFORE the body runs, so re-entering the header never re-visits
+            // the slot the body was handed.
+            self.loop_stack.push(LoopFrame {
+                label: label.map(str::to_string),
+                continue_bb: loop_bb,
+                break_bb: exit_bb,
+                result_slot: None,
+                cleanup_depth: self.scope_cleanup_actions.len(),
+            });
+
+            self.builder.position_at_end(loop_bb);
+            let i = self
+                .builder
+                .build_load(i64_t, idx_slot, "mw.i.v")
+                .unwrap()
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i, capacity, "mw.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(more, scan_bb, exit_bb)
+                .unwrap();
+
+            self.builder.position_at_end(scan_bb);
+            let st_p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_t, status_ptr, &[i], "mw.st.p")
+                    .unwrap()
+            };
+            let st = self
+                .builder
+                .build_load(i8_t, st_p, "mw.st")
+                .unwrap()
+                .into_int_value();
+            let occupied = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    st,
+                    self.context.i8_type().const_int(BUCKET_OCCUPIED, false),
+                    "mw.occ",
+                )
+                .unwrap();
+            let next_i = self
+                .builder
+                .build_int_add(i, i64_t.const_int(1, false), "mw.i.next")
+                .unwrap();
+            self.builder.build_store(idx_slot, next_i).unwrap();
+            self.builder
+                .build_conditional_branch(occupied, body_bb, loop_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            let off = self.builder.build_int_mul(i, stride, "mw.off").unwrap();
+            let kptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_t, kv_ptr, &[off], "mw.k.p")
+                    .unwrap()
+            };
+            let voff = self
+                .builder
+                .build_int_add(off, key_size, "mw.voff")
+                .unwrap();
+            let vptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_t, kv_ptr, &[voff], "mw.v.p")
+                    .unwrap()
+            };
+            use inkwell::values::BasicValue;
+            let key_load = self.builder.build_load(key_ty, kptr, "mw.k").unwrap();
+            if let Some(iv) = key_load.as_instruction_value() {
+                let _ = iv.set_alignment(1);
+            }
+            let val_load = self.builder.build_load(val_ty, vptr, "mw.v").unwrap();
+            if let Some(iv) = val_load.as_instruction_value() {
+                let _ = iv.set_alignment(1);
+            }
+            let kv_ty = self.context.struct_type(&[key_ty, val_ty], false);
+            let mut kv = kv_ty.get_undef();
+            kv = self
+                .builder
+                .build_insert_value(kv, key_load, 0, "mw.kv.k")
+                .unwrap()
+                .into_struct_value();
+            kv = self
+                .builder
+                .build_insert_value(kv, val_load, 1, "mw.kv.v")
+                .unwrap()
+                .into_struct_value();
+            self.bind_pattern(pattern, kv.into())?;
+            self.register_for_loop_bindings(pattern, var_name);
+            self.compile_loop_body_with_cleanup(body, loop_bb)?;
+            self.loop_stack.pop();
+
+            self.builder.position_at_end(exit_bb);
+            return Ok(i64_t.const_int(0, false).into());
+        }
+
         // Create the iterator (opaque ptr, lives for the duration of the loop).
         let iter_ptr = self
             .builder
