@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
 | soundness | 25 | 0 |
-| perf | 25 | 1 |
+| perf | 25 | 0 |
 | diagnostics | 15 | 0 |
 | use-after-free | 7 | 0 |
 | other | 3 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 489 | 1 |
+| codegen | 489 | 0 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **674 surfaced · 1 open · 667 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **674 surfaced · 0 open · 668 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-24-2 | 2026-07-24 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `keys()` iteration inside a hot loop pays a malloc + full-set copy + free per outer iteration. Rust's `keys()` is a zero-allocation, inlined lazy bucket walk. On LeetCode #170 (Two Sum III), `find` does `for k in ds.counts.keys()` and runs 1.2M times over a ~170-entry map — 1.2M materializations — making the Kāra bench ~1.74x the equal-safety Rust mirror. | — |
+_None — the ledger is fully drained._
 
-### Fixed (667)
+### Fixed (668)
 
-<details><summary>667 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>668 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -802,6 +800,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **674 surfaced 
 | B-2026-07-23-25 | autopar | medium | Auto-par over-parallelizes a fine-grained inner loop, making the DEFAULT `karac build` catastrophically slow (~1000x) while output stays CORRECT | c702d61 |
 | B-2026-07-23-26 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): statement-position `v.pop()` was a NO-OP — a non-push statement method call fell through to `emit_met… | 21a6eed |
 | B-2026-07-24-1 | codegen | medium | Compiler-driven inline-hint pass runs on the LOWERED AST but its node-count thresholds are calibrated for RAW-source sizes, so a small loop-hot helpe… | 20d33f7 |
+| B-2026-07-24-2 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `… | bef6bbc |
 | B-2026-07-24-3 | typecheck+interp | medium | `u8 as char` was rejected at typecheck with E_INT_AS_CHAR even though it is the ONE infallible integer→char cast — every byte (0..=255) is a valid Un… | 6b0c98a |
 | B-2026-07-25-1 | codegen | high | USE-AFTER-FREE under codegen: a RECURSIVE function taking an OWNED `String` parameter whose argument is an ELEMENT of a `Vec[String]` obtained from a… | — |
 | B-2026-07-25-2 | typecheck | low | Match-arm type unification does not bind an unsolved type variable inside a generic: `match m.get(k) { Some(d) => d, None => Vec.new() }` is rejected… | 9226dff |
