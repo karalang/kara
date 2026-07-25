@@ -164,6 +164,57 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &iterable.kind
         {
+            // B-2026-07-24-2 — `for k in m.keys()` / `for v in m.values()` /
+            // `for (k, v) in m.entries()` over a MAP place.
+            //
+            // Those three methods are compiled by `compile_map_keys_values_
+            // entries` (maps.rs) into an eagerly materialized OWNED `Vec`: a
+            // malloc, a full `iter_new`/`iter_next`-per-entry copy into the
+            // buffer, then the loop, then a free — paid on EVERY evaluation.
+            // Inside a hot function that is one materialization per call
+            // (LeetCode #170's `find` did 1.2M of them over a ~170-entry map,
+            // ~1.74x the equal-safety Rust mirror, whose `keys()` is a
+            // zero-allocation lazy bucket walk).
+            //
+            // `for (k, v) in m` ALREADY lowers to the lazy runtime iterator —
+            // `karac_map_iter_new`/`_next`/`_free` with no intermediate Vec,
+            // and with the `FreeMapIter` scope-exit cleanup that makes an early
+            // `return` out of the body leak-free (B-2026-07-23-1). So this
+            // needs no new machinery, only ROUTING: rewrite the pattern to the
+            // entries shape and recurse on the receiver.
+            //
+            //     for k in m.keys()        ==>  for (k, _) in m
+            //     for v in m.values()      ==>  for (_, v) in m
+            //     for (k, v) in m.entries() ==>  for (k, v) in m
+            //
+            // The receiver recursion reuses every existing dispatch path — the
+            // `Identifier` and `FieldAccess` arms (the latter mints the tracked
+            // alias), the `SortedMap` ascending-order arm, loop frames and
+            // labels, and the per-iteration cleanup. The wildcard half is
+            // dropped by the ordinary pattern binder.
+            //
+            // Fails closed: only a bare `.keys()`/`.values()`/`.entries()` with
+            // no arguments as the OUTERMOST node, and only when the receiver
+            // resolves to a map place (`map_place_is_iterable`). Anything else
+            // — an adaptor chained on top (`m.keys().filter(..)`), a temp-map
+            // receiver, a Set — falls through to the eager path below,
+            // unchanged.
+            if args.is_empty()
+                && matches!(method.as_str(), "keys" | "values" | "entries")
+                && self.map_place_is_iterable(object)
+            {
+                {
+                    let rewritten = match method.as_str() {
+                        "keys" => Some(Self::map_half_pattern(pattern, true)),
+                        "values" => Some(Self::map_half_pattern(pattern, false)),
+                        // `entries()` already yields `(k, v)` — the receiver
+                        // path binds exactly that, so pass the pattern through.
+                        _ => None,
+                    };
+                    let pat = rewritten.as_ref().unwrap_or(pattern);
+                    return self.compile_for(label, pat, object, body);
+                }
+            }
             // `for line in stdin.lines()` — the stdin line iterator (phase-8
             // `Stdin.lines()` slice). Caught before the `.iter()`/`.map()`
             // peeling and the silent `_ =>` fall-through; routes to a dedicated
@@ -3645,6 +3696,110 @@ impl<'ctx> super::Codegen<'ctx> {
         self.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// B-2026-07-24-2 — does `expr` name a MAP place whose `for` iteration the
+    /// receiver-recursion in [`Self::compile_for`] can drive lazily?
+    ///
+    /// Deliberately conservative: a bare name (or `self`) already registered in
+    /// the map tables, or a struct field whose DECLARED type is `Map`/`SortedMap`.
+    /// A `Set` is excluded — it lowers to `Map[T, ()]` and iterates through
+    /// `compile_for_set_var`, which binds the element directly rather than a
+    /// `(k, v)` pair, so the half-pattern rewrite would not match it. Anything
+    /// else (a temp-map call result, an index expression, a chained receiver)
+    /// answers `false` and keeps the caller on the eager materializing path.
+    ///
+    /// The field arm reads the declared `TypeExpr` rather than resolving the
+    /// place, so it stays side-effect free — no GEPs are emitted for a receiver
+    /// the caller may end up not using.
+    fn map_place_is_iterable(&self, expr: &Expr) -> bool {
+        // Both halves must be SCALAR. The lazy entries path binds each half by
+        // a shallow load out of the iterator's out-slot; the eager `keys()` Vec
+        // it replaces produced OWNED deep clones, and it also registered the
+        // element under the loop variable's name in the String/Vec side tables
+        // so `k.bytes()` / `k.len()` could dispatch. Rewriting a HEAP half to
+        // the tuple form loses that registration (caught by
+        // `test_run_derive_message_repeated_string_and_map_roundtrip`: a
+        // `Map[String, _]` key loop failed with "no handler for method 'bytes'")
+        // and would hand the body a borrow where it used to own a copy. Scalars
+        // have neither problem — no registration to lose, nothing to alias — so
+        // gate there and leave every heap-half map on the eager path.
+        let scalar_ll = |cg: &Self, t: inkwell::types::BasicTypeEnum<'ctx>| {
+            !cg.llvm_ty_is_vec_struct(t) && !t.is_pointer_type() && !t.is_struct_type()
+        };
+        let named = |cg: &Self, n: &str| {
+            cg.map_key_types.contains_key(n)
+                && !cg.set_elem_types.contains_key(n)
+                && cg.map_key_types.get(n).is_some_and(|t| scalar_ll(cg, *t))
+                && cg.map_val_types.get(n).is_some_and(|t| scalar_ll(cg, *t))
+        };
+        // Declared-TypeExpr sibling of `scalar_ll` for the field arm: a `Map[K,
+        // V]` field qualifies only when NEITHER type argument owns heap below
+        // its header.
+        let scalar_te = |cg: &Self, te: &crate::ast::TypeExpr| !cg.te_owns_heap_below_buffer(te);
+        match &expr.kind {
+            ExprKind::Identifier(n) => named(self, n.as_str()),
+            ExprKind::SelfValue => named(self, "self"),
+            ExprKind::FieldAccess { object, field } => {
+                let Some(struct_name) = self.inferred_receiver_type(object) else {
+                    return false;
+                };
+                let Some(idx) = self
+                    .struct_field_names
+                    .get(&struct_name)
+                    .and_then(|names| names.iter().position(|n| n == field))
+                else {
+                    return false;
+                };
+                let Some(te) = self
+                    .struct_field_type_exprs
+                    .get(&struct_name)
+                    .and_then(|tes| tes.get(idx))
+                else {
+                    return false;
+                };
+                let TypeKind::Path(p) = &te.kind else {
+                    return false;
+                };
+                if !matches!(
+                    p.segments.last().map(|s| s.as_str()),
+                    Some("Map") | Some("SortedMap")
+                ) {
+                    return false;
+                }
+                let Some(args) = p.generic_args.as_ref() else {
+                    return false;
+                };
+                if args.len() != 2 {
+                    return false;
+                }
+                args.iter().all(|a| match a {
+                    GenericArg::Type(te) => scalar_te(self, te),
+                    _ => false,
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// Wrap `inner` into the `(k, v)` tuple pattern the map-entries iteration
+    /// binds, with the unwanted half a wildcard: `keys()` keeps the key slot
+    /// (`want_key`), `values()` keeps the value slot. See the rewrite comment
+    /// in [`Self::compile_for`].
+    fn map_half_pattern(inner: &Pattern, want_key: bool) -> Pattern {
+        let hole = Pattern {
+            kind: PatternKind::Wildcard,
+            span: inner.span.clone(),
+        };
+        let elems = if want_key {
+            vec![inner.clone(), hole]
+        } else {
+            vec![hole, inner.clone()]
+        };
+        Pattern {
+            kind: PatternKind::Tuple(elems),
+            span: inner.span.clone(),
+        }
     }
 
     pub(super) fn compile_for_array_values(
