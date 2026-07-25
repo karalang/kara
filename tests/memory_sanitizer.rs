@@ -32766,4 +32766,101 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-07-25-5: `m[k].push(x)` — an indexed-receiver method call whose
+    /// outer is a Map — lowers through `karac_map_lookup_slot`, so the element
+    /// pointer ALIASES the value half of the key's bucket rather than a copied
+    /// out-slot. That aliasing is the whole point (MR3: mutations must
+    /// propagate), which also makes it the shape most likely to double-free or
+    /// leak: the pushed element is adopted by a Vec living inside the map's kv
+    /// buffer, and the map's own teardown must free it exactly once.
+    ///
+    /// The loop drives repeated lookups on a heap key with growth on the value
+    /// Vec (200 pushes across 7 keys forces several reallocs of the in-bucket
+    /// Vec), and the key expression is a live `Vec[String]` element read — the
+    /// case where freeing the key buffer after lookup would be a
+    /// use-after-free rather than the fix for a leak.
+    ///
+    /// LeakSanitizer only runs on Linux, so the leak half of this is
+    /// authoritative in Linux CI, not on a local macOS run.
+    #[test]
+    fn asan_map_indexed_receiver_push_no_leak() {
+        let label = "map_indexed_receiver_push";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+fn main() {
+    let mut froms: Vec[String] = Vec.new();
+    let mut tos: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 200i64 {
+        froms.push(f"K{i % 7i64}");
+        tos.push(f"V{i}");
+        i = i + 1i64;
+    }
+
+    let mut adj: Map[String, Vec[String]] = Map.new();
+    let mut j = 0i64;
+    while j < froms.len() {
+        let k = froms[j];
+        let present = match adj.get(k) { Some(_) => true, None => false };
+        if not present {
+            let empty: Vec[String] = Vec.new();
+            let _ = adj.insert(k, empty);
+        }
+        adj[k].push(tos[j]);
+        j = j + 1i64;
+    }
+
+    let mut total = 0i64;
+    for key in adj.keys() {
+        let d: Vec[String] = match adj.get(key) { Some(v) => v, None => Vec.new() };
+        total = total + d.len();
+    }
+    println(f"keys={adj.len()} total={total}");
+
+    // Scalar-keyed sibling: same lowering, no heap key half.
+    let mut mi: Map[i64, Vec[i64]] = Map.new();
+    let mut s = 0i64;
+    while s < 5i64 {
+        let empty: Vec[i64] = Vec.new();
+        let _ = mi.insert(s, empty);
+        s = s + 1i64;
+    }
+    let mut t = 0i64;
+    while t < 100i64 {
+        mi[t % 5i64].push(t);
+        t = t + 1i64;
+    }
+    let mut sum = 0i64;
+    let mut u = 0i64;
+    while u < 5i64 {
+        let d: Vec[i64] = match mi.get(u) { Some(v) => v, None => Vec.new() };
+        sum = sum + d.len();
+        u = u + 1i64;
+    }
+    println(f"scalar={sum}");
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN/LSAN reported a memory error (exit code {:?}) — the \
+             indexed-receiver Map path aliases the in-bucket value, so look for a \
+             double-free of a pushed element or a leak of the value Vec's buffer",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["keys=7 total=200", "scalar=100"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }

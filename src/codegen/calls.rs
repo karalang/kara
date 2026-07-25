@@ -274,6 +274,12 @@ impl<'ctx> super::Codegen<'ctx> {
             self.lower_indexed_elem_ptr_vec(&outer_name, index)?
         } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
             self.lower_indexed_elem_ptr_slice(&outer_name, index)?
+        } else if self.map_val_types.contains_key(outer_name.as_str()) {
+            // B-2026-07-25-5: Map outer. `var_elem_type_exprs` is already
+            // populated with the map's VALUE TypeExpr at every Map-registering
+            // site, so the `elem_te` lookup above resolves for maps unchanged —
+            // only the element-pointer lowering was missing.
+            self.lower_indexed_elem_ptr_map(&outer_name, index)?
         } else {
             // Array shape via slot.ty inspection. v1 supports fixed-size
             // arrays only when the slot's LLVM type is ArrayType.
@@ -1394,6 +1400,96 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
         };
         Ok((elem_ptr, elem_ty))
+    }
+
+    /// Map MR (B-2026-07-25-5): lower `outer[k]` for an outer `Map[K, V]`
+    /// receiver, yielding a pointer to the VALUE HALF of the key's bucket.
+    ///
+    /// Unlike `karac_map_get`, which copies the value out into a caller slot,
+    /// `karac_map_lookup_slot` hands back the address of the value inside the
+    /// map's `kv` buffer — which is what MR3 requires: the element pointer must
+    /// alias the container's storage so a mutating method (`m[k].push(x)`)
+    /// propagates. The same runtime entrypoint already backs `entry(k)
+    /// .and_modify(...)`, so this reuses a lookup contract that is established
+    /// rather than inventing one.
+    ///
+    /// Missing key panics, matching the `m[k]` READ path
+    /// (`compile_map_index`) and the tree-walk interpreter, which also
+    /// requires the key to be present. The lookup variant never inserts.
+    ///
+    /// Key ownership deliberately mirrors `compile_map_index`: the key buffer
+    /// is not freed here. `karac_map_lookup_slot` does not adopt the key, and
+    /// the key expression may equally be a live binding (`m[k].push(x)` with
+    /// `k` still in scope) — freeing unconditionally would be a
+    /// use-after-free on exactly that shape. Staying byte-for-byte with the
+    /// read path keeps this change from introducing a new ownership class.
+    pub(super) fn lower_indexed_elem_ptr_map(
+        &mut self,
+        outer_name: &str,
+        index: &Expr,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let handle_ptr = self.get_data_ptr(outer_name).ok_or_else(|| {
+            format!(
+                "Undefined Map variable '{}' in indexed-receiver lowering",
+                outer_name
+            )
+        })?;
+        let map_handle = self
+            .builder
+            .build_load(ptr_ty, handle_ptr, "m.mr.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let key_ty = self
+            .map_key_types
+            .get(outer_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+        let val_ty = self
+            .map_val_types
+            .get(outer_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        let key_val = self.compile_expr(index)?;
+        let fn_val = self.current_fn.unwrap();
+        let key_slot = self.create_entry_alloca(fn_val, "m.mr.key", key_ty);
+        self.builder.build_store(key_slot, key_val).unwrap();
+
+        // The runtime writes the value-half address into this out-pointer.
+        let slot_pp = self.create_entry_alloca(fn_val, "m.mr.slot.pp", ptr_ty.into());
+        let found = self
+            .builder
+            .build_call(
+                self.karac_map_lookup_slot_fn,
+                &[map_handle.into(), key_slot.into(), slot_pp.into()],
+                "m.mr.found",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        let found_bb = self.context.append_basic_block(fn_val, "m.mr.found");
+        let miss_bb = self.context.append_basic_block(fn_val, "m.mr.miss");
+        self.builder
+            .build_conditional_branch(found, found_bb, miss_bb)
+            .unwrap();
+
+        self.builder.position_at_end(miss_bb);
+        self.emit_panic("Map index: key not present");
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(found_bb);
+        let slot_ptr = self
+            .builder
+            .build_load(ptr_ty, slot_pp, "m.mr.slot.ptr")
+            .unwrap()
+            .into_pointer_value();
+        Ok((slot_ptr, val_ty))
     }
 
     /// Infer the declared struct/enum type name of a method-call receiver,
