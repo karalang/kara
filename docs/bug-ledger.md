@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 175 | 0 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
-| codegen-gap | 77 | 1 |
+| codegen-gap | 77 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 492 | 2 |
+| codegen | 492 | 1 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **677 surfaced · 2 open · 669 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **677 surfaced · 1 open · 670 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-25-4 | 2026-07-25 | codegen | medium | `for k in m.keys()` (and `.values()`/`.entries()`) STILL eagerly materializes an owned `Vec` per evaluation when either map half is a HEAP type (`Map[String, _]`, `Map[_, Vec[_]]`). B-2026-07-24-2's inline bucket walk and its lazy keys() routing are both gated to SCALAR halves, so the originally-reported malloc + full-set copy + free — plus a DEEP CLONE of every heap key — is unchanged for the heap case, which is if anything the more expensive one. | — |
-| B-2026-07-25-5 | 2026-07-25 | codegen | medium | Indexed-receiver method call on a MAP element (`m[k].push(x)`) type-checks and runs correctly under the tree-walk interpreter but is REJECTED by codegen with `indexed-receiver method 'push' on '<m>' — outer is not a Vec/Slice/Array`. A `Vec` outer (`vv[0].push(x)`) works in codegen, so the gap is specific to Map outers, and it reproduces for BOTH heap-keyed (`Map[String, Vec[_]]`) and scalar-keyed (`Map[i64, Vec[_]]`) maps. | — |
 
-### Fixed (669)
+### Fixed (670)
 
-<details><summary>669 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>670 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -808,6 +807,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **677 surfaced 
 | B-2026-07-24-3 | typecheck+interp | medium | `u8 as char` was rejected at typecheck with E_INT_AS_CHAR even though it is the ONE infallible integer→char cast — every byte (0..=255) is a valid Un… | 6b0c98a |
 | B-2026-07-25-1 | codegen | high | USE-AFTER-FREE under codegen: a RECURSIVE function taking an OWNED `String` parameter whose argument is an ELEMENT of a `Vec[String]` obtained from a… | — |
 | B-2026-07-25-2 | typecheck | low | Match-arm type unification does not bind an unsolved type variable inside a generic: `match m.get(k) { Some(d) => d, None => Vec.new() }` is rejected… | 9226dff |
+| B-2026-07-25-5 | codegen | medium | Indexed-receiver method call on a MAP element (`m[k].push(x)`) type-checks and runs correctly under the tree-walk interpreter but is REJECTED by code… | 4416d33 |
 
 </details>
 
