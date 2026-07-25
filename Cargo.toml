@@ -108,6 +108,17 @@ name = "drop_fuzz"
 path = "src/bin/drop_fuzz.rs"
 required-features = ["llvm"]
 
+# Pre-optimization LLVM IR dump for a single `.kara` file — the investigation
+# harness for codegen bugs. Runs the FULL front-end chain including
+# `lowering::lower_program`; skipping lowering leaves codegen's span-keyed side
+# tables (`pattern_binding_types`, …) empty and produces IR the compiler never
+# actually emits (see bug-ledger B-2026-07-25-1's retraction note).
+#   cargo run --features llvm --example dump_ir -- path/to/file.kara
+[[example]]
+name = "dump_ir"
+path = "examples/dump_ir.rs"
+required-features = ["llvm"]
+
 [dependencies]
 inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }
 # Phase-7 L560 (Always-JIT via LLJIT): inkwell 0.9 does not expose ORC v2 /
