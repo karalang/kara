@@ -12598,7 +12598,11 @@ fn run_value_corrupting_cast_aborts() {
     let path = tmp.join("vcast.kara");
     // `b as char` is rejected (E_INT_AS_CHAR). Before the fix, `karac run`
     // downgraded it to a warning and printed a placeholder for `c`.
-    let src = "fn main() {\n    let b: u8 = 65u8;\n    let c = b as char;\n    println(c);\n    println(\"unreachable past the cast\");\n}\n";
+    // B-2026-07-24-3 carved `u8 as char` OUT of E_INT_AS_CHAR — it is
+    // infallible (every byte is a valid Unicode scalar) and now compiles — so
+    // this pin uses an `i64` source, which stays rejected: the cast is genuinely
+    // value-corrupting there (a negative or >0x10FFFF value has no scalar).
+    let src = "fn main() {\n    let b: i64 = 65i64;\n    let c = b as char;\n    println(c);\n    println(\"unreachable past the cast\");\n}\n";
     std::fs::write(&path, src).unwrap();
 
     let out = karac_bin()

@@ -4563,6 +4563,26 @@ impl<'ctx> super::Codegen<'ctx> {
         // execution lane while the AOT oracle stayed green (B-2026-07-07-4).
         // A borrow takes no ownership, so there is nothing to move-null.
         if self.vec_elem_types.contains_key(var_name) {
+            // B-2026-07-25-1: an OWNED `String`/`Vec` PARAM is caller-retains.
+            // The callee never registers a `FreeVecBuffer` for it (that is why
+            // it lands in `owned_vecstr_params` instead of `track_vec_var`), and
+            // every retaining consume site deep-copies it via
+            // `maybe_defensive_copy_param_arg` — so the param's buffer is never
+            // actually moved out and there is NO cleanup here to suppress.
+            // Zeroing its `cap` is therefore pure damage: it destroys the
+            // header's ownership bit for every LATER use in the same function.
+            // The next consume reads `cap == 0`, concludes "borrowed view", and
+            // SKIPS its own defensive copy — storing a raw alias into a buffer
+            // this frame does not own. In the ledger repro that alias points at
+            // the caller's map-derived `Vec[String]` element, which is freed as
+            // soon as the recursive call returns, so `route` ends up holding a
+            // dangling pointer (ASan: read in `main` of a block allocated by
+            // `karac_string_clone` and freed in `visit`). Invisible whenever the
+            // consume happens to be the param's LAST use — which is why this
+            // survived so long.
+            if self.owned_vecstr_params.contains(var_name) {
+                return;
+            }
             let holds_inline = matches!(
                 slot.ty,
                 inkwell::types::BasicTypeEnum::StructType(held) if held == vec_ty

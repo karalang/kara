@@ -32688,4 +32688,82 @@ fn main() {
             "map_set_iter_early_return_no_leak",
         );
     }
+
+    /// B-2026-07-25-1 — an owned `String` PARAM consumed TWICE in one function
+    /// (`cursor.insert(airport, …)` then, after a recursive descent,
+    /// `route.push(airport)`) must not have its `cap` zeroed by the first
+    /// consume. Owned Vec/String params are caller-retains: the callee never
+    /// registers a `FreeVecBuffer` for them and every retaining consume
+    /// deep-copies, so there is no cleanup to suppress — but the move-out
+    /// suppression zeroed the header's `cap` anyway, and the SECOND consume then
+    /// read `cap == 0`, took itself for a borrowed view, skipped its defensive
+    /// copy and stored a raw alias into the caller's map-derived `Vec[String]`
+    /// element. That element is freed the moment the recursive call returns, so
+    /// `route` finished holding dangling pointers (ASan: `main` reads a block
+    /// allocated by `karac_string_clone` and freed in `visit`). The tree-walk
+    /// interpreter was correct throughout, making it a run-vs-build divergence
+    /// too. Kata source: LeetCode #332 Reconstruct Itinerary; standalone repro at
+    /// kara-katas/oracle/recursive-owned-string-param-uaf/repro.kara.
+    #[test]
+    fn asan_owned_string_param_consumed_twice_no_uaf() {
+        let label = "owned_string_param_consumed_twice";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+fn visit(
+    adj: mut ref Map[String, Vec[String]],
+    cursor: mut ref Map[String, i64],
+    airport: String,
+    route: mut ref Vec[String],
+) {
+    while true {
+        let dests: Vec[String] = match adj.get(airport) { Some(d) => d, None => Vec.new() };
+        let used = match cursor.get(airport) { Some(u) => u, None => 0i64 };
+        if used >= dests.len() { break; }
+        let _ = cursor.insert(airport, used + 1i64);
+        visit(adj, cursor, dests[used], route);
+    }
+    route.push(airport);
+}
+
+fn main() {
+    let mut adj: Map[String, Vec[String]] = Map.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push("ATL"); a.push("SFO");
+    let _ = adj.insert("JFK", a);
+    let mut b: Vec[String] = Vec.new();
+    b.push("JFK"); b.push("SFO");
+    let _ = adj.insert("ATL", b);
+    let mut c: Vec[String] = Vec.new();
+    c.push("ATL");
+    let _ = adj.insert("SFO", c);
+
+    let mut cursor: Map[String, i64] = Map.new();
+    let mut route: Vec[String] = Vec.new();
+    visit(mut adj, mut cursor, "JFK", mut route);
+    let mut i = 0i64;
+    while i < route.len() { println(route[i]); i = i + 1i64; }
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — look for \
+             heap-use-after-free on a String buffer freed while an owned param \
+             still aliases it",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["SFO", "ATL", "SFO", "JFK", "ATL", "JFK"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }
