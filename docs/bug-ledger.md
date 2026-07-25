@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 173 | 0 |
+| miscompile | 174 | 0 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 76 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 487 | 2 |
+| codegen | 488 | 2 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **672 surfaced · 2 open · 665 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **673 surfaced · 2 open · 666 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -133,9 +133,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **672 surfaced 
 | B-2026-07-24-2 | 2026-07-24 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `keys()` iteration inside a hot loop pays a malloc + full-set copy + free per outer iteration. Rust's `keys()` is a zero-allocation, inlined lazy bucket walk. On LeetCode #170 (Two Sum III), `find` does `for k in ds.counts.keys()` and runs 1.2M times over a ~170-entry map — 1.2M materializations — making the Kāra bench ~1.74x the equal-safety Rust mirror. | — |
 | B-2026-07-25-1 | 2026-07-25 | codegen | high | USE-AFTER-FREE under codegen: a RECURSIVE function taking an OWNED `String` parameter whose argument is an ELEMENT of a `Vec[String]` obtained from a `Map[String, Vec[String]]`, where the parameter is USED AFTER the recursive descent, reads freed String buffers. `karac build` prints garbage bytes for the affected elements; `karac run` (LLJIT) aborts inside `karac_string_clone` with a `ptr::copy_nonoverlapping` unaligned/non-null precondition violation. The tree-walk interpreter is CORRECT, so this is also a run-vs-build divergence. Silent data corruption (no crash) under AOT build makes it high severity. | — |
 
-### Fixed (665)
+### Fixed (666)
 
-<details><summary>665 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>666 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -801,6 +801,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **672 surfaced 
 | B-2026-07-23-23 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): INDEXED ASSIGNMENT `v[i] = value` was SILENTLY DROPPED | 53f2553 |
 | B-2026-07-23-24 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): `Vec[bool]` has NO distinct element kind — it is conflated with `Vec[i64]` (kind 3), so the i1/i64 la… | 0498e79 |
 | B-2026-07-23-25 | autopar | medium | Auto-par over-parallelizes a fine-grained inner loop, making the DEFAULT `karac build` catastrophically slow (~1000x) while output stays CORRECT | c702d61 |
+| B-2026-07-23-26 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): statement-position `v.pop()` was a NO-OP — a non-push statement method call fell through to `emit_met… | 21a6eed |
 | B-2026-07-24-1 | codegen | medium | Compiler-driven inline-hint pass runs on the LOWERED AST but its node-count thresholds are calibrated for RAW-source sizes, so a small loop-hot helpe… | 20d33f7 |
 | B-2026-07-24-3 | typecheck+interp | medium | `u8 as char` was rejected at typecheck with E_INT_AS_CHAR even though it is the ONE infallible integer→char cast — every byte (0..=255) is a valid Un… | 6b0c98a |
 | B-2026-07-25-2 | typecheck | low | Match-arm type unification does not bind an unsolved type variable inside a generic: `match m.get(k) { Some(d) => d, None => Vec.new() }` is rejected… | 9226dff |
