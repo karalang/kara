@@ -2131,6 +2131,145 @@ impl Emitter {
                             + sp
                             + ", align 8\n";
                     }
+                } else if method == "pop" {
+                    // `v.pop()` in STATEMENT position (Slice 57) — the port's
+                    // `self.loop_cont.pop()` / `loop_break.pop()` shape, which
+                    // discards the returned `Option`. A no-op pop is NOT
+                    // harmless here: those are the loop-label stacks, so failing
+                    // to shrink them leaves stale entries and mis-resolves
+                    // `break`/`continue` for later loops. Shrink the vec by one:
+                    // load {ptr,len,cap}, and — GUARDED by `len > 0` (an empty
+                    // pop is a no-op, matching the seed; the guard also prevents
+                    // a wild element-free / len underflow) — free the popped
+                    // Vec[String] element, then write back {ptr, len-1, cap}.
+                    // Vec[i64] (kind 3) and Vec[String] (kind 4) are surfaced;
+                    // Vec-of-struct/enum pop has no port site. Value-position
+                    // pop (using the returned Option) stays out of surface.
+                    let mut pslot = 0 - 1;
+                    match object {
+                        Ident(pie) => {
+                            let IdentExpr { name: pon, span: posp } = pie;
+                            pslot = self.local_slot(pon);
+                        }
+                        SelfVal(psv) => {
+                            pslot = self.local_slot("self".to_string());
+                        }
+                        _ => {}
+                    }
+                    let mut pk = 0 - 1;
+                    if pslot >= 0 {
+                        pk = self.locals_kind[pslot];
+                    }
+                    if pk == 3 or pk == 4 {
+                        let psp = "%v" + pslot.to_string();
+                        let pag = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pag.clone()
+                            + " = load { ptr, i64, i64 }, ptr "
+                            + psp.clone()
+                            + ", align 8\n";
+                        let pptr = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pptr.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + pag.clone()
+                            + ", 0\n";
+                        let plen = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + plen.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + pag.clone()
+                            + ", 1\n";
+                        let pcap = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pcap.clone()
+                            + " = extractvalue { ptr, i64, i64 } "
+                            + pag
+                            + ", 2\n";
+                        let pcmp = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pcmp.clone()
+                            + " = icmp sgt i64 "
+                            + plen.clone()
+                            + ", 0\n";
+                        let plid = self.nlbl;
+                        self.nlbl = self.nlbl + 1;
+                        let pdo = "popdo" + plid.to_string();
+                        let pend = "popend" + plid.to_string();
+                        self.body = self.body
+                            + "  br i1 "
+                            + pcmp
+                            + ", label %"
+                            + pdo.clone()
+                            + ", label %"
+                            + pend.clone()
+                            + "\n";
+                        self.body = self.body + pdo.clone() + ":\n";
+                        let pnew = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pnew.clone()
+                            + " = sub i64 "
+                            + plen
+                            + ", 1\n";
+                        if pk == 4 {
+                            let pep = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + pep.clone()
+                                + " = getelementptr { ptr, i64 }, ptr "
+                                + pptr.clone()
+                                + ", i64 "
+                                + pnew.clone()
+                                + "\n";
+                            let pold = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + pold.clone()
+                                + " = load { ptr, i64 }, ptr "
+                                + pep
+                                + ", align 8\n";
+                            self.emit_free_val(pold);
+                        }
+                        let pa0 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pa0.clone()
+                            + " = insertvalue { ptr, i64, i64 } undef, ptr "
+                            + pptr
+                            + ", 0\n";
+                        let pa1 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pa1.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + pa0
+                            + ", i64 "
+                            + pnew
+                            + ", 1\n";
+                        let pa2 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pa2.clone()
+                            + " = insertvalue { ptr, i64, i64 } "
+                            + pa1
+                            + ", i64 "
+                            + pcap
+                            + ", 2\n";
+                        self.body = self.body
+                            + "  store { ptr, i64, i64 } "
+                            + pa2
+                            + ", ptr "
+                            + psp
+                            + ", align 8\n";
+                        self.body = self.body + "  br label %" + pend.clone() + "\n";
+                        self.body = self.body + pend + ":\n";
+                    }
                 } else {
                     let dv = self.emit_method_value(object, method, margs);
                     let Val { op: dop, kind: dk, heap: dh } = dv;

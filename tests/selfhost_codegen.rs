@@ -515,6 +515,19 @@ const CORPUS: &[&str] = &[
     // ten arithmetic/bitwise/shift forms and a loop-counter `i += 1` / an
     // accumulator `acc += i`. Differential vs the seed's `karac run`.
     "fn main() {\n    let mut x = 5;\n    x += 3;\n    println(x.to_string());\n    x -= 2;\n    println(x.to_string());\n    x *= 4;\n    println(x.to_string());\n    x /= 5;\n    println(x.to_string());\n    x %= 3;\n    println(x.to_string());\n    let mut b = 12;\n    b &= 10;\n    println(b.to_string());\n    b |= 5;\n    println(b.to_string());\n    b ^= 6;\n    println(b.to_string());\n    let mut sh = 1;\n    sh <<= 4;\n    println(sh.to_string());\n    sh >>= 2;\n    println(sh.to_string());\n    let mut acc = 0;\n    let mut i = 0;\n    while i < 5 {\n        acc += i;\n        i += 1;\n    }\n    println(acc.to_string());\n}",
+    // Slice 57: statement-position `v.pop()` — an EMITTER slice. A non-push
+    // statement method call fell through to `emit_method_value`, which is a
+    // no-op for `pop`, so `v.pop()` never shrank the vec. NOT harmless: the
+    // port's own `self.loop_cont.pop()` / `loop_break.pop()` (the loop-label
+    // stacks) rely on it — a no-op pop leaves stale entries and mis-resolves
+    // `break`/`continue` for later loops. B-2026-07-23-26. Fix: a `pop` arm
+    // that shrinks {ptr,len,cap} by one, GUARDED by `len > 0` (empty pop is a
+    // no-op, matching the seed, and the guard avoids a wild element-free / len
+    // underflow); Vec[String] (kind 4) frees the popped element (valgrind
+    // leak guard), Vec[i64] (kind 3) just decrements. Covers pop-then-len,
+    // a Vec[String] pop (element free), an empty-vec pop, and a
+    // push/pop/push loop-stack pattern read back in order.
+    "fn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(1);\n    v.push(2);\n    v.push(3);\n    v.pop();\n    v.pop();\n    v.push(99);\n    println(v.len().to_string());\n    println(v[0].to_string());\n    println(v[1].to_string());\n    let mut e: Vec[i64] = Vec.new();\n    e.pop();\n    println(e.len().to_string());\n    let mut s: Vec[String] = Vec.new();\n    s.push(\"a\".to_string());\n    s.push(\"b\".to_string());\n    s.push(\"c\".to_string());\n    s.pop();\n    let mut i = 0;\n    while i < s.len() as i64 {\n        println(s[i as i64]);\n        i += 1;\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
