@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
+| perf | 28 | 3 |
 | crash | 28 | 0 |
-| perf | 27 | 2 |
 | soundness | 25 | 0 |
 | diagnostics | 15 | 0 |
 | use-after-free | 7 | 0 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 493 | 2 |
+| codegen | 494 | 3 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
 | autopar | 18 | 0 |
-| runtime | 14 | 0 |
+| runtime | 15 | 1 |
 | cli | 12 | 0 |
 | resolver | 11 | 0 |
 | parser | 6 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **678 surfaced · 2 open · 670 fixed** (2026-05-20 → 2026-07-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **679 surfaced · 3 open · 670 fixed** (2026-05-20 → 2026-07-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-25-4 | 2026-07-25 | codegen | medium | `for k in m.keys()` (and `.values()`/`.entries()`) STILL eagerly materializes an owned `Vec` per evaluation when either map half is a HEAP type (`Map[String, _]`, `Map[_, Vec[_]]`). B-2026-07-24-2's inline bucket walk and its lazy keys() routing are both gated to SCALAR halves, so the originally-reported malloc + full-set copy + free — plus a DEEP CLONE of every heap key — is unchanged for the heap case, which is if anything the more expensive one. | — |
 | B-2026-07-26-1 | 2026-07-26 | codegen | medium | Overflow check on a BOUNDED loop-accumulator (`cnt = cnt + 1` guarded by an if, inside a counted loop) is not elided, and because a checked add can trap it cannot be speculated — which blocks LLVM's if-conversion of `if bit { cnt += 1 }` into the branchless `cnt += bit`. On random data the surviving conditional branch mispredicts ~50% of the time, costing 7.9x on a per-bit counting loop. | — |
+| B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + lookup runs ~2.45x behind an EQUAL-HASH Rust HashMap. Isolated: String construction itself is a dead tie, so the whole gap is the map operations — most likely the erased runtime's per-probe indirect `hash_fn`/`eq_fn` calls, which the scalar-key `Set.contains` mono fast path already avoids for Sets but which has no `Map[String, _]` counterpart. | — |
 
 ### Fixed (670)
 
