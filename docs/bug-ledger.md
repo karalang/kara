@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
 | crash | 28 | 0 |
-| perf | 26 | 1 |
+| perf | 27 | 2 |
 | soundness | 25 | 0 |
 | diagnostics | 15 | 0 |
 | use-after-free | 7 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 492 | 1 |
+| codegen | 493 | 2 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **677 surfaced · 1 open · 670 fixed** (2026-05-20 → 2026-07-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **678 surfaced · 2 open · 670 fixed** (2026-05-20 → 2026-07-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-25-4 | 2026-07-25 | codegen | medium | `for k in m.keys()` (and `.values()`/`.entries()`) STILL eagerly materializes an owned `Vec` per evaluation when either map half is a HEAP type (`Map[String, _]`, `Map[_, Vec[_]]`). B-2026-07-24-2's inline bucket walk and its lazy keys() routing are both gated to SCALAR halves, so the originally-reported malloc + full-set copy + free — plus a DEEP CLONE of every heap key — is unchanged for the heap case, which is if anything the more expensive one. | — |
+| B-2026-07-26-1 | 2026-07-26 | codegen | medium | Overflow check on a BOUNDED loop-accumulator (`cnt = cnt + 1` guarded by an if, inside a counted loop) is not elided, and because a checked add can trap it cannot be speculated — which blocks LLVM's if-conversion of `if bit { cnt += 1 }` into the branchless `cnt += bit`. On random data the surviving conditional branch mispredicts ~50% of the time, costing 7.9x on a per-bit counting loop. | — |
 
 ### Fixed (670)
 
