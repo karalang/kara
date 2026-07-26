@@ -270,20 +270,70 @@ impl KaracMap {
         self.len = 0;
         self.tombstones = 0;
 
-        for i in 0..old_cap {
-            if *old_status.add(i) == BUCKET_OCCUPIED {
-                let kv_size = self.key_size + self.val_size;
-                let key = old_kv.add(i * kv_size) as *const c_void;
-                let val = old_kv.add(i * kv_size + self.key_size) as *const c_void;
-                self.insert(key, val);
-            }
-        }
+        self.rehash_from(old_status, old_kv, old_cap);
 
         let status_layout = Layout::array::<u8>(old_cap).unwrap();
         dealloc(old_status, status_layout);
         let kv_layout =
             Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
         dealloc(old_kv, kv_layout);
+    }
+
+    /// Move every occupied bucket of a just-replaced table into `self`'s fresh
+    /// storage. Shared by [`resize`] and [`try_resize`].
+    ///
+    /// This deliberately does NOT go through [`insert`] (B-2026-07-26-2), which
+    /// is what it used to do. Three of `insert`'s steps are dead weight here,
+    /// and rehashing is 72% of the cost of building a map — measured on a
+    /// 3,125-key `Map[String, i64]` built 60 times, growth accounted for 21.5ms
+    /// of kara's 29.7ms insert total against Rust's 6.8ms of 11.1ms:
+    ///
+    /// * **The load-factor test cannot fire.** `resize` doubled the capacity and
+    ///   is replaying at most `3/4 * old_cap == 3/8 * new_cap` live keys, so the
+    ///   `(len + tombstones + 1) * 4 > capacity * 3` guard is false at every
+    ///   step. Re-evaluating it per key is a branch on a value that cannot move.
+    /// * **`find_insert_slot`'s tombstone bookkeeping and `eq_fn` call site are
+    ///   unreachable.** The destination came straight from `alloc_storage`, so
+    ///   every status byte is `BUCKET_EMPTY`: the probe stops at the first slot
+    ///   it touches and the `BUCKET_TOMBSTONE` / `BUCKET_OCCUPIED` arms never
+    ///   run. Keys are also unique by construction (they were unique in the old
+    ///   table and rehashing preserves that), so no equality test is *needed*
+    ///   even in principle — the erased `eq_fn` is an indirect call the
+    ///   optimizer cannot see through, and this removes its call site entirely.
+    /// * **Two runtime-sized `copy_nonoverlapping`s become one.** `insert`
+    ///   copies the key and the value separately because they arrive as two
+    ///   caller pointers; here they are already adjacent in the old bucket, so a
+    ///   single `key_size + val_size` copy moves both. With non-constant sizes
+    ///   each of those lowers to a libc `memcpy` call, so halving the count is a
+    ///   real saving — `memcpy` was 7.9% of the profile.
+    ///
+    /// The one thing that cannot be skipped is the per-key `hash_fn` call: the
+    /// bucket layout stores no hash, so a wider table has to re-derive it.
+    ///
+    /// # Safety
+    /// `old_status` / `old_kv` must be the storage arrays of a table with
+    /// `old_cap` buckets and the same `key_size` / `val_size` as `self`, and
+    /// `self`'s own storage must be freshly allocated (all-`BUCKET_EMPTY`) with
+    /// capacity strictly greater than the live count in the old table.
+    unsafe fn rehash_from(&mut self, old_status: *const u8, old_kv: *const u8, old_cap: usize) {
+        let kv_size = self.key_size + self.val_size;
+        let mask = self.capacity - 1;
+        for i in 0..old_cap {
+            if *old_status.add(i) != BUCKET_OCCUPIED {
+                continue;
+            }
+            let src = old_kv.add(i * kv_size);
+            let hash = (self.hash_fn)(src as *const c_void);
+            let mut slot = (hash as usize) & mask;
+            // Terminates: the destination has strictly more buckets than the
+            // number of keys being replayed, so an EMPTY slot always exists.
+            while *self.status.add(slot) != BUCKET_EMPTY {
+                slot = (slot + 1) & mask;
+            }
+            ptr::copy_nonoverlapping(src, self.kv.add(slot * kv_size), kv_size);
+            *self.status.add(slot) = BUCKET_OCCUPIED;
+            self.len += 1;
+        }
     }
 
     /// Fallible sibling of [`alloc_storage`]: returns `None` on OOM — after
@@ -348,14 +398,7 @@ impl KaracMap {
         self.len = 0;
         self.tombstones = 0;
 
-        for i in 0..old_cap {
-            if *old_status.add(i) == BUCKET_OCCUPIED {
-                let kv_size = self.key_size + self.val_size;
-                let key = old_kv.add(i * kv_size) as *const c_void;
-                let val = old_kv.add(i * kv_size + self.key_size) as *const c_void;
-                self.insert(key, val);
-            }
-        }
+        self.rehash_from(old_status, old_kv, old_cap);
 
         let status_layout = Layout::array::<u8>(old_cap).unwrap();
         dealloc(old_status, status_layout);
