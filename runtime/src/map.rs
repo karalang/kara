@@ -1076,6 +1076,15 @@ mod tests {
         assert_eq!(offset_of!(KaracMap, capacity), 16);
         assert_eq!(offset_of!(KaracMap, len), 24);
         assert_eq!(offset_of!(KaracMap, tombstones), 32);
+        // The tail fields were unpinned until B-2026-07-26-2 even though
+        // codegen already GEP'd `val_size` (the Set contains stride) and
+        // `hash_fn` (the Set contains probe). The monomorphized String-key
+        // Map probe adds `key_size` and `eq_fn`, so pin all four: drift here
+        // is a silent wrong-bucket miscompile, not a link error.
+        assert_eq!(offset_of!(KaracMap, key_size), 40);
+        assert_eq!(offset_of!(KaracMap, val_size), 48);
+        assert_eq!(offset_of!(KaracMap, hash_fn), 56);
+        assert_eq!(offset_of!(KaracMap, eq_fn), 64);
     }
 
     use std::ffi::c_void;

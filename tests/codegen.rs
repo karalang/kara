@@ -74920,6 +74920,78 @@ fn main() {
             }
         }
     }
+
+    /// B-2026-07-26-2: the monomorphized String-key `Map.get` probe must agree
+    /// with the ERASED insert path on bucket placement in every shape the
+    /// erased path can produce. A probe that hashes or compares differently
+    /// from how the buckets were filled is a silent wrong-answer bug, which is
+    /// why the mono body reads the map's STORED `hash_fn` / `eq_fn` rather than
+    /// synthesizing its own.
+    ///
+    /// Covers the four cases that can break placement agreement:
+    ///   * **growth** — 400 keys forces several resizes, so most lookups land
+    ///     in a table that was rehashed after their insert;
+    ///   * **tombstones** — removals leave `BUCKET_TOMBSTONE`, and the probe
+    ///     must step past them rather than stopping (stopping would report a
+    ///     live key as missing);
+    ///   * **a cloned map** — a different creation path, which for Sets is
+    ///     documented to register a different-but-self-consistent layout;
+    ///   * **misses** — including a key whose hash collides into an occupied
+    ///     run, which must terminate at the first EMPTY rather than run off.
+    #[test]
+    fn mono_str_map_get_agrees_with_erased_insert() {
+        let out = run_program(
+            "fn key(i: i64) -> String {\n\
+                 let mut s: String = \"k\";\n\
+                 s.push_str(f\"{i}\");\n\
+                 s\n\
+             }\n\
+             fn main() {\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 let mut i = 0i64;\n\
+                 while i < 400i64 {\n\
+                     let _ = m.insert(key(i), i * 3i64);\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 // Tombstones: drop every 5th key, then re-probe the survivors.\n\
+                 let mut d = 0i64;\n\
+                 while d < 400i64 {\n\
+                     let _ = m.remove(key(d));\n\
+                     d = d + 5i64;\n\
+                 }\n\
+                 let mut hits = 0i64;\n\
+                 let mut sum = 0i64;\n\
+                 let mut misses = 0i64;\n\
+                 let mut j = 0i64;\n\
+                 while j < 400i64 {\n\
+                     match m.get(key(j)) {\n\
+                         Some(v) => { hits = hits + 1i64; sum = (sum + v) % 1000000007i64; }\n\
+                         None => { misses = misses + 1i64; }\n\
+                     }\n\
+                     j = j + 1i64;\n\
+                 }\n\
+                 println(f\"{hits} {sum} {misses}\");\n\
+                 // Absent keys must miss, not alias a live bucket.\n\
+                 match m.get(\"nope\") { Some(_) => { println(\"BAD\"); } None => { println(\"absent\"); } }\n\
+                 match m.get(\"\") { Some(_) => { println(\"BAD\"); } None => { println(\"absent\"); } }\n\
+                 // A clone is a distinct creation path; it must probe the same.\n\
+                 let c = m.clone();\n\
+                 let mut chits = 0i64;\n\
+                 let mut k = 0i64;\n\
+                 while k < 400i64 {\n\
+                     match c.get(key(k)) {\n\
+                         Some(_) => { chits = chits + 1i64; }\n\
+                         None => {}\n\
+                     }\n\
+                     k = k + 1i64;\n\
+                 }\n\
+                 println(f\"{chits}\");\n\
+             }\n",
+        );
+        // 400 inserted, 80 removed (0,5,...,395) => 320 live.
+        // sum = 3 * (sum of j in 0..400 where j % 5 != 0) = 3 * (79800 - 15800).
+        assert_eq!(out.as_deref(), Some("320 192000 80\nabsent\nabsent\n320\n"));
+    }
 }
 
 #[cfg(feature = "llvm")]

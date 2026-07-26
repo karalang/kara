@@ -1853,7 +1853,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val_slot = self.create_entry_alloca(fn_val, "map.get.val", val_ty);
                 self.builder.build_store(key_slot, key_val).unwrap();
                 let key_val_matches = key_val.get_type() == key_ty;
-                let found = if self.should_use_mono_map_for(key_ty, val_ty) && key_val_matches {
+                // B-2026-07-26-2: String-key maps get their own mono probe.
+                // They cannot use the scalar family above (its key travels by
+                // value in a register), and without this they fell through to
+                // the erased `karac_map_get` FFI call — measured at 2.16x a
+                // Rust `HashMap` lookup while the scalar mono path is already
+                // at parity. `key_slot` is the caller's key aggregate, which is
+                // exactly the by-address form the stored hash/eq expect.
+                let str_key_te = self
+                    .map_key_type_exprs
+                    .get(var_name)
+                    .cloned()
+                    .filter(|te| self.should_use_mono_str_map_get(te, val_ty));
+                let found = if str_key_te.is_some() {
+                    let mono_get = self.get_or_emit_map_str_mono_get(val_ty);
+                    self.builder
+                        .build_call(
+                            mono_get,
+                            &[map_handle.into(), key_slot.into(), val_slot.into()],
+                            "map.get.found",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value()
+                } else if self.should_use_mono_map_for(key_ty, val_ty) && key_val_matches {
                     let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
                     self.builder
                         .build_call(

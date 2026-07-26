@@ -2881,6 +2881,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// type lowers to an i64-sized slot in `emit_map_clone_fn`), so the stride
     /// is not constant across Set instances and must be read at runtime.
     const KARAC_MAP_VAL_SIZE_OFFSET: u64 = 48;
+    /// `key_size` field (offset 40). Read by the monomorphized String-key Map
+    /// probe to recover the bucket stride and the value's in-bucket offset
+    /// without hardcoding `sizeof(String) == 24`.
+    const KARAC_MAP_KEY_SIZE_OFFSET: u64 = 40;
+    /// `eq_fn` pointer field (offset 64), immediately after `hash_fn`. Read by
+    /// the String-key Map probe for the same reason it reads `hash_fn`: the
+    /// comparison must be the one the buckets were actually filled with.
+    const KARAC_MAP_EQ_FN_OFFSET: u64 = 64;
     /// `hash_fn` pointer field: after status, kv (2 ptrs) + capacity, len,
     /// tombstones, key_size, val_size (5 usizes) = 8*2 + 8*5 = 56. Used by
     /// [`emit_mono_set_contains_body`] to call the Set's *actual* stored hash
@@ -4428,5 +4436,288 @@ impl<'ctx> super::Codegen<'ctx> {
         // ── exhausted: unreachable under resize policy; erased safety
         self.builder.position_at_end(exhausted_bb);
         erased_insert(self);
+    }
+
+    /// Gate for the monomorphized **String-key** `Map` lookup
+    /// (B-2026-07-26-2). Sibling of [`should_use_mono_map_for`], which covers
+    /// scalar keys only, so a `Map[String, _]` used to fall all the way through
+    /// to the erased `karac_map_get` FFI call.
+    ///
+    /// Why it is worth a separate path, measured rather than assumed. On a
+    /// 3,125-key lookup loop run 60 times:
+    ///
+    /// * `Map[i64, i64]`, which already takes the scalar mono path, runs 2.2ms
+    ///   against Rust's 2.1ms — **parity**. The mono probe is not the problem.
+    /// * `Map[String, i64]`, which did not, runs 4.1ms net against Rust's
+    ///   1.9ms — **2.16x**.
+    /// * The difference is NOT the erased runtime's indirect `hash_fn` /
+    ///   `eq_fn` calls, which is what the original bug report guessed.
+    ///   Re-implementing `KaracMap`'s exact probe in Rust twice — once through
+    ///   stored fn pointers, once with direct calls — measures 3.6ms vs 3.7ms,
+    ///   a wash: the call target is identical every iteration, so it predicts
+    ///   perfectly. What costs is the **FFI boundary itself** — an opaque call
+    ///   per lookup that blocks inlining, plus the out-param protocol (store
+    ///   the key into an alloca, hand over its address, reload the value).
+    ///
+    /// So this path inlines the probe loop but deliberately keeps calling the
+    /// map's **stored** `hash_fn` / `eq_fn` rather than the ones this call site
+    /// would synthesize. That mirrors [`emit_mono_set_contains_body`]'s
+    /// existing rule and is the correctness invariant: `Map.new` and
+    /// `clone`/map-ops may register different-but-self-consistent hashes for
+    /// the same key type, and a probe that hashes differently from how the
+    /// buckets were filled is a silent wrong-answer bug, not a slow one. Since
+    /// the indirect call measured free, there is nothing to trade away.
+    ///
+    /// Gated on a scalar value type so the found-value load is one typed load;
+    /// a compound V keeps the erased path.
+    pub(super) fn should_use_mono_str_map_get(
+        &self,
+        key_te: &TypeExpr,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) -> bool {
+        let key_name = Self::mangled_type_name(key_te);
+        if key_name != "String" && key_name != "str" {
+            return false;
+        }
+        matches!(
+            val_ty,
+            BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_) | BasicTypeEnum::PointerType(_)
+        )
+    }
+
+    /// Emit (or reuse) `karac_map_str_<val>_get(map, key_ptr, out_val) -> bool`
+    /// — the monomorphized String-key lookup gated by
+    /// [`should_use_mono_str_map_get`]. `LinkOnceODR` so duplicates across
+    /// translation units collapse at link time, matching the scalar family.
+    ///
+    /// Calling convention differs from the scalar mono `get` in one way: the
+    /// key is passed **by pointer**, not by value. A `String` is a
+    /// `{ptr, len, cap}` aggregate that the stored `hash_fn` / `eq_fn` already
+    /// expect to receive by address, so passing the caller's existing key slot
+    /// straight through avoids a copy.
+    pub(super) fn get_or_emit_map_str_mono_get(
+        &mut self,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let val_mangle = self.llvm_type_to_mangle_str(val_ty);
+        let fn_name = format!("karac_map_str_{val_mangle}_get");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let saved_bb = self.builder.get_insert_block();
+        let fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let f = self
+            .module
+            .add_function(&fn_name, fn_ty, Some(Linkage::LinkOnceODR));
+        self.emit_mono_map_str_get_body(f, val_ty);
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Body for [`get_or_emit_map_str_mono_get`]. Structurally the same probe
+    /// as [`emit_mono_map_get_body`] — bound by `capacity`, stop on EMPTY, skip
+    /// TOMBSTONE, compare on OCCUPIED — with three changes for a heap key:
+    ///
+    /// * `key_size` / `val_size` (and therefore the bucket stride and the
+    ///   value's in-bucket offset) are **read from the map struct at runtime**
+    ///   instead of being folded in as constants. The scalar path can fold them
+    ///   because its K and V are fixed-width by construction; here it costs two
+    ///   loads hoisted out of the loop and buys immunity to any creation path
+    ///   that lays buckets out differently.
+    /// * The key comparison is an indirect call to the map's stored `eq_fn`
+    ///   rather than an inline `icmp eq` — a `String` compare is a length test
+    ///   plus a `memcmp`, not a register compare.
+    /// * The hash likewise comes from the stored `hash_fn`.
+    ///
+    /// See [`should_use_mono_str_map_get`] for why keeping both calls indirect
+    /// costs nothing and why hashing any other way would be a correctness bug.
+    fn emit_mono_map_str_get_body(&mut self, f: FunctionValue<'ctx>, val_ty: BasicTypeEnum<'ctx>) {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
+        let key_arg = f.get_nth_param(1).unwrap().into_pointer_value();
+        let out_val_arg = f.get_nth_param(2).unwrap().into_pointer_value();
+
+        let entry_bb = self.context.append_basic_block(f, "entry");
+        let probe_cond_bb = self.context.append_basic_block(f, "probe.cond");
+        let probe_body_bb = self.context.append_basic_block(f, "probe.body");
+        let check_occupied_bb = self.context.append_basic_block(f, "check.occupied");
+        let eq_check_bb = self.context.append_basic_block(f, "eq.check");
+        let match_found_bb = self.context.append_basic_block(f, "match.found");
+        let not_found_bb = self.context.append_basic_block(f, "not.found");
+
+        // ── entry: hoist every map field the loop needs ──────────
+        self.builder.position_at_end(entry_bb);
+        let load_i64_field = |s: &Self, off: u64, name: &str| {
+            let p = unsafe {
+                s.builder
+                    .build_in_bounds_gep(i8_t, map_arg, &[i64_t.const_int(off, false)], name)
+                    .unwrap()
+            };
+            s.builder
+                .build_load(i64_t, p, name)
+                .unwrap()
+                .into_int_value()
+        };
+        let load_ptr_field = |s: &Self, off: u64, name: &str| {
+            let p = unsafe {
+                s.builder
+                    .build_in_bounds_gep(i8_t, map_arg, &[i64_t.const_int(off, false)], name)
+                    .unwrap()
+            };
+            s.builder
+                .build_load(ptr_ty, p, name)
+                .unwrap()
+                .into_pointer_value()
+        };
+
+        let cap = load_i64_field(self, Self::KARAC_MAP_CAPACITY_OFFSET, "cap");
+        let status_ptr = load_ptr_field(self, Self::KARAC_MAP_STATUS_OFFSET, "status");
+        let kv_ptr = load_ptr_field(self, Self::KARAC_MAP_KV_OFFSET, "kv");
+        let key_size = load_i64_field(self, Self::KARAC_MAP_KEY_SIZE_OFFSET, "key.size");
+        let val_size = load_i64_field(self, Self::KARAC_MAP_VAL_SIZE_OFFSET, "val.size");
+        let hash_fn_ptr = load_ptr_field(self, Self::KARAC_MAP_HASH_FN_OFFSET, "hash.fn");
+        let eq_fn_ptr = load_ptr_field(self, Self::KARAC_MAP_EQ_FN_OFFSET, "eq.fn");
+        let kv_size = self
+            .builder
+            .build_int_add(key_size, val_size, "kv.size")
+            .unwrap();
+
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let eq_fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+
+        let hash = self
+            .builder
+            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[key_arg.into()], "hash")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let mask = self
+            .builder
+            .build_int_sub(cap, i64_t.const_int(1, false), "mask")
+            .unwrap();
+        let start = self.builder.build_and(hash, mask, "start").unwrap();
+        self.builder
+            .build_unconditional_branch(probe_cond_bb)
+            .unwrap();
+
+        // ── probe.cond: PHI for i; bound-check vs cap ─────────────
+        self.builder.position_at_end(probe_cond_bb);
+        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let bound_done = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bound_done, not_found_bb, probe_body_bb)
+            .unwrap();
+
+        // ── probe.body: load status, branch on empty ──────────────
+        self.builder.position_at_end(probe_body_bb);
+        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
+        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        let status_slot_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
+                .unwrap()
+        };
+        let status_byte = self
+            .builder
+            .build_load(i8_t, status_slot_p, "status.byte")
+            .unwrap()
+            .into_int_value();
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_EMPTY, false),
+                "is.empty",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, not_found_bb, check_occupied_bb)
+            .unwrap();
+
+        // ── check.occupied: tombstone → continue, occupied → eq ──
+        self.builder.position_at_end(check_occupied_bb);
+        let is_occupied = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
+                "is.occupied",
+            )
+            .unwrap();
+        let tomb_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
+            .unwrap();
+        i_phi.add_incoming(&[(&tomb_i_next, check_occupied_bb)]);
+        self.builder
+            .build_conditional_branch(is_occupied, eq_check_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── eq.check: stored eq_fn against the bucket's key half ──
+        self.builder.position_at_end(eq_check_bb);
+        let slot_off = self
+            .builder
+            .build_int_mul(slot, kv_size, "slot.off")
+            .unwrap();
+        let slot_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "slot.kv.p")
+                .unwrap()
+        };
+        let key_match = self
+            .builder
+            .build_indirect_call(
+                eq_fn_ty,
+                eq_fn_ptr,
+                &[slot_kv_p.into(), key_arg.into()],
+                "key.match",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let nomatch_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.nomatch")
+            .unwrap();
+        i_phi.add_incoming(&[(&nomatch_i_next, eq_check_bb)]);
+        self.builder
+            .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── match.found: load val, write out, return true ────────
+        self.builder.position_at_end(match_found_bb);
+        let slot_val_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, slot_kv_p, &[key_size], "slot.val.p")
+                .unwrap()
+        };
+        let val = self.builder.build_load(val_ty, slot_val_p, "val").unwrap();
+        self.builder.build_store(out_val_arg, val).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // ── not.found: return false, out_val untouched ───────────
+        self.builder.position_at_end(not_found_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_zero()))
+            .unwrap();
     }
 }
