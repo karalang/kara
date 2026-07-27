@@ -7094,6 +7094,79 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_loop_closure_element_call_dispatches_indirect() {
+        // B-2026-07-23-28: calling a closure bound as a `for`-loop ELEMENT
+        // (`for op in ops { v = op(v) }` over `Array`/`Vec[Fn(i64) -> i64]`)
+        // silently returned 0 under `karac build`/JIT while the interpreter was
+        // correct. The element BINDING was fine all along — the IR stored the
+        // right `{fn_ptr, env}` fat pointer into the loop slot — but the loop
+        // var was never registered in `closure_fn_types`, so `op(v)` missed
+        // `compile_call`'s indirect-call dispatch and fell to the unknown-callee
+        // path, folding the whole call to `store i64 0`. (`let op = ops[i];
+        // op(v)` always worked: the `let` path has its own registration via
+        // `let_binding_fn_value_type` — which is exactly why the bug looked
+        // for-loop-specific.) Fixed by registering a `Fn(..)`-typed binding in
+        // `register_var_from_type_expr`, the shared registrar every binding form
+        // routes through. Covers: the array-literal repro, a `Vec[Fn]` built by
+        // push, a single-element array, CAPTURING closures, and a String
+        // (heap-returning) closure applied through the loop binding.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let ops = [|x| x + 1, |x| x * 10];\n\
+                 let mut v = 5;\n\
+                 for op in ops { v = op(v); }\n\
+                 println(v);\n\
+                 let mut vs: Vec[Fn(i64) -> i64] = Vec.new();\n\
+                 vs.push(|x| x + 1);\n\
+                 vs.push(|x| x * 10);\n\
+                 vs.push(|x| x - 3);\n\
+                 let mut w = 5;\n\
+                 for op in vs { w = op(w); }\n\
+                 println(w);\n\
+                 let one = [|x| x + 100];\n\
+                 let mut u = 5;\n\
+                 for op in one { u = op(u); }\n\
+                 println(u);\n\
+                 let base = 100;\n\
+                 let caps = [|x| x + base, |x| x * base];\n\
+                 let mut c = 1;\n\
+                 for op in caps { c = op(c); }\n\
+                 println(c);\n\
+                 let fs = [|s: String| s + \"-a\", |s: String| s + \"-b\"];\n\
+                 let mut acc = \"x\".to_string();\n\
+                 for f in fs { acc = f(acc); }\n\
+                 println(acc);\n\
+             }",
+        ) {
+            assert_eq!(out, "60\n57\n105\n10100\nx-a-b\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_for_loop_closure_element_emits_indirect_call_not_const_zero() {
+        // B-2026-07-23-28 structural guard: the `for op in ops` body must emit a
+        // real indirect `call` through the loaded fat pointer's fn slot. Before
+        // the fix the body was just `store { ptr, ptr } %elem, ptr %op` followed
+        // by `store i64 0` — the call folded away entirely, so asserting on the
+        // OUTPUT alone could regress silently if a future default changed. Pin
+        // the emitted shape: an `extractvalue` of the closure fat pointer inside
+        // the loop body plus at least one indirect call.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let ops = [|x| x + 1, |x| x * 10];\n\
+                 let mut v = 5;\n\
+                 for op in ops { v = op(v); }\n\
+                 println(v);\n\
+             }",
+        );
+        assert!(
+            ir.contains("closure_call"),
+            "the for-loop closure element call must lower to an indirect \
+             closure call, not a folded constant:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_e2e_closure_mutates_captured_collection_via_method() {
         // B-2026-07-15-13: a closure that mutates a captured collection through
         // a mutating METHOD (`acc.push`, `buf.push_str`, `m.insert`) captures

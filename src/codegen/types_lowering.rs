@@ -1423,6 +1423,33 @@ impl<'ctx> super::Codegen<'ctx> {
             self.register_var_from_type_expr(var_name, &base);
             return;
         }
+        // `Fn(..) -> R` / `OnceFn(..)` — a first-class FN VALUE binding
+        // (B-2026-07-23-28). Register the env-first closure `FunctionType` in
+        // `closure_fn_types` so a later `name(args)` dispatches as an INDIRECT
+        // call through the fat pointer (`compile_call`'s `closure_fn_types`
+        // check → `compile_closure_call`). Without this the name misses that
+        // dispatch and falls through to the unknown-callee path, which silently
+        // returns `i64 0` — the `for op in ops { v = op(v) }` miscompile, where
+        // the element binding itself was correct (`{fn_ptr, env}` stored fine)
+        // but the CALL folded to a constant. The `let` path had its own
+        // registration (`let_binding_fn_value_type`), which is why
+        // `let op = ops[i]; op(x)` always worked; putting it here covers every
+        // binding form that routes through this registrar — for-loop elements
+        // (`Vec`/`Array[Fn]`, incl. the `(k, v)` map-value arm), function
+        // params, and synthesized temporaries — from ONE arm. No slot/cleanup
+        // state is touched: the fat pointer is bound by the caller as usual and
+        // a closure's env ownership is tracked separately
+        // (`heap_env_closure_vars`), so this is dispatch metadata only.
+        if let TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } = &te.kind
+        {
+            let fn_type = self.closure_abi_fn_type(params, return_type.as_deref());
+            self.closure_fn_types.insert(var_name.to_string(), fn_type);
+            return;
+        }
         // Atomic[T] — transparent wrapper type registered with
         // `var_type_names = "Atomic"` so downstream `.load(ord)` /
         // `.store(v, ord)` method-call dispatch (the Atomic arm in
