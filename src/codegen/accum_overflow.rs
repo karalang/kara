@@ -356,10 +356,8 @@ fn count_writes(body: &Block, name: &str) -> usize {
                 }
             }
         }
-        StmtKind::Let { pattern, .. } => {
-            if binds_identifier(pattern) == Some(name) {
-                n += 1;
-            }
+        StmtKind::Let { pattern, .. } if binds_identifier(pattern) == Some(name) => {
+            n += 1;
         }
         _ => {}
     });
