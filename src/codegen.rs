@@ -22,6 +22,7 @@ use crate::ownership::{CapturePath, OwnershipCheckResult, OwnershipMode, ParCapt
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
+mod accum_overflow;
 mod assoc_call;
 mod backpressure;
 mod bce_length_pin;
@@ -2519,6 +2520,21 @@ pub(super) struct Codegen<'ctx> {
     /// Consumed by Prereq.3's scope-exit lowering pass via
     /// `module.get_function("karac_drop_<Type>")`.
     pub(crate) user_drop_wrapper_fns: HashMap<String, FunctionValue<'ctx>>,
+
+    /// Assignment statements whose `acc = acc + 1` RHS may skip its overflow
+    /// check, keyed by the STATEMENT's span (B-2026-07-26-1). Populated per
+    /// block by `accum_overflow::check_free_accumulator_sites`, which only
+    /// admits sites where the trap is provably dead — see that module for the
+    /// bound proof. Empty for essentially every block, so the lookup is a
+    /// hash miss on the common path.
+    pub(crate) check_free_accum_sites: std::collections::HashSet<crate::resolver::SpanKey>,
+    /// One-shot latch consumed by the `BinOp::Add` arm in `compile_binop_typed`
+    /// to emit a plain `add` instead of the trapping
+    /// `llvm.sadd.with.overflow` sequence. Set immediately before compiling a
+    /// recognized accumulator RHS and taken by the first add it reaches; the
+    /// recognized RHS is exactly `<ident> + <literal>`, so there is no nested
+    /// add for the latch to leak onto.
+    pub(crate) elide_next_add_overflow_check: bool,
     /// Per-shared-struct lazy drop-fn cache (shared-struct name →
     /// `__karac_rc_drop_<Name>` `FunctionValue`, or `None` when the
     /// struct has no heap-owning fields and `emit_rc_dec` can fall
@@ -7306,6 +7322,8 @@ impl<'ctx> Codegen<'ctx> {
             struct_drop_fns: HashMap::new(),
             soa_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),
+            check_free_accum_sites: std::collections::HashSet::new(),
+            elide_next_add_overflow_check: false,
             rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             question_ok_payload_types: HashMap::new(),

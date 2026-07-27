@@ -74992,6 +74992,64 @@ fn main() {
         // sum = 3 * (sum of j in 0..400 where j % 5 != 0) = 3 * (79800 - 15800).
         assert_eq!(out.as_deref(), Some("320 192000 80\nabsent\nabsent\n320\n"));
     }
+
+    /// B-2026-07-26-1: the bounded-accumulator elision must be SEMANTICS-
+    /// PRESERVING, not merely fast. Two halves:
+    ///
+    /// * the qualifying `let cnt = 0; while i < n { if … { cnt = cnt + 1 } }`
+    ///   shape still computes the right count with the trap removed;
+    /// * the SAME loop shape with a non-zero initializer is rejected by the
+    ///   analysis and therefore still traps. That is the behavioural pin on
+    ///   the `init == 0` precondition — the bound is `acc <= init + trip`, so
+    ///   a non-zero start is exactly the case that can still overflow.
+    #[test]
+    fn bounded_accumulator_elision_preserves_semantics() {
+        let out = run_program(
+            "fn count_set(nums: ref Vec[i64], b: i64) -> i64 {\n\
+                 let mut cnt = 0i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < nums.len() {\n\
+                     if ((nums[i] >> b) & 1i64) == 1i64 {\n\
+                         cnt = cnt + 1i64;\n\
+                     }\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 cnt\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(1i64); v.push(2i64); v.push(3i64); v.push(7i64); v.push(8i64);\n\
+                 println(f\"{count_set(v, 0i64)} {count_set(v, 1i64)} {count_set(v, 3i64)}\");\n\
+             }\n",
+        );
+        // bit0 set in {1,3,7} = 3; bit1 in {2,3,7} = 3; bit3 in {8} = 1.
+        assert_eq!(out.as_deref(), Some("3 3 1\n"));
+    }
+
+    /// The `init == 0` half of the pin above: same loop, accumulator started
+    /// near `i64::MAX`, so the add genuinely overflows on the second
+    /// iteration. The analysis must NOT have elided this check.
+    #[test]
+    fn bounded_accumulator_nonzero_init_still_traps() {
+        if let Some(cap) = run_program_capturing(
+            "fn main() {\n\
+                 let mut acc = 9223372036854775806i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < 10i64 {\n\
+                     acc = acc + 1i64;\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 println(f\"{acc}\");\n\
+             }\n",
+        ) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains("integer overflow"),
+                "a non-zero-init accumulator must still trap; stdout={:?}",
+                cap.stdout
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

@@ -38,6 +38,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // live-range end on both backends (design.md § Drop ordering).
         // Guarded on the program having any user Drop impl at all — the
         // common no-user-Drop program pays nothing.
+        // Bounded-accumulator overflow-check elision (B-2026-07-26-1): record
+        // this block's provably-non-trapping `acc = acc + 1` sites before
+        // lowering any statement. Accumulates across nested blocks rather than
+        // being scoped/restored, which is safe because the keys are SPANS —
+        // a site from a sibling block can never collide with one here.
+        for key in super::accum_overflow::check_free_accumulator_sites(block) {
+            self.check_free_accum_sites.insert(key);
+        }
         let user_drop_last_use = if self.user_drop_wrapper_fns.is_empty() {
             None
         } else {
@@ -5676,6 +5684,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::Assign { target, value } => {
+                // B-2026-07-26-1: arm the one-shot latch when this exact
+                // statement was proven non-trapping. Taken by the first `add`
+                // the RHS reaches — which, for the recognized
+                // `<ident> + <literal>` shape, is the only one.
+                self.elide_next_add_overflow_check = self
+                    .check_free_accum_sites
+                    .contains(&crate::resolver::SpanKey::from_span(&stmt.span));
                 // Phase-B2 link-store fast path: `<bare>.link =
                 // Some(<fresh>)` (or `= None`) on a b2 cluster target
                 // collapses to a single pointer store into the niche

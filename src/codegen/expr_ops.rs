@@ -4210,6 +4210,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // `with.overflow` intrinsics hand LLVM the same no-wrap fact on
             // the continue path that `nsw` asserted — but as a checked
             // runtime property. Panic messages match `eval_ops.rs` exactly.
+            // B-2026-07-26-1: a bounded-accumulator increment whose trap was
+            // proven dead emits a plain add, so LLVM may speculate it and
+            // if-convert the guarded `if bit { acc = acc + 1 }` into branchless
+            // arithmetic. `take` clears the latch, so exactly one add per
+            // armed statement can consume it. See `codegen::accum_overflow`
+            // for the bound proof and the pattern it admits.
+            BinOp::Add if std::mem::take(&mut self.elide_next_add_overflow_check) => {
+                self.builder.build_int_add(lv, rv, "add.bounded").unwrap()
+            }
             BinOp::Add => self.emit_checked_int_arith("add", lv, rv, is_unsigned)?,
             BinOp::Sub => self.emit_checked_int_arith("sub", lv, rv, is_unsigned)?,
             BinOp::Mul => self.emit_checked_int_arith("mul", lv, rv, is_unsigned)?,
