@@ -93,13 +93,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 177 | 0 |
-| leak | 96 | 0 |
+| leak | 97 | 1 |
 | double-free | 81 | 0 |
 | codegen-gap | 77 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
-| perf | 28 | 2 |
+| perf | 28 | 1 |
 | crash | 28 | 0 |
 | soundness | 25 | 0 |
 | diagnostics | 15 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 497 | 2 |
+| codegen | 498 | 2 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **682 surfaced · 2 open · 674 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **683 surfaced · 2 open · 675 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-25-4 | 2026-07-25 | codegen | medium | `for k in m.keys()` (and `.values()`/`.entries()`) STILL eagerly materializes an owned `Vec` per evaluation when either map half is a HEAP type (`Map[String, _]`, `Map[_, Vec[_]]`). B-2026-07-24-2's inline bucket walk and its lazy keys() routing are both gated to SCALAR halves, so the originally-reported malloc + full-set copy + free — plus a DEEP CLONE of every heap key — is unchanged for the heap case, which is if anything the more expensive one. | — |
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
+| B-2026-07-27-2 | 2026-07-27 | codegen | medium | Struct-FIELD `Map[_, Vec[String]]` leaks the inner Vec's element buffers at drop. A struct whose field is a Map with a HEAP VALUE (`Map[i64, Vec[String]]` / `Map[String, Vec[String]]`) frees the map and the value Vec headers at scope exit but never the per-element String buffers inside those Vecs. Valgrind: 'definitely lost'. A LOCAL map of the same type is CLEAN, and a struct-field map with a SCALAR value is CLEAN — the leak needs the field + heap-value combination. | — |
 
-### Fixed (674)
+### Fixed (675)
 
-<details><summary>674 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>675 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -810,6 +810,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **682 surfaced 
 | B-2026-07-24-3 | typecheck+interp | medium | `u8 as char` was rejected at typecheck with E_INT_AS_CHAR even though it is the ONE infallible integer→char cast — every byte (0..=255) is a valid Un… | 6b0c98a |
 | B-2026-07-25-1 | codegen | high | USE-AFTER-FREE under codegen: a RECURSIVE function taking an OWNED `String` parameter whose argument is an ELEMENT of a `Vec[String]` obtained from a… | — |
 | B-2026-07-25-2 | typecheck | low | Match-arm type unification does not bind an unsolved type variable inside a generic: `match m.get(k) { Some(d) => d, None => Vec.new() }` is rejected… | 9226dff |
+| B-2026-07-25-4 | codegen | medium | `for k in m.keys()` (and `.values()`/`.entries()`) STILL eagerly materializes an owned `Vec` per evaluation when either map half is a HEAP type (`Map… | 15dcfac |
 | B-2026-07-25-5 | codegen | medium | Indexed-receiver method call on a MAP element (`m[k].push(x)`) type-checks and runs correctly under the tree-walk interpreter but is REJECTED by code… | 4416d33 |
 | B-2026-07-26-1 | codegen | medium | Overflow check on a BOUNDED loop-accumulator (`cnt = cnt + 1` guarded by an if, inside a counted loop) is not elided, and because a checked add can t… | 762865a |
 | B-2026-07-27-1 | codegen | high | SEED codegen double-free: `return <struct>.<vecfield>[i];` — returning a heap (String) element of a STRUCT-FIELD Vec directly as a `return` STATEMENT… | 42d8e96 |
