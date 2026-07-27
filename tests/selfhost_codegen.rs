@@ -588,6 +588,23 @@ const CORPUS: &[&str] = &[
     // BOTH match paths. Covers String- and struct-valued ifs and matches, an
     // int-literal match yielding String, plus i64/bool/payload regressions.
     "struct P {\n    x: i64,\n    y: i64,\n}\nfn clone_p(p: ref P) -> P {\n    return P { x: p.x, y: p.y };\n}\nenum E {\n    A(P),\n    B(P),\n}\nenum T {\n    X,\n    Y,\n}\nfn pick_str(t: ref T) -> String {\n    match t {\n        X => \"ex\".to_string(),\n        Y => \"why\".to_string(),\n    }\n}\nfn pick_struct(e: ref E) -> P {\n    match e {\n        A(n) => clone_p(n),\n        B(n) => clone_p(n),\n    }\n}\nfn name_of(n: i64) -> String {\n    match n {\n        0 => \"zero\".to_string(),\n        1 => \"one\".to_string(),\n        _ => \"many\".to_string(),\n    }\n}\nfn label(c: bool) -> String {\n    if c {\n        \"yes\".to_string()\n    } else {\n        \"no\".to_string()\n    }\n}\nfn corner(c: bool) -> P {\n    if c {\n        P { x: 1, y: 2 }\n    } else {\n        P { x: 3, y: 4 }\n    }\n}\nfn tag(t: ref T) -> i64 {\n    match t {\n        X => 10,\n        Y => 20,\n    }\n}\nfn yes(t: ref T) -> bool {\n    match t {\n        X => true,\n        Y => false,\n    }\n}\nfn main() {\n    println(pick_str(T.X));\n    println(pick_str(T.Y));\n    let r = pick_struct(E.A(P { x: 7, y: 2 }));\n    println((r.x + r.y).to_string());\n    println(name_of(0));\n    println(name_of(1));\n    println(name_of(9));\n    println(label(true));\n    println(label(false));\n    let q = corner(false);\n    println((q.x + q.y).to_string());\n    println(tag(T.Y).to_string());\n    if yes(T.X) {\n        println(\"yx\");\n    } else {\n        println(\"nx\");\n    }\n}",
+    // Slice 62: DESTRUCTURING `let S { a, b } = s;` — an EMITTER slice, and a
+    // SILENT MISCOMPILE before this. The Let handler matched only a plain
+    // BindingPat, so a struct pattern fell through `_ => {}` and bound
+    // NOTHING: every later field reference hit the emitter's `0` fallback, so
+    // scalars silently read as 0 (`let S{a,b}=s; a+b` gave 0, not 12) and a
+    // String field emitted `{ ptr, i64 } 0` — invalid IR. Pervasive in the
+    // port (codegen.kara's own `let Val { op, kind, heap } = v;` idiom), and
+    // it blocked typechecker/resolver/ast_render. B-2026-07-27-10. Fix: project
+    // each named field out of the struct aggregate with `extractvalue` at its
+    // DECLARED index and bind a fresh local carrying that field's kind.
+    // Bindings are BORROWS, matching the field-READ convention — the source
+    // keeps ownership and its scope-exit drop frees heap fields exactly once,
+    // so destructuring a named local or an owned param neither double-frees
+    // nor leaks (the oracle's valgrind leg guards this). Covers scalar and
+    // String fields, destructure inside a free fn and a method, the `{ a: x }`
+    // renaming form, and a heap-field print.
+    "struct S {\n    name: String,\n    a: i64,\n    b: i64,\n}\nfn idof(name: ref String) -> i64 {\n    if name == \"x\" {\n        return 1;\n    }\n    return 0;\n}\nfn consume(s: S) -> i64 {\n    let S { name, a, b } = s;\n    return idof(name) + a * 100 + b;\n}\nstruct C {\n    tag: i64,\n}\nimpl C {\n    fn idof2(ref self, name: ref String) -> i64 {\n        if name == \"y\" {\n            return 7;\n        }\n        return 0;\n    }\n    fn check(mut ref self, s: S) -> i64 {\n        let S { name, a, b } = s;\n        let sid = self.idof2(name);\n        return sid + a + b;\n    }\n}\nfn main() {\n    let s1 = S {\n        name: \"x\".to_string(),\n        a: 3,\n        b: 4,\n    };\n    println(consume(s1).to_string());\n    let mut c = C { tag: 0 };\n    let s2 = S {\n        name: \"y\".to_string(),\n        a: 1,\n        b: 2,\n    };\n    println(c.check(s2).to_string());\n    let s3 = S {\n        name: \"hello\".to_string(),\n        a: 7,\n        b: 5,\n    };\n    let S { name, a, b } = s3;\n    println(name);\n    println((a + b).to_string());\n    let s4 = S {\n        name: \"z\".to_string(),\n        a: 2,\n        b: 9,\n    };\n    let S { name: nm, a: x, b: y } = s4;\n    println(nm);\n    println((x * 10 + y).to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

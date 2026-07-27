@@ -73,6 +73,8 @@ import ast.{
     VariantNode,
     Pattern,
     BindingPattern,
+    StructPattern,
+    StructFieldPat,
 };
 
 // An emitted VALUE: the LLVM operand text plus its type KIND — 0 = `i64`,
@@ -1312,6 +1314,116 @@ impl Emitter {
                             + ", ptr "
                             + slot
                             + ", align 8\n";
+                    }
+                    StructPat(sp) => {
+                        // DESTRUCTURING `let S { a, b } = s;` (Slice 62,
+                        // B-2026-07-27-10). Previously UNHANDLED — it fell to
+                        // the `_ => {}` below and bound NOTHING, so every field
+                        // reference afterwards hit the emitter's `0` fallback:
+                        // scalars silently read as 0 (`let S{a,b}=s; a+b` gave
+                        // 0 instead of 12 — a SILENT MISCOMPILE) and a String
+                        // field produced `{ ptr, i64 } 0`, invalid IR. The port
+                        // uses this shape pervasively — codegen.kara's own
+                        // `let Val { op, kind, heap } = v;` idiom — so it
+                        // blocked typechecker/resolver/ast_render/parser.
+                        //
+                        // Each named field is projected out of the struct
+                        // aggregate with `extractvalue` at its DECLARED index
+                        // and bound to a fresh local carrying the field's kind.
+                        // Bindings are BORROWS (heap=false), matching the
+                        // field-READ convention: the source binding keeps
+                        // ownership and its scope-exit drop frees the heap
+                        // fields exactly once, so destructuring a named local
+                        // or an owned param neither double-frees nor leaks.
+                        let StructPattern { segments, fields, has_rest, span: spsp } = sp;
+                        let sv = self.emit_value(value);
+                        let Val { op: sop, kind: skind, heap: sheap } = sv;
+                        if skind >= 10 and skind < 1000 {
+                            let ssi = skind - 10;
+                            let soff = self.st_off[ssi];
+                            let scnt = self.st_cnt[ssi];
+                            let sty2 = self.ty_text(skind);
+                            for fp in fields {
+                                let StructFieldPat { name: fpname, pattern: fppat, span: fpsp } =
+                                    fp;
+                                // `{ a }` binds `a`; `{ a: x }` binds `x`.
+                                let mut bindname = fpname.clone();
+                                match fppat {
+                                    Some(inner) => {
+                                        match inner {
+                                            BindingPat(ibp) => {
+                                                let BindingPattern { name: iname, span: isp } =
+                                                    ibp;
+                                                bindname = iname;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    None => {}
+                                }
+                                let mut fi3 = 0;
+                                let mut fidx3 = 0 - 1;
+                                let mut fkind3 = 0;
+                                while fi3 < scnt {
+                                    if self.st_field_names[soff + fi3] == fpname {
+                                        fidx3 = fi3;
+                                        fkind3 = self.st_field_kinds[soff + fi3];
+                                    }
+                                    fi3 = fi3 + 1;
+                                }
+                                if fidx3 >= 0 {
+                                    let fx = self.fresh();
+                                    self.body = self.body
+                                        + "  "
+                                        + fx.clone()
+                                        + " = extractvalue "
+                                        + sty2.clone()
+                                        + " "
+                                        + sop.clone()
+                                        + ", "
+                                        + fidx3.to_string()
+                                        + "\n";
+                                    let bidx = self.locals.len();
+                                    self.locals.push(bindname);
+                                    self.locals_kind.push(fkind3);
+                                    self.locals_heap.push(false);
+                                    let bslot = "%v" + bidx.to_string();
+                                    let bty = self.ty_text(fkind3);
+                                    let mut bzi = "zeroinitializer".to_string();
+                                    if fkind3 == 0 {
+                                        bzi = "0".to_string();
+                                    }
+                                    if fkind3 == 1 {
+                                        bzi = "false".to_string();
+                                    }
+                                    if fkind3 == 5 {
+                                        bzi = "0.0".to_string();
+                                    }
+                                    self.entry_allocas = self.entry_allocas
+                                        + "  "
+                                        + bslot.clone()
+                                        + " = alloca "
+                                        + bty.clone()
+                                        + ", align 8\n";
+                                    self.entry_allocas = self.entry_allocas
+                                        + "  store "
+                                        + bty.clone()
+                                        + " "
+                                        + bzi
+                                        + ", ptr "
+                                        + bslot.clone()
+                                        + ", align 8\n";
+                                    self.body = self.body
+                                        + "  store "
+                                        + bty
+                                        + " "
+                                        + fx
+                                        + ", ptr "
+                                        + bslot
+                                        + ", align 8\n";
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 }
