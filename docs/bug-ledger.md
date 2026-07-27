@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 177 | 0 |
 | leak | 97 | 0 |
 | double-free | 81 | 0 |
-| codegen-gap | 78 | 0 |
+| codegen-gap | 80 | 1 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 500 | 2 |
+| codegen | 502 | 3 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,18 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **685 surfaced · 2 open · 677 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **687 surfaced · 3 open · 678 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
 | B-2026-07-27-4 | 2026-07-27 | codegen+cli | medium | No working per-function / per-line PROFILING attribution for an AOT kara binary. Emitted user functions carry internal linkage and never reach the symbol table (at any `KARAC_OPT_LEVEL`), and `KARAC_DEBUG_INFO=1` produces no DWARF in either the emitted IR or the linked binary — so callgrind/perf can only report whole-program aggregates or one unnamed blob. This blocks every codegen perf investigation that needs to know WHICH construct costs. | — |
+| B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): an enum's payload layout provides only TWO aggregate slots (`en_extra`, `en_extra2`), so an enum with MORE THAN TWO distinct aggregate (struct) payload types cannot resolve fields on the surplus payload kinds — the field lookup returns its -1 'not found' sentinel and that sentinel is emitted VERBATIM as `extractvalue <ty> %t, -1`, producing invalid IR ('expected integer'). Blocks ast.kara, whose `Expr` enum has ~30 distinct payload struct types. | — |
 
-### Fixed (677)
+### Fixed (678)
 
-<details><summary>677 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>678 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -816,6 +817,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **685 surfaced 
 | B-2026-07-27-1 | codegen | high | SEED codegen double-free: `return <struct>.<vecfield>[i];` — returning a heap (String) element of a STRUCT-FIELD Vec directly as a `return` STATEMENT… | 42d8e96 |
 | B-2026-07-27-2 | codegen | medium | Struct-FIELD `Map[_, Vec[String]]` leaks the inner Vec's element buffers at drop | 44b606e |
 | B-2026-07-27-3 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a BOOL-valued `if` or `match` in VALUE position emitted INVALID IR | 6740872 |
+| B-2026-07-27-5 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): value-position `if` and `match` used a HARDCODED `alloca i64` result slot, so a STRING / struct / enu… | 999cd9c |
 
 </details>
 
