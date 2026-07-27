@@ -1911,6 +1911,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_load(ptr_ty, field_ptr, &format!("drop.field{field_idx}.handle"))
                         .unwrap()
                         .into_pointer_value();
+                    // B-2026-07-27-2: the per-VALUE drop fn for a value that
+                    // owns heap BELOW its `{ptr,len,cap}` header
+                    // (`Map[_, Vec[String]]`, `Map[_, Map[..]]`, a struct value
+                    // with heap fields). The flag free below is one-level: it
+                    // releases the value Vec's own buffer but never walks its
+                    // ELEMENTS, so every String inside every value Vec leaked
+                    // (scales with entry count — an adjacency map leaks
+                    // proportionally). The LOCAL-binding path never had this
+                    // bug because it routes through `emit_free_one_map_handle`,
+                    // which prefers `karac_map_free_with_val_drop_fn`; this arm
+                    // hand-rolled the flag call and skipped that branch. Set
+                    // below, inside the `current_fn`-swap block, because the
+                    // synthesizer may emit sibling drop fns.
+                    let mut field_val_drop_fn: Option<FunctionValue<'ctx>> = None;
                     if let Some(field_te) = self
                         .struct_field_type_exprs
                         .get(struct_name)
@@ -1936,6 +1950,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&k_te) {
                                 self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
                             }
+                            // B-2026-07-27-2. Disjoint from the shared walk just
+                            // above by construction: the helper returns `None`
+                            // for a shared value (the rc_dec walk owns that
+                            // side) and for an exact one-level overlay
+                            // (`String`, `Vec` with a heapless element), so it
+                            // only fires where the flag free was INCOMPLETE —
+                            // it can add a leak fix but never a double free.
+                            field_val_drop_fn = self.map_val_drop_fn_for_type_expr(&v_te);
                         } else if let Some(elem_te) = super::helpers::set_inner_type_expr(&field_te)
                         {
                             // `Set[T]` lowers to `Map[T, ()]`; the
@@ -1960,17 +1982,38 @@ impl<'ctx> super::Codegen<'ctx> {
                         .and_then(|v| v.get(field_idx))
                         .map(|fte| self.map_drop_flags(fte))
                         .unwrap_or((0, 0));
-                    self.builder
-                        .build_call(
-                            self.karac_map_free_with_drop_vec_fn,
-                            &[
-                                handle.into(),
-                                i32_t.const_int(dk, false).into(),
-                                i32_t.const_int(dv, false).into(),
-                            ],
-                            "",
-                        )
-                        .unwrap();
+                    if let Some(val_fn) = field_val_drop_fn {
+                        // B-2026-07-27-2: the value side is released by its own
+                        // recursive drop fn (which walks a value Vec's elements,
+                        // an inner map's entries, a struct value's heap fields);
+                        // the KEY side stays on the flag contract. Same call the
+                        // local-binding path makes via `emit_free_one_map_handle`
+                        // — this arm just reaches it directly, since it already
+                        // has the handle and the key flag in hand.
+                        self.builder
+                            .build_call(
+                                self.karac_map_free_with_val_drop_fn_fn,
+                                &[
+                                    handle.into(),
+                                    i32_t.const_int(dk, false).into(),
+                                    val_fn.as_global_value().as_pointer_value().into(),
+                                ],
+                                "",
+                            )
+                            .unwrap();
+                    } else {
+                        self.builder
+                            .build_call(
+                                self.karac_map_free_with_drop_vec_fn,
+                                &[
+                                    handle.into(),
+                                    i32_t.const_int(dk, false).into(),
+                                    i32_t.const_int(dv, false).into(),
+                                ],
+                                "",
+                            )
+                            .unwrap();
+                    }
                 }
                 FieldDrop::HttpHandleFree(extern_name) => {
                     // Phase-8 line 39 follow-up — load the i64 side-table

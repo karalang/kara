@@ -32865,6 +32865,127 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_field_map_heap_value_drop_no_leak() {
+        // B-2026-07-27-2: a struct FIELD `Map[_, Vec[String]]` freed the map and
+        // each value Vec's `{ptr,len,cap}` buffer but never walked that Vec's
+        // ELEMENTS, so every String inside every value leaked — scaling with
+        // entry count, so a real adjacency map / multimap index leaks
+        // proportionally. The LOCAL-binding path was always clean: it routes
+        // through `emit_free_one_map_handle`, which prefers
+        // `karac_map_free_with_val_drop_fn` when the value owns heap below its
+        // header. The struct-drop `MapOrSet` arm hand-rolled the flag call and
+        // skipped that branch; it now takes the same per-value drop fn.
+        //
+        // The regression risk runs BOTH ways, so this covers both: a missing
+        // walk leaks, and a walk that double-counts against the flag free would
+        // double-free. Shapes: heap value under a scalar key and under a heap
+        // key (the leaking pair); a nested `Map` value; `Map[String, String]`
+        // and `Set[String]` (exact one-level overlays that must stay on the
+        // flag path); and `Map[_, Vec[i64]]` / `Map[i64, i64]` (Copy values that
+        // must not be walked at all). Looped so a leak clears LSan's floor.
+        let label = "struct_field_map_heap_value_drop";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+struct A { m: Map[i64, Vec[String]] }
+struct B { m: Map[String, Vec[String]] }
+struct C { m: Map[String, String] }
+struct D { m: Map[i64, Map[i64, String]] }
+struct E { s: Set[String] }
+struct F { m: Map[i64, Vec[i64]] }
+struct G { m: Map[i64, i64] }
+
+fn main() {
+    let mut a = A { m: Map.new() };
+    let mut i = 0i64;
+    while i < 40i64 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"x{i}");
+        v.push(f"yy{i}");
+        a.m.insert(i, v);
+        i = i + 1i64;
+    }
+    println(f"a={a.m.len()}");
+
+    let mut b = B { m: Map.new() };
+    let mut j = 0i64;
+    while j < 40i64 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"p{j}");
+        b.m.insert(f"k{j}", v);
+        j = j + 1i64;
+    }
+    println(f"b={b.m.len()}");
+
+    let mut c = C { m: Map.new() };
+    let mut k = 0i64;
+    while k < 20i64 {
+        c.m.insert(f"ck{k}", f"cv{k}");
+        k = k + 1i64;
+    }
+    println(f"c={c.m.len()}");
+
+    let mut d = D { m: Map.new() };
+    let mut n = 0i64;
+    while n < 10i64 {
+        let mut inner: Map[i64, String] = Map.new();
+        inner.insert(n, f"z{n}");
+        d.m.insert(n, inner);
+        n = n + 1i64;
+    }
+    println(f"d={d.m.len()}");
+
+    let mut e = E { s: Set.new() };
+    let mut q = 0i64;
+    while q < 20i64 {
+        e.s.insert(f"s{q}");
+        q = q + 1i64;
+    }
+    println(f"e={e.s.len()}");
+
+    let mut f = F { m: Map.new() };
+    let mut r = 0i64;
+    while r < 20i64 {
+        let mut vi: Vec[i64] = Vec.new();
+        vi.push(r);
+        f.m.insert(r, vi);
+        r = r + 1i64;
+    }
+    println(f"f={f.m.len()}");
+
+    let mut g = G { m: Map.new() };
+    let mut t = 0i64;
+    while t < 20i64 {
+        g.m.insert(t, t * 2i64);
+        t = t + 1i64;
+    }
+    println(f"g={g.m.len()}");
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN/LSAN reported a memory error (exit code {:?}) — the \
+             struct-drop Map arm routes a heap value through its own drop fn, so \
+             look for a leak of the value Vecs' element buffers (walk missing) or \
+             a double-free of those elements (walked AND flag-freed)",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["a=40", "b=40", "c=20", "d=10", "e=20", "f=20", "g=20"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
+    #[test]
     fn asan_return_struct_field_vec_element_no_double_free() {
         // B-2026-07-27-1: `return <struct>.<vecfield>[i];` — a field-rooted heap
         // element read as the WHOLE expression of an explicit `return` STATEMENT
