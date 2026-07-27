@@ -104,33 +104,34 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 25 | 0 |
 | diagnostics | 15 | 0 |
 | use-after-free | 7 | 0 |
-| other | 3 | 0 |
+| other | 4 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 499 | 1 |
+| codegen | 500 | 2 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
 | other | 18 | 0 |
 | autopar | 18 | 0 |
 | runtime | 15 | 1 |
-| cli | 12 | 0 |
+| cli | 13 | 1 |
 | resolver | 11 | 0 |
 | parser | 6 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **684 surfaced · 1 open · 677 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **685 surfaced · 2 open · 677 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
+| B-2026-07-27-4 | 2026-07-27 | codegen+cli | medium | No working per-function / per-line PROFILING attribution for an AOT kara binary. Emitted user functions carry internal linkage and never reach the symbol table (at any `KARAC_OPT_LEVEL`), and `KARAC_DEBUG_INFO=1` produces no DWARF in either the emitted IR or the linked binary — so callgrind/perf can only report whole-program aggregates or one unnamed blob. This blocks every codegen perf investigation that needs to know WHICH construct costs. | — |
 
 ### Fixed (677)
 
