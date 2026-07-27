@@ -4288,6 +4288,23 @@ impl Emitter {
         if self.en_extra2[ei] == aggkind {
             return 4;
         }
+        // B-2026-07-27-6: an enum payload layout carries only TWO aggregate
+        // slots (`en_extra` = slot 3, `en_extra2` = slot 4). A THIRD distinct
+        // aggregate payload type has nowhere to live, and both callers
+        // interpolate this result straight into an `extractvalue`/`insertvalue`
+        // index — so returning the old -1 sentinel emitted literal
+        // `extractvalue <ty> %x, -1`, which LLVM rejects with a bare "expected
+        // integer" that names neither the enum nor the payload. REFUSE loudly
+        // instead: the -1 path could never produce runnable IR, so failing here
+        // cannot regress a working program, and the message names exactly what
+        // is unsupported. Lifting this needs a union-style payload area (one
+        // max-size aggregate region + per-variant offsets) to replace the
+        // fixed two slots — see the ledger entry.
+        // NOTE: the seed's `panic` only propagates a STRING-LITERAL message (a
+        // computed one degrades to "explicit panic"), so the text is a literal.
+        panic(
+            "codegen.kara: this enum needs a THIRD distinct aggregate payload slot, but the enum layout provides only two (en_extra/en_extra2). Unsupported — see bug B-2026-07-27-6.",
+        );
         0 - 1
     }
 
