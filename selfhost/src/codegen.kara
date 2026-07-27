@@ -3116,6 +3116,9 @@ impl Emitter {
             self.nlbl = self.nlbl + 1;
             let lend = "endmatch" + mid.to_string();
             let mut rslot = "".to_string();
+            // B-2026-07-27-3: set when any arm body yields a BOOL (i1) — the
+            // i64 result lane is narrowed back to i1 at the join.
+            let mut rbool = false;
             if want_value {
                 rslot = self.fresh();
                 self.body = self.body + "  " + rslot.clone() + " = alloca i64, align 8\n";
@@ -3186,7 +3189,15 @@ impl Emitter {
                     }
                     if want_value {
                         let bv = self.emit_value(body);
-                        let Val { op: bop, kind: bk, heap: bh } = bv;
+                        let Val { op: bop0, kind: bk, heap: bh } = bv;
+                        // B-2026-07-27-3: a BOOL-valued match arm yields i1;
+                        // the result slot is an i64 lane, so widen on store and
+                        // remember to narrow at the join (same convention as the
+                        // value-if and Vec[bool] paths).
+                        if bk == 1 {
+                            rbool = true;
+                        }
+                        let bop = self.to_i64_lane(bop0, bk);
                         self.body = self.body
                             + "  store i64 "
                             + bop
@@ -3238,7 +3249,12 @@ impl Emitter {
                         }
                         if want_value {
                             let bv = self.emit_value(body);
-                            let Val { op: bop, kind: bk, heap: bh } = bv;
+                            let Val { op: bop0, kind: bk, heap: bh } = bv;
+                            // B-2026-07-27-3: bool arm -> widen to the i64 lane.
+                            if bk == 1 {
+                                rbool = true;
+                            }
+                            let bop = self.to_i64_lane(bop0, bk);
                             self.body = self.body
                                 + "  store i64 "
                                 + bop
@@ -3260,6 +3276,12 @@ impl Emitter {
                 let r = self.fresh();
                 self.body =
                     self.body + "  " + r.clone() + " = load i64, ptr " + rslot + ", align 8\n";
+                if rbool {
+                    let rb = self.fresh();
+                    self.body =
+                        self.body + "  " + rb.clone() + " = trunc i64 " + r + " to i1\n";
+                    return Val { op: rb, kind: 1, heap: false };
+                }
                 return Val { op: r, kind: 0, heap: false };
             }
             return Val { op: "0".to_string(), kind: 0, heap: false };
@@ -3279,6 +3301,8 @@ impl Emitter {
             + sop.clone()
             + ", 0\n";
         let mut rslot = "".to_string();
+        // B-2026-07-27-3: set when any arm yields a BOOL (i1).
+        let mut rbool = false;
         if want_value {
             rslot = self.fresh();
             self.body = self.body + "  " + rslot.clone() + " = alloca i64, align 8\n";
@@ -3609,7 +3633,12 @@ impl Emitter {
                 }
                 if want_value {
                     let bv = self.emit_value(body);
-                    let Val { op: bop, kind: bk, heap: bh } = bv;
+                    let Val { op: bop0, kind: bk, heap: bh } = bv;
+                    // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
+                    if bk == 1 {
+                        rbool = true;
+                    }
+                    let bop = self.to_i64_lane(bop0, bk);
                     self.body = self.body
                         + "  store i64 "
                         + bop
@@ -3665,7 +3694,12 @@ impl Emitter {
                 }
                 if want_value {
                     let bv = self.emit_value(body);
-                    let Val { op: bop, kind: bk, heap: bh } = bv;
+                    let Val { op: bop0, kind: bk, heap: bh } = bv;
+                    // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
+                    if bk == 1 {
+                        rbool = true;
+                    }
+                    let bop = self.to_i64_lane(bop0, bk);
                     self.body = self.body
                         + "  store i64 "
                         + bop
@@ -3690,6 +3724,11 @@ impl Emitter {
                 + " = load i64, ptr "
                 + rslot
                 + ", align 8\n";
+            if rbool {
+                let rb = self.fresh();
+                self.body = self.body + "  " + rb.clone() + " = trunc i64 " + r + " to i1\n";
+                return Val { op: rb, kind: 1, heap: false };
+            }
             return Val { op: r, kind: 0, heap: false };
         }
         Val { op: "0".to_string(), kind: 0, heap: false }
@@ -5809,7 +5848,16 @@ impl Emitter {
                     + "\n";
                 self.body = self.body + lthen + ":\n";
                 let tv = self.emit_block_value(then_block);
-                let Val { op: top, kind: tk, heap: th } = tv;
+                let Val { op: top0, kind: tk, heap: th } = tv;
+                // B-2026-07-27-3: a BOOL-valued if (`fn f() -> bool { if c {
+                // false } else { true } }`) yields i1 branch values, but the
+                // result slot is an i64 lane — WITHOUT the widen this emitted
+                // `store i64 false` (an i1 constant into an i64 store) and the
+                // module failed verification. Reuse the Vec[bool] lane
+                // convention (B-2026-07-23-24): zext i1 -> i64 on store, trunc
+                // back to i1 at the join so the value re-enters bool contexts
+                // (`if`/`and`/`not`/a `-> bool` return) correctly.
+                let top = self.to_i64_lane(top0, tk);
                 self.body =
                     self.body + "  store i64 " + top + ", ptr " + slot.clone() + ", align 8\n";
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
@@ -5817,7 +5865,8 @@ impl Emitter {
                 match else_branch {
                     Some(eb) => {
                         let ev = self.emit_value(eb);
-                        let Val { op: eop, kind: ek, heap: eh } = ev;
+                        let Val { op: eop0, kind: ek, heap: eh } = ev;
+                        let eop = self.to_i64_lane(eop0, ek);
                         self.body = self.body
                             + "  store i64 "
                             + eop
@@ -5835,6 +5884,15 @@ impl Emitter {
                 let r = self.fresh();
                 self.body =
                     self.body + "  " + r.clone() + " = load i64, ptr " + slot + ", align 8\n";
+                // Both branches of a well-typed value-if share a type, so the
+                // THEN branch's kind decides the result: a bool if narrows the
+                // i64 lane back to i1 (kind 1); anything else stays i64.
+                if tk == 1 {
+                    let rb = self.fresh();
+                    self.body =
+                        self.body + "  " + rb.clone() + " = trunc i64 " + r + " to i1\n";
+                    return Val { op: rb, kind: 1, heap: false };
+                }
                 Val { op: r, kind: 0, heap: false }
             }
             Match(mn) => self.emit_match(mn, true),

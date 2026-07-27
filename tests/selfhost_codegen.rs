@@ -556,6 +556,22 @@ const CORPUS: &[&str] = &[
     // field and a Vec[i64] field build+drop+sum, all through `mut ref self`
     // methods, plus a plain-local push/pop regression.
     "struct E {\n    stk: Vec[String],\n    nums: Vec[i64],\n}\nimpl E {\n    fn enter(mut ref self, l: String) {\n        self.stk.push(l);\n    }\n    fn leave(mut ref self) {\n        self.stk.pop();\n    }\n    fn add(mut ref self, x: i64) {\n        self.nums.push(x);\n    }\n    fn drop_num(mut ref self) {\n        self.nums.pop();\n    }\n    fn report(ref self) {\n        println(self.stk.len().to_string());\n        let mut i = 0;\n        while i < self.stk.len() as i64 {\n            println(self.stk[i]);\n            i += 1;\n        }\n        let mut s = 0;\n        let mut j = 0;\n        while j < self.nums.len() as i64 {\n            s = s + self.nums[j];\n            j += 1;\n        }\n        println(s.to_string());\n    }\n}\nfn main() {\n    let mut e = E {\n        stk: Vec.new(),\n        nums: Vec.new(),\n    };\n    e.enter(\"a\".to_string());\n    e.enter(\"b\".to_string());\n    e.leave();\n    e.enter(\"c\".to_string());\n    e.add(10);\n    e.add(20);\n    e.add(30);\n    e.drop_num();\n    e.report();\n    let mut v: Vec[i64] = Vec.new();\n    v.push(7);\n    v.push(8);\n    v.pop();\n    println(v.len().to_string());\n    println(v[0].to_string());\n}",
+    // Slice 60: BOOL-valued `if` and `match` in VALUE position — an EMITTER
+    // slice. Both route branch/arm tails through an i64 result slot, but a
+    // bool-valued branch yields an i1, so the emitter produced
+    // `store i64 false` (an i1 constant into an i64 store) and the module
+    // FAILED LLVM verification — 8 such sites in the real lexer.kara alone
+    // (`fn match_char(...) -> bool { if c { false } else { ... true } }`).
+    // B-2026-07-27-3. Fix: reuse the Vec[bool] i64-lane convention
+    // (B-2026-07-23-24) — `to_i64_lane` zext's an i1 arm/branch value on
+    // store, and the join truncs the lane back to i1 (returning kind 1) when
+    // any arm/branch was bool, so the result re-enters bool contexts (`if` /
+    // `and` / `not` / a `-> bool` return) correctly. Applied to the value-if
+    // path and BOTH match paths (enum-variant and int-literal). Covers a
+    // bool value-if, the real `match_char` guard-chain shape, bool-if feeding
+    // `and` / `not` / a let-binding, a bool-valued enum match, an int-literal
+    // match, and an i64 value-if regression.
+    "enum T {\n    A,\n    B,\n    C,\n}\nfn pick(t: ref T) -> bool {\n    match t {\n        A => true,\n        B => false,\n        C => true,\n    }\n}\nfn small(n: i64) -> bool {\n    match n {\n        0 => false,\n        1 => true,\n        _ => false,\n    }\n}\nfn flip(c: bool) -> bool {\n    if c {\n        false\n    } else {\n        true\n    }\n}\nfn advance(cur: i64, n: i64, e: i64) -> bool {\n    if cur >= n {\n        false\n    } else if e != 7 {\n        false\n    } else {\n        true\n    }\n}\nfn maxi(a: i64, b: i64) -> i64 {\n    if a > b {\n        a\n    } else {\n        b\n    }\n}\nfn main() {\n    if pick(T.A) {\n        println(\"a-t\");\n    } else {\n        println(\"a-f\");\n    }\n    if pick(T.B) {\n        println(\"b-t\");\n    } else {\n        println(\"b-f\");\n    }\n    if small(1) {\n        println(\"one\");\n    } else {\n        println(\"not-one\");\n    }\n    if flip(true) {\n        println(\"ft\");\n    } else {\n        println(\"ff\");\n    }\n    if flip(true) and flip(false) {\n        println(\"both\");\n    } else {\n        println(\"nope\");\n    }\n    if not flip(true) {\n        println(\"neg\");\n    } else {\n        println(\"plain\");\n    }\n    let b = flip(false);\n    if b {\n        println(\"bound-t\");\n    } else {\n        println(\"bound-f\");\n    }\n    if advance(0, 3, 7) {\n        println(\"adv\");\n    } else {\n        println(\"stay\");\n    }\n    if advance(5, 3, 7) {\n        println(\"adv2\");\n    } else {\n        println(\"stay2\");\n    }\n    println(maxi(3, 9).to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
