@@ -1885,11 +1885,8 @@ fn eval_lazy_agg(
 fn lazy_expr_cols(ir: &crate::interpreter::value::LazyExprIR, out: &mut Vec<String>) {
     use crate::interpreter::value::LazyExprIR;
     match ir {
-        LazyExprIR::Col(n) => {
-            if !out.contains(n) {
-                out.push(n.clone());
-            }
-        }
+        LazyExprIR::Col(n) if !out.contains(n) => out.push(n.clone()),
+        LazyExprIR::Col(_) => {}
         LazyExprIR::Cmp { lhs, rhs, .. } | LazyExprIR::Arith { lhs, rhs, .. } => {
             lazy_expr_cols(lhs, out);
             lazy_expr_cols(rhs, out);

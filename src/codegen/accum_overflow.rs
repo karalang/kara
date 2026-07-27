@@ -247,11 +247,10 @@ fn literal_init_before(block: &Block, before: usize, name: &str) -> Option<i64> 
     let mut init = None;
     for stmt in block.stmts.iter().take(before) {
         match &stmt.kind {
-            StmtKind::Let { pattern, value, .. } => {
-                if binds_identifier(pattern) == Some(name) {
-                    init = integer_literal(value);
-                }
+            StmtKind::Let { pattern, value, .. } if binds_identifier(pattern) == Some(name) => {
+                init = integer_literal(value);
             }
+            StmtKind::Let { .. } => {}
             // A write between the declaration and the loop invalidates the
             // literal we recorded — fail closed rather than tracking it.
             StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {

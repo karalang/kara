@@ -780,11 +780,8 @@ fn fold_expr(e: &Arc<ExprNode>) -> Arc<ExprNode> {
 
 fn expr_cols(e: &ExprNode, out: &mut Vec<String>) {
     match e {
-        ExprNode::Col(n) => {
-            if !out.contains(n) {
-                out.push(n.clone());
-            }
-        }
+        ExprNode::Col(n) if !out.contains(n) => out.push(n.clone()),
+        ExprNode::Col(_) => {}
         ExprNode::Cmp { lhs, rhs, .. } | ExprNode::Arith { lhs, rhs, .. } => {
             expr_cols(lhs, out);
             expr_cols(rhs, out);

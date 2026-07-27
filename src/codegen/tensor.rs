@@ -3932,11 +3932,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the loop-invariant scalar captures the vectorizer splats per lane.
     fn collect_map_captures(body: &Expr, params: &[String], out: &mut Vec<String>) {
         match &body.kind {
-            ExprKind::Identifier(n) => {
-                if !params.contains(n) && !out.contains(n) {
-                    out.push(n.clone());
-                }
+            ExprKind::Identifier(n) if !params.contains(n) && !out.contains(n) => {
+                out.push(n.clone())
             }
+            ExprKind::Identifier(_) => {}
             ExprKind::Unary { operand, .. } => Self::collect_map_captures(operand, params, out),
             ExprKind::Binary { left, right, .. } => {
                 Self::collect_map_captures(left, params, out);

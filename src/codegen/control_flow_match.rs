@@ -1192,11 +1192,8 @@ impl<'ctx> super::Codegen<'ctx> {
         out: &mut Vec<String>,
     ) {
         match &pattern.kind {
-            PatternKind::Binding(n) => {
-                if in_payload {
-                    out.push(n.clone());
-                }
-            }
+            PatternKind::Binding(n) if in_payload => out.push(n.clone()),
+            PatternKind::Binding(_) => {}
             PatternKind::AtBinding { name, pattern, .. } => {
                 if in_payload {
                     out.push(name.clone());
