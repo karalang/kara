@@ -1789,22 +1789,87 @@ impl Emitter {
                 // evaluated for effect and a heap temp result freed.
                 let MethodCallExpr { object, method, args: margs, span: msp } = mcs;
                 if method == "push" {
-                    let mut slot = 0 - 1;
+                    // Receiver resolution (Slice 59): a Vec target is either a
+                    // LOCAL (`v.push(x)` → its `%vN` slot) or a STRUCT FIELD
+                    // (`self.en_names.push(x)` / `s.items.push(x)` → GEP the
+                    // field's {ptr,len,cap}). The port builds EVERY table via
+                    // `self.<vec>.push` (152 sites: locals / en_names / … ) and
+                    // manages its loop stacks via `self.loop_cont.push`, so the
+                    // field receiver is essential. `sp` = storage pointer, `vk` =
+                    // vec kind, `vok` = resolved. The field-address GEP reuses
+                    // the Slice-27 (`self.x = v`) pattern. B-2026-07-23-29.
+                    let mut sp = "".to_string();
+                    let mut vk = 0 - 1;
+                    let mut vok = false;
                     match object {
                         Ident(ie3) => {
                             let IdentExpr { name: on, span: osp } = ie3;
-                            slot = self.local_slot(on);
+                            let slot = self.local_slot(on);
+                            if slot >= 0 {
+                                sp = "%v" + slot.to_string();
+                                vk = self.locals_kind[slot];
+                                vok = true;
+                            }
+                        }
+                        Field(fpa) => {
+                            let FieldAccessExpr { object: fpo, field: fpn, span: fps } = fpa;
+                            let mut fsi = 0 - 1;
+                            match fpo {
+                                Ident(fpe) => {
+                                    let IdentExpr { name: fpon, span: fpsp } = fpe;
+                                    fsi = self.local_slot(fpon);
+                                }
+                                SelfVal(fpsv) => {
+                                    fsi = self.local_slot("self".to_string());
+                                }
+                                _ => {}
+                            }
+                            if fsi >= 0 {
+                                let fsk = self.locals_kind[fsi];
+                                if fsk >= 10 and fsk < 1000 {
+                                    let fesi = fsk - 10;
+                                    let foff = self.st_off[fesi];
+                                    let fcnt = self.st_cnt[fesi];
+                                    let mut ffi = 0;
+                                    let mut ffidx = 0 - 1;
+                                    let mut ffkind = 0;
+                                    while ffi < fcnt {
+                                        if self.st_field_names[foff + ffi] == fpn {
+                                            ffidx = ffi;
+                                            ffkind = self.st_field_kinds[foff + ffi];
+                                        }
+                                        ffi = ffi + 1;
+                                    }
+                                    if ffidx >= 0 {
+                                        let fsty = self.ty_text(fsk);
+                                        let ffp = self.fresh();
+                                        self.body = self.body
+                                            + "  "
+                                            + ffp.clone()
+                                            + " = getelementptr "
+                                            + fsty
+                                            + ", ptr %v"
+                                            + fsi.to_string()
+                                            + ", i32 0, i32 "
+                                            + ffidx.to_string()
+                                            + "\n";
+                                        sp = ffp;
+                                        vk = ffkind;
+                                        vok = true;
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
-                    if slot >= 0 and self.locals_kind[slot] >= 2000 {
+                    if vok and vk >= 2000 {
                         // `v.push(<elem>)` on a Vec[<struct>] (Slice 18) or
                         // Vec[<enum>] (Slice 32): the vec owns the element —
                         // a fresh value transfers, a borrow materializes its
                         // heap in (tag-conditionally for enums). A
                         // sentinel-kinded Some/Ok/Err arg stores as-is: its
                         // widened layout matches the element type by design.
-                        let vk4 = self.locals_kind[slot];
+                        let vk4 = vk;
                         let mut sty = "".to_string();
                         let mut stride = 8;
                         let mut eei = 0 - 1;
@@ -1848,7 +1913,6 @@ impl Emitter {
                                 ev = aop;
                             }
                         }
-                        let sp = "%v" + slot.to_string();
                         let ag = self.fresh();
                         self.body = self.body
                             + "  "
@@ -1941,7 +2005,7 @@ impl Emitter {
                             + ", ptr "
                             + sp
                             + ", align 8\n";
-                    } else if slot >= 0 and self.locals_kind[slot] == 4 {
+                    } else if vok and vk == 4 {
                         // `v.push(s)` on a Vec[String] (Slice 16): the vec OWNS
                         // its elements — a borrowed arg materializes in, a heap
                         // temp transfers. 16-byte {ptr,i64} elements.
@@ -1958,7 +2022,6 @@ impl Emitter {
                                 ev = aop;
                             }
                         }
-                        let sp = "%v" + slot.to_string();
                         let ag = self.fresh();
                         self.body = self.body
                             + "  "
@@ -2041,7 +2104,7 @@ impl Emitter {
                             + ", ptr "
                             + sp
                             + ", align 8\n";
-                    } else if slot >= 0 and self.locals_kind[slot] == 3 {
+                    } else if vok and vk == 3 {
                         let mut ev = "0".to_string();
                         for ma in margs {
                             let CallArg { label, mut_marker, value, span: asp } = ma;
@@ -2051,7 +2114,6 @@ impl Emitter {
                             // path; a bool arg (kind 1) zext's to the i64 lane.
                             ev = self.to_i64_lane(aop, ak);
                         }
-                        let sp = "%v" + slot.to_string();
                         let ag = self.fresh();
                         self.body = self.body
                             + "  "
@@ -2145,23 +2207,76 @@ impl Emitter {
                     // Vec[i64] (kind 3) and Vec[String] (kind 4) are surfaced;
                     // Vec-of-struct/enum pop has no port site. Value-position
                     // pop (using the returned Option) stays out of surface.
-                    let mut pslot = 0 - 1;
+                    // Receiver resolution (Slice 59): the port's real pop shape
+                    // is `self.loop_cont.pop()` / `self.loop_break.pop()` — a
+                    // FIELD receiver (13 sites), not a bare local. Same
+                    // Ident-or-Field GEP resolution as push. `psp` = storage
+                    // pointer, `pk` = vec kind, `pok` = resolved.
+                    let mut psp = "".to_string();
+                    let mut pk = 0 - 1;
+                    let mut pok = false;
                     match object {
                         Ident(pie) => {
                             let IdentExpr { name: pon, span: posp } = pie;
-                            pslot = self.local_slot(pon);
+                            let pslot = self.local_slot(pon);
+                            if pslot >= 0 {
+                                psp = "%v" + pslot.to_string();
+                                pk = self.locals_kind[pslot];
+                                pok = true;
+                            }
                         }
-                        SelfVal(psv) => {
-                            pslot = self.local_slot("self".to_string());
+                        Field(pfa) => {
+                            let FieldAccessExpr { object: pfo, field: pfn, span: pfs } = pfa;
+                            let mut pfsi = 0 - 1;
+                            match pfo {
+                                Ident(pfe) => {
+                                    let IdentExpr { name: pfon, span: pfsp } = pfe;
+                                    pfsi = self.local_slot(pfon);
+                                }
+                                SelfVal(pfsv) => {
+                                    pfsi = self.local_slot("self".to_string());
+                                }
+                                _ => {}
+                            }
+                            if pfsi >= 0 {
+                                let pfsk = self.locals_kind[pfsi];
+                                if pfsk >= 10 and pfsk < 1000 {
+                                    let pfesi = pfsk - 10;
+                                    let pfoff = self.st_off[pfesi];
+                                    let pfcnt = self.st_cnt[pfesi];
+                                    let mut pffi = 0;
+                                    let mut pffidx = 0 - 1;
+                                    let mut pffkind = 0;
+                                    while pffi < pfcnt {
+                                        if self.st_field_names[pfoff + pffi] == pfn {
+                                            pffidx = pffi;
+                                            pffkind = self.st_field_kinds[pfoff + pffi];
+                                        }
+                                        pffi = pffi + 1;
+                                    }
+                                    if pffidx >= 0 {
+                                        let pfsty = self.ty_text(pfsk);
+                                        let pffp = self.fresh();
+                                        self.body = self.body
+                                            + "  "
+                                            + pffp.clone()
+                                            + " = getelementptr "
+                                            + pfsty
+                                            + ", ptr %v"
+                                            + pfsi.to_string()
+                                            + ", i32 0, i32 "
+                                            + pffidx.to_string()
+                                            + "\n";
+                                        psp = pffp;
+                                        pk = pffkind;
+                                        pok = true;
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
-                    let mut pk = 0 - 1;
-                    if pslot >= 0 {
-                        pk = self.locals_kind[pslot];
-                    }
-                    if pk == 3 or pk == 4 {
-                        let psp = "%v" + pslot.to_string();
+                    if pok and (pk == 3 or pk == 4) {
                         let pag = self.fresh();
                         self.body = self.body
                             + "  "

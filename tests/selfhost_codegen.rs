@@ -542,6 +542,20 @@ const CORPUS: &[&str] = &[
     // an interleaved sequence, and a loop-accumulated build (the `out.push_str`
     // idiom the port lives on).
     "fn main() {\n    let mut out = \"\".to_string();\n    out.push_str(\"ab\");\n    out.push_str(\"c\");\n    println(out);\n    let mut line = \"start\".to_string();\n    let mid = \"-mid-\".to_string();\n    line.push_str(mid);\n    line.push_str(\"end\");\n    println(line);\n    let mut cat = \"\".to_string();\n    let p = \"x\".to_string();\n    cat.push_str(p + \"y\");\n    println(cat);\n    let mut acc = \"\".to_string();\n    let mut i = 0;\n    while i < 4 {\n        acc.push_str(\"ab\");\n        i += 1;\n    }\n    println(acc);\n    println(acc.len().to_string());\n}",
+    // Slice 59: FIELD-receiver `self.<vec>.push(x)` / `self.<vec>.pop()` — an
+    // EMITTER slice. push/pop resolved only an `Ident` receiver, so a STRUCT
+    // FIELD receiver fell through to a no-op. This is a hard self-hosting
+    // blocker: the port builds EVERY table via `self.<field>.push` (152 sites:
+    // `self.locals.push`, `self.en_names.push`, …) and manages its loop-label
+    // stacks via `self.loop_cont.push` / `self.loop_break.pop` (13 pop sites).
+    // B-2026-07-23-29. Fix: receiver resolution now computes a storage pointer
+    // for both an Ident local (`%vN`) and a struct field (GEP the field's
+    // {ptr,len,cap}, reusing the Slice-27 field-address pattern), then the
+    // existing kind-3/4/struct push and kind-3/4 pop logic runs on that
+    // pointer. Covers the loop-stack push/pop/read idiom on a Vec[String]
+    // field and a Vec[i64] field build+drop+sum, all through `mut ref self`
+    // methods, plus a plain-local push/pop regression.
+    "struct E {\n    stk: Vec[String],\n    nums: Vec[i64],\n}\nimpl E {\n    fn enter(mut ref self, l: String) {\n        self.stk.push(l);\n    }\n    fn leave(mut ref self) {\n        self.stk.pop();\n    }\n    fn add(mut ref self, x: i64) {\n        self.nums.push(x);\n    }\n    fn drop_num(mut ref self) {\n        self.nums.pop();\n    }\n    fn report(ref self) {\n        println(self.stk.len().to_string());\n        let mut i = 0;\n        while i < self.stk.len() as i64 {\n            println(self.stk[i]);\n            i += 1;\n        }\n        let mut s = 0;\n        let mut j = 0;\n        while j < self.nums.len() as i64 {\n            s = s + self.nums[j];\n            j += 1;\n        }\n        println(s.to_string());\n    }\n}\nfn main() {\n    let mut e = E {\n        stk: Vec.new(),\n        nums: Vec.new(),\n    };\n    e.enter(\"a\".to_string());\n    e.enter(\"b\".to_string());\n    e.leave();\n    e.enter(\"c\".to_string());\n    e.add(10);\n    e.add(20);\n    e.add(30);\n    e.drop_num();\n    e.report();\n    let mut v: Vec[i64] = Vec.new();\n    v.push(7);\n    v.push(8);\n    v.pop();\n    println(v.len().to_string());\n    println(v[0].to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
