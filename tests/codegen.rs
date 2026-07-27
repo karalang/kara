@@ -7238,6 +7238,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_continue_in_chars_loop_advances_the_byte_offset() {
+        // B-2026-07-27-8: `continue` inside the general `for ch in s.chars()`
+        // loop was an INFINITE LOOP in compiled code on every backend and both
+        // opt levels, while the interpreter ran correctly. The decoded offset
+        // was stored at the BODY TAIL, and `continue` branches straight to the
+        // incr block — skipping the store, so the offset never advanced and the
+        // loop re-read the same character forever. With a `break` also present
+        // the program terminated but returned a silently WRONG answer.
+        //
+        // Every shape here must take the GENERAL decode loop (multibyte, or a
+        // binding mutated after its `let`, or a String parameter) — the
+        // branch-free ASCII loop from B-2026-07-27-7 advances in its incr block
+        // and was never affected, so testing only ASCII constants would miss
+        // the regression entirely.
+        if let Some(out) = run_program(
+            "fn count_non_x(s: String) -> i64 {\n\
+             \x20   let mut n = 0i64;\n\
+             \x20   for c in s.chars() { if c == 'x' { continue; } n = n + 1i64; }\n\
+             \x20   return n;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let s: String = \"a\u{e9}c\";\n\
+             \x20   let mut n = 0i64;\n\
+             \x20   for ch in s.chars() { if ch == 'c' { continue; } n = n + 1i64; }\n\
+             \x20   println(n);\n\
+             \x20   let g: String = \"abcde\";\n\
+             \x20   g.push('\u{e9}');\n\
+             \x20   let mut i = 0i64;\n\
+             \x20   let mut sum = 0i64;\n\
+             \x20   for c in g.chars() {\n\
+             \x20       if i == 1i64 { i = i + 1i64; continue; }\n\
+             \x20       if i == 4i64 { break; }\n\
+             \x20       sum = sum + (c as i64);\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             \x20   println(sum);\n\
+             \x20   println(count_non_x(\"axbx\u{e9}\"));\n\
+             \x20   let t: String = \"a\u{e9}\";\n\
+             \x20   t.push('z');\n\
+             \x20   let mut m = 0i64;\n\
+             \x20   outer: for c in t.chars() {\n\
+             \x20       for k in 0i64..3i64 {\n\
+             \x20           if k == 1i64 { continue outer; }\n\
+             \x20           m = m + (c as i64);\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   println(m);\n\
+             \x20   let u: String = \"\u{e9}\u{e9}\";\n\
+             \x20   let mut z = 0i64;\n\
+             \x20   for c in u.chars() { z = z + 1i64; continue; }\n\
+             \x20   println(z);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                // "aéc" skipping 'c' = 2 chars; "abcde"+é with continue at i==1
+                // and break at i==4 = 97+99+100 = 296; "axbxé" minus the two x
+                // = 3; "aéz" with a labeled continue after one inner step each =
+                // 97+233+122 = 452; "éé" continuing every iteration = 2.
+                "2\n296\n3\n452\n2\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_ir_ascii_const_chars_loop_is_branch_free_stride_1() {
         // B-2026-07-27-7: `for ch in <ascii-const>.chars()` must lower to a
         // branch-free stride-1 walk — no ASCII peek-and-branch, no

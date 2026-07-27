@@ -3174,22 +3174,29 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_none()
         {
             // Per-iteration cleanup of body-local owned heap values
-            // (B-2026-06-14-21), then stash new_off in the offset alloca
-            // so the incr block picks it up. Written here at body-tail
-            // rather than at the call site so a mid-body `break` doesn't
-            // corrupt the offset (the break path skips this store and
-            // exits via exit_bb).
+            // (B-2026-06-14-21). The offset advance itself lives in the incr
+            // block below, NOT here — see the note there.
             self.drain_top_frame_with_emit();
-            self.builder.build_store(byte_offset, new_off).unwrap();
             self.builder.build_unconditional_branch(incr_bb).unwrap();
         } else {
             self.scope_cleanup_actions.pop();
         }
 
-        // Increment: no-op — body already wrote the new offset. Kept as
-        // a separate block so `continue` (which branches to incr_bb)
-        // routes through one stable label.
+        // Increment: store the decoded post-char offset, then branch back to
+        // cond. This MUST live in the incr block rather than at the body tail,
+        // where it sat until B-2026-07-27-8: `continue` branches straight
+        // here, so a body-tail store is skipped on that path and the offset
+        // never advances — the loop then re-reads the same character forever.
+        // That was a silent infinite loop in compiled code on every backend
+        // and both opt levels (the interpreter ran correctly), or, when the
+        // body also had a `break` to terminate it, a silently wrong answer.
+        // Putting the store here still keeps the property the body-tail
+        // placement was chosen for — a mid-body `break` must not advance the
+        // offset — because `break` exits via exit_bb and never reaches
+        // incr_bb. `new_off` is defined in the ASCII/multibyte merge block,
+        // which dominates the whole body and therefore incr_bb.
         self.builder.position_at_end(incr_bb);
+        self.builder.build_store(byte_offset, new_off).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
         self.loop_stack.pop();
