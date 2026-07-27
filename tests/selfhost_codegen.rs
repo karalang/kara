@@ -627,6 +627,26 @@ const CORPUS: &[&str] = &[
     // and statement- and value-position matches. Leak-clean under the oracle's
     // valgrind leg (the real assertion for the RC path).
     "shared enum Chain {\n    End,\n    Link(Chain),\n}\nshared enum V {\n    Num(i64),\n    Name(String),\n    Flag(bool),\n    Real(f64),\n    Nothing,\n}\nfn depth(c: ref Chain) -> i64 {\n    match c {\n        End => 0,\n        Link(inner) => 1 + depth(inner),\n    }\n}\nfn kind_of(v: ref V) -> String {\n    match v {\n        Num(n) => \"num\".to_string(),\n        Name(s) => \"name\".to_string(),\n        Flag(b) => \"flag\".to_string(),\n        Real(f) => \"real\".to_string(),\n        Nothing => \"none\".to_string(),\n    }\n}\nfn num_of(v: ref V) -> i64 {\n    match v {\n        Num(n) => n,\n        Name(s) => 0 - 1,\n        Flag(b) => 0 - 2,\n        Real(f) => 0 - 3,\n        Nothing => 0 - 4,\n    }\n}\nfn truth(v: ref V) -> bool {\n    match v {\n        Flag(b) => b,\n        Num(n) => false,\n        Name(s) => false,\n        Real(f) => false,\n        Nothing => false,\n    }\n}\nfn make(n: i64) -> V {\n    if n > 0 {\n        return V.Num(n);\n    }\n    V.Nothing\n}\nfn main() {\n    let c = Chain.Link(Chain.Link(Chain.Link(Chain.End)));\n    let d = depth(c);\n    println(d.to_string());\n    let a = V.Num(7);\n    println(kind_of(a));\n    let an = num_of(a);\n    println(an.to_string());\n    let b = V.Flag(true);\n    println(kind_of(b));\n    if truth(b) {\n        println(\"yes\");\n    } else {\n        println(\"no\");\n    }\n    let r = V.Real(2.5);\n    println(kind_of(r));\n    let e = V.Nothing;\n    println(kind_of(e));\n    let f = V.Name(\"hi\".to_string());\n    match f {\n        Num(n) => println(\"num\"),\n        Name(s) => println(s),\n        Flag(g) => println(\"flag\"),\n        Real(q) => println(\"real\"),\n        Nothing => println(\"none\"),\n    }\n    let x = make(5);\n    println(kind_of(x));\n    let xn = num_of(x);\n    println(xn.to_string());\n    let y = make(0);\n    println(kind_of(y));\n}",
+    // Slice 64: `.clone()` — UNIMPLEMENTED before this, and a SILENT
+    // miscompile. The method name matched nothing in the emitter's dispatch, so
+    // the call fell through to the scalar fallback and yielded the constant 0:
+    // a cloned String printed EMPTY, a cloned i64 printed 0. The emitted IR was
+    // well-formed, so neither the verifier nor a build failure saw it — only
+    // output parity did. B-2026-07-27-11. Pervasive: `.clone()` appears 706
+    // times in codegen.kara itself, so the self-host FIXPOINT depends on it.
+    // Fix: a clone is exactly the per-kind DEEP COPY this emitter already
+    // performs when materializing a borrow into an owned slot, so it reuses
+    // those helpers (String / Vec / struct / enum) rather than growing a second
+    // copy path; scalars copy by value. The arm sits AFTER user-method
+    // dispatch, so a type with its own `clone` impl still wins. Scope note: the
+    // SEED rejects `.clone()` on a user struct or a user `shared enum` ("no
+    // method 'clone' on type 'S'"), so those arms are unreachable for
+    // seed-accepted programs and are deliberately NOT exercised here — the
+    // corpus only asserts what the seed itself admits. Covers String locals, a
+    // struct-field String, i64/f64/bool, Vec[i64], Vec[String], and a
+    // match-bound String payload. Leak-clean: the clone is owned by its slot
+    // and freed once at scope exit, with the source freed independently.
+    "struct S {\n    name: String,\n    n: i64,\n}\nenum T {\n    Leaf(String),\n    Other,\n}\nfn main() {\n    let a = \"deep\".to_string();\n    let b = a.clone();\n    println(b);\n    println(a);\n    let s = S {\n        name: \"fld\".to_string(),\n        n: 3,\n    };\n    let c = s.name.clone();\n    println(c);\n    let d = s.n.clone();\n    println(d.to_string());\n    let mut v: Vec[i64] = Vec.new();\n    v.push(3);\n    v.push(4);\n    let w = v.clone();\n    println((w[0] + w[1]).to_string());\n    println(v.len().to_string());\n    let mut vs: Vec[String] = Vec.new();\n    vs.push(\"one\".to_string());\n    let ws = vs.clone();\n    println(ws[0]);\n    println(vs.len().to_string());\n    let t = T.Leaf(\"pl\".to_string());\n    match t {\n        Leaf(x) => {\n            let y = x.clone();\n            println(y);\n        }\n        Other => println(\"o\"),\n    }\n    let f = 2.5;\n    let g = f.clone();\n    println(g.to_string());\n    let bo = true;\n    let bc = bo.clone();\n    if bc {\n        println(\"yes\");\n    } else {\n        println(\"no\");\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

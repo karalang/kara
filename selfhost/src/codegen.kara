@@ -6961,6 +6961,69 @@ impl Emitter {
             }
             return Val { op: r, kind: rk, heap: rh };
         }
+        if method == "clone" {
+            // `x.clone()` (Slice 64, B-2026-07-27-11). Placed AFTER the
+            // user-method dispatch above, so a type with its own `clone` impl
+            // still wins; this is the built-in fallback. Before this, `clone`
+            // matched nothing and fell through to the emitter's scalar `0`
+            // fallback — a SILENT miscompile (a cloned String printed empty,
+            // a cloned i64 printed 0) that the IR verifier cannot see.
+            //
+            // A clone is exactly the per-kind DEEP COPY this emitter already
+            // performs when materializing a borrow into an owned slot, so it
+            // reuses those helpers rather than growing a second copy path.
+            let ovc = self.emit_value(object);
+            let Val { op: oopc, kind: okc, heap: ohc } = ovc;
+            if okc == 2 {
+                return self.emit_materialize(oopc);
+            }
+            if okc == 3 or okc == 4 or okc >= 2000 {
+                return self.emit_materialize_vec(oopc, okc);
+            }
+            if okc >= 10 and okc < 1000 {
+                return self.emit_materialize_struct(oopc, okc - 10);
+            }
+            if okc >= 1000 and okc < 2000 {
+                if self.en_is_shared(okc - 1000) {
+                    // A `shared` clone is a RETAIN, not a deep copy — that is
+                    // the whole point of reference semantics. Both handles are
+                    // owned, and each one's scope-exit release decrements, so
+                    // the node dies exactly once (Slice 63's RC contract).
+                    //
+                    // NOTE: the SEED currently rejects `.clone()` on a user
+                    // `shared enum` ("no method 'clone' on type 'T'"), so this
+                    // arm is unreachable for any seed-accepted program. It is
+                    // written out anyway so the representation stays coherent:
+                    // the alternative — falling through to the by-value
+                    // `emit_materialize_enum` — would deep-copy a POINTER as
+                    // if it were an aggregate, which is the silent-miscompile
+                    // shape this port keeps finding.
+                    let rcpc = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + rcpc.clone()
+                        + " = getelementptr inbounds { i64, i64 }, ptr "
+                        + oopc.clone()
+                        + ", i32 0, i32 0\n";
+                    let rcvc = self.fresh();
+                    self.body = self.body
+                        + "  "
+                        + rcvc.clone()
+                        + " = load i64, ptr "
+                        + rcpc.clone()
+                        + ", align 8\n";
+                    let rcnc = self.fresh();
+                    self.body =
+                        self.body + "  " + rcnc.clone() + " = add i64 " + rcvc + ", 1\n";
+                    self.body =
+                        self.body + "  store i64 " + rcnc + ", ptr " + rcpc + ", align 8\n";
+                    return Val { op: oopc, kind: okc, heap: true };
+                }
+                return self.emit_materialize_enum(oopc, okc - 1000);
+            }
+            // Scalars (i64 / bool / f64) copy by value — the clone IS the value.
+            return Val { op: oopc, kind: okc, heap: ohc };
+        }
         if method == "is_some" or method == "is_none" or method == "is_ok" or method == "is_err" {
             // Option/Result tag predicates (Slice 34): extract the tag and
             // compare against 0 — None=0/Some=1, Ok=0/Err=1, so is_none and
