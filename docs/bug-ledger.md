@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 178 | 0 |
+| miscompile | 179 | 0 |
 | leak | 97 | 0 |
 | double-free | 81 | 0 |
 | codegen-gap | 80 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 504 | 2 |
+| codegen | 505 | 2 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **690 surfaced · 3 open · 681 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **691 surfaced · 3 open · 682 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **690 surfaced 
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
 | B-2026-07-27-9 | 2026-07-27 | ownership | medium | A non-`mut` `let` binding can be REASSIGNED and MUTATED IN PLACE with no diagnostic — `let s: String = "abc"; s = "xyz";` and `let s: String = "abc"; s.push('z');` both pass `karac check` and really take effect, so `mut` is not enforced on bindings at all (it IS enforced at call sites, where a `mut ref` parameter correctly demands a `mut` argument marker). | — |
 
-### Fixed (681)
+### Fixed (682)
 
-<details><summary>681 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>682 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -821,6 +821,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **690 surfaced 
 | B-2026-07-27-5 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): value-position `if` and `match` used a HARDCODED `alloca i64` result slot, so a STRING / struct / enu… | 999cd9c |
 | B-2026-07-27-7 | codegen | medium | `for ch in <str>.chars()` over a COMPILE-TIME-CONSTANT string runs ~21.7x the instructions of the identical Rust source, because the ASCII/multibyte… | de5da39 |
 | B-2026-07-27-8 | codegen | high | `continue` inside `for ch in <s>.chars()` is an INFINITE LOOP in compiled code on every backend (JIT and AOT, -O0 and -O2), because the general chars… | 6f1c706 |
+| B-2026-07-27-10 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a DESTRUCTURING `let S { a, b } = s;` bound NOTHING — the Let handler matched only a plain BindingPat… | 7bd2de1 |
 
 </details>
 
