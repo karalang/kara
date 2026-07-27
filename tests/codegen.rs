@@ -7143,6 +7143,127 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_keys_loop_over_heap_half_is_lazy_not_materialized() {
+        // B-2026-07-25-4: `for k in m.keys()` (and `.values()`/`.entries()`)
+        // over a map with a HEAP half kept paying the eager materializer — a
+        // `malloc`, a `karac_map_len`, a full copy of the key set into that
+        // buffer, a DEEP CLONE of every heap key, then two `karac_free_buf` —
+        // on EVERY evaluation. B-2026-07-24-2 routed the scalar-halved case to
+        // the lazy runtime iterator but deliberately failed closed on a heap
+        // half. It now routes too: the `(k, v)` destination path registers the
+        // binding's side tables (`register_for_loop_bindings`) and borrow-marks
+        // the heap half, which is what the eager Vec used to provide.
+        //
+        // Assert on the ABSENCE of the materializer, not just on output — the
+        // whole bug is that a correct-but-slow lowering was chosen.
+        let ir = ir_for(
+            "fn total(m: ref Map[String, i64]) -> i64 {\n\
+             \x20   let mut s = 0i64;\n\
+             \x20   for k in m.keys() { s = s + k.len(); }\n\
+             \x20   return s;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut m: Map[String, i64] = Map.new();\n\
+             \x20   m.insert(\"aa\".to_string(), 1i64);\n\
+             \x20   println(total(m));\n\
+             }",
+        );
+        let total = ir
+            .split("define")
+            .find(|f| f.contains("@total"))
+            .expect("@total not found in IR");
+        assert!(
+            total.contains("@karac_map_iter_new"),
+            "a heap-half `keys()` loop must use the LAZY runtime iterator:\n{total}"
+        );
+        for eager in ["@malloc", "@karac_map_len", "@karac_free_buf"] {
+            assert!(
+                !total.contains(eager),
+                "a heap-half `keys()` loop must not eagerly materialize a Vec \
+                 (found `{eager}`):\n{total}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_keys_values_entries_over_heap_halves_are_correct() {
+        // B-2026-07-25-4 behavioural companion to the IR guard: moving a heap
+        // half from an OWNED deep clone to a BORROW of the map's slot is an
+        // ownership change, so pin the observable results across every shape —
+        // heap key, heap value, both halves heap through a struct FIELD, a
+        // consuming sink that must still get an independent copy
+        // (`owned.push(k)`), an early `return` out of the loop body (the
+        // iterator cleanup path), and the source map staying intact afterwards.
+        if let Some(out) = run_program(
+            "struct H { m: Map[String, Vec[String]] }\n\
+             fn firstk(m: ref Map[String, i64]) -> i64 {\n\
+             \x20   for k in m.keys() { return k.len(); }\n\
+             \x20   return 0i64;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut a: Map[String, i64] = Map.new();\n\
+             \x20   a.insert(\"aa\".to_string(), 1i64);\n\
+             \x20   a.insert(\"bbb\".to_string(), 2i64);\n\
+             \x20   let mut s = 0i64;\n\
+             \x20   for k in a.keys() { s = s + k.len(); }\n\
+             \x20   println(s);\n\
+             \x20   let mut owned: Vec[String] = Vec.new();\n\
+             \x20   for k in a.keys() { owned.push(k); }\n\
+             \x20   println(owned.len());\n\
+             \x20   let mut t = 0i64;\n\
+             \x20   for v in a.values() { t = t + v; }\n\
+             \x20   println(t);\n\
+             \x20   let mut e = 0i64;\n\
+             \x20   for (k, v) in a.entries() { e = e + k.len() + v; }\n\
+             \x20   println(e);\n\
+             \x20   let mut b: Map[i64, String] = Map.new();\n\
+             \x20   b.insert(1i64, \"xx\".to_string());\n\
+             \x20   b.insert(2i64, \"yyy\".to_string());\n\
+             \x20   let mut u = 0i64;\n\
+             \x20   for v in b.values() { u = u + v.len(); }\n\
+             \x20   println(u);\n\
+             \x20   let mut h = H { m: Map.new() };\n\
+             \x20   let mut inner: Vec[String] = Vec.new();\n\
+             \x20   inner.push(\"p\".to_string());\n\
+             \x20   h.m.insert(\"kk\".to_string(), inner);\n\
+             \x20   let mut c = 0i64;\n\
+             \x20   for k in h.m.keys() { c = c + k.len(); }\n\
+             \x20   println(c);\n\
+             \x20   println(firstk(a));\n\
+             \x20   println(a.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n2\n3\n8\n5\n2\n2\n2\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_entries_single_binding_still_materializes_tuple() {
+        // B-2026-07-25-4 guard on the shape the routing must NOT take: a SINGLE
+        // binding over `.entries()` wants one tuple VALUE per step (`e.0` /
+        // `e.1`), which only the eager materializer produces. The `(k, v)`
+        // receiver path binds a PAIR, so rewriting this shape bound the value
+        // half to `e` and left `e.0` unregistered — the "no handler for method
+        // 'bytes' on non-identifier receiver" failure that
+        // `tests/cli.rs::test_run_derive_message_repeated_string_and_map_
+        // roundtrip` polices (it is what `#[derive(Message)]` emits for a Map
+        // field). Only a real 2-tuple pattern is rewritten.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let mut m: Map[String, i64] = Map.new();\n\
+             \x20   m.insert(\"aa\".to_string(), 5i64);\n\
+             \x20   let mut n = 0i64;\n\
+             \x20   let mut l = 0i64;\n\
+             \x20   for e in m.entries() { l = l + e.0.len(); n = n + e.1; }\n\
+             \x20   println(l);\n\
+             \x20   println(n);\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_return_struct_field_vec_element_is_cloned() {
         // B-2026-07-27-1: `return <struct>.<vecfield>[i];` handed back the
         // container's OWN element buffer — the caller freed it and the struct's

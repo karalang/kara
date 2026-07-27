@@ -199,8 +199,26 @@ impl<'ctx> super::Codegen<'ctx> {
             // — an adaptor chained on top (`m.keys().filter(..)`), a temp-map
             // receiver, a Set — falls through to the eager path below,
             // unchanged.
+            // `entries()` passes the loop pattern straight through to the
+            // receiver path, which binds a `(k, v)` PAIR — so it is only a
+            // faithful rewrite when the pattern really is a 2-tuple. A SINGLE
+            // binding over `.entries()` (`for e0 in m.entries() { … e0.0 … }`,
+            // which is what `#[derive(Message)]` generates for a Map field)
+            // wants one tuple VALUE per step, and the eager materializer is what
+            // produces that. Routing it to the pair-binding path bound `e0` to
+            // the value half and left `e0.0` unregistered — "no handler for
+            // method 'bytes' on non-identifier receiver", caught by
+            // `tests/cli.rs::test_run_derive_message_repeated_string_and_map_
+            // roundtrip`. `keys()`/`values()` are unaffected: they SYNTHESIZE
+            // the tuple pattern (`map_half_pattern`), so their shape is always
+            // right. (B-2026-07-25-4 — the condition is independent of the
+            // halves' types, so it also closes the same latent hole for a
+            // scalar-halved map, which the old scalar-only gate could reach.)
+            let entries_shape_ok = method != "entries"
+                || matches!(&pattern.kind, PatternKind::Tuple(ps) if ps.len() == 2);
             if args.is_empty()
                 && matches!(method.as_str(), "keys" | "values" | "entries")
+                && entries_shape_ok
                 && self.map_place_is_iterable(object)
             {
                 {
@@ -3883,30 +3901,48 @@ impl<'ctx> super::Codegen<'ctx> {
     /// place, so it stays side-effect free — no GEPs are emitted for a receiver
     /// the caller may end up not using.
     fn map_place_is_iterable(&self, expr: &Expr) -> bool {
-        // Both halves must be SCALAR. The lazy entries path binds each half by
-        // a shallow load out of the iterator's out-slot; the eager `keys()` Vec
-        // it replaces produced OWNED deep clones, and it also registered the
-        // element under the loop variable's name in the String/Vec side tables
-        // so `k.bytes()` / `k.len()` could dispatch. Rewriting a HEAP half to
-        // the tuple form loses that registration (caught by
-        // `test_run_derive_message_repeated_string_and_map_roundtrip`: a
-        // `Map[String, _]` key loop failed with "no handler for method 'bytes'")
-        // and would hand the body a borrow where it used to own a copy. Scalars
-        // have neither problem — no registration to lose, nothing to alias — so
-        // gate there and leave every heap-half map on the eager path.
-        let scalar_ll = |cg: &Self, t: inkwell::types::BasicTypeEnum<'ctx>| {
-            !cg.llvm_ty_is_vec_struct(t) && !t.is_pointer_type() && !t.is_struct_type()
-        };
+        // B-2026-07-25-4: HEAP halves qualify too. This gate used to demand
+        // BOTH halves be scalar, so `Map[String, _]` / `Map[_, Vec[_]]` kept
+        // paying the eager `keys()` materializer (malloc + full-set copy + a
+        // DEEP CLONE per heap key + free, on every evaluation) — if anything the
+        // more expensive case. Two concerns held it back, and both are answered
+        // by the path this routes to rather than by the gate:
+        //
+        //  - Side-table registration. The eager `keys()` Vec registered the
+        //    element under the loop variable's name so `k.bytes()` / `k.len()`
+        //    could dispatch; losing it was the "no handler for method 'bytes'"
+        //    failure of `test_run_derive_message_repeated_string_and_map_
+        //    roundtrip`. The `(k, v)` destination path
+        //    (`compile_for_map_var`) now calls `register_for_loop_bindings`,
+        //    whose Tuple arm registers the key half from `map_key_type_exprs`
+        //    and the value half from `var_elem_type_exprs` — the same tables the
+        //    eager path installs. So the registration is made, not lost.
+        //  - Owned-vs-borrow. The lazy binding IS a borrow of the map's slot
+        //    where the eager Vec handed over a deep clone, but
+        //    `register_for_loop_bindings` also calls
+        //    `mark_for_loop_borrow_if_heap`, which puts the binding in
+        //    `for_loop_borrow_vars` — the machinery that inserts a defensive
+        //    copy at each retaining-consume site. That is exactly the model
+        //    every other heap for-loop element already uses.
+        //
+        // Requiring the TypeExpr tables (not just the LLVM-type tables) is what
+        // keeps this honest: registration is only possible when the half's
+        // `TypeExpr` is on hand, so a map whose halves codegen cannot describe
+        // fails closed to the eager path instead of silently binding an
+        // unregistered heap value.
+        //
+        // The INLINE BUCKET WALK inside `compile_for_map_var` keeps its own,
+        // separate scalar gate — a heap half still needs the per-element
+        // clone/drop the runtime iterator performs. So a heap-halved map lands
+        // on the LAZY `karac_map_iter_new`/`_next`/`_free` walk: no intermediate
+        // Vec and no per-key deep clone, which is the win here; the
+        // zero-call bucket walk stays a scalar-only optimization.
         let named = |cg: &Self, n: &str| {
             cg.map_key_types.contains_key(n)
                 && !cg.set_elem_types.contains_key(n)
-                && cg.map_key_types.get(n).is_some_and(|t| scalar_ll(cg, *t))
-                && cg.map_val_types.get(n).is_some_and(|t| scalar_ll(cg, *t))
+                && cg.map_key_type_exprs.contains_key(n)
+                && cg.var_elem_type_exprs.contains_key(n)
         };
-        // Declared-TypeExpr sibling of `scalar_ll` for the field arm: a `Map[K,
-        // V]` field qualifies only when NEITHER type argument owns heap below
-        // its header.
-        let scalar_te = |cg: &Self, te: &crate::ast::TypeExpr| !cg.te_owns_heap_below_buffer(te);
         match &expr.kind {
             ExprKind::Identifier(n) => named(self, n.as_str()),
             ExprKind::SelfValue => named(self, "self"),
@@ -3943,10 +3979,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if args.len() != 2 {
                     return false;
                 }
-                args.iter().all(|a| match a {
-                    GenericArg::Type(te) => scalar_te(self, te),
-                    _ => false,
-                })
+                // B-2026-07-25-4: both halves may now be heap — the field arm
+                // only has to prove this really is a two-parameter `Map` /
+                // `SortedMap`. Each half's `TypeExpr` is right here in the
+                // declaration, so the destination path can register the binding
+                // (the same condition the named arm checks via the type-expr
+                // tables). A non-type generic argument still fails closed.
+                args.iter().all(|a| matches!(a, GenericArg::Type(_)))
             }
             _ => false,
         }
