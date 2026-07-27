@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 178 | 1 |
+| miscompile | 178 | 0 |
 | leak | 97 | 0 |
 | double-free | 81 | 0 |
 | codegen-gap | 80 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 504 | 3 |
+| codegen | 504 | 2 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 1 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **690 surfaced · 4 open · 680 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **690 surfaced · 3 open · 681 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): an enum's payload layout provides only TWO aggregate slots (`en_extra`, `en_extra2`), so an enum with MORE THAN TWO distinct aggregate (struct) payload types cannot resolve fields on the surplus payload kinds — the field lookup returns its -1 'not found' sentinel and that sentinel is emitted VERBATIM as `extractvalue <ty> %t, -1`, producing invalid IR ('expected integer'). Blocks ast.kara, whose `Expr` enum has ~30 distinct payload struct types. | — |
-| B-2026-07-27-8 | 2026-07-27 | codegen | high | `continue` inside `for ch in <s>.chars()` is an INFINITE LOOP in compiled code on every backend (JIT and AOT, -O0 and -O2), because the general chars loop advances the byte offset at BODY-TAIL and `continue` branches straight past that store to a no-op incr block — so the loop re-reads the same character forever. The interpreter is correct. With a `break` also present the program terminates but silently returns a WRONG answer instead of hanging. | — |
 | B-2026-07-27-9 | 2026-07-27 | ownership | medium | A non-`mut` `let` binding can be REASSIGNED and MUTATED IN PLACE with no diagnostic — `let s: String = "abc"; s = "xyz";` and `let s: String = "abc"; s.push('z');` both pass `karac check` and really take effect, so `mut` is not enforced on bindings at all (it IS enforced at call sites, where a `mut ref` parameter correctly demands a `mut` argument marker). | — |
 
-### Fixed (680)
+### Fixed (681)
 
-<details><summary>680 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>681 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -821,6 +820,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **690 surfaced 
 | B-2026-07-27-4 | codegen+cli | medium | No working per-function / per-line PROFILING attribution for an AOT kara binary | f569aac |
 | B-2026-07-27-5 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): value-position `if` and `match` used a HARDCODED `alloca i64` result slot, so a STRING / struct / enu… | 999cd9c |
 | B-2026-07-27-7 | codegen | medium | `for ch in <str>.chars()` over a COMPILE-TIME-CONSTANT string runs ~21.7x the instructions of the identical Rust source, because the ASCII/multibyte… | de5da39 |
+| B-2026-07-27-8 | codegen | high | `continue` inside `for ch in <s>.chars()` is an INFINITE LOOP in compiled code on every backend (JIT and AOT, -O0 and -O2), because the general chars… | 6f1c706 |
 
 </details>
 
