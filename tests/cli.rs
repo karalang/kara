@@ -22243,3 +22243,102 @@ fn test_project_lib_table_builds_library_e2e() {
         assert_eq!(run.status.code(), Some(0));
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn test_build_debug_info_keeps_symbols_and_dwarf() {
+    // B-2026-07-27-4: `karac build` runs `strip -x` on every linked executable
+    // as a binary-size measure. `strip -x` discards ALL non-global symbols, and
+    // codegen gives user functions INTERNAL linkage — so the strip erased every
+    // user-function symbol AND the `.debug_*` sections, at every
+    // `KARAC_OPT_LEVEL`. Profilers were left with one unnamed blob plus `main`,
+    // which blocked the whole codegen perf-investigation class (B-2026-07-26-2
+    // could only be measured in whole-program aggregates). The strip is now
+    // skipped when `KARAC_DEBUG_INFO` is set, mirroring the pre-existing
+    // sanitizer carve-out (sanitizers need local symbols to symbolicate).
+    //
+    // Both directions are asserted, because the binary-size floor the strip
+    // protects matters just as much as the symbols: the DEFAULT build must stay
+    // stripped. Uses `nm` via subprocess (portable across Linux/macOS, and
+    // env is set on the CHILD so this cannot race parallel tests).
+    if Command::new("nm").arg("--version").output().is_err() {
+        eprintln!("nm unavailable — skipping");
+        return;
+    }
+    let path = write_run_temp(
+        "debuginfo-symbols",
+        "fn helper(a: i64, b: i64) -> i64 { a * b + 1 }\n\
+         fn main() { println(helper(6, 7)); }\n",
+    );
+    let dir = path.parent().unwrap();
+    let exe = dir.join("prog");
+
+    let local_syms = |p: &std::path::Path| -> usize {
+        let out = Command::new("nm").arg("-a").arg(p).output().expect("nm");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| {
+                let mut it = l.split_whitespace();
+                it.next();
+                matches!(it.next(), Some("t"))
+            })
+            .count()
+    };
+    let has_dwarf = |p: &std::path::Path| -> bool {
+        // `nm` does not report sections; read the file and look for the DWARF
+        // section-name strings, which live in the section header string table
+        // on both ELF and Mach-O. Crude but toolchain-independent.
+        let bytes = std::fs::read(p).unwrap_or_default();
+        bytes
+            .windows(11)
+            .any(|w| w == b"debug_info\0" || w == b"__debug_info")
+    };
+
+    // Default build: stripped — no local symbols, no DWARF.
+    let out = karac_bin()
+        .current_dir(dir)
+        .args(["build", "prog.kara"])
+        .output()
+        .unwrap();
+    if !exe.exists() {
+        eprintln!(
+            "skip: build produced no binary (llvm/runtime unavailable):\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        return;
+    }
+    assert_eq!(
+        local_syms(&exe),
+        0,
+        "a DEFAULT build must stay stripped of local symbols (binary-size floor)"
+    );
+    assert!(
+        !has_dwarf(&exe),
+        "a DEFAULT build must carry no DWARF (binary-size floor)"
+    );
+
+    // Debug-info build: symbols and DWARF survive the link.
+    std::fs::remove_file(&exe).unwrap();
+    let out = karac_bin()
+        .current_dir(dir)
+        .env("KARAC_DEBUG_INFO", "1")
+        .args(["build", "prog.kara"])
+        .output()
+        .unwrap();
+    assert!(
+        exe.exists(),
+        "KARAC_DEBUG_INFO build failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        local_syms(&exe) > 0,
+        "KARAC_DEBUG_INFO=1 must keep local symbols so profilers can attribute \
+         cost to a function instead of one unnamed blob"
+    );
+    assert!(
+        has_dwarf(&exe),
+        "KARAC_DEBUG_INFO=1 must keep the DWARF `.debug_*` sections"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

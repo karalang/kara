@@ -595,7 +595,20 @@ pub(super) fn link_executable_impl(
         // build. Print a stderr note rather than failing the codegen path so
         // hosts without `strip` (rare on macOS/Linux) keep producing
         // working binaries.
-        if cfg!(unix) && !is_sanitizer_link(extra_cc_args) {
+        // B-2026-07-27-4: also skipped when debug info was requested. `strip -x`
+        // discards ALL non-global symbols, and codegen emits user functions with
+        // INTERNAL linkage — so the strip is precisely what erased every
+        // user-function symbol from AOT binaries at every `KARAC_OPT_LEVEL`,
+        // leaving profilers (callgrind/perf) with one unnamed blob plus `main`
+        // and no way to attribute cost to a construct. That blocked the whole
+        // codegen perf-investigation class (see B-2026-07-26-2, where the #127
+        // deficit could only be measured in whole-program aggregates). Same
+        // reasoning as the sanitizer carve-out immediately above — a build that
+        // asked for symbolic information should keep its symbol table — so it
+        // reuses that gate's shape rather than inventing a new mechanism. The
+        // default (gate off) path is unchanged, so the binary-size floor the
+        // strip protects is untouched for ordinary builds.
+        if cfg!(unix) && !is_sanitizer_link(extra_cc_args) && !debug_info_requested() {
             let strip_status = std::process::Command::new("strip")
                 .args(["-x", exe_path])
                 .output();
@@ -1067,6 +1080,18 @@ fn link_executable_windows(
         return Err(format!("Linker (clang) failed: {stderr}"));
     }
     Ok(())
+}
+
+/// True when this build asked for debug information (`KARAC_DEBUG_INFO`, the
+/// same gate `di_init` reads). Such a build must keep its symbol table: `strip
+/// -x` discards every non-global symbol, and codegen gives user functions
+/// INTERNAL linkage, so stripping erases exactly the names a debugger or
+/// profiler needs (B-2026-07-27-4). Read here rather than threaded through the
+/// link signature so the check sits next to the strip it guards and matches the
+/// sanitizer carve-out's shape; the gate is process-global and read once per
+/// link, so there is no cost on the default path.
+fn debug_info_requested() -> bool {
+    matches!(std::env::var("KARAC_DEBUG_INFO"), Ok(v) if v != "0")
 }
 
 /// True if any extra cc flag enables a sanitizer instrumentation runtime.
