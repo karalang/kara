@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 179 | 0 |
-| leak | 97 | 0 |
+| miscompile | 180 | 1 |
+| leak | 98 | 1 |
 | double-free | 81 | 0 |
 | codegen-gap | 80 | 1 |
 | missing-feature | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 505 | 2 |
+| codegen | 507 | 4 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 1 |
@@ -124,15 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **691 surfaced · 3 open · 682 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **693 surfaced · 5 open · 682 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
 | B-2026-07-27-9 | 2026-07-27 | ownership | medium | A non-`mut` `let` binding can be REASSIGNED and MUTATED IN PLACE with no diagnostic — `let s: String = "abc"; s = "xyz";` and `let s: String = "abc"; s.push('z');` both pass `karac check` and really take effect, so `mut` is not enforced on bindings at all (it IS enforced at call sites, where a `mut ref` parameter correctly demands a `mut` argument marker). | — |
+| B-2026-07-27-11 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `.clone()` is UNIMPLEMENTED and silently lowers to the i64 default `0` — `let b = a.clone()` on a String prints `0`/empty instead of the string, with no diagnostic | — |
+| B-2026-07-27-12 | 2026-07-27 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): a `to_string()` result produced INSIDE a match arm and returned from a fn leaks — the caller never frees the returned buffer | — |
 
 ### Fixed (682)
 
