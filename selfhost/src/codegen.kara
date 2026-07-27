@@ -3119,10 +3119,20 @@ impl Emitter {
             // B-2026-07-27-3: set when any arm body yields a BOOL (i1) — the
             // i64 result lane is narrowed back to i1 at the join.
             let mut rbool = false;
+            // Slice 61 (B-2026-07-27-5): the result slot must be TYPED by the
+            // arm value (a String/struct-valued match used to store an
+            // aggregate into a hardcoded i64 slot -> invalid IR). The alloca
+            // precedes the arms, so DEFER it: buffer the arm IR, then splice a
+            // correctly typed `alloca` + zero-init in front once an arm's kind
+            // is known. `rsty`/`rkind`/`rheap` carry that kind to the join.
+            let mut rsty = "i64".to_string();
+            let mut rkind = 0;
+            let mut rheap = false;
+            let mut rsaved = "".to_string();
             if want_value {
                 rslot = self.fresh();
-                self.body = self.body + "  " + rslot.clone() + " = alloca i64, align 8\n";
-                self.body = self.body + "  store i64 0, ptr " + rslot.clone() + ", align 8\n";
+                rsaved = self.body.clone();
+                self.body = "".to_string();
             }
             let mut ai = 0;
             for arm in arms {
@@ -3198,8 +3208,15 @@ impl Emitter {
                             rbool = true;
                         }
                         let bop = self.to_i64_lane(bop0, bk);
+                        if bk != 1 {
+                            rsty = self.ty_text(bk);
+                        }
+                        rkind = bk;
+                        rheap = bh;
                         self.body = self.body
-                            + "  store i64 "
+                            + "  store "
+                            + rsty.clone()
+                            + " "
                             + bop
                             + ", ptr "
                             + rslot.clone()
@@ -3255,8 +3272,15 @@ impl Emitter {
                                 rbool = true;
                             }
                             let bop = self.to_i64_lane(bop0, bk);
+                            if bk != 1 {
+                                rsty = self.ty_text(bk);
+                            }
+                            rkind = bk;
+                            rheap = bh;
                             self.body = self.body
-                                + "  store i64 "
+                                + "  store "
+                                + rsty.clone()
+                                + " "
                                 + bop
                                 + ", ptr "
                                 + rslot.clone()
@@ -3274,15 +3298,41 @@ impl Emitter {
             self.body = self.body + lend + ":\n";
             if want_value {
                 let r = self.fresh();
-                self.body =
-                    self.body + "  " + r.clone() + " = load i64, ptr " + rslot + ", align 8\n";
+                self.body = self.body
+                    + "  "
+                    + r.clone()
+                    + " = load "
+                    + rsty.clone()
+                    + ", ptr "
+                    + rslot.clone()
+                    + ", align 8\n";
+                // Splice the now-typed alloca + zero-init ahead of the arm IR.
+                let mut zv = "0".to_string();
+                if rkind != 0 and rkind != 1 {
+                    zv = "zeroinitializer".to_string();
+                }
+                let inner = self.body.clone();
+                self.body = rsaved
+                    + "  "
+                    + rslot.clone()
+                    + " = alloca "
+                    + rsty.clone()
+                    + ", align 8\n"
+                    + "  store "
+                    + rsty.clone()
+                    + " "
+                    + zv
+                    + ", ptr "
+                    + rslot
+                    + ", align 8\n"
+                    + inner;
                 if rbool {
                     let rb = self.fresh();
                     self.body =
                         self.body + "  " + rb.clone() + " = trunc i64 " + r + " to i1\n";
                     return Val { op: rb, kind: 1, heap: false };
                 }
-                return Val { op: r, kind: 0, heap: false };
+                return Val { op: r, kind: rkind, heap: rheap };
             }
             return Val { op: "0".to_string(), kind: 0, heap: false };
         }
@@ -3303,9 +3353,16 @@ impl Emitter {
         let mut rslot = "".to_string();
         // B-2026-07-27-3: set when any arm yields a BOOL (i1).
         let mut rbool = false;
+        // Slice 61 (B-2026-07-27-5): typed, deferred result slot — see the
+        // enum-match path above.
+        let mut rsty = "i64".to_string();
+        let mut rkind = 0;
+        let mut rheap = false;
+        let mut rsaved = "".to_string();
         if want_value {
             rslot = self.fresh();
-            self.body = self.body + "  " + rslot.clone() + " = alloca i64, align 8\n";
+            rsaved = self.body.clone();
+            self.body = "".to_string();
         }
         let mid = self.nlbl;
         self.nlbl = self.nlbl + 1;
@@ -3639,8 +3696,15 @@ impl Emitter {
                         rbool = true;
                     }
                     let bop = self.to_i64_lane(bop0, bk);
+                    if bk != 1 {
+                        rsty = self.ty_text(bk);
+                    }
+                    rkind = bk;
+                    rheap = bh;
                     self.body = self.body
-                        + "  store i64 "
+                        + "  store "
+                        + rsty.clone()
+                        + " "
                         + bop
                         + ", ptr "
                         + rslot.clone()
@@ -3700,8 +3764,15 @@ impl Emitter {
                         rbool = true;
                     }
                     let bop = self.to_i64_lane(bop0, bk);
+                    if bk != 1 {
+                        rsty = self.ty_text(bk);
+                    }
+                    rkind = bk;
+                    rheap = bh;
                     self.body = self.body
-                        + "  store i64 "
+                        + "  store "
+                        + rsty.clone()
+                        + " "
                         + bop
                         + ", ptr "
                         + rslot.clone()
@@ -3721,15 +3792,36 @@ impl Emitter {
             self.body = self.body
                 + "  "
                 + r.clone()
-                + " = load i64, ptr "
-                + rslot
+                + " = load "
+                + rsty.clone()
+                + ", ptr "
+                + rslot.clone()
                 + ", align 8\n";
+            let mut zv = "0".to_string();
+            if rkind != 0 and rkind != 1 {
+                zv = "zeroinitializer".to_string();
+            }
+            let inner = self.body.clone();
+            self.body = rsaved
+                + "  "
+                + rslot.clone()
+                + " = alloca "
+                + rsty.clone()
+                + ", align 8\n"
+                + "  store "
+                + rsty.clone()
+                + " "
+                + zv
+                + ", ptr "
+                + rslot
+                + ", align 8\n"
+                + inner;
             if rbool {
                 let rb = self.fresh();
                 self.body = self.body + "  " + rb.clone() + " = trunc i64 " + r + " to i1\n";
                 return Val { op: rb, kind: 1, heap: false };
             }
-            return Val { op: r, kind: 0, heap: false };
+            return Val { op: r, kind: rkind, heap: rheap };
         }
         Val { op: "0".to_string(), kind: 0, heap: false }
     }
@@ -5826,9 +5918,22 @@ impl Emitter {
                 // `if` in VALUE position (Slice 6): route each branch's tail
                 // value through a result slot, then load it at the join — the
                 // slot stands in for a phi without block-predecessor tracking.
+                //
+                // Slice 61 (B-2026-07-27-5): the slot must be TYPED by the
+                // branch value. It used to be a hardcoded `alloca i64`, so a
+                // STRING/struct/enum-valued if stored a `{ ptr, i64 }` (or
+                // wider) aggregate into an i64 slot and the module failed
+                // verification. The alloca is emitted BEFORE the branches, so
+                // it cannot see their kind — instead we DEFER it: buffer the
+                // branch IR into a fresh `self.body`, then splice the correctly
+                // typed alloca in front once the then-branch kind is known.
+                // `self.body` is reset per function, so the clone is bounded by
+                // one function's IR. A BOOL result keeps the i64 lane
+                // (B-2026-07-27-3's convention) and narrows at the join.
                 let IfExpr { cond, then_block, else_branch, span } = n;
                 let slot = self.fresh();
-                self.body = self.body + "  " + slot.clone() + " = alloca i64, align 8\n";
+                let saved = self.body.clone();
+                self.body = "".to_string();
                 let c = self.emit_value(cond);
                 let Val { op: cop0, kind: ck, heap: ch } = c;
                 // B-2026-07-23-24: normalize an i64-lane bool (Vec[bool] read) to i1.
@@ -5849,17 +5954,22 @@ impl Emitter {
                 self.body = self.body + lthen + ":\n";
                 let tv = self.emit_block_value(then_block);
                 let Val { op: top0, kind: tk, heap: th } = tv;
-                // B-2026-07-27-3: a BOOL-valued if (`fn f() -> bool { if c {
-                // false } else { true } }`) yields i1 branch values, but the
-                // result slot is an i64 lane — WITHOUT the widen this emitted
-                // `store i64 false` (an i1 constant into an i64 store) and the
-                // module failed verification. Reuse the Vec[bool] lane
-                // convention (B-2026-07-23-24): zext i1 -> i64 on store, trunc
-                // back to i1 at the join so the value re-enters bool contexts
-                // (`if`/`and`/`not`/a `-> bool` return) correctly.
+                // B-2026-07-27-3: a BOOL-valued if yields i1 branch values;
+                // widen to the i64 lane on store and narrow back at the join so
+                // the value re-enters bool contexts (`if`/`and`/`not`/`-> bool`).
                 let top = self.to_i64_lane(top0, tk);
-                self.body =
-                    self.body + "  store i64 " + top + ", ptr " + slot.clone() + ", align 8\n";
+                let mut sty = "i64".to_string();
+                if tk != 1 {
+                    sty = self.ty_text(tk);
+                }
+                self.body = self.body
+                    + "  store "
+                    + sty.clone()
+                    + " "
+                    + top
+                    + ", ptr "
+                    + slot.clone()
+                    + ", align 8\n";
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
                 self.body = self.body + lelse + ":\n";
                 match else_branch {
@@ -5868,32 +5978,63 @@ impl Emitter {
                         let Val { op: eop0, kind: ek, heap: eh } = ev;
                         let eop = self.to_i64_lane(eop0, ek);
                         self.body = self.body
-                            + "  store i64 "
+                            + "  store "
+                            + sty.clone()
+                            + " "
                             + eop
                             + ", ptr "
                             + slot.clone()
                             + ", align 8\n";
                     }
                     None => {
-                        self.body =
-                            self.body + "  store i64 0, ptr " + slot.clone() + ", align 8\n";
+                        // No else: a scalar slot zero-fills; an aggregate slot
+                        // takes zeroinitializer (an else-less value-if with an
+                        // aggregate result is ill-typed anyway, but the IR must
+                        // still verify).
+                        let mut zv = "0".to_string();
+                        if tk != 0 and tk != 1 {
+                            zv = "zeroinitializer".to_string();
+                        }
+                        self.body = self.body
+                            + "  store "
+                            + sty.clone()
+                            + " "
+                            + zv
+                            + ", ptr "
+                            + slot.clone()
+                            + ", align 8\n";
                     }
                 }
                 self.body = self.body + "  br label %" + lend.clone() + "\n";
                 self.body = self.body + lend + ":\n";
                 let r = self.fresh();
+                self.body = self.body
+                    + "  "
+                    + r.clone()
+                    + " = load "
+                    + sty.clone()
+                    + ", ptr "
+                    + slot.clone()
+                    + ", align 8\n";
+                // Splice the now-typed alloca in front of the buffered branch IR.
+                let inner = self.body.clone();
                 self.body =
-                    self.body + "  " + r.clone() + " = load i64, ptr " + slot + ", align 8\n";
+                    saved + "  " + slot + " = alloca " + sty + ", align 8\n" + inner;
                 // Both branches of a well-typed value-if share a type, so the
                 // THEN branch's kind decides the result: a bool if narrows the
-                // i64 lane back to i1 (kind 1); anything else stays i64.
+                // i64 lane back to i1 (kind 1); anything else CARRIES ITS KIND
+                // (Slice 61 — previously hardcoded to 0, which is why a
+                // String/struct-valued if lost its type at the join and any
+                // downstream field access resolved against the wrong layout).
+                // The ownership flag rides along too: a heap-producing branch
+                // (e.g. two `.to_string()` arms) yields an owned result.
                 if tk == 1 {
                     let rb = self.fresh();
                     self.body =
                         self.body + "  " + rb.clone() + " = trunc i64 " + r + " to i1\n";
                     return Val { op: rb, kind: 1, heap: false };
                 }
-                Val { op: r, kind: 0, heap: false }
+                Val { op: r, kind: tk, heap: th }
             }
             Match(mn) => self.emit_match(mn, true),
             Path(pe) => {

@@ -572,6 +572,22 @@ const CORPUS: &[&str] = &[
     // `and` / `not` / a let-binding, a bool-valued enum match, an int-literal
     // match, and an i64 value-if regression.
     "enum T {\n    A,\n    B,\n    C,\n}\nfn pick(t: ref T) -> bool {\n    match t {\n        A => true,\n        B => false,\n        C => true,\n    }\n}\nfn small(n: i64) -> bool {\n    match n {\n        0 => false,\n        1 => true,\n        _ => false,\n    }\n}\nfn flip(c: bool) -> bool {\n    if c {\n        false\n    } else {\n        true\n    }\n}\nfn advance(cur: i64, n: i64, e: i64) -> bool {\n    if cur >= n {\n        false\n    } else if e != 7 {\n        false\n    } else {\n        true\n    }\n}\nfn maxi(a: i64, b: i64) -> i64 {\n    if a > b {\n        a\n    } else {\n        b\n    }\n}\nfn main() {\n    if pick(T.A) {\n        println(\"a-t\");\n    } else {\n        println(\"a-f\");\n    }\n    if pick(T.B) {\n        println(\"b-t\");\n    } else {\n        println(\"b-f\");\n    }\n    if small(1) {\n        println(\"one\");\n    } else {\n        println(\"not-one\");\n    }\n    if flip(true) {\n        println(\"ft\");\n    } else {\n        println(\"ff\");\n    }\n    if flip(true) and flip(false) {\n        println(\"both\");\n    } else {\n        println(\"nope\");\n    }\n    if not flip(true) {\n        println(\"neg\");\n    } else {\n        println(\"plain\");\n    }\n    let b = flip(false);\n    if b {\n        println(\"bound-t\");\n    } else {\n        println(\"bound-f\");\n    }\n    if advance(0, 3, 7) {\n        println(\"adv\");\n    } else {\n        println(\"stay\");\n    }\n    if advance(5, 3, 7) {\n        println(\"adv2\");\n    } else {\n        println(\"stay2\");\n    }\n    println(maxi(3, 9).to_string());\n}",
+    // Slice 61: TYPED result slot for value-position `if` / `match` — an
+    // EMITTER slice. Both routed branch/arm tails through a hardcoded
+    // `alloca i64`, so a STRING / struct / enum-valued if-or-match stored a
+    // `{ ptr, i64 }` (or wider) aggregate into an i64 slot -> invalid IR, and
+    // the join returned `kind: 0`, losing the type so any downstream field
+    // access resolved against the wrong layout. B-2026-07-27-5. The alloca is
+    // emitted BEFORE the branches and so cannot see their kind, so it is now
+    // DEFERRED: the branch/arm IR is buffered into a fresh `self.body` and the
+    // correctly typed `alloca` (+ zero-init for match) is spliced in front once
+    // a branch/arm kind is known — cheap because `self.body` is reset per
+    // function. The join loads at that type and propagates BOTH the kind and
+    // the ownership (heap) flag. A BOOL result keeps the i64 lane and narrows
+    // at the join (Slice 60's convention). Applied to the value-if path and
+    // BOTH match paths. Covers String- and struct-valued ifs and matches, an
+    // int-literal match yielding String, plus i64/bool/payload regressions.
+    "struct P {\n    x: i64,\n    y: i64,\n}\nfn clone_p(p: ref P) -> P {\n    return P { x: p.x, y: p.y };\n}\nenum E {\n    A(P),\n    B(P),\n}\nenum T {\n    X,\n    Y,\n}\nfn pick_str(t: ref T) -> String {\n    match t {\n        X => \"ex\".to_string(),\n        Y => \"why\".to_string(),\n    }\n}\nfn pick_struct(e: ref E) -> P {\n    match e {\n        A(n) => clone_p(n),\n        B(n) => clone_p(n),\n    }\n}\nfn name_of(n: i64) -> String {\n    match n {\n        0 => \"zero\".to_string(),\n        1 => \"one\".to_string(),\n        _ => \"many\".to_string(),\n    }\n}\nfn label(c: bool) -> String {\n    if c {\n        \"yes\".to_string()\n    } else {\n        \"no\".to_string()\n    }\n}\nfn corner(c: bool) -> P {\n    if c {\n        P { x: 1, y: 2 }\n    } else {\n        P { x: 3, y: 4 }\n    }\n}\nfn tag(t: ref T) -> i64 {\n    match t {\n        X => 10,\n        Y => 20,\n    }\n}\nfn yes(t: ref T) -> bool {\n    match t {\n        X => true,\n        Y => false,\n    }\n}\nfn main() {\n    println(pick_str(T.X));\n    println(pick_str(T.Y));\n    let r = pick_struct(E.A(P { x: 7, y: 2 }));\n    println((r.x + r.y).to_string());\n    println(name_of(0));\n    println(name_of(1));\n    println(name_of(9));\n    println(label(true));\n    println(label(false));\n    let q = corner(false);\n    println((q.x + q.y).to_string());\n    println(tag(T.Y).to_string());\n    if yes(T.X) {\n        println(\"yx\");\n    } else {\n        println(\"nx\");\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
