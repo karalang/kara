@@ -32863,4 +32863,122 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    #[test]
+    fn asan_return_struct_field_vec_element_no_double_free() {
+        // B-2026-07-27-1: `return <struct>.<vecfield>[i];` — a field-rooted heap
+        // element read as the WHOLE expression of an explicit `return` STATEMENT
+        // — handed back the container's own element buffer without a copy, so
+        // the caller freed it AND the struct's per-element drop freed it again
+        // (Invalid free() / SIGABRT under both JIT and AOT; `--interp` clean).
+        // The TAIL spelling of the identical read (`{ self.xs[i] }`) was already
+        // correct — it routes through `compile_tail_final_expr`'s field-rooted
+        // clone arm — so the two return spellings disagreed. Both now share one
+        // clone gate (`compile_field_rooted_index_return`).
+        //
+        // Covers all four trigger conditions plus the contrasts that must stay
+        // balanced (no DOUBLE clone → no leak): the method form, the free-fn
+        // form (`ref S` param — not `self`-specific), the tail form, the
+        // let-binding form, the concat form, a `Vec[i64]` (Copy) field that must
+        // NOT clone, and a `Vec[Vec[String]]` field whose element is itself a
+        // heap Vec. Looped so a leak accumulates past LSan's noise floor.
+        let label = "return_struct_field_vec_element";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+struct S { xs: Vec[String] }
+struct G { g: Vec[Vec[String]] }
+struct N { ns: Vec[i64] }
+
+impl S {
+    fn get(ref self, i: i64) -> String { return self.xs[i]; }
+    fn tail(ref self, i: i64) -> String { self.xs[i] }
+    fn via_let(ref self, i: i64) -> String { let t = self.xs[i]; return t; }
+    fn concat(ref self, i: i64) -> String { return self.xs[i] + "!"; }
+}
+impl G { fn get(ref self, i: i64) -> Vec[String] { return self.g[i]; } }
+impl N { fn get(ref self, i: i64) -> i64 { return self.ns[i]; } }
+
+fn free_get(s: ref S, i: i64) -> String { return s.xs[i]; }
+
+fn main() {
+    let mut s = S { xs: Vec.new() };
+    let mut i = 0i64;
+    while i < 50i64 {
+        s.xs.push(f"e{i}");
+        i = i + 1i64;
+    }
+
+    let mut n = 0i64;
+    let mut j = 0i64;
+    while j < 50i64 {
+        n = n + s.get(j).len();
+        n = n + free_get(s, j).len();
+        n = n + s.tail(j).len();
+        n = n + s.via_let(j).len();
+        n = n + s.concat(j).len();
+        j = j + 1i64;
+    }
+    println(f"str={n}");
+
+    // The source container must be intact after all those reads.
+    println(f"live={s.xs[7]} len={s.xs.len()}");
+
+    // Copy element: must NOT be cloned, and must stay correct.
+    let mut nn = N { ns: Vec.new() };
+    let mut k = 0i64;
+    while k < 20i64 {
+        nn.ns.push(k * 3i64);
+        k = k + 1i64;
+    }
+    let mut sum = 0i64;
+    let mut p = 0i64;
+    while p < 20i64 {
+        sum = sum + nn.get(p);
+        p = p + 1i64;
+    }
+    println(f"scalar={sum}");
+
+    // Heap element that is itself a Vec.
+    let mut gg = G { g: Vec.new() };
+    let mut q = 0i64;
+    while q < 10i64 {
+        let mut inner: Vec[String] = Vec.new();
+        inner.push(f"i{q}");
+        inner.push(f"j{q}");
+        gg.g.push(inner);
+        q = q + 1i64;
+    }
+    let mut gl = 0i64;
+    let mut r = 0i64;
+    while r < 10i64 {
+        let got = gg.get(r);
+        gl = gl + got.len();
+        r = r + 1i64;
+    }
+    println(f"nested={gl}");
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN/LSAN reported a memory error (exit code {:?}) — a \
+             `return <struct>.<vecfield>[i];` hands back the container's element \
+             buffer, so look for a double-free of the returned String (missing \
+             clone) or a leak of the clone (cloned twice)",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["str=750", "live=e7 len=50", "scalar=570", "nested=20",],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }

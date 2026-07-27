@@ -757,6 +757,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         // and clean, which is why ONLY the explicit-return shape
                         // leaked. Removed 2026-06-12.
                         self.compile_tail_final_expr(e, ret_opt_inner)?
+                    } else if let Some(v) = self.compile_field_rooted_index_return(e)? {
+                        // B-2026-07-27-1: `return <struct>.<vecfield>[i];` — a
+                        // field-rooted heap element read as the WHOLE return
+                        // expression. The indexed read yields a shallow
+                        // `{ptr,len,cap}` ALIAS of the container's element (the
+                        // Vec keeps ownership), so returning it as-if-owned made
+                        // the caller free the buffer AND the struct's per-element
+                        // drop free it again — an Invalid free()/SIGABRT under
+                        // both JIT and AOT while `--interp` was clean. The TAIL
+                        // form of the identical expression (`fn get(ref self)
+                        // -> String { self.xs[i] }`) was already correct: it
+                        // routes through `compile_tail_final_expr`, whose
+                        // field-rooted index arm deep-clones (B-2026-07-11-35
+                        // return leg). The explicit-`return` arm never reached
+                        // that helper unless the fn returned `Option[shared]`, so
+                        // it fell straight to `compile_expr` and skipped the
+                        // clone — the exact tail-vs-return asymmetry. Share the
+                        // one clone path so both spellings own an independent
+                        // buffer.
+                        v
                     } else {
                         self.compile_expr(e)?
                     };

@@ -90,6 +90,45 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Compile a return-position field-rooted heap element index
+    /// (`self.xs[i]`, `h.items[i]`) as an independently-owned value, or `None`
+    /// when `expr` is not that shape (the caller then falls through unchanged).
+    ///
+    /// A `ref self` / `ref Struct` fn cannot MOVE an element out of the borrowed
+    /// container, and `compile_vec_index` only loads the element's
+    /// `{ptr,len,cap}` header — so returning it directly hands the caller an
+    /// ALIAS of the container's buffer and both free it at their scope exits
+    /// (double-free: B-2026-07-11-35's return leg at the tail, B-2026-07-27-1 at
+    /// an explicit `return`). The bare-`v[i]` return is already produced as an
+    /// independent value by the owned/borrow return machinery, so ONLY the
+    /// field-rooted read falls through uncloned.
+    ///
+    /// Shared by BOTH return spellings — `compile_tail_final_expr` (tail
+    /// expression) and the `ExprKind::Return` arm (explicit `return`). They used
+    /// to disagree: only the tail had the clone, so the identical expression
+    /// crashed with `return` and was clean without it. Keeping the one gate here
+    /// is what makes the two spellings behave the same.
+    ///
+    /// Gated to a FieldAccess-object element index; a range slice is excluded
+    /// (already fresh), and `clone_owned_vec_index_element` self-gates on a
+    /// non-trivially-copyable element and on the read value's LLVM type, so a
+    /// Copy element (`Vec[i64]`) or a mis-typed monomorph read is a no-op.
+    pub(super) fn compile_field_rooted_index_return(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return Ok(None);
+        };
+        if !matches!(&object.kind, ExprKind::FieldAccess { .. })
+            || matches!(&index.kind, ExprKind::Range { .. })
+        {
+            return Ok(None);
+        }
+        let v = self.compile_expr(expr)?;
+        self.clone_owned_vec_index_element(expr, v).map(Some)
+    }
+
     /// Compile a block's final expression, applying per-branch tail-return
     /// compensation for `Option[shared T]` returns when `tail_inner` is `Some`
     /// (i.e. this block's value IS the function's return value).
@@ -159,13 +198,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`Vec[i64]`) or a mis-typed read is a no-op. Runs ahead of the
         // `tail_inner` (Option[shared]) path — a `Vec`/`String` element index is
         // disjoint from the shared-enum tail shapes handled below.
-        if let ExprKind::Index { object, index } = &expr.kind {
-            if matches!(&object.kind, ExprKind::FieldAccess { .. })
-                && !matches!(&index.kind, ExprKind::Range { .. })
-            {
-                let v = self.compile_expr(expr)?;
-                return self.clone_owned_vec_index_element(expr, v);
-            }
+        if let Some(v) = self.compile_field_rooted_index_return(expr)? {
+            return Ok(v);
         }
         let Some(inner) = tail_inner else {
             return self.compile_expr(expr);

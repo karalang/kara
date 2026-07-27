@@ -7143,6 +7143,68 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_return_struct_field_vec_element_is_cloned() {
+        // B-2026-07-27-1: `return <struct>.<vecfield>[i];` handed back the
+        // container's OWN element buffer — the caller freed it and the struct's
+        // per-element drop freed it again (SIGABRT under JIT and AOT, clean
+        // under `--interp`). The TAIL spelling of the same read was already
+        // correct via `compile_tail_final_expr`'s field-rooted clone arm; the
+        // explicit-`return` arm never reached that helper. Both now share
+        // `compile_field_rooted_index_return`. Asserts the value is right AND
+        // that the source container survives every read intact — a
+        // move-instead-of-clone would leave `s.xs[0]` dangling.
+        if let Some(out) = run_program(
+            "struct S { xs: Vec[String] }\n\
+             impl S {\n\
+             \x20   fn get(ref self, i: i64) -> String { return self.xs[i]; }\n\
+             \x20   fn tail(ref self, i: i64) -> String { self.xs[i] }\n\
+             }\n\
+             fn free_get(s: ref S, i: i64) -> String { return s.xs[i]; }\n\
+             fn main() {\n\
+             \x20   let mut s = S { xs: Vec.new() };\n\
+             \x20   s.xs.push(\"a\".to_string());\n\
+             \x20   s.xs.push(\"b\".to_string());\n\
+             \x20   println(s.get(0));\n\
+             \x20   println(free_get(s, 1));\n\
+             \x20   println(s.tail(0));\n\
+             \x20   println(s.get(0));\n\
+             \x20   println(s.xs[0]);\n\
+             \x20   println(s.xs.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "a\nb\na\na\na\n2\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_return_struct_field_vec_element_emits_clone() {
+        // B-2026-07-27-1 structural guard: the explicit-`return` lowering of a
+        // field-rooted heap element index must emit the element deep-clone, and
+        // must match what the TAIL spelling emits. Pinning the shape keeps the
+        // two return forms from silently diverging again — an output-only
+        // assertion can pass on a build where the missing clone happens not to
+        // abort. A `Vec[i64]` (Copy) field must still emit NO clone.
+        let ret_ir = ir_for(
+            "struct S { xs: Vec[String] }\n\
+             impl S { fn get(ref self, i: i64) -> String { return self.xs[i]; } }\n\
+             fn main() { let mut s = S { xs: Vec.new() }; s.xs.push(\"a\"); println(s.get(0)); }",
+        );
+        assert!(
+            ret_ir.contains("karac_clone_String"),
+            "an explicit `return self.xs[i];` must deep-clone the element:\n{ret_ir}"
+        );
+        let copy_ir = ir_for(
+            "struct S { ns: Vec[i64] }\n\
+             impl S { fn get(ref self, i: i64) -> i64 { return self.ns[i]; } }\n\
+             fn main() { let mut s = S { ns: Vec.new() }; s.ns.push(7); println(s.get(0)); }",
+        );
+        assert!(
+            !copy_ir.contains("karac_clone_String"),
+            "a Copy (`Vec[i64]`) field element must NOT be cloned:\n{copy_ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_for_loop_closure_element_emits_indirect_call_not_const_zero() {
         // B-2026-07-23-28 structural guard: the `for op in ops` body must emit a
         // real indirect `call` through the loaded fat pointer's fn slot. Before
