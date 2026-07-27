@@ -191,6 +191,18 @@ struct Emitter {
     loop_cont: Vec[String],
     en_off: Vec[i64],
     en_cnt: Vec[i64],
+    // Per-ENUM (parallel to `en_names`, Slice 63): `true` for a `shared enum`.
+    // A shared enum is an RC POINTER handle, not a by-value aggregate: the
+    // value is a `ptr` to a heap node `{ i64 rc, i64 tag, <payload> }` whose
+    // payload type is the CONSTRUCTED VARIANT's own (so the node is typed
+    // per-variant, not a union — the `{rc,tag}` prefix is common to all
+    // variants, which is what makes the tag load legal through any handle).
+    // This is what makes a RECURSIVE enum representable: a `shared` field
+    // inside a payload lowers to `ptr` (one word), so the node has a finite
+    // size. Contrast the by-value path, whose payload lives in fixed
+    // `en_extra`/`en_extra2` aggregate slots and therefore cannot express a
+    // type that contains itself (B-2026-07-27-6).
+    en_shared: Vec[bool],
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
@@ -235,8 +247,18 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         loop_cont: Vec.new(),
         en_off: Vec.new(),
         en_cnt: Vec.new(),
+        en_shared: Vec.new(),
     };
     e.collect_sigs(items);
+    // Slice 63: one RC-drop helper per `shared enum`, emitted before any user
+    // function so a handle slot's scope-exit release always has a callee.
+    let mut sei = 0;
+    while sei < e.en_shared.len() {
+        if e.en_shared[sei] {
+            e.sh_emit_release_fn(sei);
+        }
+        sei = sei + 1;
+    }
     for it in items {
         match it {
             Func(f) => {
@@ -308,7 +330,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_extra, en_extra2, loop_break, loop_cont, en_off, en_cnt } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_extra, en_extra2, loop_break, loop_cont, en_off, en_cnt, en_shared } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -410,6 +432,10 @@ impl Emitter {
         while self.en_extra2.len() < self.en_names.len() {
             self.en_extra2.push(0 - 1);
         }
+        // The synthetic Option/Result family is never `shared` (Slice 63).
+        while self.en_shared.len() < self.en_names.len() {
+            self.en_shared.push(false);
+        }
         // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
         // return type can name any struct regardless of order. Indexed reads
         // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
@@ -463,11 +489,18 @@ impl Emitter {
                     // Aggregate payload slots (Slices 39/41/43): record up to
                     // TWO distinct AGGREGATE payload kinds (struct 10+ or vec
                     // 3/4/2000+/4000+) → slot 3 and slot 4.
+                    // Slice 63: a `shared enum` is an RC pointer handle, so it
+                    // has NO by-value aggregate slots — its payload lives in a
+                    // per-variant heap node instead. Recording `-1/-1` below is
+                    // what keeps a 30-variant recursive enum like `ast.Expr`
+                    // off the two-slot ceiling (the `en_agg_slot` sentinel).
+                    let eshared = ed.is_shared;
+                    self.en_shared.push(eshared);
                     let eoff2 = self.en_off[self.en_names.len() - 1];
                     let mut ex = 0 - 1;
                     let mut ex2 = 0 - 1;
                     let mut vj = 0;
-                    while vj < cnt {
+                    while vj < cnt and eshared == false {
                         let p1 = self.en_var_pl[eoff2 + vj];
                         let is_agg = (p1 >= 10 and p1 < 1000) or p1 == 3 or p1 == 4 or p1 >= 2000;
                         if is_agg {
@@ -694,6 +727,13 @@ impl Emitter {
             return "{ ptr, i64, i64 }".to_string();
         }
         if kind >= 1000 {
+            // Slice 63: a `shared enum` handle is one machine word — a `ptr`
+            // to its heap node. This single line is what breaks the recursion
+            // cycle: `ty_text` of a payload struct containing an `Expr` field
+            // no longer re-enters that enum's layout, it stops at `ptr`.
+            if self.en_shared[kind - 1000] {
+                return "ptr".to_string();
+            }
             // A str-enum (Slice 23: any variant carries a String payload)
             // widens to { tag, i64 payload, String payload }; pure-i64 enums
             // keep the two-slot layout. The four synthetic Result kinds
@@ -799,6 +839,180 @@ impl Emitter {
             vi = vi + 1;
         }
         0 - 1
+    }
+
+    // ---- `shared enum` support (Slice 63) --------------------------------
+    //
+    // Representation: a handle is a `ptr` to a heap node laid out as
+    //     { i64 refcount, i64 tag, <this variant's payload> }
+    // The `{ i64, i64 }` prefix is IDENTICAL for every variant of the enum,
+    // so loading the tag through an unknown-variant handle is well-defined;
+    // only after the tag is known does codegen GEP with the variant's own
+    // node type to reach the payload. That is why this is a per-variant
+    // typed node rather than a union or a word-blob — no payload
+    // decomposition, no max-size computation, and each payload keeps its
+    // natural LLVM type.
+
+    // True when enum `ei` is declared `shared`.
+    fn en_is_shared(ref self, ei: i64) -> bool {
+        if ei < 0 {
+            return false;
+        }
+        if ei >= self.en_shared.len() {
+            return false;
+        }
+        self.en_shared[ei]
+    }
+
+    // The heap-node type text for variant `tag` of shared enum `ei`.
+    fn sh_node_ty(ref self, ei: i64, tag: i64) -> String {
+        let plk = self.en_var_pl[self.en_off[ei] + tag];
+        if plk < 0 {
+            return "{ i64, i64 }".to_string();
+        }
+        "{ i64, i64, ".to_string() + self.ty_text(plk) + " }"
+    }
+
+    // Payload kinds this slice can allocate/release inside a shared node.
+    // Deliberately narrow, and REFUSED LOUDLY rather than mis-emitted: a
+    // silently-wrong payload is exactly the class of bug this port keeps
+    // finding (B-2026-07-27-10). Struct payloads (`ast.Expr`'s real shape)
+    // land in the next slice.
+    fn sh_payload_ok(ref self, plk: i64) -> bool {
+        if plk < 0 {
+            return true;
+        }
+        if plk == 0 or plk == 1 or plk == 5 or plk == 2 {
+            return true;
+        }
+        if plk >= 1000 and plk < 2000 {
+            return self.en_is_shared(plk - 1000);
+        }
+        false
+    }
+
+    // Emit `%r = call ptr @malloc(<size of node>)` using the GEP size idiom
+    // (`getelementptr <ty>, ptr null, i64 1` → the type's allocated size),
+    // then store refcount 1 and the tag. Returns the node pointer register.
+    fn sh_emit_alloc(mut ref self, ei: i64, tag: i64) -> String {
+        let nty = self.sh_node_ty(ei, tag);
+        let szp = self.fresh();
+        self.body = self.body
+            + "  "
+            + szp.clone()
+            + " = getelementptr "
+            + nty.clone()
+            + ", ptr null, i64 1\n";
+        let sz = self.fresh();
+        self.body = self.body + "  " + sz.clone() + " = ptrtoint ptr " + szp + " to i64\n";
+        let p = self.fresh();
+        self.body = self.body + "  " + p.clone() + " = call ptr @malloc(i64 " + sz + ")\n";
+        // refcount := 1
+        let rcp = self.fresh();
+        self.body = self.body
+            + "  "
+            + rcp.clone()
+            + " = getelementptr inbounds { i64, i64 }, ptr "
+            + p.clone()
+            + ", i32 0, i32 0\n";
+        self.body = self.body + "  store i64 1, ptr " + rcp + ", align 8\n";
+        // tag
+        let tgp = self.fresh();
+        self.body = self.body
+            + "  "
+            + tgp.clone()
+            + " = getelementptr inbounds { i64, i64 }, ptr "
+            + p.clone()
+            + ", i32 0, i32 1\n";
+        self.body = self.body + "  store i64 " + tag.to_string() + ", ptr " + tgp + ", align 8\n";
+        p
+    }
+
+    // Load the tag out of a shared handle (legal for ANY variant — the
+    // `{ i64, i64 }` prefix is common).
+    fn sh_emit_tag_load(mut ref self, hop: String) -> String {
+        let tgp = self.fresh();
+        self.body = self.body
+            + "  "
+            + tgp.clone()
+            + " = getelementptr inbounds { i64, i64 }, ptr "
+            + hop
+            + ", i32 0, i32 1\n";
+        let tg = self.fresh();
+        self.body = self.body + "  " + tg.clone() + " = load i64, ptr " + tgp + ", align 8\n";
+        tg
+    }
+
+    // Emit `@sh_release_<ei>` — the per-enum RC drop. Decrements the
+    // refcount; at zero it releases the live variant's payload (recursively,
+    // for a `shared` payload — this is what frees a whole tree from its root)
+    // and frees the node. Null-safe, so an un-initialized handle slot
+    // (zeroinit) releases harmlessly, matching the `free(null)` discipline
+    // every other slot free in this emitter relies on.
+    fn sh_emit_release_fn(mut ref self, ei: i64) {
+        let fname = "@sh_release_" + ei.to_string();
+        let mut f = "define void ".to_string() + fname.clone() + "(ptr %p) {\n";
+        f = f + "entry:\n";
+        f = f + "  %isnull = icmp eq ptr %p, null\n";
+        f = f + "  br i1 %isnull, label %rdone, label %rdec\n";
+        f = f + "rdec:\n";
+        f = f + "  %rcp = getelementptr inbounds { i64, i64 }, ptr %p, i32 0, i32 0\n";
+        f = f + "  %rc = load i64, ptr %rcp, align 8\n";
+        f = f + "  %rc1 = sub i64 %rc, 1\n";
+        f = f + "  store i64 %rc1, ptr %rcp, align 8\n";
+        f = f + "  %dead = icmp sle i64 %rc1, 0\n";
+        f = f + "  br i1 %dead, label %rfree, label %rdone\n";
+        f = f + "rfree:\n";
+        f = f + "  %tgp = getelementptr inbounds { i64, i64 }, ptr %p, i32 0, i32 1\n";
+        f = f + "  %tg = load i64, ptr %tgp, align 8\n";
+        let off = self.en_off[ei];
+        let cnt = self.en_cnt[ei];
+        let mut vi = 0;
+        while vi < cnt {
+            let plk = self.en_var_pl[off + vi];
+            // Only variants whose payload OWNS heap need a release arm.
+            let mut needs = false;
+            if plk == 2 {
+                needs = true;
+            }
+            if plk >= 1000 and plk < 2000 and self.en_is_shared(plk - 1000) {
+                needs = true;
+            }
+            if needs {
+                let sfx = vi.to_string();
+                let nty = self.sh_node_ty(ei, vi);
+                f = f + "  %c" + sfx.clone() + " = icmp eq i64 %tg, " + sfx.clone() + "\n";
+                f = f + "  br i1 %c" + sfx.clone() + ", label %rv" + sfx.clone() + ", label %rn"
+                    + sfx.clone() + "\n";
+                f = f + "rv" + sfx.clone() + ":\n";
+                f = f + "  %pp" + sfx.clone() + " = getelementptr inbounds " + nty
+                    + ", ptr %p, i32 0, i32 2\n";
+                if plk == 2 {
+                    // String payload: free its buffer (the `{ptr,i64}` head).
+                    f = f + "  %sp" + sfx.clone() + " = getelementptr inbounds { ptr, i64 }, ptr %pp"
+                        + sfx.clone() + ", i32 0, i32 0\n";
+                    f = f + "  %sb" + sfx.clone() + " = load ptr, ptr %sp" + sfx.clone()
+                        + ", align 8\n";
+                    f = f + "  call void @free(ptr %sb" + sfx.clone() + ")\n";
+                } else {
+                    // `shared` payload: recurse into the child handle.
+                    let cei = plk - 1000;
+                    f = f + "  %ch" + sfx.clone() + " = load ptr, ptr %pp" + sfx.clone()
+                        + ", align 8\n";
+                    f = f + "  call void @sh_release_" + cei.to_string() + "(ptr %ch" + sfx.clone()
+                        + ")\n";
+                }
+                f = f + "  br label %rn" + sfx.clone() + "\n";
+                f = f + "rn" + sfx.clone() + ":\n";
+            }
+            vi = vi + 1;
+        }
+        f = f + "  call void @free(ptr %p)\n";
+        f = f + "  br label %rdone\n";
+        f = f + "rdone:\n";
+        f = f + "  ret void\n";
+        f = f + "}\n";
+        self.funcs = self.funcs + f;
     }
 
     // Emit ONE function definition (Slice 6). Per-fn state (`body`, `locals`)
@@ -3453,15 +3667,23 @@ impl Emitter {
         }
         let ei = sk - 1000;
         let ety = self.ty_text(sk);
-        let tg = self.fresh();
-        self.body = self.body
-            + "  "
-            + tg.clone()
-            + " = extractvalue "
-            + ety.clone()
-            + " "
-            + sop.clone()
-            + ", 0\n";
+        let shared_scrut = self.en_is_shared(ei);
+        let mut tg = "".to_string();
+        if shared_scrut {
+            // Slice 63: the tag lives behind the handle, in the `{rc,tag}`
+            // prefix every variant node shares.
+            tg = self.sh_emit_tag_load(sop.clone());
+        } else {
+            tg = self.fresh();
+            self.body = self.body
+                + "  "
+                + tg.clone()
+                + " = extractvalue "
+                + ety.clone()
+                + " "
+                + sop.clone()
+                + ", 0\n";
+        }
         let mut rslot = "".to_string();
         // B-2026-07-27-3: set when any arm yields a BOOL (i1).
         let mut rbool = false;
@@ -3584,7 +3806,67 @@ impl Emitter {
                     + lnext.clone()
                     + "\n";
                 self.body = self.body + lbody + ":\n";
-                if bind_payload != "" {
+                if bind_payload != "" and shared_scrut {
+                    // Slice 63: the arm's tag selects the node type, so the
+                    // payload is reached by a typed GEP + load. Bound as a
+                    // BORROW (the scrutinee's owner keeps it and releases it),
+                    // matching how every other aggregate payload binds here.
+                    let plk7 = self.en_var_pl[self.en_off[ei] + tag];
+                    if plk7 >= 0 {
+                        let nty7 = self.sh_node_ty(ei, tag);
+                        let pgp7 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pgp7.clone()
+                            + " = getelementptr inbounds "
+                            + nty7
+                            + ", ptr "
+                            + sop.clone()
+                            + ", i32 0, i32 2\n";
+                        let sty7 = self.ty_text(plk7);
+                        let pv7 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pv7.clone()
+                            + " = load "
+                            + sty7.clone()
+                            + ", ptr "
+                            + pgp7
+                            + ", align 8\n";
+                        let idx7 = self.locals.len();
+                        self.locals.push(bind_payload.clone());
+                        self.locals_kind.push(plk7);
+                        self.locals_heap.push(false);
+                        let mut zv7 = "zeroinitializer".to_string();
+                        if plk7 == 0 or plk7 == 1 {
+                            zv7 = "0".to_string();
+                        }
+                        if plk7 >= 1000 and plk7 < 2000 {
+                            zv7 = "null".to_string();
+                        }
+                        self.entry_allocas = self.entry_allocas
+                            + "  %v"
+                            + idx7.to_string()
+                            + " = alloca "
+                            + sty7.clone()
+                            + ", align 8\n"
+                            + "  store "
+                            + sty7.clone()
+                            + " "
+                            + zv7
+                            + ", ptr %v"
+                            + idx7.to_string()
+                            + ", align 8\n";
+                        self.body = self.body
+                            + "  store "
+                            + sty7
+                            + " "
+                            + pv7
+                            + ", ptr %v"
+                            + idx7.to_string()
+                            + ", align 8\n";
+                    }
+                } else if bind_payload != "" {
                     // The payload binds by KIND (Slice 23): i64 from slot 1,
                     // String from slot 2, a struct/vec aggregate from slot 3
                     // or 4 (Slices 39/41/43) — heap payloads bind as BORROWS
@@ -5080,6 +5362,22 @@ impl Emitter {
             self.emit_free_struct_val(ag2, k - 10);
             return;
         }
+        if k >= 1000 and k < 2000 and self.en_is_shared(k - 1000) {
+            // Slice 63: a `shared enum` slot holds an RC handle — release it.
+            // The slot is zero-initialized at fn entry, so an unexecuted `let`
+            // releases `null`, which `@sh_release_*` short-circuits.
+            let hh = self.fresh();
+            self.body = self.body
+                + "  "
+                + hh.clone()
+                + " = load ptr, ptr %v"
+                + idx.to_string()
+                + ", align 8\n";
+            self.body =
+                self.body + "  call void @sh_release_" + (k - 1000).to_string() + "(ptr " + hh
+                    + ")\n";
+            return;
+        }
         if k >= 1000 and k < 2000 {
             // A str-enum slot (Slice 23): tag-conditional payload free. Pure
             // enums are POD — nothing to do.
@@ -5779,6 +6077,52 @@ impl Emitter {
                         + ", 1\n";
                     return Val { op: a1, kind: 0 - 10, heap: false };
                 }
+                if enum_ei >= 0 and enum_tag >= 0 and self.en_is_shared(enum_ei) {
+                    // Slice 63: payload-carrying construction of a `shared`
+                    // variant. The node is typed with THIS variant's payload,
+                    // so the value is stored at its natural type — no slot
+                    // routing, no widening, and (unlike the by-value path) no
+                    // ceiling on how many distinct payload types the enum has.
+                    let plk6 = self.en_var_pl[self.en_off[enum_ei] + enum_tag];
+                    if self.sh_payload_ok(plk6) == false {
+                        panic("codegen.kara: unsupported payload type in a `shared enum` variant. Slice 63 handles i64/bool/f64/String/`shared` payloads; struct payloads are the next slice — see bug B-2026-07-27-6.");
+                    }
+                    let hp6 = self.sh_emit_alloc(enum_ei, enum_tag);
+                    let nty6 = self.sh_node_ty(enum_ei, enum_tag);
+                    for a in args {
+                        let CallArg { label, mut_marker, value, span: asp } = a;
+                        let av6 = self.emit_value(value);
+                        let Val { op: aop6, kind: ak6, heap: ah6 } = av6;
+                        let mut sop6 = aop6;
+                        // A BORROWED String payload must be deep-copied — the
+                        // node owns (and later frees) whatever it stores, so
+                        // storing a borrow would double-free against its owner.
+                        if plk6 == 2 and ah6 == false {
+                            let mv6 = self.emit_materialize(sop6);
+                            let Val { op: cop6, kind: ck6, heap: ch6 } = mv6;
+                            sop6 = cop6;
+                        }
+                        let pgp6 = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + pgp6.clone()
+                            + " = getelementptr inbounds "
+                            + nty6.clone()
+                            + ", ptr "
+                            + hp6.clone()
+                            + ", i32 0, i32 2\n";
+                        let sty6 = self.ty_text(plk6);
+                        self.body = self.body
+                            + "  store "
+                            + sty6
+                            + " "
+                            + sop6
+                            + ", ptr "
+                            + pgp6
+                            + ", align 8\n";
+                    }
+                    return Val { op: hp6, kind: 1000 + enum_ei, heap: true };
+                }
                 if enum_ei >= 0 and enum_tag >= 0 {
                     // Payload-carrying construction (Slice 14; String payloads
                     // Slice 23; TWO-payload variants Slice 35). Args route by
@@ -6174,6 +6518,14 @@ impl Emitter {
                     let ei = self.en_index(segments[0]);
                     if ei >= 0 {
                         let tag = self.en_variant_tag(ei, segments[1]);
+                        if tag >= 0 and self.en_is_shared(ei) {
+                            // Slice 63: unit variant of a `shared enum` — a
+                            // heap node carrying just `{ rc, tag }`. `heap:
+                            // true` puts it under the same owned-slot release
+                            // discipline as any other heap value.
+                            let hp = self.sh_emit_alloc(ei, tag);
+                            return Val { op: hp, kind: 1000 + ei, heap: true };
+                        }
                         if tag >= 0 {
                             // Zeroinitializer base (Slice 23): a str-enum's
                             // untouched payload slot must hold null, not undef

@@ -605,6 +605,28 @@ const CORPUS: &[&str] = &[
     // String fields, destructure inside a free fn and a method, the `{ a: x }`
     // renaming form, and a heap-field print.
     "struct S {\n    name: String,\n    a: i64,\n    b: i64,\n}\nfn idof(name: ref String) -> i64 {\n    if name == \"x\" {\n        return 1;\n    }\n    return 0;\n}\nfn consume(s: S) -> i64 {\n    let S { name, a, b } = s;\n    return idof(name) + a * 100 + b;\n}\nstruct C {\n    tag: i64,\n}\nimpl C {\n    fn idof2(ref self, name: ref String) -> i64 {\n        if name == \"y\" {\n            return 7;\n        }\n        return 0;\n    }\n    fn check(mut ref self, s: S) -> i64 {\n        let S { name, a, b } = s;\n        let sid = self.idof2(name);\n        return sid + a + b;\n    }\n}\nfn main() {\n    let s1 = S {\n        name: \"x\".to_string(),\n        a: 3,\n        b: 4,\n    };\n    println(consume(s1).to_string());\n    let mut c = C { tag: 0 };\n    let s2 = S {\n        name: \"y\".to_string(),\n        a: 1,\n        b: 2,\n    };\n    println(c.check(s2).to_string());\n    let s3 = S {\n        name: \"hello\".to_string(),\n        a: 7,\n        b: 5,\n    };\n    let S { name, a, b } = s3;\n    println(name);\n    println((a + b).to_string());\n    let s4 = S {\n        name: \"z\".to_string(),\n        a: 2,\n        b: 9,\n    };\n    let S { name: nm, a: x, b: y } = s4;\n    println(nm);\n    println((x * 10 + y).to_string());\n}",
+    // Slice 63: `shared enum` — the RC POINTER representation. Before this the
+    // port parsed `shared` and then IGNORED it, laying a shared enum out as a
+    // by-value aggregate with fixed payload slots; a RECURSIVE enum is not
+    // expressible that way (the type contains itself), so `ast.Expr` hit the
+    // two-slot `en_agg_slot` ceiling and refused. B-2026-07-27-6. Fix: a shared
+    // handle is a `ptr` to a heap node `{ i64 rc, i64 tag, <payload> }` typed
+    // with the CONSTRUCTED variant's own payload. The `{rc,tag}` prefix is
+    // common to every variant, which is what makes loading the tag through an
+    // unknown-variant handle well-defined; only once the tag is known does an
+    // arm GEP with that variant's node type. Because `ty_text` of a shared kind
+    // stops at `ptr`, a payload that mentions the enum itself is one word, so
+    // the node has a finite size and recursion falls out. Ownership: a per-enum
+    // `@sh_release_<ei>` decrements, and at zero releases the live variant's
+    // payload — recursing for a `shared` payload, so releasing a root frees the
+    // whole chain — then frees the node; it is null-safe, so a zero-initialized
+    // slot releases harmlessly. Payload binds are BORROWS (the scrutinee's
+    // owner releases), matching every other aggregate payload here. Covers a
+    // recursive 3-deep chain, i64/String/bool/f64 payloads, a unit variant,
+    // construction returned from a fn through both the `return` and tail paths,
+    // and statement- and value-position matches. Leak-clean under the oracle's
+    // valgrind leg (the real assertion for the RC path).
+    "shared enum Chain {\n    End,\n    Link(Chain),\n}\nshared enum V {\n    Num(i64),\n    Name(String),\n    Flag(bool),\n    Real(f64),\n    Nothing,\n}\nfn depth(c: ref Chain) -> i64 {\n    match c {\n        End => 0,\n        Link(inner) => 1 + depth(inner),\n    }\n}\nfn kind_of(v: ref V) -> String {\n    match v {\n        Num(n) => \"num\".to_string(),\n        Name(s) => \"name\".to_string(),\n        Flag(b) => \"flag\".to_string(),\n        Real(f) => \"real\".to_string(),\n        Nothing => \"none\".to_string(),\n    }\n}\nfn num_of(v: ref V) -> i64 {\n    match v {\n        Num(n) => n,\n        Name(s) => 0 - 1,\n        Flag(b) => 0 - 2,\n        Real(f) => 0 - 3,\n        Nothing => 0 - 4,\n    }\n}\nfn truth(v: ref V) -> bool {\n    match v {\n        Flag(b) => b,\n        Num(n) => false,\n        Name(s) => false,\n        Real(f) => false,\n        Nothing => false,\n    }\n}\nfn make(n: i64) -> V {\n    if n > 0 {\n        return V.Num(n);\n    }\n    V.Nothing\n}\nfn main() {\n    let c = Chain.Link(Chain.Link(Chain.Link(Chain.End)));\n    let d = depth(c);\n    println(d.to_string());\n    let a = V.Num(7);\n    println(kind_of(a));\n    let an = num_of(a);\n    println(an.to_string());\n    let b = V.Flag(true);\n    println(kind_of(b));\n    if truth(b) {\n        println(\"yes\");\n    } else {\n        println(\"no\");\n    }\n    let r = V.Real(2.5);\n    println(kind_of(r));\n    let e = V.Nothing;\n    println(kind_of(e));\n    let f = V.Name(\"hi\".to_string());\n    match f {\n        Num(n) => println(\"num\"),\n        Name(s) => println(s),\n        Flag(g) => println(\"flag\"),\n        Real(q) => println(\"real\"),\n        Nothing => println(\"none\"),\n    }\n    let x = make(5);\n    println(kind_of(x));\n    let xn = num_of(x);\n    println(xn.to_string());\n    let y = make(0);\n    println(kind_of(y));\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
