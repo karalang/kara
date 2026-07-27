@@ -1285,6 +1285,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // String comparator). Repopulated below from params and at let sites.
         self.enum_inst_var_types.clear();
         self.string_vars.clear();
+        self.ascii_const_string_lets.clear();
         self.slice_elem_types.clear();
         self.map_key_types.clear();
         self.map_val_types.clear();

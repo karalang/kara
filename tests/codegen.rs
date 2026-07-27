@@ -7238,6 +7238,196 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_ascii_const_chars_loop_is_branch_free_stride_1() {
+        // B-2026-07-27-7: `for ch in <ascii-const>.chars()` must lower to a
+        // branch-free stride-1 walk — no ASCII peek-and-branch, no
+        // `karac_string_decode_char` call, so the byte offset IS the
+        // induction variable. That shape is what lets LLVM reduce a search
+        // over a constant string to a single indexed load; with the general
+        // loop's offset PHI in the way it cannot, and the walk survives into
+        // the binary (measured 699.4M vs 42.8M instructions on a 4.25M-call
+        // `nth_letter` probe).
+        //
+        // Assert on the ABSENCE of the decode call, not just on output — a
+        // correct-but-unfoldable lowering is exactly the bug.
+        let ir = ir_for(
+            "fn nth(n: i64) -> char {\n\
+             \x20   let alphabet: String = \"abcdefghijklmnopqrstuvwxyz\";\n\
+             \x20   let mut i = 0i64;\n\
+             \x20   for ch in alphabet.chars() {\n\
+             \x20       if i == n { return ch; }\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             \x20   return 'a';\n\
+             }\n\
+             fn main() { println(nth(3i64)); }",
+        );
+        let nth = ir
+            .split("define")
+            .find(|f| f.contains("@nth"))
+            .expect("@nth not found in IR");
+        assert!(
+            !nth.contains("@karac_string_decode_char"),
+            "a proven all-ASCII constant must take the branch-free chars loop \
+             (no per-char decode call); got:\n{}",
+            nth
+        );
+        assert!(
+            nth.contains("for.sa.cond"),
+            "expected the branch-free stride-1 chars loop blocks (for.sa.*); got:\n{}",
+            nth
+        );
+    }
+
+    #[test]
+    fn test_ir_non_const_and_multibyte_chars_loops_keep_the_decode_path() {
+        // B-2026-07-27-7 fail-closed guard — the half that keeps the fix
+        // sound. Each of these must KEEP the general decode loop, because the
+        // branch-free walk binds one `char` per BYTE and would silently split
+        // a multibyte scalar into its UTF-8 bytes:
+        //   - a String PARAMETER (contents unknown at compile time),
+        //   - a multibyte literal,
+        //   - an ASCII literal binding that is later MUTATED (`push`), so the
+        //     literal is no longer what the loop walks.
+        for (name, src) in [
+            (
+                "param",
+                "fn walk(s: String) -> i64 {\n\
+                 \x20   let mut n = 0i64;\n\
+                 \x20   for ch in s.chars() { n = n + 1i64; }\n\
+                 \x20   return n;\n\
+                 }\n\
+                 fn main() { println(walk(\"ab\".to_string())); }",
+            ),
+            (
+                "multibyte-literal",
+                "fn walk() -> i64 {\n\
+                 \x20   let s: String = \"h\u{e9}llo\";\n\
+                 \x20   let mut n = 0i64;\n\
+                 \x20   for ch in s.chars() { n = n + 1i64; }\n\
+                 \x20   return n;\n\
+                 }\n\
+                 fn main() { println(walk()); }",
+            ),
+            (
+                "mutated-after-let",
+                "fn walk() -> i64 {\n\
+                 \x20   let s: String = \"ab\";\n\
+                 \x20   s.push('c');\n\
+                 \x20   let mut n = 0i64;\n\
+                 \x20   for ch in s.chars() { n = n + 1i64; }\n\
+                 \x20   return n;\n\
+                 }\n\
+                 fn main() { println(walk()); }",
+            ),
+        ] {
+            let ir = ir_for(src);
+            let w = ir
+                .split("define")
+                .find(|f| f.contains("@walk("))
+                .unwrap_or_else(|| panic!("@walk not found in IR for {}", name));
+            assert!(
+                w.contains("@karac_string_decode_char"),
+                "{}: must fail CLOSED to the general UTF-8 decode loop — the \
+                 branch-free walk would mis-iterate multibyte text; got:\n{}",
+                name,
+                w
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_ascii_const_chars_loop_matches_the_decode_path() {
+        // B-2026-07-27-7 behavioural companion to the two IR guards. The fast
+        // path is a different loop body, so pin the observable results across
+        // every shape it can and cannot take: a let-bound ASCII constant, a
+        // multibyte let-bound constant, bare ASCII / multibyte literal
+        // receivers, the no-`.chars()` spelling, a binding mutated after its
+        // `let`, a reassigned binding, `break` / `continue` through the fast
+        // path, the empty string, glyph (not codepoint) rendering, and a
+        // SHADOWING inner binding of the same name holding runtime multibyte
+        // text — the case the loop-site alloca identity check exists for.
+        if let Some(out) = run_program(
+            "fn pick() -> String { return \"\u{e9}\u{2192}\"; }\n\
+             fn spoil(s: mut ref String) { s.push('\u{e9}'); }\n\
+             fn main() {\n\
+             \x20   let a: String = \"abcXYZ\";\n\
+             \x20   let mut o = 0i64;\n\
+             \x20   for c in a.chars() { o = o + (c as i64); }\n\
+             \x20   println(o);\n\
+             \x20   let m: String = \"h\u{e9}llo\u{2192}\";\n\
+             \x20   let mut p = 0i64;\n\
+             \x20   for c in m.chars() { p = p + (c as i64); }\n\
+             \x20   println(p);\n\
+             \x20   let mut q = 0i64;\n\
+             \x20   for c in \"hey\".chars() { q = q + (c as i64); }\n\
+             \x20   println(q);\n\
+             \x20   let mut r = 0i64;\n\
+             \x20   for c in \"\u{e9}\u{2192}\".chars() { r = r + (c as i64); }\n\
+             \x20   println(r);\n\
+             \x20   let e: String = \"pq\";\n\
+             \x20   let mut t = 0i64;\n\
+             \x20   for c in e { t = t + (c as i64); }\n\
+             \x20   println(t);\n\
+             \x20   let g: String = \"ab\";\n\
+             \x20   g.push('\u{e9}');\n\
+             \x20   let mut u = 0i64;\n\
+             \x20   for c in g.chars() { u = u + (c as i64); }\n\
+             \x20   println(u);\n\
+             \x20   let w: String = \"ab\";\n\
+             \x20   w = \"\u{e9}\";\n\
+             \x20   let mut x = 0i64;\n\
+             \x20   for c in w.chars() { x = x + (c as i64); }\n\
+             \x20   println(x);\n\
+             \x20   let k: String = \"abcdef\";\n\
+             \x20   let mut n = 0i64;\n\
+             \x20   let mut s = 0i64;\n\
+             \x20   for c in k.chars() {\n\
+             \x20       if n == 1i64 { n = n + 1i64; continue; }\n\
+             \x20       if n == 4i64 { break; }\n\
+             \x20       s = s + (c as i64);\n\
+             \x20       n = n + 1i64;\n\
+             \x20   }\n\
+             \x20   println(s);\n\
+             \x20   let mut z = 0i64;\n\
+             \x20   for c in \"\".chars() { z = z + 1i64; }\n\
+             \x20   println(z);\n\
+             \x20   let v: String = \"xyz\";\n\
+             \x20   let mut gl: String = \"\";\n\
+             \x20   for c in v.chars() { gl = gl + f\"{c}\"; }\n\
+             \x20   println(gl);\n\
+             \x20   let alphabet: String = \"ab\";\n\
+             \x20   let mut y = 0i64;\n\
+             \x20   for c in alphabet.chars() { y = y + (c as i64); }\n\
+             \x20   println(y);\n\
+             \x20   {\n\
+             \x20       let alphabet: String = pick();\n\
+             \x20       let mut sh = 0i64;\n\
+             \x20       for c in alphabet.chars() { sh = sh + (c as i64); }\n\
+             \x20       println(sh);\n\
+             \x20   }\n\
+             \x20   let ma: String = \"ab\";\n\
+             \x20   spoil(mut ma);\n\
+             \x20   let mut mc = 0i64;\n\
+             \x20   for c in ma.chars() { mc = mc + (c as i64); }\n\
+             \x20   println(mc);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                // a=97+98+99+88+89+90=561; héllo→=104+233+108+108+111+8594=9258;
+                // hey=104+101+121=326; é→=233+8594=8827; pq=112+113=225;
+                // "ab"+push('é')=97+98+233=428; reassigned to "é"=233;
+                // break/continue over "abcdef"=97+99+100=296; empty=0;
+                // glyphs=xyz; ab=195; shadowed é→=8827; `spoil(mut ma)` pushes é onto
+                // "ab" so rule 4 must disqualify it: 97+98+233=428 (a byte-wise walk
+                // would give 4 chars summing 559).
+                "561\n9258\n326\n8827\n225\n428\n233\n296\n0\nxyz\n195\n8827\n428\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_map_entries_single_binding_still_materializes_tuple() {
         // B-2026-07-25-4 guard on the shape the routing must NOT take: a SINGLE
         // binding over `.entries()` wants one tuple VALUE per step (`e.0` /

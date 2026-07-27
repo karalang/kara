@@ -46,6 +46,12 @@ impl<'ctx> super::Codegen<'ctx> {
         for key in super::accum_overflow::check_free_accumulator_sites(block) {
             self.check_free_accum_sites.insert(key);
         }
+        // Branch-free stride-1 `.chars()` lowering (B-2026-07-27-7): which of
+        // this block's `let`s bind a stable all-ASCII string constant. Only
+        // the NAMES are decided here; each one is registered against its own
+        // alloca in the statement loop below, and the loop site requires both
+        // to line up before taking the fast path.
+        let ascii_const_lets = super::ascii_const_chars::ascii_const_string_lets(block);
         let user_drop_last_use = if self.user_drop_wrapper_fns.is_empty() {
             None
         } else {
@@ -64,6 +70,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if lowered.is_none() {
                 self.compile_stmt(stmt)?;
             }
+            self.note_ascii_const_string_let(stmt, &ascii_const_lets);
             if self
                 .builder
                 .get_insert_block()
@@ -87,6 +94,31 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(Some(val))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Bind an ASCII-constant `let` to the alloca it just created, so the
+    /// `.chars()` loop lowering can prove a receiver names THAT binding
+    /// (B-2026-07-27-7). Runs after every `let` statement, not just the
+    /// qualifying ones: a re-binding of a registered name must drop the old
+    /// entry, since a name-keyed lookup can no longer distinguish the two.
+    fn note_ascii_const_string_let(
+        &mut self,
+        stmt: &Stmt,
+        ascii_const_lets: &std::collections::HashSet<String>,
+    ) {
+        let StmtKind::Let { pattern, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return;
+        };
+        self.ascii_const_string_lets.remove(name);
+        if !ascii_const_lets.contains(name) {
+            return;
+        }
+        if let Some(ptr) = self.get_data_ptr(name) {
+            self.ascii_const_string_lets.insert(name.clone(), ptr);
         }
     }
 

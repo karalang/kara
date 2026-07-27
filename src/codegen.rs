@@ -23,6 +23,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 mod accum_overflow;
+mod ascii_const_chars;
 mod assoc_call;
 mod backpressure;
 mod bce_length_pin;
@@ -3541,6 +3542,17 @@ pub(super) struct Codegen<'ctx> {
     /// `Vec[u8]` iterates per byte. Populated alongside the existing
     /// `vec_elem_types` insertion at every String-registration site.
     pub(crate) string_vars: HashSet<String>,
+    /// String bindings proven to be stable compile-time ALL-ASCII constants,
+    /// mapped to the String-struct alloca their `let` created
+    /// (B-2026-07-27-7). Gates the branch-free stride-1 `.chars()` loop in
+    /// `control_flow_for.rs`, which is only correct when every byte is a
+    /// complete 1-byte UTF-8 scalar. The name-level proof comes from
+    /// `ascii_const_chars::ascii_const_string_lets`; the alloca is stored so
+    /// the loop site can additionally verify the receiver resolves to THAT
+    /// binding — a shadow, a same-named parameter, or a stale cross-function
+    /// entry then misses and keeps the general decode loop rather than
+    /// silently mis-iterating multibyte text.
+    pub(crate) ascii_const_string_lets: HashMap<String, PointerValue<'ctx>>,
     /// Variables whose surface type is `ref CStr` (the `c"..."` literal
     /// type — design.md § C-String Literals). Physically a `{ptr, i64}`
     /// slice-struct value: the NUL-terminated rodata pointer plus the
@@ -7462,6 +7474,7 @@ impl<'ctx> Codegen<'ctx> {
             set_elem_type_names: HashMap::new(),
             set_elem_type_exprs: HashMap::new(),
             string_vars: HashSet::new(),
+            ascii_const_string_lets: HashMap::new(),
             cstr_vars: HashSet::new(),
             http_shim_cache: HashMap::new(),
             karac_map_new_fn,

@@ -471,6 +471,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_extract_value(sv, 1, "for.s.recv.len")
                     .unwrap()
                     .into_int_value();
+                // A literal receiver (`"abc".chars()`) carries its own proof:
+                // the bytes are right there, so no analysis is needed to know
+                // whether the branch-free stride-1 loop is safe
+                // (B-2026-07-27-7).
+                if matches!(&object.kind, ExprKind::StringLit(s) if s.is_ascii()) {
+                    return self
+                        .compile_for_string_chars_ascii_inner(label, pattern, data, len, body);
+                }
                 return self.compile_for_string_chars_inner(label, pattern, data, len, body);
             }
             // `for b in <receiver>.bytes()` — the byte-wise sibling of
@@ -650,6 +658,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_extract_value(sv, 1, "for.s.lit.len")
                     .unwrap()
                     .into_int_value();
+                // Bare all-ASCII literal (`for c in "abc"`): self-proving, so
+                // take the branch-free stride-1 loop (B-2026-07-27-7). An
+                // f-string is not a literal — its bytes are built at runtime —
+                // so it keeps the general decode loop.
+                if matches!(&iterable.kind, ExprKind::StringLit(s) if s.is_ascii()) {
+                    return self
+                        .compile_for_string_chars_ascii_inner(label, pattern, data, len, body);
+                }
                 self.compile_for_string_chars_inner(label, pattern, data, len, body)
             }
             ExprKind::Identifier(name) => {
@@ -2852,7 +2868,135 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, data_ptr_ptr, "for.s.data")
             .unwrap()
             .into_pointer_value();
+        // B-2026-07-27-7: take the branch-free stride-1 loop only when BOTH
+        // independent checks agree — the name passed the block-level
+        // "stable all-ASCII constant" analysis, AND it resolves here to the
+        // very alloca that analysis's `let` created. The second half is what
+        // makes a shadowing binding, a same-named parameter, or a stale
+        // entry from another function fall back instead of miscompiling.
+        if self.ascii_const_string_lets.get(var_name) == Some(&str_ptr) {
+            return self.compile_for_string_chars_ascii_inner(label, pattern, data, len, body);
+        }
         self.compile_for_string_chars_inner(label, pattern, data, len, body)
+    }
+
+    /// Branch-free stride-1 sibling of [`compile_for_string_chars_inner`],
+    /// emitted only when the iterated string is a proven compile-time
+    /// all-ASCII constant (see [`super::ascii_const_chars`]). Every byte is
+    /// then a complete 1-byte UTF-8 scalar, so the loop needs no ASCII
+    /// peek-and-branch and no `karac_string_decode_char` call — the byte
+    /// offset IS the iteration index, advancing by exactly 1.
+    ///
+    /// That shape is the whole point: the general loop's offset is a PHI of
+    /// "advance 1" and "whatever the decoder returned", which stops LLVM
+    /// recovering stride-1 indexing and leaves a real walk in the binary.
+    /// With the PHI gone LLVM folds a search over a constant string to a
+    /// single indexed load — 699.4M -> 42.8M instructions on the
+    /// `nth_letter` probe, against 32.3M for the equivalent Rust.
+    ///
+    /// Shape (identical to [`compile_for_string_bytes_inner`] except the
+    /// binding is zero-extended to `i32` and tagged `char`):
+    /// - `idx` alloca (i64), initialised to 0.
+    /// - cond block: `idx < len` (empty string falls straight to exit).
+    /// - body block: load `data[idx]` as `i8`, zext to `i32`, bind, run the
+    ///   user body.
+    /// - incr block: `idx += 1`, branch back to cond.
+    pub(super) fn compile_for_string_chars_ascii_inner(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        data: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let i8_t = self.context.i8_type();
+
+        let idx = self.create_entry_alloca(fn_val, "for.sa.idx", i64_t.into());
+        self.builder
+            .build_store(idx, i64_t.const_int(0, false))
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "for.sa.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "for.sa.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "for.sa.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "for.sa.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+
+        // Condition: idx < len.
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), idx, "for.sa.i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, cur, len, "for.sa.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: load data[idx], widen to the `char` LLVM type, bind, execute.
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), idx, "for.sa.i")
+            .unwrap()
+            .into_int_value();
+        let byte_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, data, &[cur], "for.sa.ptr")
+                .unwrap()
+        };
+        let byte = self
+            .builder
+            .build_load(i8_t, byte_ptr, "for.sa.byte")
+            .unwrap()
+            .into_int_value();
+        let cp_val = self
+            .builder
+            .build_int_z_extend(byte, i32_t, "for.sa.cp")
+            .unwrap();
+        self.bind_pattern(pattern, cp_val.into())?;
+        // Tag the binding's source type as `char` so print / f-string render
+        // a glyph rather than the integer codepoint — same rationale as the
+        // general chars loop; `bind_pattern` only owns the LLVM-side slot.
+        if let PatternKind::Binding(bind_name) = &pattern.kind {
+            self.var_type_names
+                .insert(bind_name.clone(), "char".to_string());
+        }
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
+
+        // Increment: idx += 1, branch back to cond.
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), idx, "for.sa.i")
+            .unwrap()
+            .into_int_value();
+        let next = self
+            .builder
+            .build_int_add(cur, i64_t.const_int(1, false), "for.sa.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// Inner per-char loop driver — takes already-extracted `data` and `len`
