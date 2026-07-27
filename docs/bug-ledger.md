@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 176 | 1 |
+| miscompile | 177 | 1 |
 | leak | 96 | 0 |
 | double-free | 80 | 0 |
 | codegen-gap | 77 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 495 | 4 |
+| codegen | 496 | 4 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **680 surfaced · 4 open · 670 fixed** (2026-05-20 → 2026-07-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **681 surfaced · 4 open · 671 fixed** (2026-05-20 → 2026-07-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **680 surfaced 
 | B-2026-07-26-1 | 2026-07-26 | codegen | medium | Overflow check on a BOUNDED loop-accumulator (`cnt = cnt + 1` guarded by an if, inside a counted loop) is not elided, and because a checked add can trap it cannot be speculated — which blocks LLVM's if-conversion of `if bit { cnt += 1 }` into the branchless `cnt += bit`. On random data the surviving conditional branch mispredicts ~50% of the time, costing 7.9x on a per-bit counting loop. | — |
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
 
-### Fixed (670)
+### Fixed (671)
 
-<details><summary>670 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>671 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -805,6 +805,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **680 surfaced 
 | B-2026-07-23-25 | autopar | medium | Auto-par over-parallelizes a fine-grained inner loop, making the DEFAULT `karac build` catastrophically slow (~1000x) while output stays CORRECT | c702d61 |
 | B-2026-07-23-26 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): statement-position `v.pop()` was a NO-OP — a non-push statement method call fell through to `emit_met… | 21a6eed |
 | B-2026-07-23-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): statement-position `s.push_str(arg)` was a NO-OP — it fell through to `emit_method_value`, which does… | bd6af74 |
+| B-2026-07-23-29 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a FIELD-receiver Vec method call — `self.<vec>.push(x)` / `self.<vec>.pop()` — was a NO-OP | b686bdb |
 | B-2026-07-24-1 | codegen | medium | Compiler-driven inline-hint pass runs on the LOWERED AST but its node-count thresholds are calibrated for RAW-source sizes, so a small loop-hot helpe… | 20d33f7 |
 | B-2026-07-24-2 | codegen | medium | `for k in map.keys()` (and `.values()`/`.entries()`) eagerly materializes the whole key/value set into a fresh heap `Vec` on every evaluation, so a `… | bef6bbc |
 | B-2026-07-24-3 | typecheck+interp | medium | `u8 as char` was rejected at typecheck with E_INT_AS_CHAR even though it is the ONE infallible integer→char cast — every byte (0..=255) is a valid Un… | 6b0c98a |
