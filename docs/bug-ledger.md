@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 177 | 1 |
 | leak | 96 | 0 |
-| double-free | 80 | 0 |
+| double-free | 81 | 1 |
 | codegen-gap | 77 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 496 | 3 |
+| codegen | 497 | 4 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 27 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **681 surfaced · 3 open · 672 fixed** (2026-05-20 → 2026-07-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **682 surfaced · 4 open · 672 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-23-28 | 2026-07-23 | codegen | high | Calling a closure bound as a `for`-loop element returns 0 under `karac build`/JIT (interp correct). `for op in ops { v = op(v); }` where `ops: Array/Vec[Fn(i64)->i64]` — the loop-var closure call yields 0; `let op = ops[0]; op(5)` and `ops[0](5)` both work. | — |
 | B-2026-07-25-4 | 2026-07-25 | codegen | medium | `for k in m.keys()` (and `.values()`/`.entries()`) STILL eagerly materializes an owned `Vec` per evaluation when either map half is a HEAP type (`Map[String, _]`, `Map[_, Vec[_]]`). B-2026-07-24-2's inline bucket walk and its lazy keys() routing are both gated to SCALAR halves, so the originally-reported malloc + full-set copy + free — plus a DEEP CLONE of every heap key — is unchanged for the heap case, which is if anything the more expensive one. | — |
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
+| B-2026-07-27-1 | 2026-07-27 | codegen | high | SEED codegen double-free: `return <struct>.<vecfield>[i];` — returning a heap (String) element of a STRUCT-FIELD Vec directly as a `return` STATEMENT expression — hands back the vec's OWN element buffer without materializing a copy, so the caller frees the returned String AND the vec's element drop frees the same block. Valgrind: Invalid free() of the same malloc'd block. The identical read as a TAIL EXPRESSION (no `return` keyword), or via a local binding, is CLEAN. | — |
 
 ### Fixed (672)
 
