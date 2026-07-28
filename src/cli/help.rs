@@ -57,11 +57,13 @@ COMMANDS:
                       (one record per exported item with signature shape,
                       generics, parameters with modes, return type,
                       declared effects, refinement constraints, and span).
-    explain --concept=NAME
-                      Print a concept-level explainer page. Available
-                      concepts:
-                        closures       - capture-mode inference + the
-                                         own / ref / mut ref prefixes
+    explain <name>    Explain a diagnostic code (`E0200`), a diagnostic
+                      class (`TYPE_MISMATCH`), or a concept (`closures`)
+                      — the taxonomy is detected from the name, so a
+                      token copied out of `check --output=json` works
+                      directly. Explicit forms: --code= / --class= /
+                      --concept=. Run `karac explain --help` for the
+                      catalogue's coverage.
     fmt <file>        Format a .kara file
     debug <crash>     Render a std.panic crash report (JSON file, or `-` for
                       stdin) as a human-readable report; --output=json
@@ -862,10 +864,29 @@ v1 status:
         }
         "explain" => {
             "\
-karac explain - Print a concept-level explainer page
+karac explain - Explain a diagnostic code, a diagnostic class, or a concept
 
 USAGE:
-    karac explain --concept=NAME
+    karac explain <NAME>                 (taxonomy detected from the name)
+    karac explain --code=E0200
+    karac explain --class=TYPE_MISMATCH
+    karac explain --concept=closures
+
+A bare NAME is classified by shape, so the token a diagnostic gives you
+can be pasted straight in:
+
+    E0200 / W0244      a diagnostic code — the `code` field of a
+                       `karac check --output=json` record
+    TYPE_MISMATCH      a diagnostic class — the `class` field of the
+                       same record (UPPER_SNAKE)
+    closures           a concept page (lower-case)
+
+CODES:
+    Catalogued for the `resolve` and `typecheck` families (E01xx,
+    E02xx / W02xx, E08xx). Each lookup reports the emitting phase, the
+    compiler's error-kind name, and the diagnostic class where one is
+    assigned. Codes from the parse / effect / ownership phases are not
+    catalogued yet — look those up by `--class` instead.
 
 CONCEPTS:
     closures           Closure capture-mode inference (Rule 2),
@@ -879,9 +900,15 @@ CONCEPTS:
                        modes.
 
 OPTIONS:
+    --format=text|json Output shape. `text` (default) is human prose;
+                       `json` is the machine-consumable record.
     -h, --help         Print this message
 
 SEE ALSO:
+    karac check --output=json <file>
+                       Structured diagnostics — each record's `code`
+                       and `class` fields feed straight into this
+                       command.
     karac query ownership <file>.<function>
                        Per-function JSON of inferred parameter modes
                        and per-closure capture modes against a real

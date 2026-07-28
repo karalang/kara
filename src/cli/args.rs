@@ -1546,16 +1546,29 @@ fn parse_catalog_command(args: &[String]) -> Command {
     Command::Catalog { file }
 }
 
-/// Parser for `karac explain --concept=NAME [--format=FMT]` and
-/// `karac explain --class=NAME [--format=FMT]`. Exactly one of
-/// `--concept` / `--class` is required. `--format` defaults to
-/// `text`; `--format=json` opts into the machine-consumable shape
-/// minted by line 619 slice 3. The concept / class *name* itself
-/// is validated at render time so the supported-set message lives
-/// in one place (`src/cli/explain.rs`).
+/// Parser for `karac explain <NAME> [--format=FMT]` and its explicit
+/// flag forms (`--concept=NAME`, `--class=NAME`, `--code=NAME`).
+/// At most one target may be given. `--format` defaults to `text`;
+/// `--format=json` opts into the machine-consumable shape minted by
+/// line 619 slice 3. The target *name* itself is validated at render
+/// time so the supported-set message lives in one place
+/// (`src/cli/explain.rs`).
+///
+/// The bare positional form exists because the flags-only surface
+/// dead-ended the agent loop it was built for: `karac check
+/// --output=json` reports `"code": "E0200"`, and the obvious next
+/// call — `karac explain E0200` — used to exit 1 with "unexpected
+/// argument". A positional token is classified by shape, so all
+/// three of `karac explain closures`, `karac explain TYPE_MISMATCH`,
+/// and `karac explain E0200` resolve without the caller having to
+/// know which taxonomy the token belongs to. The explicit flags stay
+/// as the unambiguous form (and the only way to force a taxonomy
+/// when a name is shaped like another's).
 fn parse_explain_command(args: &[String]) -> Command {
     let mut concept: Option<String> = None;
     let mut class: Option<String> = None;
+    let mut code: Option<String> = None;
+    let mut positional: Option<String> = None;
     let mut format: Option<crate::cli::ExplainFormat> = None;
     for arg in args.iter().skip(2) {
         if let Some(rest) = arg.strip_prefix("--concept=") {
@@ -1578,6 +1591,16 @@ fn parse_explain_command(args: &[String]) -> Command {
                 process::exit(1);
             }
             class = Some(rest.to_string());
+        } else if let Some(rest) = arg.strip_prefix("--code=") {
+            if rest.is_empty() {
+                eprintln!("error: --code requires a diagnostic code (e.g. --code=E0200)");
+                process::exit(1);
+            }
+            if code.is_some() {
+                eprintln!("error: --code may only be specified once");
+                process::exit(1);
+            }
+            code = Some(rest.to_string());
         } else if let Some(rest) = arg.strip_prefix("--format=") {
             if format.is_some() {
                 eprintln!("error: --format may only be specified once");
@@ -1595,26 +1618,90 @@ fn parse_explain_command(args: &[String]) -> Command {
             eprintln!("error: unknown flag '{arg}' for `karac explain`");
             process::exit(1);
         } else {
-            eprintln!("error: unexpected argument '{arg}' (use --concept=NAME or --class=NAME)");
-            process::exit(1);
+            if positional.is_some() {
+                eprintln!(
+                    "error: `karac explain` takes at most one name (got '{}' and '{arg}')",
+                    positional.as_deref().unwrap_or_default(),
+                );
+                process::exit(1);
+            }
+            positional = Some(arg.to_string());
         }
     }
-    let target = match (concept, class) {
-        (Some(c), None) => crate::cli::ExplainTarget::Concept(c),
-        (None, Some(c)) => crate::cli::ExplainTarget::Class(c),
-        (Some(_), Some(_)) => {
-            eprintln!("error: --concept and --class are mutually exclusive");
-            process::exit(1);
-        }
-        (None, None) => {
-            eprintln!(
-                "error: `karac explain` requires --concept=NAME or --class=NAME (e.g. --concept=closures, --class=TYPE_MISMATCH)"
-            );
-            process::exit(1);
-        }
+    let explicit = [
+        concept.as_ref().map(|c| ("--concept", c)),
+        class.as_ref().map(|c| ("--class", c)),
+        code.as_ref().map(|c| ("--code", c)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if explicit.len() > 1 {
+        let names = explicit
+            .iter()
+            .map(|(flag, _)| *flag)
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!("error: {names} are mutually exclusive");
+        process::exit(1);
+    }
+    if !explicit.is_empty() && positional.is_some() {
+        eprintln!(
+            "error: `karac explain` takes either a bare name or one of --concept / --class / --code, not both"
+        );
+        process::exit(1);
+    }
+    let target = if let Some(c) = concept {
+        crate::cli::ExplainTarget::Concept(c)
+    } else if let Some(c) = class {
+        crate::cli::ExplainTarget::Class(c)
+    } else if let Some(c) = code {
+        crate::cli::ExplainTarget::Code(c)
+    } else if let Some(name) = positional {
+        classify_explain_name(&name)
+    } else {
+        eprintln!(
+            "error: `karac explain` requires a name (e.g. `karac explain closures`, `karac explain TYPE_MISMATCH`, `karac explain E0200`)"
+        );
+        process::exit(1);
     };
     let format = format.unwrap_or(crate::cli::ExplainFormat::Text);
     Command::Explain { target, format }
+}
+
+/// Classify a bare `karac explain <NAME>` token into its taxonomy by
+/// shape. The three namespaces are disjoint in practice, so the token
+/// itself says which one it belongs to:
+///
+/// * `E0200` / `W0244` — a diagnostic code: one leading `E`/`W`, then
+///   digits. This is the form structured diagnostics report.
+/// * `TYPE_MISMATCH` — a diagnostic class: UPPER_SNAKE, the wire form
+///   of [`DiagnosticClass::as_str`](crate::diagnostic_class::DiagnosticClass::as_str).
+/// * anything else — a concept page name (`closures`), which are
+///   lower-case by convention.
+///
+/// Misclassification is not silent: each arm's renderer reports the
+/// namespace it searched and lists that namespace's supported set, so
+/// a typo'd class name says "unknown diagnostic class" rather than
+/// falling through to a confusing concept-page error.
+fn classify_explain_name(name: &str) -> crate::cli::ExplainTarget {
+    let is_code = {
+        let mut chars = name.chars();
+        matches!(chars.next(), Some('E') | Some('W'))
+            && !name[1..].is_empty()
+            && chars.all(|c| c.is_ascii_digit())
+    };
+    if is_code {
+        return crate::cli::ExplainTarget::Code(name.to_string());
+    }
+    let is_class = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if is_class {
+        return crate::cli::ExplainTarget::Class(name.to_string());
+    }
+    crate::cli::ExplainTarget::Concept(name.to_string())
 }
 
 fn parse_query_command(args: &[String]) -> Command {
@@ -1867,6 +1954,7 @@ fn parse_affected_by_target(raw: &str) -> (String, crate::call_graph::TargetSpec
 
 #[cfg(test)]
 mod tests {
+    use super::classify_explain_name;
     use super::parse_affected_by_target;
     use super::split_query_function_target;
     use crate::call_graph::TargetSpec;
@@ -1952,5 +2040,38 @@ mod tests {
             parse_affected_by_target("a:b").1,
             TargetSpec::Function(n) if n == "b"
         ));
+    }
+
+    /// A bare `karac explain <NAME>` token must land in the taxonomy
+    /// the token's own shape implies — this is what lets a caller
+    /// paste `code` or `class` straight out of a
+    /// `karac check --output=json` record.
+    #[test]
+    fn bare_explain_name_is_classified_by_shape() {
+        use crate::cli::ExplainTarget as T;
+        assert!(matches!(classify_explain_name("E0200"), T::Code(c) if c == "E0200"));
+        assert!(matches!(classify_explain_name("W0244"), T::Code(c) if c == "W0244"));
+        assert!(matches!(
+            classify_explain_name("TYPE_MISMATCH"),
+            T::Class(c) if c == "TYPE_MISMATCH"
+        ));
+        assert!(matches!(
+            classify_explain_name("OWNERSHIP_BORROW_CONFLICT"),
+            T::Class(_)
+        ));
+        assert!(matches!(classify_explain_name("closures"), T::Concept(c) if c == "closures"));
+    }
+
+    /// Shapes that are *nearly* a code must not be swallowed by the
+    /// code arm — `E` alone has no digits, and `E02a0` is not numeric.
+    /// Both fall through to the class arm (they are upper-case), where
+    /// the renderer reports an unknown class rather than an unknown
+    /// code. The point is that neither panics or silently resolves.
+    #[test]
+    fn near_code_shapes_do_not_masquerade_as_codes() {
+        use crate::cli::ExplainTarget as T;
+        assert!(matches!(classify_explain_name("E"), T::Class(_)));
+        assert!(matches!(classify_explain_name("E02A0"), T::Class(_)));
+        assert!(matches!(classify_explain_name("e0200"), T::Concept(_)));
     }
 }

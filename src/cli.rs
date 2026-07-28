@@ -617,9 +617,16 @@ pub enum CacheSub {
 /// What `karac explain` should look up. Line 619 slice 3 widens the
 /// command from concept-only to concept-or-class so the diagnostic
 /// catalogue surface (`DiagnosticClass` enum, slice 1) is
-/// reachable from the CLI. Future slices extend this with
-/// `--code=E_XXX` for direct E_*-code lookups when the per-code
-/// catalogue stabilises.
+/// reachable from the CLI.
+///
+/// [`Code`](ExplainTarget::Code) closes the loop the structured
+/// diagnostics opened: every JSON diagnostic carries a `code` field
+/// (`"E0200"`), so `explain` has to accept that same token or the
+/// machine-readable surface dead-ends at the one command meant to
+/// interpret it. It resolves through the code→class table in
+/// `cli::explain`, which is deliberately *not* a per-code prose
+/// catalogue — that remains the deferred surface this doc comment
+/// originally pointed at.
 #[derive(Debug, Clone)]
 pub enum ExplainTarget {
     /// `--concept=NAME` — concept-page surface (closures, …).
@@ -629,6 +636,9 @@ pub enum ExplainTarget {
     /// etc.). Slice 1 minted the enum; slice 3 surfaces it via the
     /// CLI.
     Class(String),
+    /// `--code=NAME` — the `E0NNN` / `W0NNN` token a structured
+    /// diagnostic reports in its `code` field.
+    Code(String),
 }
 
 /// Output format selector for `karac explain`. Defaults to `Text`

@@ -7195,13 +7195,14 @@ fn test_main_help_lists_explain_command() {
     let out = karac_bin().arg("help").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("explain --concept=NAME"),
+        stdout.contains("explain <name>"),
         "top-level help should advertise the explain subcommand"
     );
-    assert!(
-        stdout.contains("closures"),
-        "top-level help should list the supported explain concepts"
-    );
+    // All three taxonomies, so the reader learns from the top-level help
+    // that a diagnostic's `code` / `class` field is a valid argument.
+    assert!(stdout.contains("closures"), "got: {stdout}");
+    assert!(stdout.contains("E0200"), "got: {stdout}");
+    assert!(stdout.contains("TYPE_MISMATCH"), "got: {stdout}");
 }
 
 #[test]
@@ -7211,11 +7212,22 @@ fn test_subcommand_help_explain() {
         assert!(out.status.success(), "`karac explain {flag}` should exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(stdout.contains("karac explain"));
-        assert!(stdout.contains("--concept=NAME"));
+        // Every accepted form must be documented. The `--class` and
+        // `--format` flags worked before B-2026-07-27-13 but appeared
+        // nowhere in this page, so a reader had no way to discover them.
+        assert!(stdout.contains("--concept=closures"), "got: {stdout}");
+        assert!(stdout.contains("--class=TYPE_MISMATCH"), "got: {stdout}");
+        assert!(stdout.contains("--code=E0200"), "got: {stdout}");
+        assert!(stdout.contains("--format=text|json"), "got: {stdout}");
         assert!(stdout.contains("closures"));
         assert!(
             stdout.contains("karac query ownership"),
             "scoped help should point at the per-function inspection surface"
+        );
+        assert!(
+            stdout.contains("karac check --output=json"),
+            "scoped help should name the command whose `code` / `class` \
+             fields feed this one"
         );
     }
 }
@@ -7349,15 +7361,20 @@ fn test_explain_concept_closures_describes_outer_scope_rc_routing() {
 }
 
 #[test]
-fn test_explain_requires_concept_flag() {
+fn test_explain_requires_a_name() {
     let out = karac_bin().arg("explain").output().unwrap();
     assert!(
         !out.status.success(),
         "bare `karac explain` should exit non-zero"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("--concept"));
-    assert!(stderr.contains("closures"));
+    // The error must show all three taxonomies, since the point of the
+    // positional form is that the caller need not know which one their
+    // token belongs to.
+    assert!(stderr.contains("requires a name"), "got: {stderr}");
+    assert!(stderr.contains("closures"), "got: {stderr}");
+    assert!(stderr.contains("TYPE_MISMATCH"), "got: {stderr}");
+    assert!(stderr.contains("E0200"), "got: {stderr}");
 }
 
 #[test]
@@ -7401,11 +7418,119 @@ fn test_explain_rejects_duplicate_concept_flags() {
 }
 
 #[test]
-fn test_explain_rejects_positional_argument() {
-    let out = karac_bin().args(["explain", "closures"]).output().unwrap();
+/// A bare positional name is now the primary form — it used to be a
+/// hard error, which dead-ended the agent loop: `karac check
+/// --output=json` reports `"code": "E0200"` and the obvious follow-up
+/// `karac explain E0200` exited 1 (B-2026-07-27-13). Each of the three
+/// taxonomies must resolve from a pasted token.
+fn test_explain_accepts_positional_name_for_each_taxonomy() {
+    for (name, expected) in [
+        ("closures", "Closures"),
+        ("TYPE_MISMATCH", "diagnostic class: TYPE_MISMATCH"),
+        ("E0200", "diagnostic code: E0200"),
+    ] {
+        let out = karac_bin().args(["explain", name]).output().unwrap();
+        assert!(
+            out.status.success(),
+            "`karac explain {name}` should succeed; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(expected),
+            "`karac explain {name}` should render {expected:?}; got: {stdout}"
+        );
+    }
+}
+
+/// Two names is still an error — the command explains one thing.
+#[test]
+fn test_explain_rejects_two_positional_names() {
+    let out = karac_bin()
+        .args(["explain", "closures", "E0200"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("--concept=NAME"));
+    assert!(stderr.contains("at most one name"), "got: {stderr}");
+}
+
+/// Mixing the bare form with an explicit flag is ambiguous about which
+/// taxonomy was meant, so it is rejected rather than silently preferring
+/// one.
+#[test]
+fn test_explain_rejects_positional_mixed_with_flag() {
+    let out = karac_bin()
+        .args(["explain", "--concept=closures", "E0200"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not both"), "got: {stderr}");
+}
+
+/// The end-to-end contract B-2026-07-27-13 was filed against: whatever
+/// `karac check --output=json` puts in a record's `code` field must be
+/// something `karac explain` accepts verbatim.
+#[test]
+fn test_explain_accepts_the_code_a_diagnostic_reports() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-explain-code-roundtrip-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let file = tmp.join("bad.kara");
+    std::fs::write(
+        &file,
+        "fn add(a: i64, b: i64) -> i64 { a + b }\n\
+         fn main() {\n\
+         \x20   let y: String = \"two\";\n\
+         \x20   println(add(1, y));\n\
+         }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["check", "--output=json"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let code = stdout
+        .split("\"code\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| {
+            panic!("check --output=json should report a `code` field; got: {stdout}")
+        });
+
+    let explained = karac_bin().args(["explain", code]).output().unwrap();
+    assert!(
+        explained.status.success(),
+        "`karac explain {code}` must accept the code the compiler just \
+         emitted; stderr: {}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let text = String::from_utf8_lossy(&explained.stdout);
+    assert!(
+        text.contains(&format!("diagnostic code: {code}")),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn test_explain_uncatalogued_code_points_at_the_class_surface() {
+    // E0001 (parse) is deliberately outside the catalogue's resolve /
+    // typecheck coverage. The message must say so and redirect, not
+    // pretend the code is unknown gibberish.
+    let out = karac_bin().args(["explain", "E0001"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not in the catalogue yet"), "got: {stderr}");
+    assert!(stderr.contains("--class"), "got: {stderr}");
 }
 
 #[test]
