@@ -895,3 +895,83 @@ jobs:
                 tests::test_https_round_trip_against_public_origin \
                 --include-ignored --nocapture
             '
+
+  # ── Supply chain ───────────────────────────────────────────────────
+  # `karac` compiles other people's code, so its ~350-crate dependency
+  # tree is part of its threat model: a compromised transitive crate runs
+  # on every machine that builds a Kāra program. Nothing in this repo
+  # checked that tree against RUSTSEC before this job — `cargo build`
+  # will happily link a crate with a live advisory.
+  #
+  # Config (and the rationale for which checks block vs. warn) lives in
+  # `deny.toml`. Advisories, licenses, and sources are blocking; the
+  # duplicate-version lint is a warning because the arrow / tokio trees
+  # legitimately carry several versions of small helper crates.
+  supply-chain:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          # `advisories` alone would pass a tree that swapped crates.io
+          # for an unknown registry, so run the full set the config
+          # defines.
+          arguments: --all-features
+
+  # ── Toolchain drift canary ─────────────────────────────────────────
+  # `rust-toolchain.toml` pins the toolchain so that rustfmt output, the
+  # clippy lint set, and the size/speed baselines are reproducible. The
+  # cost of pinning is that a new rustc release is invisible until
+  # someone bumps the pin — and then all of its breakage arrives at once,
+  # usually in the middle of an unrelated slice.
+  #
+  # This job is the other half of that trade: it builds, tests, and lints
+  # on floating `stable` (RUSTUP_TOOLCHAIN overrides the file), so an
+  # incompatibility shows up the week it ships. It is deliberately
+  # `continue-on-error` — a rustc release must never redden the merge
+  # queue. A red run here is a scheduling signal, not a blocker: bump the
+  # pin deliberately, in its own commit.
+  stable-drift:
+    name: Toolchain drift canary (floating stable)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUSTUP_TOOLCHAIN: stable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Report the toolchain under test
+        run: |
+          echo "pinned:   $(grep -oP 'channel = "\K[^"]+' rust-toolchain.toml)"
+          echo "floating: $(rustc --version)"
+
+      - name: Build
+        run: cargo build --all
+
+      - name: Test
+        run: cargo test --all
+
+      - name: Clippy
+        run: cargo clippy --all --all-targets -- -D warnings
+
+      # Formatting is the most version-sensitive of the three gates —
+      # rustfmt's output changes across releases, and `--check` is a hard
+      # pre-commit gate on the pinned toolchain. Surfacing the diff here
+      # (without failing) is what makes a pin bump a known quantity
+      # instead of a surprise `cargo fmt` churn commit.
+      - name: Formatting delta vs. the pinned toolchain
+        run: cargo fmt --all -- --check

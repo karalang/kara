@@ -43,6 +43,11 @@ name = "karac"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+# MSRV. Set to the toolchain `rust-toolchain.toml` pins, because that is the
+# only version the gate actually verifies — claiming a lower floor we never
+# build against would be a guess, not a guarantee. Raise both together; see
+# the header comment in `rust-toolchain.toml` for the bump procedure.
+rust-version = "1.94"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

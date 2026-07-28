@@ -1,0 +1,142 @@
+name: Fuzz
+
+# Both of this repo's fuzzing assets were built, used to good effect, and
+# then left as manual one-off commands:
+#
+#   * `fuzz/fuzz_targets/*` — three libFuzzer targets asserting the
+#     front-end never panics on arbitrary input (lexer, parser, and the
+#     full resolve → typecheck → effect → ownership pipeline).
+#   * `src/bin/drop_fuzz.rs` + `scripts/drop-fuzz.sh` — the drop-soundness
+#     fuzzer: it generates well-typed heap-core Kāra programs, compiles
+#     each through the real AOT path, links under ASan + LSan, runs it,
+#     and lets the sanitizer judge. Its last recorded measurement was
+#     0 bugs over ~2500 (program, surface) executions
+#     (docs/spikes/ownership-model-mechanization.md).
+#
+# Neither ran on a schedule, so both measurements were only ever as fresh
+# as the last time someone remembered. That matters here more than in most
+# projects: the bug ledger's largest classes by far are the exact ones
+# these two target — miscompile / leak / double-free / use-after-free /
+# crash — and codegen is still the surface where most of them land.
+#
+# This workflow runs both nightly and on demand. It is intentionally NOT
+# a pull-request gate: fuzzing is a time-boxed search, so a green run
+# proves nothing about a specific diff and a red one usually needs
+# triage rather than a revert. Nightly is where that trade works.
+on:
+  schedule:
+    # 04:00 UTC daily — off-peak for the shared runner pool.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      drop_fuzz_count:
+        description: "Programs for the drop-soundness fuzzer"
+        required: false
+        default: "400"
+      libfuzzer_seconds:
+        description: "Seconds per libFuzzer front-end target"
+        required: false
+        default: "300"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Drop soundness (ASan + LSan over real compiled binaries) ────────
+  # The high-value leg. LSan ships with upstream LLVM's ASan on Linux
+  # (and NOT on macOS), so this must run on a Linux runner to cover the
+  # leak arm at all — the same reason the `memory-sanitizer` job in
+  # ci.yml is the authoritative leak gate.
+  drop-soundness:
+    name: Drop soundness (drop_fuzz, ASan + LSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same LLVM 18 provisioning as ci.yml's codegen jobs: inkwell
+      # `llvm18-1-prefer-dynamic` + llvm-sys `181` need libLLVM-18.so and
+      # headers present, and llvm-sys reads the prefix from the env.
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # The script builds the runtime archives (in the CLAUDE.md-mandated
+      # lean-then-full order) and the drop_fuzz binary itself, then runs.
+      # Without the archives the ASan link step has nothing to link, so
+      # the whole run would pass vacuously.
+      - name: Run the drop-soundness fuzzer
+        run: |
+          scripts/drop-fuzz.sh \
+            --count "${{ github.event.inputs.drop_fuzz_count || '400' }}" \
+            --out target/drop-fuzz-corpus \
+            --keep-going \
+            --verbose
+
+      # `--keep-going` means the run completes even when a program trips
+      # the sanitizer, so the shrunk repros are what the triage starts
+      # from. Upload them whether or not the step above went red.
+      - name: Upload shrunk repro corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drop-fuzz-corpus
+          path: target/drop-fuzz-corpus
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ── Front-end panic-freedom (libFuzzer) ────────────────────────────
+  # Cheap by comparison: no codegen, no linking, no sanitizer runtime —
+  # just "the front end must return diagnostics, never panic, on
+  # arbitrary bytes". Each target is time-boxed so the matrix finishes
+  # in a predictable window.
+  front-end:
+    name: Front-end panic-freedom (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_lexer, fuzz_parser, fuzz_pipeline]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo-fuzz requires a nightly toolchain for `-Z sanitizer`.
+      # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml's pin, which
+      # exists for reproducibility of the shipped build and has no
+      # bearing on the fuzzer.
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: |
+          cargo fuzz run ${{ matrix.target }} -- \
+            -max_total_time=${{ github.event.inputs.libfuzzer_seconds || '300' }} \
+            -print_final_stats=1
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 30

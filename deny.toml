@@ -1,0 +1,84 @@
+# cargo-deny configuration — the supply-chain gate for `karac`.
+#
+# `karac` compiles other people's code, so its own dependency tree is
+# part of its threat model: a compromised or unmaintained transitive
+# crate ends up executing on every machine that builds a Kāra program.
+# The tree is ~350 crates deep (arrow, hyper/tokio/rustls, inkwell +
+# llvm-sys, pubgrub), which is far past the point where "read the
+# Cargo.lock diff" is a real review.
+#
+# What this gate does and does not do:
+#
+#   advisories — BLOCKING. A RUSTSEC advisory against anything we
+#                actually link is a build failure. This is the reason
+#                the file exists.
+#   bans       — BLOCKING on `wildcard` version requirements only.
+#                Duplicate versions are *warned*, not denied: the arrow
+#                and tokio trees legitimately carry several versions of
+#                small helper crates, and denying that would make the
+#                gate red on day one for no security benefit.
+#   sources    — BLOCKING. Everything must come from crates.io. A git
+#                dependency sneaking into the tree is exactly the kind
+#                of change that should need a deliberate config edit.
+#   licenses   — BLOCKING against an explicit allow-list. The list is
+#                the set actually present in the current lockfile; a new
+#                license appearing is a decision the maintainer should
+#                make consciously, not absorb silently.
+#
+# Run locally with: cargo deny check
+
+[graph]
+# Check the dependency tree for the targets we actually ship to. Left
+# empty deliberately: restricting to a target list would hide
+# advisories in the wasm and Windows arms, which CI builds too.
+all-features = false
+
+[advisories]
+version = 2
+# Deliberately empty. An advisory is either fixed, or it gets an
+# explicit entry here with a comment saying why it does not apply to
+# our usage. An empty list means "nothing is currently waived", which
+# is the state worth defending.
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# `kara-registry-proxy = { path = "registry-proxy" }` and its siblings are
+# in-workspace path deps with no version requirement, which cargo-deny
+# classifies as wildcards. They are first-party source in this repo, not
+# an unpinned third-party fetch, so the supply-chain concern the
+# `wildcards` lint exists for does not apply. Third-party wildcards stay
+# denied.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[licenses]
+version = 2
+# Permissive licenses compatible with karac's own `MIT OR Apache-2.0`.
+# Unicode-3.0 covers the `unicode-ident` family; CDLA-Permissive-2.0
+# covers `webpki-roots`' trust-anchor data. Every entry here is one
+# cargo-deny actually matched against the current lockfile — an
+# aspirational entry would only produce a `license-not-encountered`
+# warning and blunt the signal. Adding to this list is a licensing
+# decision; make it explicitly, in a commit that says why.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "Unlicense",
+    "BSL-1.0",
+    "CC0-1.0",
+]
+confidence-threshold = 0.8

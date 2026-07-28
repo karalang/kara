@@ -264,9 +264,12 @@ The numbers behind each claim:
 
 ### Standard Library at v1
 
-In-tree, no third-party runtime dependencies. Blocking-style I/O, no
-function coloring — the effect-driven scheduler moves blocking work off
-the par-runtime threads. Minimal, compiling examples live in
+In-tree — no third-party Kāra packages to add, and no package manager to
+reach for. (The Rust runtime crate that backs these surfaces does link
+tokio, hyper, and rustls; the point is that a Kāra program's dependency
+list stays empty.) Blocking-style I/O, no function coloring — the
+effect-driven scheduler moves blocking work off the par-runtime threads.
+Minimal, compiling examples live in
 [`examples/std_net`](examples/std_net).
 
 - **HTTP/1.1 server** — [`runtime/stdlib/http.kara`](runtime/stdlib/http.kara) · `Server.serve(addr, handler)` over `Fn(Request) -> Response` · [minimal example](examples/std_net/http_hello.kara)
@@ -396,7 +399,33 @@ cargo clippy --all --all-targets -- -D warnings   # lint
 cargo fmt                            # format
 ```
 
-Codegen E2E tests (`tests/codegen.rs`, `tests/par_codegen.rs`, `tests/memory_sanitizer.rs`) are gated on `--features llvm` and need the runtime library built once via `cargo build -p karac-runtime --release`. The memory-sanitizer suite additionally needs a `cc` toolchain that supports `-fsanitize=address`; it skips gracefully on hosts that don't.
+Codegen E2E tests (`tests/codegen.rs`, `tests/par_codegen.rs`,
+`tests/memory_sanitizer.rs`) are gated on `--features llvm` and need the runtime
+staticlib archives built once. Build the lean archive first, then the full one —
+both emit the same canonical filename, so the order matters:
+
+```bash
+# Lean archive (rustls-free, native net kept) — built, then renamed.
+cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+# Full archive (TLS on) — must run SECOND; overwrites the canonical name.
+cargo rustc -p karac-runtime --release --crate-type staticlib
+```
+
+Use `cargo rustc … --crate-type staticlib`, **not** `cargo build -p
+karac-runtime --release`. The runtime's `crate-type` is `["staticlib", "rlib"]`,
+and emitting both artifacts in one `cargo build` under `lto = "fat"` defeats the
+staticlib's cross-module dead-code elimination — std's DWARF backtrace
+symbolizer then survives `-dead_strip` into *every* compiled binary (measured:
+auto-par floor 295.7 KiB → 417.7 KiB, +41%). The rationale is spelled out at
+`runtime/Cargo.toml`'s `crate-type` line. Two further archives (`wasm`,
+`wasm-threads`) are needed only for `karac build --target=wasm_*`; see
+[CLAUDE.md](CLAUDE.md) for the full four-archive recipe.
+
+Without the archives the E2E tests skip with a stderr notice rather than
+exercise real binaries — they pass vacuously. The memory-sanitizer suite
+additionally needs a `cc` toolchain that supports `-fsanitize=address`; it skips
+gracefully on hosts that don't.
 
 See [docs/roadmap.md](docs/roadmap.md) for current progress and [docs/design.md](docs/design.md) for the language specification.
 

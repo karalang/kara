@@ -1,0 +1,34 @@
+# Pinned toolchain for reproducible builds of `karac`.
+#
+# Why pin at all: without this file every local build and every CI job
+# resolves to whatever `stable` happens to be that day. Three things then
+# drift silently — `cargo fmt` output (rustfmt's formatting is version-
+# sensitive, and `cargo fmt --all -- --check` is a hard pre-commit gate),
+# the clippy lint set (`-D warnings` turns a newly-added lint into a build
+# failure on an unchanged tree), and codegen/inlining behaviour that the
+# binary-size and compile-speed gates measure against a stored baseline.
+# A floating toolchain makes all three non-reproducible and turns "CI went
+# red overnight on a commit nobody pushed" into a recurring event.
+#
+# Why this is not the same as freezing: CI keeps a separate
+# `stable-drift` job (see `.github/workflows/ci.yml`) that builds, tests,
+# and lints on floating `stable`. It is non-required, so a new rustc
+# release cannot break the merge queue — but it goes red the day an
+# incompatibility appears, which is the signal to bump the pin here
+# deliberately rather than discover the breakage mid-slice.
+#
+# Bumping: change `channel` here, run the full gate
+# (`cargo fmt --all -- --check`, `cargo clippy --all --all-targets --
+# -D warnings`, `cargo test --all`), and land it as its own
+# `chore: bump pinned toolchain to <version>` commit. Keep
+# `rust-version` in `Cargo.toml` in step — that field is the MSRV we
+# actually verify, and this pin is what verifies it.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]
+# Targets the wasm archives need (phase-10 `--target=wasm_wasi` /
+# `wasm_browser`). Declared here so a fresh checkout can build them
+# without a separate `rustup target add` — the wasi-threads sysroot in
+# particular is the only one whose wasi-libc carries atomics, which the
+# `--shared-memory` link requires.
+targets = ["wasm32-wasip1", "wasm32-wasip1-threads"]
