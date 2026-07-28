@@ -5089,6 +5089,109 @@ fn main() {
         );
     }
 
+    /// B-2026-07-28-8: storing into a PLAIN (value-type) struct's
+    /// `Option[shared T]` field must retain the new inner BEFORE releasing the
+    /// old one.
+    ///
+    /// The shared-struct destinations already did; the plain-struct
+    /// fall-through instead dropped the old field value and then raw-stored the
+    /// new one. That is fine for a fresh RHS and fatal for an ALIASING one: in
+    /// `h.head = n.next` the RHS is loaded un-retained, dropping the old head
+    /// releases the old head's own `next` — the very node just loaded — and the
+    /// store then commits a dangling pointer. The next read is a
+    /// use-after-free and the scope-exit drop of the field is a double free.
+    ///
+    /// This is the list-head shape (`struct DList { mut head: Option[Node] }`)
+    /// that `examples/tangle/doubly_linked.kara` is built from; it printed an
+    /// uninitialized value where the README documents `3`.
+    #[test]
+    fn test_e2e_plain_struct_option_shared_field_store_retains_aliasing_rhs() {
+        // `h.head = n.next` where the old `h.head` transitively owns the RHS.
+        // Reading the field afterwards must see node 2, not freed memory.
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Node { mut val: i64, mut next: Option[Node] }
+struct H { mut head: Option[Node] }
+fn main() {
+    let mut h = H { head: None };
+    let a = Node { val: 1, next: None };
+    let b = Node { val: 2, next: None };
+    a.next = Some(b);
+    h.head = Some(a);
+    match h.head { None => {} Some(n) => { h.head = n.next; } }
+    match h.head { None => { println("none") } Some(m) => { println(m.val) } }
+}
+"#
+            ),
+            Some("2\n".to_string())
+        );
+        // Same store reached through a `mut ref self` method receiver — the
+        // sibling branch in `compile_field_store`, hooked alongside it.
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Node { mut val: i64, mut next: Option[Node] }
+struct H { mut head: Option[Node] }
+impl H {
+    fn advance(mut ref self) {
+        match self.head { None => {} Some(n) => { self.head = n.next; } }
+    }
+}
+fn main() {
+    let mut h = H { head: None };
+    let a = Node { val: 1, next: None };
+    let b = Node { val: 2, next: None };
+    a.next = Some(b);
+    h.head = Some(a);
+    h.advance();
+    match h.head { None => { println("none") } Some(m) => { println(m.val) } }
+}
+"#
+            ),
+            Some("2\n".to_string())
+        );
+        // Self-assignment must not free the node: retain-then-release keeps the
+        // count above zero across the store.
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Node { mut val: i64, mut next: Option[Node] }
+struct H { mut head: Option[Node] }
+fn main() {
+    let mut h = H { head: None };
+    let a = Node { val: 7, next: None };
+    h.head = Some(a);
+    h.head = h.head;
+    match h.head { None => { println("none") } Some(m) => { println(m.val) } }
+}
+"#
+            ),
+            Some("7\n".to_string())
+        );
+        // Overwriting with an unrelated node still releases the old one — the
+        // retain must not turn the old-side release into a leak. Two writes to
+        // the same field, then a read of the survivor.
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Node { mut val: i64, mut next: Option[Node] }
+struct H { mut head: Option[Node] }
+fn main() {
+    let mut h = H { head: None };
+    let a = Node { val: 1, next: None };
+    let b = Node { val: 2, next: None };
+    h.head = Some(a);
+    h.head = Some(b);
+    h.head = None;
+    match h.head { None => { println("none") } Some(m) => { println(m.val) } }
+}
+"#
+            ),
+            Some("none\n".to_string())
+        );
+    }
+
     #[test]
     fn test_e2e_volatile_read_write_roundtrip() {
         // MMIO intrinsics `volatile_write` / `volatile_read`

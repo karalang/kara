@@ -1687,6 +1687,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         // inside the drop fn), so it frees the live old value
                         // regardless. Trivially-copyable (scalar) fields are a
                         // no-op. Surfaced by leetcode #158's Reader buffer refill.
+                        //
+                        // An `Option[shared]` field needs retain-new-then-
+                        // release-old instead (B-2026-07-28-8) — this drop
+                        // would free the node an aliasing RHS points at.
+                        if self.try_plain_struct_option_shared_field_store(
+                            object,
+                            var_name,
+                            field,
+                            idx,
+                            struct_ty,
+                            ptr,
+                            new_val,
+                            rhs_is_fresh,
+                        ) {
+                            return Ok(());
+                        }
                         self.drop_old_plain_struct_field(
                             object, var_name, field, idx, struct_ty, ptr,
                         );
@@ -1726,6 +1742,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         // struct-drop uses; trivially-copyable (scalar) fields are
                         // a no-op. The generic-field subst resolves a bare-param
                         // field (`Box[T]{v:T}`) to its concrete type first.
+                        //
+                        // An `Option[shared]` field needs retain-new-then-
+                        // release-old instead (B-2026-07-28-8) — this drop
+                        // would free the node an aliasing RHS points at.
+                        if self.try_plain_struct_option_shared_field_store(
+                            object,
+                            var_name,
+                            field,
+                            idx,
+                            sv.get_type(),
+                            slot.ptr,
+                            new_val,
+                            rhs_is_fresh,
+                        ) {
+                            return Ok(());
+                        }
                         self.drop_old_plain_struct_field(
                             object,
                             var_name,
@@ -1747,6 +1779,82 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// B-2026-07-28-8: route a store into a PLAIN (value-type) struct's
+    /// `Option[shared T]` field through the retain-aware store, returning
+    /// `true` when it handled the store.
+    ///
+    /// The shared-struct destinations (`node.next = ..`, `v[i].next = ..`)
+    /// already dispatch here; a plain struct holding the list head
+    /// (`struct DList { mut head: Option[Node] }`) did not, and instead took
+    /// the generic fall-through: drop the old field value, then raw-store the
+    /// new one. That is wrong whenever the RHS is an ALIASING read rather than
+    /// a fresh value — `self.head = n.next` loads `n.next` un-retained, the
+    /// old-side drop frees the previous head, freeing the previous head
+    /// releases ITS `next` (the very node just loaded), and the raw store then
+    /// commits a dangling pointer. The following read is a use-after-free and
+    /// the scope-exit drop of the field is a double free.
+    ///
+    /// `emit_option_shared_field_store` is exactly the fix: it loads the old
+    /// slot, retains the new inner, stores, and only then releases the old — an
+    /// order that is also safe for `h.head = h.head`. It owns the old-side
+    /// release, so callers must NOT also run `drop_old_plain_struct_field`.
+    ///
+    /// Only the non-niche variant is reachable: niche-opt is recorded on
+    /// `shared_types` (`niche_field_inner_heap_type` looks the outer type up
+    /// there), and a plain struct is never in that map, so its `Option[shared]`
+    /// field always uses the full four-word `Option` layout.
+    fn try_plain_struct_option_shared_field_store(
+        &mut self,
+        object: &Expr,
+        var_name: &str,
+        field: &str,
+        idx: u32,
+        struct_ty: StructType<'ctx>,
+        base_ptr: PointerValue<'ctx>,
+        new_val: BasicValueEnum<'ctx>,
+        rhs_is_fresh: bool,
+    ) -> bool {
+        let Some(type_name) = self
+            .type_name_of_expr(object)
+            .or_else(|| self.var_type_names.get(var_name).cloned())
+        else {
+            return false;
+        };
+        // A shared receiver has its own dispatch upstream; only plain structs
+        // reach this fall-through, but check so a future reordering cannot
+        // double-handle one.
+        if self.shared_types.contains_key(&type_name) {
+            return false;
+        }
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(&type_name)
+            .and_then(|v| v.get(idx as usize))
+            .cloned()
+        else {
+            return false;
+        };
+        let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(&field_te) else {
+            return false;
+        };
+        let Ok(field_ptr) = self.builder.build_struct_gep(
+            struct_ty,
+            base_ptr,
+            idx,
+            &format!("opt_sh_{}_ptr", field),
+        ) else {
+            return false;
+        };
+        self.emit_option_shared_field_store(
+            field_ptr,
+            new_val,
+            inner_info.heap_type,
+            rhs_is_fresh,
+            field,
+        );
+        true
     }
 
     /// Drop the OLD value of a plain (non-shared, non-Option-shared, non-SoA)

@@ -105,14 +105,15 @@ const CASES: &[Case] = &[
         // Fixed 2026-07-28 (B-2026-07-28-7): the interpreter used to HANG here.
         // `cur = n.next` inside `match cur { Some(n) => .. }` was reverted by
         // B-2026-07-23-12's payload write-through, so every walk re-visited the
-        // head forever. This is now the corpus's authoritative oracle for the
-        // still-broken codegen leg below.
+        // head forever. Fixing it first gave the codegen leg below an oracle.
         interp: Expect::Matches,
-        // Prints the forward/backward walks correctly, then an UNINITIALIZED
-        // value where the README documents `3` — the remaining node is read
-        // after the splices dropped its last counted reference.
-        codegen: Expect::KnownBroken,
-        note: "B-2026-07-28-4: codegen prints an uninitialized value after the splices (RC accounting across the neighbor relink)",
+        // Fixed 2026-07-28 (B-2026-07-28-8): `self.head = n.next` stored an
+        // un-retained handle into the plain `DList` struct's `Option[Node]`
+        // field and only THEN dropped the old head — which released the very
+        // node just loaded. Now retain-new / store / release-old; the program
+        // is valgrind-clean at 27 allocs / 27 frees, 0 bytes at exit.
+        codegen: Expect::Matches,
+        note: "",
     },
     Case {
         file: "interp.kara",
