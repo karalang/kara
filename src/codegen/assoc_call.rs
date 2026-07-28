@@ -461,6 +461,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 "new" | "with_capacity" | "from_vec" | "from_iter_nullable" => {
                     return self.compile_column_new(method, args)
                 }
+                // Arrow IPC interchange is interpreter-only (AOT codegen + the
+                // runtime `libkarac_runtime_arrow.a` archive are a later slice).
+                // Without this arm `Column.from_arrow_ipc(bytes)` falls through
+                // to the silent `Ok(const 0)` tail below and MISCOMPILES a
+                // `Column` to the integer 0 — the same run-vs-build divergence
+                // as B-2026-07-18-20. `karac run` routes Arrow IPC programs to
+                // the interpreter; give a loud, actionable error under `build`.
+                "from_arrow_ipc" => {
+                    return Err(format!(
+                        "codegen: `Column.{method}(...)` is interpreter-only (AOT codegen + \
+                         the `libkarac_runtime_arrow.a` archive are a later slice); run with \
+                         `karac run` (which routes Arrow IPC programs to the tree-walk \
+                         interpreter) or `karac run --interp`. Emitting it under `karac build` \
+                         would silently return 0."
+                    ));
+                }
                 _ => {}
             }
         }

@@ -526,6 +526,30 @@ mod codegen_tests {
     }
 
     #[test]
+    fn arrow_ipc_builtins_rejected_by_codegen() {
+        // Arrow IPC interchange (`Column.to_arrow_ipc` / `Column.from_arrow_ipc`)
+        // is interpreter-only — codegen must REJECT it with an actionable
+        // message rather than silently miscompile. `from_arrow_ipc` is the
+        // important case: as an ASSOC call it would otherwise fall through to the
+        // `const 0` default and return the integer 0 in place of a `Column` (the
+        // B-2026-07-18-20 run-vs-build divergence class). `karac run` routes
+        // these programs to the interpreter.
+        let to_ipc = "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
+                      let b = c.to_arrow_ipc(); println(b.len()); }";
+        let err = ir_result(to_ipc).expect_err("to_arrow_ipc must be rejected by codegen");
+        assert!(err.contains("interpreter-only in Arrow IPC"), "got: {err}");
+
+        let from_ipc = "fn main() { let bytes: Vec[u8] = Vec.new(); \
+                        let d: Column[i64] = Column.from_arrow_ipc(bytes); println(d.len()); }";
+        let err = ir_result(from_ipc).expect_err("from_arrow_ipc must be rejected by codegen");
+        assert!(
+            err.contains("`Column.from_arrow_ipc(...)` is interpreter-only"),
+            "got: {err}"
+        );
+        assert!(err.contains("silently return 0"), "got: {err}");
+    }
+
+    #[test]
     fn test_e2e_dataframe_write_csv_serializes_all_backends() {
         // Phase-11 CSV leg — the codegen twin (karac_runtime_df_write_csv
         // walks the DataFrame/Column control blocks; Rust `Display` IS the

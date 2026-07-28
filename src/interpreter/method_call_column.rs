@@ -168,9 +168,9 @@ impl<'a> super::Interpreter<'a> {
                 })
             }
             // `from_arrow_ipc(bytes)` — parse an Arrow IPC stream (`Vec[u8]`)
-            // into a column. Reads the first RecordBatch's first column; slice
-            // 1 supports Int64 / Float64 (arrow_ipc.rs). The round-trip peer of
-            // `to_arrow_ipc`.
+            // into a column. Reads the first RecordBatch's first column;
+            // Int64/Int32, Float64/Float32, Utf8/LargeUtf8, and Boolean element
+            // types (arrow_ipc.rs). The round-trip peer of `to_arrow_ipc`.
             "Column.from_arrow_ipc" => {
                 let arg = args.first()?;
                 let bytes_val = self.eval_expr_inner(&arg.value);
@@ -295,9 +295,9 @@ impl<'a> super::Interpreter<'a> {
             }
             // Serialize to an Arrow IPC stream (`Vec[u8]`) — a single
             // RecordBatch with one field `col`, interoperable with any Arrow
-            // reader (pyarrow / polars / DuckDB). Slice 1: i64 / f64 columns
-            // with nulls (arrow_ipc.rs). The bytes round-trip back through
-            // `from_arrow_ipc`.
+            // reader (pyarrow / polars / DuckDB). i64 / f64 / String / bool
+            // columns with nulls (arrow_ipc.rs). The bytes round-trip back
+            // through `from_arrow_ipc`.
             "to_arrow_ipc" => {
                 let data_guard = data.read().unwrap();
                 let valid_guard = valid.read().unwrap();

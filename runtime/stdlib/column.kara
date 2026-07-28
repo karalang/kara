@@ -145,15 +145,17 @@ impl[T] Column[T] {
         Column { handle_id: 0 }
     }
 
-    // --- Arrow IPC interchange (phase-11 Arrow IPC slice 1). ---
+    // --- Arrow IPC interchange (phase-11 Arrow IPC). ---
     // Serialize the column to the Apache Arrow **IPC stream** format — a single
     // RecordBatch with one field `col`, interoperable with any Arrow reader
     // (pyarrow `ipc.open_stream`, polars, DuckDB). The validity bitmap maps to
-    // Arrow's null buffer. Round-trips through `from_arrow_ipc`. Slice 1
-    // supports `i64` / `f64` element columns (interpreter reference impl in
+    // Arrow's null buffer. Round-trips through `from_arrow_ipc`. Element types:
+    // `i64` (Int64), `f64` (Float64), `String` (Utf8), `bool` (Boolean); the
+    // reader also accepts Int32/Float32 (widened) and LargeUtf8 so a foreign
+    // producer's column still loads (interpreter reference impl in
     // `src/interpreter/arrow_ipc.rs`; codegen + the runtime
-    // `libkarac_runtime_arrow.a` archive are slice 2 — `karac run` routes an
-    // arrow program to the interpreter until then).
+    // `libkarac_runtime_arrow.a` archive are a later slice — `karac run` routes
+    // an arrow program to the interpreter until then).
     #[compiler_builtin]
     fn to_arrow_ipc(ref self) -> Vec[u8] {
         Vec.new()

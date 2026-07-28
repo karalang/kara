@@ -3853,6 +3853,52 @@ fn test_column_arrow_ipc_roundtrip_from_vec_nonempty_bytes() {
     assert_eq!(out, "true\n5\n15\n");
 }
 
+// A `String` column serializes as Arrow `Utf8` and round-trips its values,
+// null pattern (null POSITION, not just count), and length.
+#[test]
+fn test_column_arrow_ipc_roundtrip_string() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[String] = Column.new();\n\
+             c.push(\"alpha\"); c.push_null(); c.push(\"gamma\");\n\
+             let bytes = c.to_arrow_ipc();\n\
+             let d: Column[String] = Column.from_arrow_ipc(bytes);\n\
+             println(d.len());\n\
+             println(d.null_count());\n\
+             println(d.is_null(0));\n\
+             println(d.is_null(1));\n\
+             println(d.is_null(2));\n\
+             let vals = d.iter_valid();\n\
+             println(vals[0]);\n\
+             println(vals[1]);\n\
+         }",
+    );
+    // len 3, one null at index 1; the two valid cells are "alpha", "gamma".
+    assert_eq!(out, "3\n1\nfalse\ntrue\nfalse\nalpha\ngamma\n");
+}
+
+// A `bool` column serializes as Arrow `Boolean` and round-trips its values,
+// null pattern, and length.
+#[test]
+fn test_column_arrow_ipc_roundtrip_bool() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[bool] = Column.new();\n\
+             c.push(true); c.push(false); c.push_null(); c.push(true);\n\
+             let bytes = c.to_arrow_ipc();\n\
+             let d: Column[bool] = Column.from_arrow_ipc(bytes);\n\
+             println(d.len());\n\
+             println(d.null_count());\n\
+             let vals = d.iter_valid();\n\
+             println(vals[0]);\n\
+             println(vals[1]);\n\
+             println(vals[2]);\n\
+         }",
+    );
+    // len 4, one null; the three valid cells are true, false, true.
+    assert_eq!(out, "4\n1\ntrue\nfalse\ntrue\n");
+}
+
 #[test]
 fn test_column_narrow_element_binop_in_range_ok() {
     // Non-overflowing narrow element ops keep working after the peel.

@@ -6444,15 +6444,15 @@ impl<'ctx> super::Codegen<'ctx> {
                  (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
             ));
         }
-        // Arrow IPC interchange is interpreter-only in slice 1 (codegen + the
-        // runtime `libkarac_runtime_arrow.a` archive are slice 2). Give a clean,
+        // Arrow IPC interchange is interpreter-only (codegen + the runtime
+        // `libkarac_runtime_arrow.a` archive are a later slice). Give a clean,
         // actionable error instead of the generic "this is a codegen bug"
         // fall-through — `karac run` routes these programs to the interpreter
         // automatically (phase-11-stdlib-longtail.md § Arrow IPC).
         if method == "to_arrow_ipc" {
             return Err(format!(
-                "codegen: `Column.{method}` is interpreter-only in Arrow IPC slice 1 \
-                 (AOT codegen + the `libkarac_runtime_arrow.a` archive are slice 2); \
+                "codegen: `Column.{method}` is interpreter-only in Arrow IPC \
+                 (AOT codegen + the `libkarac_runtime_arrow.a` archive are a later slice); \
                  run with `karac run` (which routes Arrow IPC programs to the tree-walk \
                  interpreter) or `karac run --interp`"
             ));
