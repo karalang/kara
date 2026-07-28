@@ -642,8 +642,55 @@ impl Emitter {
         }
     }
 
+    // B-2026-07-28-15: the PRIMITIVE type names this emitter recognizes, and
+    // the kind each lowers to. -1 means "not a primitive" — the caller then
+    // looks the name up among the declared structs/enums and REFUSES if it is
+    // not there, instead of silently calling it i64.
+    //
+    // Every integer width collapses to kind 0 (i64) because the emitter models
+    // one integer type; that is a deliberate narrowing, not an accident, so
+    // those names are listed rather than left to a fallback. `f32` is NOT here:
+    // only `f64` has a kind, and treating an `f32` annotation as an integer
+    // would be exactly the silent miscompile this list exists to prevent.
+    fn primitive_kind_of_name(ref self, n: ref String) -> i64 {
+        if n == "String" {
+            return 2;
+        }
+        if n == "bool" {
+            return 1;
+        }
+        if n == "f64" {
+            return 5;
+        }
+        if n == "i64"
+            or n == "i32"
+            or n == "i16"
+            or n == "i8"
+            or n == "u64"
+            or n == "u32"
+            or n == "u16"
+            or n == "u8"
+            or n == "usize"
+            or n == "isize"
+            or n == "char"
+        {
+            return 0;
+        }
+        0 - 1
+    }
+
     // Map a DECLARED type to a value kind (Slice 10; struct-aware Slice 12):
-    // String → 2, bool → 1, a registered struct → 10+index, else 0.
+    // String → 2, bool → 1, a registered struct → 10+index.
+    //
+    // B-2026-07-28-15: an UNRESOLVABLE name is now a hard refusal. It used to
+    // return 0 — i64 — which is how every type reached by an `import` lowered
+    // to a bare integer with no diagnostic: `emit_program` walks the items of
+    // ONE module and ignores `Import`, so nothing an import names is ever
+    // registered. The emitted `ast.kara` had `@u_clone_span(i64) -> i64` though
+    // `Span` is a four-field struct, and a module the seed REFUSES ("'P' is not
+    // a struct") produced well-formed IR here. Pass A0 (Slice 65) had already
+    // made the fallback unreachable by a FORWARD reference within a module; an
+    // imported name still reached it.
     fn kind_of_ty(ref self, t: TypeExpr) -> i64 {
         match t {
             PathTy(p) => {
@@ -651,15 +698,9 @@ impl Emitter {
                 if segments.len() == 0 {
                     return 0;
                 }
-                if segments[0] == "String" {
-                    return 2;
-                }
-                if segments[0] == "bool" {
-                    return 1;
-                }
-                if segments[0] == "f64" {
-                    // f64 (Slice 36).
-                    return 5;
+                let prim = self.primitive_kind_of_name(segments[0]);
+                if prim >= 0 {
+                    return prim;
                 }
                 if segments[0] == "Option" {
                     // Option[i64] / Option[String] (Slice 29): the synthetic
@@ -748,6 +789,20 @@ impl Emitter {
                     }
                     j = j + 1;
                 }
+                // Not a primitive, not a declared struct or enum. Almost always
+                // an IMPORTED type (see this function's header) or a collection
+                // the emitter does not model (`Map`, `Set`, a tuple, a `Fn`).
+                //
+                // The name is printed before the panic because the seed only
+                // propagates a STRING-LITERAL panic message — a computed one
+                // degrades to "explicit panic" — and a refusal that cannot say
+                // WHICH name it could not resolve is barely better than the
+                // silent i64 it replaces. Stdout is the IR stream, but the IR
+                // is being abandoned anyway, so there is nothing to corrupt.
+                println("codegen.kara: unresolved type name: " + segments[0]);
+                panic(
+                    "codegen.kara: a type name resolved to neither a primitive nor a declared struct/enum (the name is printed on the line above). This emitter walks ONE module's items and ignores `import`, so an imported type has no declaration to find — see bug B-2026-07-28-15. It used to lower such a name to i64 SILENTLY.",
+                );
                 0
             }
             _ => 0,
