@@ -102,14 +102,17 @@ const CASES: &[Case] = &[
     Case {
         file: "doubly_linked.kara",
         expected: "forward:  1 2 3 4\nbackward: 4 3 2 1\nafter removals forward:  3\nafter removals backward: 3\n",
-        // HANGS under the interpreter — the corpus's only interpreter-side
-        // failure. Treated as known-broken (the runner's timeout yields no
-        // match).
-        interp: Expect::KnownBroken,
+        // Fixed 2026-07-28 (B-2026-07-28-7): the interpreter used to HANG here.
+        // `cur = n.next` inside `match cur { Some(n) => .. }` was reverted by
+        // B-2026-07-23-12's payload write-through, so every walk re-visited the
+        // head forever. This is now the corpus's authoritative oracle for the
+        // still-broken codegen leg below.
+        interp: Expect::Matches,
         // Prints the forward/backward walks correctly, then an UNINITIALIZED
-        // value where the README documents `3`.
+        // value where the README documents `3` — the remaining node is read
+        // after the splices dropped its last counted reference.
         codegen: Expect::KnownBroken,
-        note: "B-2026-07-28-4: interpreter hangs; codegen prints an uninitialized value after the splices",
+        note: "B-2026-07-28-4: codegen prints an uninitialized value after the splices (RC accounting across the neighbor relink)",
     },
     Case {
         file: "interp.kara",

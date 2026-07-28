@@ -39,7 +39,24 @@ impl<'a> super::Interpreter<'a> {
                 }
                 self.env.push_scope();
                 self.bind_pattern(&arm.pattern, scrutinee.clone());
+                // B-2026-07-28-7: watch the scrutinee's slot across the arm
+                // body. If the body ASSIGNS to it (`match cur { Some(n) => {
+                // cur = n.next } }` — every linked-structure walk and every
+                // state machine), the storage the write-through below would
+                // target no longer exists, so writing back the pre-body value
+                // silently REVERTS the assignment. That turned the canonical
+                // list walk into an infinite loop.
+                let watch = scrutinee_place
+                    .filter(|p| Self::match_place_is_writable(p))
+                    .map(|p| match &p.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "self".to_string(),
+                    });
+                if let Some(name) = &watch {
+                    self.env.push_watch(name);
+                }
                 let result = self.eval_expr_inner(&arm.body);
+                let reassigned = watch.is_some() && self.env.pop_watch();
                 // B-2026-07-23-12: write-through for a mutable-place scrutinee.
                 // The interpreter binds a match payload BY VALUE (a clone of the
                 // scrutinee), so an in-arm mutation of a bound payload —
@@ -55,7 +72,13 @@ impl<'a> super::Interpreter<'a> {
                 // in `eval_call` then propagates a `mut ref` param back to the
                 // caller. A non-place scrutinee (`match f() { .. }`) or a pattern
                 // with no direct value binding leaves the scrutinee untouched.
-                if let Some(place) = scrutinee_place {
+                // Skipped entirely when the body reassigned the place
+                // (`reassigned`, B-2026-07-28-7): that write is the newer and
+                // authoritative one, and it is also what codegen does — there
+                // the payload binding is a pointer into the OLD storage, so
+                // replacing the place leaves the binding's later mutations
+                // invisible to it rather than resurrecting the old value.
+                if let Some(place) = scrutinee_place.filter(|_| !reassigned) {
                     if Self::match_place_is_writable(place) {
                         if let Some(patched) = self.patch_arm_bindings(&arm.pattern, scrutinee) {
                             self.write_back_receiver(place, patched);

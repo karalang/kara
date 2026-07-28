@@ -14070,6 +14070,114 @@ fn test_match_readonly_enum_payload_not_corrupted() {
     assert_eq!(output, "1\n1\n");
 }
 
+// ── Match-arm assignment to the scrutinee (B-2026-07-28-7) ────────────────────
+// The write-through above reconstructed the scrutinee from its arm bindings and
+// stored it back UNCONDITIONALLY, which silently REVERTED an assignment the arm
+// body made to the scrutinee place itself. `match cur { Some(n) => { cur = ..
+// } }` is the shape of every linked-structure walk and most state machines, so
+// the revert turned them into infinite loops. `eval_match` now watches the
+// scrutinee's slot across the arm body and skips the write-through when the
+// body replaced it.
+#[test]
+fn test_match_arm_assignment_to_scrutinee_survives() {
+    // Minimal shape: the arm assigns `None` to the very variable being matched.
+    // Before the fix the second match still saw `Some(1)`.
+    let output = run("fn main() {\n\
+             let mut cur = Some(1);\n\
+             match cur { None => {} Some(n) => { println(n); cur = None; } }\n\
+             match cur { None => { println(\"none\") } Some(m) => { println(m) } }\n\
+         }");
+    assert_eq!(output, "1\nnone\n");
+}
+
+#[test]
+fn test_match_arm_scrutinee_countdown_terminates() {
+    // Assigning a fresh `Some` (not just `None`) must stick too — otherwise the
+    // loop never makes progress. Ran forever before the fix.
+    let output = run("fn main() {\n\
+             let mut cur = Some(3);\n\
+             let mut guard = 0;\n\
+             loop {\n\
+                 if guard >= 9 { println(\"CYCLE\"); break; }\n\
+                 match cur {\n\
+                     None => { println(\"end\"); break; }\n\
+                     Some(n) => { println(n); if n <= 1 { cur = None; } else { cur = Some(n - 1); } }\n\
+                 }\n\
+                 guard = guard + 1;\n\
+             }\n\
+         }");
+    assert_eq!(output, "3\n2\n1\nend\n");
+}
+
+#[test]
+fn test_match_arm_shared_struct_link_walk_terminates() {
+    // The `examples/tangle/src/doubly_linked.kara` shape that surfaced this:
+    // walking `Option[<shared struct>]` links by reassigning the cursor inside
+    // the arm. Before the fix `cur` never advanced past the head, so the walk
+    // re-read node 1 forever.
+    let output = run(
+        "shared struct Node { mut val: i64, mut next: Option[Node] }\n\
+         fn main() {\n\
+             let a = Node { val: 1, next: None };\n\
+             let b = Node { val: 2, next: None };\n\
+             a.next = Some(b);\n\
+             let mut cur = Some(a);\n\
+             let mut guard = 0;\n\
+             loop {\n\
+                 if guard >= 5 { println(\"CYCLE\"); break; }\n\
+                 match cur {\n\
+                     None => { println(\"end\"); break; }\n\
+                     Some(n) => { println(n.val); cur = n.next; }\n\
+                 }\n\
+                 guard = guard + 1;\n\
+             }\n\
+         }",
+    );
+    assert_eq!(output, "1\n2\nend\n");
+}
+
+#[test]
+fn test_match_arm_assignment_does_not_suppress_sibling_write_through() {
+    // The skip must be scoped to the scrutinee's OWN slot: an arm that mutates
+    // a bound payload while assigning some OTHER variable still writes through
+    // (B-2026-07-23-12 must keep working alongside B-2026-07-28-7).
+    let output = run("enum V { List(Vec[i64]) }\n\
+         fn add(v: mut ref V) {\n\
+             let mut touched = 0;\n\
+             match v { List(xs) => { xs.push(99); touched = 1; } }\n\
+             println(touched);\n\
+         }\n\
+         fn size(v: ref V) -> i64 { match v { List(xs) => xs.len() as i64 } }\n\
+         fn main() {\n\
+             let mut xs: Vec[i64] = [1, 2];\n\
+             let mut t = V.List(xs);\n\
+             add(mut t);\n\
+             println(size(t));\n\
+         }");
+    assert_eq!(output, "1\n3\n");
+}
+
+#[test]
+fn test_match_arm_assignment_in_nested_match_reaches_outer_scrutinee() {
+    // An assignment made from inside a NESTED match must still be seen by the
+    // OUTER match's watch — otherwise the inner match hides the write and the
+    // outer write-through reverts it. This is why the watch is a stack that
+    // marks every frame naming the slot, not just the innermost.
+    let output = run("fn main() {\n\
+             let mut cur = Some(1);\n\
+             let flag = Some(7);\n\
+             match cur {\n\
+                 None => {}\n\
+                 Some(n) => {\n\
+                     println(n);\n\
+                     match flag { None => {} Some(f) => { cur = Some(n + f); } }\n\
+                 }\n\
+             }\n\
+             match cur { None => { println(\"none\") } Some(m) => { println(m) } }\n\
+         }");
+    assert_eq!(output, "1\n8\n");
+}
+
 // ── std.http ──────────────────────────────────────────────────────────────────
 
 #[test]

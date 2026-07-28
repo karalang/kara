@@ -448,13 +448,35 @@ pub(crate) fn push_drops_for_stmt(stmt: &Stmt, cleanup: &mut Vec<CleanupAction>)
 #[derive(Debug, Clone)]
 pub(crate) struct Env {
     pub(crate) scopes: Vec<HashMap<String, Value>>,
+    /// Active slot-write watches (B-2026-07-28-7), innermost last. Each entry
+    /// is `(binding name, was it written)`; `set` flips the flag of every entry
+    /// naming the slot it writes. `eval_match` uses this to learn whether a
+    /// match arm body REPLACED its scrutinee's storage, which makes the
+    /// payload write-through unsound — see `pattern_match::eval_match`.
+    ///
+    /// A `Vec` rather than a single slot because matches nest: an inner match
+    /// must not hide a write from an enclosing one, so a write marks every
+    /// frame that names it, not just the innermost.
+    pub(crate) watches: Vec<(String, bool)>,
 }
 
 impl Env {
     pub(crate) fn new() -> Self {
         Env {
             scopes: vec![HashMap::new()],
+            watches: Vec::new(),
         }
+    }
+
+    /// Start watching `name` for slot writes. Pair with `pop_watch`.
+    pub(crate) fn push_watch(&mut self, name: &str) {
+        self.watches.push((name.to_string(), false));
+    }
+
+    /// Stop watching the innermost watched name; `true` if it was written
+    /// while the watch was active.
+    pub(crate) fn pop_watch(&mut self) -> bool {
+        self.watches.pop().is_some_and(|(_, written)| written)
     }
 
     pub(crate) fn push_scope(&mut self) {
@@ -495,6 +517,17 @@ impl Env {
         //   - `MapSlotRef`: a `mut ref V` into a Map slot, returned by
         //     `Entry.or_insert` — write through to the live map slot so
         //     `*r = v` / `r += 1` land in the map, not the local binding.
+        // Record the write against any active watch (B-2026-07-28-7) BEFORE
+        // dispatching on the slot kind, so a redirected write (SharedCell /
+        // MapSlotRef / VecSlotRef) counts too — each still replaces what the
+        // name denotes, which is what a watcher cares about.
+        if !self.watches.is_empty() {
+            for (watched, written) in self.watches.iter_mut() {
+                if watched == name {
+                    *written = true;
+                }
+            }
+        }
         let mut redirect: Option<(String, Value)> = None;
         let mut vec_redirect: Option<(Arc<RwLock<Vec<Value>>>, usize)> = None;
         for scope in self.scopes.iter_mut().rev() {
