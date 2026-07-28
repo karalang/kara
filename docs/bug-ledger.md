@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 28 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 1 |
-| use-after-free | 7 | 0 |
+| use-after-free | 8 | 1 |
 | other | 4 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 507 | 3 |
+| codegen | 508 | 4 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **696 surfaced · 4 open · 686 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **697 surfaced · 5 open · 686 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **696 surfaced 
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
 | B-2026-07-27-12 | 2026-07-27 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): a `to_string()` result produced INSIDE a match arm and returned from a fn leaks — the caller never frees the returned buffer | — |
 | B-2026-07-27-14 | 2026-07-27 | cli | medium | FOUR diagnostic codes are minted by TWO DIFFERENT PHASES for unrelated errors: E0222 is both resolve `PrivateItemAccess` and typecheck `RefutablePattern`; E0238 is both resolve `ContinueOnBlockLabel` and typecheck `CannotInferTypeParam`; E0239 is both resolve `NonExhaustiveInvalidTarget` and typecheck `AmbiguousMethod`; E0240 is both resolve `TrackCallerInvalidTarget` and typecheck `ConflictingImpl`. The `code` field of a structured diagnostic is therefore NOT a unique key, so any consumer keying on it alone (agent loop, IDE, docs index) can mis-identify the error. | — |
+| B-2026-07-27-15 | 2026-07-27 | codegen | high | SELFHOST EMITTER: a heap-owning payload bound by a `match` arm is bound as a BORROW, so returning or consuming it hands out a buffer the scrutinee's owner then frees — a use-after-free / double-free that is INTERMITTENT (same IR aborts on some runs, exits 0 on others). Affects both the by-value enum path and the `shared` node path. | — |
 
 ### Fixed (686)
 
