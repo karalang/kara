@@ -3863,6 +3863,20 @@ impl Emitter {
     // unreachable-but-well-formed block. In value form each arm body's i64
     // value routes through a result slot (the if-as-value pattern). Guards are
     // not lowered (corpus-free surface).
+    // B-2026-07-28-5: the synthetic tag an `Option[<shared enum>]` arm tests
+    // under the niche representation — `None` is null (0), `Some` is non-null
+    // (1), matching the `zext i1 (icmp ne ptr .., null)` the scrutinee lowers
+    // to. Any other name returns -1 ("not an Option arm").
+    fn opt_niche_tag(ref self, name: String) -> i64 {
+        if name == "None" {
+            return 0;
+        }
+        if name == "Some" {
+            return 1;
+        }
+        0 - 1
+    }
+
     fn emit_match(mut ref self, m: MatchExpr, want_value: bool) -> Val {
         let MatchExpr { scrutinee, arms, span } = m;
         let sv = self.emit_value(scrutinee);
@@ -4108,22 +4122,29 @@ impl Emitter {
         let ei = sk - 1000;
         let ety = self.ty_text(sk);
         let shared_scrut = self.en_is_shared(ei);
+        // B-2026-07-28-5: is this a match over an `Option[<shared enum>]`
+        // rather than over the enum itself? Both carry the same kind, because
+        // the niche makes them the same representation — a nullable handle. The
+        // arms are what tell them apart: `None` / `Some` are not variants of the
+        // inner enum, so `en_variant_tag` returns < 0 for them there. A genuine
+        // enum whose own variants happen to be named `None`/`Some` answers >= 0
+        // and is untouched.
+        let mut opt_mode = false;
+        let mut opt_decided = false;
+        // The tag is emitted LAZILY — on the first arm that actually tests one,
+        // by which point that arm's variant name has told us which form to use.
+        // Two reasons it cannot be emitted here:
+        //
+        //  · The choice depends on the arms, and pre-scanning them needs
+        //    `arms.clone()`. That clone CORRUPTS THE HEAP in the seed-compiled
+        //    emitter (`malloc(): unaligned tcache chunk detected`) — a
+        //    `Vec[MatchArm]` whose elements carry `shared enum` handles, which
+        //    is a seed defect in its own right, filed separately. Deciding
+        //    lazily sidesteps it and needs no clone.
+        //  · An all-catch-all match (a single lowercase binding arm) tests no
+        //    tag at all, and eagerly loading one would dereference the handle —
+        //    which is null for a `None`.
         let mut tg = "".to_string();
-        if shared_scrut {
-            // Slice 63: the tag lives behind the handle, in the `{rc,tag}`
-            // prefix every variant node shares.
-            tg = self.sh_emit_tag_load(sop.clone());
-        } else {
-            tg = self.fresh();
-            self.body = self.body
-                + "  "
-                + tg.clone()
-                + " = extractvalue "
-                + ety.clone()
-                + " "
-                + sop.clone()
-                + ", 0\n";
-        }
         let mut rslot = "".to_string();
         // B-2026-07-27-3: set when any arm yields a BOOL (i1).
         let mut rbool = false;
@@ -4148,9 +4169,15 @@ impl Emitter {
             let mut bind_payload = "".to_string();
             let mut bind_payload2 = "".to_string();
             let mut bind_whole = "".to_string();
-            // B-2026-07-28-5: the variant name this arm tests, kept so the
-            // `Option[<shared enum>]` refusal below can see it.
+            // B-2026-07-28-5: the variant name this arm tests, resolved to a
+            // tag AFTER the pattern is read — the resolution depends on whether
+            // this is an `Option[<shared enum>]` match, which the name itself is
+            // what reveals. `pat_variantish` covers the two pattern forms that
+            // name a variant; `pat_is_binding` distinguishes the bare form,
+            // which is also how a lowercase catch-all arrives.
             let mut pat_name = "".to_string();
+            let mut pat_variantish = false;
+            let mut pat_is_binding = false;
             let mut or_tags: Vec[i64] = Vec.new();
             match pattern {
                 TupleVariantPat(tvp) => {
@@ -4158,7 +4185,7 @@ impl Emitter {
                     let li = segments.len() - 1;
                     let vn = segments[li];
                     pat_name = vn.clone();
-                    tag = self.en_variant_tag(ei, vn);
+                    pat_variantish = true;
                     let mut pei = 0;
                     for el in elems {
                         match el {
@@ -4180,12 +4207,8 @@ impl Emitter {
                 BindingPat(bp) => {
                     let BindingPattern { name: bn, span: bsp } = bp;
                     pat_name = bn.clone();
-                    let vt = self.en_variant_tag(ei, bn.clone());
-                    if vt >= 0 {
-                        tag = vt;
-                    } else {
-                        bind_whole = bn;
-                    }
+                    pat_variantish = true;
+                    pat_is_binding = true;
                 }
                 OrPat(orp) => {
                     // `A | B | …` (Slice 49): collect each alternative's
@@ -4212,27 +4235,68 @@ impl Emitter {
                 }
                 _ => {}
             }
-            // B-2026-07-28-5: `Option[<shared enum>]` now shares the inner
-            // enum's kind (the niche representation — a nullable handle), so a
-            // `match` over one arrives here with `ei` set to the INNER enum,
-            // whose variants are its own, not `None`/`Some`. Lowering it as a
-            // tag match would be doubly wrong: the tag is read from behind the
-            // handle, which segfaults on a `None` (null), and `None` — having no
-            // matching variant — falls through to `bind_whole` and becomes a
-            // CATCH-ALL, so the first arm silently wins every time.
-            //
-            // The correct lowering is a null test (`icmp ne ptr %s, null` as the
-            // tag, `Some`'s binding being the handle itself) and is not
-            // implemented yet. REFUSE rather than emit either wrong form: a
-            // silent wrong answer is the outcome this port exists to avoid, and
-            // the construction/layout/release half that IS implemented is worth
-            // having behind a loud gate.
-            if shared_scrut and (pat_name == "None" or pat_name == "Some") {
-                if self.en_variant_tag(ei, pat_name.clone()) < 0 {
-                    panic("codegen.kara: `match` over an `Option[<shared enum>]` is not lowered yet — it needs a null test rather than a tag load (the handle is the niche: null = None). Construction, layout and release of the field ARE supported; only the match is missing. See bug B-2026-07-28-5.");
+            // B-2026-07-28-5: resolve the arm's name to a tag, deciding
+            // `opt_mode` from the FIRST arm that names one. An `Option[<shared
+            // enum>]` arm is a `None`/`Some` that is NOT a variant of the inner
+            // enum — a genuine enum with variants of those names answers >= 0
+            // from `en_variant_tag` and is untouched. Kāra matches are over a
+            // single type, so the first naming arm settles it for all of them.
+            if pat_variantish {
+                if shared_scrut and not opt_decided {
+                    if self.opt_niche_tag(pat_name.clone()) >= 0 {
+                        if self.en_variant_tag(ei, pat_name.clone()) < 0 {
+                            opt_mode = true;
+                        }
+                    }
+                    opt_decided = true;
+                }
+                let mut vt = 0 - 1;
+                if opt_mode {
+                    vt = self.opt_niche_tag(pat_name.clone());
+                } else {
+                    vt = self.en_variant_tag(ei, pat_name.clone());
+                }
+                if vt >= 0 {
+                    tag = vt;
+                } else if pat_is_binding {
+                    // Not a variant name — a lowercase catch-all binding.
+                    bind_whole = pat_name.clone();
                 }
             }
             if tag >= 0 {
+                // Emit the discriminant on first use, now that the form is
+                // known. `opt_mode` reads the niche — null is `None` (0),
+                // non-null is `Some` (1) — so the existing arm machinery
+                // (guards, typed result slot, binding slots, or-patterns) runs
+                // unchanged over a synthesized tag instead of a loaded one.
+                if tg == "" {
+                    if opt_mode {
+                        let nn = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + nn.clone()
+                            + " = icmp ne ptr "
+                            + sop.clone()
+                            + ", null\n";
+                        tg = self.fresh();
+                        self.body =
+                            self.body + "  " + tg.clone() + " = zext i1 " + nn + " to i64\n";
+                    } else if shared_scrut {
+                        // Slice 63: the tag lives behind the handle, in the
+                        // `{rc,tag}` prefix every variant node shares.
+                        tg = self.sh_emit_tag_load(sop.clone());
+                    } else {
+                        tg = self.fresh();
+                        self.body = self.body
+                            + "  "
+                            + tg.clone()
+                            + " = extractvalue "
+                            + ety.clone()
+                            + " "
+                            + sop.clone()
+                            + ", 0\n";
+                    }
+                }
                 let lbody = "marm" + mid.to_string() + "_" + ai.to_string();
                 let lnext = "mnext" + mid.to_string() + "_" + ai.to_string();
                 let mut c = self.fresh();
@@ -4271,7 +4335,30 @@ impl Emitter {
                     + lnext.clone()
                     + "\n";
                 self.body = self.body + lbody + ":\n";
-                if bind_payload != "" and shared_scrut {
+                if bind_payload != "" and opt_mode {
+                    // B-2026-07-28-5: `Some(x)` under the niche — the payload IS
+                    // the scrutinee handle, so there is nothing to project. Bind
+                    // it at the inner enum's own kind (`sk`), as a BORROW like
+                    // every other aggregate payload here: the scrutinee's owner
+                    // keeps the reference and releases it.
+                    let idxo = self.locals.len();
+                    self.locals.push(bind_payload.clone());
+                    self.locals_kind.push(sk);
+                    self.locals_heap.push(false);
+                    self.entry_allocas = self.entry_allocas
+                        + "  %v"
+                        + idxo.to_string()
+                        + " = alloca ptr, align 8\n"
+                        + "  store ptr null, ptr %v"
+                        + idxo.to_string()
+                        + ", align 8\n";
+                    self.body = self.body
+                        + "  store ptr "
+                        + sop.clone()
+                        + ", ptr %v"
+                        + idxo.to_string()
+                        + ", align 8\n";
+                } else if bind_payload != "" and shared_scrut {
                     // Slice 63: the arm's tag selects the node type, so the
                     // payload is reached by a typed GEP + load. Bound as a
                     // BORROW (the scrutinee's owner keeps it and releases it),
@@ -6503,6 +6590,18 @@ impl Emitter {
                         pv2 = aop;
                         pk3 = ak;
                         ph2 = ah;
+                    }
+                    // B-2026-07-28-5: `Some(<shared enum handle>)` under the
+                    // niche IS the handle — no tag word, no aggregate, so the
+                    // value passes straight through at the inner enum's kind.
+                    // Wrapping it in the `Option[i64]` layout was the bug: it
+                    // emitted `insertvalue { i64, i64 } .., i64 <ptr>, 1`, which
+                    // LLVM rejects, and would have hidden the handle from every
+                    // release path even if it had type-checked.
+                    if pk3 >= 1000 and pk3 < 2000 {
+                        if self.en_is_shared(pk3 - 1000) {
+                            return Val { op: pv2, kind: pk3, heap: ph2 };
+                        }
                     }
                     if pk3 == 2 {
                         let ety2 = self.ty_text(1001);

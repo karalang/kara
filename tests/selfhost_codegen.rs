@@ -760,10 +760,28 @@ const CORPUS: &[&str] = &[
     //    as heap-owning, and `@sh_release_<ei>` opens with an `icmp eq ptr %p,
     //    null` guard, so a `None` releases nothing without a special case.
     //
-    //    This pins the construct-and-drop half. A `match` over such a field is
-    //    NOT lowered yet (it needs a null test rather than a tag load) and the
-    //    emitter refuses loudly on one — see the entry.
+    //    (1) Construct and drop, with no match — the layout and release half.
     "struct S {\n    k: i64,\n    nxt: Option[E],\n}\nshared enum E {\n    V(S),\n}\nfn main() {\n    let a = E.V(S { k: 1, nxt: None });\n    println(\"y\");\n}",
+    //    (2) `match` over the field, which needs a NULL TEST rather than a tag
+    //        load. Reading the real tag would dereference null on a `None`,
+    //        because the tag lives behind the handle; and `None` is not a
+    //        variant of the inner enum, so a tag match would fall through to
+    //        the whole-value binding and become a CATCH-ALL that silently wins
+    //        every arm. The lowering synthesizes the tag instead —
+    //        `zext i1 (icmp ne ptr %s, null)` — so the existing arm machinery
+    //        (guards, typed result slot, binding slots) runs unchanged, and
+    //        `Some`'s binding is the scrutinee handle itself. `Some(x)`
+    //        construction passes the handle straight through for the same
+    //        reason: under the niche there is no tag word to build.
+    "struct S { k: i64, nxt: Option[E] }\nshared enum E { V(S) }\nfn sum(e: E) -> i64 {\n    match e {\n        V(s) => {\n            let S { k, nxt } = s;\n            match nxt {\n                None => k,\n                Some(inner) => k + sum(inner),\n            }\n        }\n    }\n}\nfn main() {\n    let leaf = E.V(S { k: 1, nxt: None });\n    let node = E.V(S { k: 10, nxt: Some(leaf) });\n    println(sum(node).to_string());\n}\n",
+    //    (3) The same chain three deep, walked TWICE through `ref` plus a third
+    //        traversal. Every handle in (2) is a move, so its refcounts could
+    //        balance without a single retain being correct; this one keeps the
+    //        chain live across repeated borrowing walks, so a missing or spare
+    //        retain shows up as a leak or a use-after-free instead. Both `None`
+    //        and `Some` arms are taken, and the `None` arm is reached through a
+    //        null handle — the case a tag load would have segfaulted on.
+    "struct S { k: i64, nxt: Option[E] }\nshared enum E { V(S) }\nfn sum(e: ref E) -> i64 {\n    match e {\n        V(s) => {\n            match s.nxt {\n                None => s.k,\n                Some(inner) => s.k + sum(inner),\n            }\n        }\n    }\n}\nfn depth(e: ref E) -> i64 {\n    match e {\n        V(s) => {\n            match s.nxt {\n                None => 0,\n                Some(inner) => 1 + depth(inner),\n            }\n        }\n    }\n}\nfn main() {\n    let a = E.V(S { k: 1, nxt: None });\n    let b = E.V(S { k: 10, nxt: Some(a) });\n    let c = E.V(S { k: 100, nxt: Some(b) });\n    println(sum(c).to_string());\n    println(sum(c).to_string());\n    println(depth(c).to_string());\n}\n",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
