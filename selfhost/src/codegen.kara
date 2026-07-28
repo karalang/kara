@@ -436,14 +436,44 @@ impl Emitter {
         while self.en_shared.len() < self.en_names.len() {
             self.en_shared.push(false);
         }
-        // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
-        // return type can name any struct regardless of order. Indexed reads
-        // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
-        // field copies through a borrowed enum payload are B-2026-07-17-20).
+        // Pass A0 (Slice 65) — NAMES ONLY, before any type is resolved to a
+        // kind. `kind_of_ty` maps a named type by scanning `st_names` /
+        // `en_names`, and returns 0 (i64!) for a name it cannot find — a SILENT
+        // wrong kind. With names collected in a prior pass, that fallback can
+        // no longer be reached by a forward reference, whatever the declaration
+        // order.
+        //
+        // This is what a `shared enum` and its payload structs REQUIRE, because
+        // they are MUTUALLY recursive: `ast.Expr`'s variants name node structs
+        // (`BinaryExpr`), and those structs have fields naming `Expr` right
+        // back. In one pass, whichever of the two comes second in the source
+        // resolves and the first does not — so structs-then-enum silently typed
+        // every `Expr` field as i64, and enum-then-structs silently typed every
+        // payload as i64. Neither order worked; there is no order that does.
         for it in items {
             match it {
                 Struct(sd) => {
                     self.st_names.push(sd.name);
+                }
+                Enum(ed) => {
+                    self.en_names.push(ed.name);
+                    // `en_shared` must be filled here too: `ty_text` consults it
+                    // to render a shared handle as `ptr`, and Pass A resolves
+                    // payload kinds that can reach it.
+                    self.en_shared.push(ed.is_shared);
+                }
+                _ => {}
+            }
+        }
+        // Pass A — struct defs (Slice 12), BEFORE fn signatures so a param /
+        // return type can name any struct regardless of order. Indexed reads
+        // through the ref (`sd.fields[i].ty` — the proven idiom; whole-Vec
+        // field copies through a borrowed enum payload are B-2026-07-17-20).
+        // Names are already registered by Pass A0; this pass fills the
+        // per-field / per-variant KINDS only.
+        for it in items {
+            match it {
+                Struct(sd) => {
                     let off = self.st_field_names.len();
                     self.st_off.push(off);
                     let cnt = sd.fields.len();
@@ -463,7 +493,6 @@ impl Emitter {
                     // structs collect BEFORE enums in this same loop iteration
                     // order, so a struct-payload kind would resolve — but only
                     // i64/String payloads are supported downstream.
-                    self.en_names.push(ed.name);
                     let off = self.en_var_names.len();
                     self.en_off.push(off);
                     let cnt = ed.variants.len();
@@ -495,8 +524,11 @@ impl Emitter {
                     // what keeps a 30-variant recursive enum like `ast.Expr`
                     // off the two-slot ceiling (the `en_agg_slot` sentinel).
                     let eshared = ed.is_shared;
-                    self.en_shared.push(eshared);
-                    let eoff2 = self.en_off[self.en_names.len() - 1];
+                    // `en_shared` and `en_names` are filled by Pass A0, so the
+                    // CURRENT enum's index is derived from `en_off` (which this
+                    // pass pushes in item order) — NOT from `en_names.len() - 1`,
+                    // which now names the last enum in the whole program.
+                    let eoff2 = self.en_off[self.en_off.len() - 1];
                     let mut ex = 0 - 1;
                     let mut ex2 = 0 - 1;
                     let mut vj = 0;
@@ -885,10 +917,111 @@ impl Emitter {
         if plk == 0 or plk == 1 or plk == 5 or plk == 2 {
             return true;
         }
+        if plk >= 10 and plk < 1000 {
+            // Slice 65: STRUCT payload — `ast.Expr`'s actual shape (every
+            // variant wraps a node struct). Admissible only if every field is
+            // itself releasable from inside the node's `@sh_release_*`.
+            return self.sh_struct_ok(plk - 10);
+        }
         if plk >= 1000 and plk < 2000 {
             return self.en_is_shared(plk - 1000);
         }
         false
+    }
+
+    // Slice 65: can struct `si` live inside a shared node — i.e. can
+    // `sh_struct_release_text` free everything it owns? Scalars and POD enums
+    // own nothing; String owns a buffer; a `shared` field is a handle to
+    // release; a nested struct recurses. A Vec field is the one live gap: its
+    // elements may themselves be handles needing a per-element release, which
+    // this slice does not emit — so it is REFUSED rather than leaked, per the
+    // port's rule that a silent wrong answer is the worst outcome.
+    fn sh_struct_ok(ref self, si: i64) -> bool {
+        let off = self.st_off[si];
+        let cnt = self.st_cnt[si];
+        let mut fi = 0;
+        while fi < cnt {
+            let fk = self.st_field_kinds[off + fi];
+            if fk == 3 or fk == 4 or fk >= 2000 {
+                return false;
+            }
+            if fk >= 10 and fk < 1000 {
+                if self.sh_struct_ok(fk - 10) == false {
+                    return false;
+                }
+            }
+            if fk >= 1000 and fk < 2000 {
+                // A by-value enum field is fine when it owns no heap (a POD tag
+                // enum such as `BinOp`); a heap-bearing by-value enum would need
+                // the tag-conditional free this slice does not emit here.
+                if self.en_is_shared(fk - 1000) == false {
+                    if self.en_has_heap(fk - 1000) {
+                        return false;
+                    }
+                }
+            }
+            fi = fi + 1;
+        }
+        true
+    }
+
+    // Slice 65: IR text that releases everything struct value `val` (struct
+    // index `si`) owns. A sibling of `emit_free_struct_val`, but it RETURNS
+    // text instead of appending to `self.body`, because its caller
+    // (`sh_emit_release_fn`) is building a separate function into a local
+    // string. Register names are derived from `pfx`, which the caller makes
+    // unique per variant, so no `fresh()` counter is needed.
+    fn sh_struct_release_text(ref self, si: i64, val: String, pfx: String) -> String {
+        let sty = self.ty_text(10 + si);
+        let off = self.st_off[si];
+        let cnt = self.st_cnt[si];
+        let mut out = "".to_string();
+        let mut fi = 0;
+        while fi < cnt {
+            let fk = self.st_field_kinds[off + fi];
+            let mut deep = fk == 2;
+            if fk >= 10 and fk < 1000 {
+                deep = self.st_has_heap(fk - 10);
+            }
+            if fk >= 1000 and fk < 2000 {
+                deep = self.en_has_heap(fk - 1000);
+            }
+            if deep {
+                let r = pfx.clone() + "f" + fi.to_string();
+                out = out
+                    + "  "
+                    + r.clone()
+                    + " = extractvalue "
+                    + sty.clone()
+                    + " "
+                    + val.clone()
+                    + ", "
+                    + fi.to_string()
+                    + "\n";
+                if fk == 2 {
+                    out = out
+                        + "  "
+                        + r.clone()
+                        + "b = extractvalue { ptr, i64 } "
+                        + r.clone()
+                        + ", 0\n"
+                        + "  call void @free(ptr "
+                        + r.clone()
+                        + "b)\n";
+                } else if fk >= 1000 and fk < 2000 {
+                    out = out
+                        + "  call void @sh_release_"
+                        + (fk - 1000).to_string()
+                        + "(ptr "
+                        + r.clone()
+                        + ")\n";
+                } else {
+                    out = out + self.sh_struct_release_text(fk - 10, r.clone(), r.clone() + "n");
+                }
+            }
+            fi = fi + 1;
+        }
+        out
     }
 
     // Emit `%r = call ptr @malloc(<size of node>)` using the GEP size idiom
@@ -926,6 +1059,39 @@ impl Emitter {
             + ", i32 0, i32 1\n";
         self.body = self.body + "  store i64 " + tag.to_string() + ", ptr " + tgp + ", align 8\n";
         p
+    }
+
+    // Slice 65: `rc += 1` on a shared handle, returning the SAME pointer.
+    // This is what "make an owned copy" means for an RC handle — the sibling of
+    // `emit_materialize`'s malloc+memcpy for a String. Null-safe, matching
+    // `@sh_release_*`, so an un-initialized handle slot retains harmlessly.
+    fn sh_emit_retain(mut ref self, hop: String) -> String {
+        let lid = self.nlbl;
+        self.nlbl = self.nlbl + 1;
+        let lr = "shret" + lid.to_string();
+        let ld = "shrdn" + lid.to_string();
+        let isn = self.fresh();
+        self.body =
+            self.body + "  " + isn.clone() + " = icmp eq ptr " + hop.clone() + ", null\n";
+        self.body =
+            self.body + "  br i1 " + isn + ", label %" + ld.clone() + ", label %" + lr.clone()
+                + "\n";
+        self.body = self.body + lr + ":\n";
+        let rcp = self.fresh();
+        self.body = self.body
+            + "  "
+            + rcp.clone()
+            + " = getelementptr inbounds { i64, i64 }, ptr "
+            + hop.clone()
+            + ", i32 0, i32 0\n";
+        let rc = self.fresh();
+        self.body = self.body + "  " + rc.clone() + " = load i64, ptr " + rcp.clone() + ", align 8\n";
+        let rc1 = self.fresh();
+        self.body = self.body + "  " + rc1.clone() + " = add i64 " + rc + ", 1\n";
+        self.body = self.body + "  store i64 " + rc1 + ", ptr " + rcp + ", align 8\n";
+        self.body = self.body + "  br label %" + ld.clone() + "\n";
+        self.body = self.body + ld + ":\n";
+        hop
     }
 
     // Load the tag out of a shared handle (legal for ANY variant — the
@@ -978,6 +1144,12 @@ impl Emitter {
             if plk >= 1000 and plk < 2000 and self.en_is_shared(plk - 1000) {
                 needs = true;
             }
+            // Slice 65: a STRUCT payload needs an arm exactly when the struct
+            // owns heap — a String buffer, a `shared` child handle, or the same
+            // transitively through a nested struct.
+            if plk >= 10 and plk < 1000 and self.st_has_heap(plk - 10) {
+                needs = true;
+            }
             if needs {
                 let sfx = vi.to_string();
                 let nty = self.sh_node_ty(ei, vi);
@@ -994,6 +1166,19 @@ impl Emitter {
                     f = f + "  %sb" + sfx.clone() + " = load ptr, ptr %sp" + sfx.clone()
                         + ", align 8\n";
                     f = f + "  call void @free(ptr %sb" + sfx.clone() + ")\n";
+                } else if plk >= 10 and plk < 1000 {
+                    // Slice 65: STRUCT payload — load the struct value out of
+                    // the node and release each heap-owning field. `%sv<tag>`
+                    // is unique per variant, so the derived register names in
+                    // `sh_struct_release_text` are unique too.
+                    let psty = self.ty_text(plk);
+                    f = f + "  %sv" + sfx.clone() + " = load " + psty + ", ptr %pp" + sfx.clone()
+                        + ", align 8\n";
+                    f = f + self.sh_struct_release_text(
+                        plk - 10,
+                        "%sv" + sfx.clone(),
+                        "%sr" + sfx.clone(),
+                    );
                 } else {
                     // `shared` payload: recurse into the child handle.
                     let cei = plk - 1000;
@@ -4648,6 +4833,15 @@ impl Emitter {
     // True iff any variant of enum `ei` carries a String payload (Slice 23) —
     // such enums widen to { i64, i64, { ptr, i64 } } and OWN their payload.
     fn en_has_heap(ref self, ei: i64) -> bool {
+        // Slice 65: a `shared` enum is an RC handle to a heap node, so it ALWAYS
+        // owns heap regardless of what its variants carry — even an all-POD
+        // shared enum still has a node to free. Without this, a struct field of
+        // shared-enum type read as heap-free (`st_has_heap` consults this
+        // function), so the field's handle was never released and the whole
+        // subtree leaked.
+        if self.en_is_shared(ei) {
+            return true;
+        }
         let off = self.en_off[ei];
         let cnt = self.en_cnt[ei];
         let mut vi = 0;
@@ -4854,6 +5048,14 @@ impl Emitter {
     // guard, so unit/int variants never touch it). Result routed through a
     // stack slot — the copy is conditional, so no single SSA name works.
     fn emit_materialize_enum(mut ref self, op: String, ei: i64) -> Val {
+        // Slice 65: a `shared` enum is an RC handle, not a by-value aggregate.
+        // Everything below reads the by-value layout (tag at 0, String slot at
+        // 2), which on a `ptr` produced `extractvalue ptr %h, 0` — invalid IR.
+        // Owning a second reference to a handle is a RETAIN, not a deep copy.
+        if self.en_is_shared(ei) {
+            let r = self.sh_emit_retain(op);
+            return Val { op: r, kind: 1000 + ei, heap: true };
+        }
         let ety = self.ty_text(1000 + ei);
         let slot = self.fresh();
         self.body = self.body + "  " + slot.clone() + " = alloca " + ety.clone() + ", align 8\n";
@@ -5295,6 +5497,18 @@ impl Emitter {
                 } else if fk < 1000 {
                     // Nested struct field (Slice 33): recurse.
                     self.emit_free_struct_val(f, fk - 10);
+                } else if self.en_is_shared(fk - 1000) {
+                    // Slice 65: a `shared` enum field is an RC HANDLE, not a
+                    // by-value enum aggregate — dropping it is a refcount
+                    // release, and `emit_free_enum_val` (which extracts a
+                    // String slot out of the by-value layout) would read the
+                    // pointer as an aggregate and corrupt.
+                    self.body = self.body
+                        + "  call void @sh_release_"
+                        + (fk - 1000).to_string()
+                        + "(ptr "
+                        + f
+                        + ")\n";
                 } else {
                     self.emit_free_enum_val(f, fk - 1000);
                 }
@@ -6085,7 +6299,7 @@ impl Emitter {
                     // ceiling on how many distinct payload types the enum has.
                     let plk6 = self.en_var_pl[self.en_off[enum_ei] + enum_tag];
                     if self.sh_payload_ok(plk6) == false {
-                        panic("codegen.kara: unsupported payload type in a `shared enum` variant. Slice 63 handles i64/bool/f64/String/`shared` payloads; struct payloads are the next slice — see bug B-2026-07-27-6.");
+                        panic("codegen.kara: unsupported payload type in a `shared enum` variant. Slices 63/65 handle i64/bool/f64/String/`shared` payloads and STRUCT payloads whose fields are scalars, String, POD enums, nested such structs, or `shared` handles. Still unsupported: a Vec field (needs per-element release) or a heap-bearing by-value enum field — see bug B-2026-07-27-6.");
                     }
                     let hp6 = self.sh_emit_alloc(enum_ei, enum_tag);
                     let nty6 = self.sh_node_ty(enum_ei, enum_tag);
@@ -6101,6 +6315,32 @@ impl Emitter {
                             let mv6 = self.emit_materialize(sop6);
                             let Val { op: cop6, kind: ck6, heap: ch6 } = mv6;
                             sop6 = cop6;
+                        }
+                        // Slice 65: the same rule for the other two owning
+                        // payload shapes. A borrowed `shared` handle needs a
+                        // RETAIN, not a copy — `Expr.W(a)` where `a` is a live
+                        // local ends with the node holding one reference and
+                        // `a`'s slot holding another, so both may release
+                        // independently. Without it the node stored a borrowed
+                        // pointer and the two releases raced to a double free
+                        // (intermittent SIGTRAP: the same IR aborted on some
+                        // runs and not others, which is why a single green run
+                        // is not evidence here).
+                        if plk6 >= 1000 and plk6 < 2000 and ah6 == false {
+                            if self.en_is_shared(plk6 - 1000) {
+                                sop6 = self.sh_emit_retain(sop6);
+                            }
+                        }
+                        // A borrowed STRUCT payload that owns heap must be
+                        // deep-copied for the same reason as the String arm —
+                        // the copy retains any `shared` field it carries, via
+                        // `emit_materialize_enum`'s shared branch.
+                        if plk6 >= 10 and plk6 < 1000 and ah6 == false {
+                            if self.st_has_heap(plk6 - 10) {
+                                let sv6 = self.emit_materialize_struct(sop6, plk6 - 10);
+                                let Val { op: sop6b, kind: sk6, heap: sh6 } = sv6;
+                                sop6 = sop6b;
+                            }
                         }
                         let pgp6 = self.fresh();
                         self.body = self.body

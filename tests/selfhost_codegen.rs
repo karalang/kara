@@ -647,6 +647,29 @@ const CORPUS: &[&str] = &[
     // match-bound String payload. Leak-clean: the clone is owned by its slot
     // and freed once at scope exit, with the source freed independently.
     "struct S {\n    name: String,\n    n: i64,\n}\nenum T {\n    Leaf(String),\n    Other,\n}\nfn main() {\n    let a = \"deep\".to_string();\n    let b = a.clone();\n    println(b);\n    println(a);\n    let s = S {\n        name: \"fld\".to_string(),\n        n: 3,\n    };\n    let c = s.name.clone();\n    println(c);\n    let d = s.n.clone();\n    println(d.to_string());\n    let mut v: Vec[i64] = Vec.new();\n    v.push(3);\n    v.push(4);\n    let w = v.clone();\n    println((w[0] + w[1]).to_string());\n    println(v.len().to_string());\n    let mut vs: Vec[String] = Vec.new();\n    vs.push(\"one\".to_string());\n    let ws = vs.clone();\n    println(ws[0]);\n    println(vs.len().to_string());\n    let t = T.Leaf(\"pl\".to_string());\n    match t {\n        Leaf(x) => {\n            let y = x.clone();\n            println(y);\n        }\n        Other => println(\"o\"),\n    }\n    let f = 2.5;\n    let g = f.clone();\n    println(g.to_string());\n    let bo = true;\n    let bc = bo.clone();\n    if bc {\n        println(\"yes\");\n    } else {\n        println(\"no\");\n    }\n}",
+    // ── Slice 65: STRUCT payloads in a `shared enum` (B-2026-07-27-6) ──
+    //
+    // `ast.Expr`'s actual shape — every variant wraps a node struct, and those
+    // structs have fields naming `Expr` right back. Two things this pins:
+    //
+    // (1) BOTH declaration orders. Registration collects struct/enum NAMES in
+    //     a pass of its own before resolving any field or payload to a kind,
+    //     because the two are MUTUALLY recursive. Single-pass, whichever came
+    //     second silently resolved to kind 0 (i64) — `kind_of_ty`'s fallback —
+    //     so structs-then-enum mistyped every `Expr` field and enum-then-
+    //     structs mistyped every payload. The next two entries are the same
+    //     program in the two orders and must agree with the seed in both.
+    //
+    // (2) RC discipline through struct payloads. The tree entry builds and
+    //     drops 200 trees of 127 nodes, each node's struct holding two child
+    //     handles; a missed release leaks and a double release aborts, so a
+    //     clean matching run is the leak/double-free signal available without
+    //     valgrind. The last entry passes a match-bound handle straight to a
+    //     callee, which must RETAIN rather than deep-copy it.
+    "struct IntLit { value: i64 }\nstruct AddExpr { lhs: Expr, rhs: Expr }\n\nshared enum Expr {\n    Int(IntLit),\n    Add(AddExpr),\n}\n\nfn eval(e: Expr) -> i64 {\n    match e {\n        Int(l) => l.value,\n        Add(a) => eval(a.lhs) + eval(a.rhs),\n    }\n}\n\nfn main() {\n    let one = Expr.Int(IntLit { value: 1 });\n    let two = Expr.Int(IntLit { value: 2 });\n    let sum = Expr.Add(AddExpr { lhs: one, rhs: two });\n    println(eval(sum).to_string());\n}",
+    "shared enum Expr {\n    Int(IntLit),\n    Add(AddExpr),\n}\n\nstruct IntLit { value: i64 }\nstruct AddExpr { lhs: Expr, rhs: Expr }\n\nfn eval(e: Expr) -> i64 {\n    match e {\n        Int(l) => l.value,\n        Add(a) => eval(a.lhs) + eval(a.rhs),\n    }\n}\n\nfn main() {\n    let one = Expr.Int(IntLit { value: 1 });\n    let two = Expr.Int(IntLit { value: 2 });\n    let sum = Expr.Add(AddExpr { lhs: one, rhs: two });\n    println(eval(sum).to_string());\n}",
+    "struct Leaf { v: i64 }\nstruct Node2 { l: Tree, r: Tree }\n\nshared enum Tree {\n    L(Leaf),\n    N(Node2),\n}\n\nfn sum(t: Tree) -> i64 {\n    match t {\n        L(x) => x.v,\n        N(n) => sum(n.l) + sum(n.r),\n    }\n}\n\nfn build(d: i64) -> Tree {\n    if d == 0 {\n        return Tree.L(Leaf { v: 1 });\n    }\n    Tree.N(Node2 { l: build(d - 1), r: build(d - 1) })\n}\n\nfn main() {\n    let mut i = 0;\n    let mut total = 0;\n    while i < 200 {\n        let t = build(6);\n        total = total + sum(t);\n        i = i + 1;\n    }\n    println(total.to_string());\n}",
+    "struct Leaf { v: i64 }\nshared enum Expr {\n    L(Leaf),\n    W(Expr),\n}\nfn depth(e: Expr) -> i64 {\n    match e {\n        L(x) => 0,\n        W(b) => 1 + depth(b),\n    }\n}\nfn main() {\n    let a = Expr.L(Leaf { v: 1 });\n    let w = Expr.W(a);\n    println(depth(w).to_string());\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
