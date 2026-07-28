@@ -53,7 +53,12 @@ impl<'a> super::OwnershipChecker<'a> {
             StmtKind::MultiAssign { .. } => unreachable!(
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
             ),
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                is_mut,
+                pattern,
+                value,
+                ..
+            } => {
                 // If the RHS is a closure, detect once-callability before
                 // processing so we can check which outer bindings it consumed.
                 // Value is consumed by the let binding — unless the pattern
@@ -67,6 +72,13 @@ impl<'a> super::OwnershipChecker<'a> {
 
                 // Define bindings as Live
                 self.define_pattern_states(pattern, states);
+
+                // B-2026-07-27-9 — record immutability so later writes to
+                // these names are rejected. Runs AFTER the RHS walk so
+                // `let x = x;` (shadowing an outer mutable `x`) records the
+                // NEW binding, and after `define_pattern_states` so the two
+                // maps agree on which names this `let` introduced.
+                self.record_let_mutability(pattern, *is_mut, &stmt.span);
 
                 // Record the binding's type from the RHS span. The RHS's
                 // span is unaliased (unlike LHS chains), so this is the
@@ -209,6 +221,17 @@ impl<'a> super::OwnershipChecker<'a> {
                     // the pre-assignment state. (e.g. `let x: T; x = f(x);`
                     // — the `x` inside `f(x)` is still Uninit and errors.)
                     self.check_expr_consuming(value, states, param_types, param_usage);
+                    // B-2026-07-27-9 — `let x = e;` has no first-assignment
+                    // phase (design.md § Variable Binding Rules), so ANY
+                    // assignment to such a binding is a reassignment. Cannot
+                    // double-report against the `Uninit`/`InitOnce` arms
+                    // below: `LetUninit` never enters `immutable_lets`.
+                    self.report_write_to_immutable_binding(
+                        name,
+                        &target.span,
+                        OwnershipErrorKind::ReassignToImmutable,
+                        format!("cannot reassign `{}`", name),
+                    );
                     let pre = states.get(name).cloned();
                     match pre {
                         // First assignment to a `let mut x: T;` — promote.
@@ -283,6 +306,19 @@ impl<'a> super::OwnershipChecker<'a> {
                         if let Some(usage) = param_usage.get_mut(&root) {
                             *usage = ParamUsage::Mutated;
                         }
+                        // B-2026-07-27-9 — writing through a place rooted at
+                        // an immutable binding (`p.x = 1;`, `v[0] = 1;`)
+                        // mutates that binding's value just as surely as a
+                        // rebind does — unless the path crosses a `shared`
+                        // handle, which writes the pointee, not the binding.
+                        if !self.place_writes_through_shared(target) {
+                            self.report_write_to_immutable_binding(
+                                &root,
+                                &target.span,
+                                OwnershipErrorKind::ReassignToImmutable,
+                                format!("cannot assign through `{}`", root),
+                            );
+                        }
                     }
                     self.check_expr_reading(target, states, param_types, param_usage);
                     self.check_expr_consuming(value, states, param_types, param_usage);
@@ -294,9 +330,25 @@ impl<'a> super::OwnershipChecker<'a> {
                     if let Some(usage) = param_usage.get_mut(name) {
                         *usage = ParamUsage::Mutated;
                     }
+                    // B-2026-07-27-9 — `x += 1` is a read-modify-WRITE of the
+                    // binding; same rule as the plain `=` arm above.
+                    self.report_write_to_immutable_binding(
+                        name,
+                        &target.span,
+                        OwnershipErrorKind::ReassignToImmutable,
+                        format!("cannot compound-assign `{}`", name),
+                    );
                 } else if let Some(root) = Self::root_identifier(target) {
                     if let Some(usage) = param_usage.get_mut(&root) {
                         *usage = ParamUsage::Mutated;
+                    }
+                    if !self.place_writes_through_shared(target) {
+                        self.report_write_to_immutable_binding(
+                            &root,
+                            &target.span,
+                            OwnershipErrorKind::ReassignToImmutable,
+                            format!("cannot compound-assign through `{}`", root),
+                        );
                     }
                 }
                 self.check_expr_reading(target, states, param_types, param_usage);

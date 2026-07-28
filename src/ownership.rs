@@ -485,7 +485,20 @@ pub enum OwnershipErrorKind {
     UseOfUninitialized,
     /// A `let x: T;` (no `mut`) binding was assigned more than once.
     /// First assignment is initialization; a second requires `let mut`.
+    ///
+    /// Also covers the `let x = e;` form: any assignment to such a binding
+    /// (direct, compound, or through a field / element place) is a
+    /// reassignment, since that form has no first-assignment phase.
+    /// B-2026-07-27-9.
     ReassignToImmutable,
+    /// A `mut ref self` method was called on a binding introduced by a
+    /// non-`mut` `let` — design.md § Variable Binding Rules: "`let` declares
+    /// an immutable binding. Reassigning the binding or calling a method with
+    /// `mut ref self` on it is a compile error." Split from
+    /// `ReassignToImmutable` because the write is in-place through the
+    /// receiver rather than a rebind, so the diagnostic names the method.
+    /// B-2026-07-27-9.
+    MutateImmutableBinding,
     /// Performance note: a closure declared with `mut ref |...|` reads but
     /// never mutates a captured name. Per Rule 2½ K2 conflict table — the
     /// declared mode is stronger than the body's actual usage; suggest
@@ -1025,6 +1038,26 @@ pub struct OwnershipChecker<'a> {
     // ownership-side state machine. Detection now lives in
     // `use_classifier::UseClassifier::once_callable_closures` (round
     // 12.20); UAM/RC emission is owned by `populate_predicate_outputs`.
+    /// Bindings introduced by a **non-`mut`** `let pat = e;`, mapped to the
+    /// span of the `let` statement that introduced them. Drives design.md
+    /// § Variable Binding Rules "immutable by default": reassigning such a
+    /// binding, compound-assigning it, writing through one of its fields or
+    /// elements, or calling a `mut ref self` method on it is a compile error
+    /// (B-2026-07-27-9 — before that fix, `is_mut` was parsed, round-tripped
+    /// by the formatter, and then enforced by nobody).
+    ///
+    /// Keyed by bare name, exactly like the sibling `states` map, so it
+    /// inherits that map's shadowing model: a later `let mut x` removes the
+    /// entry, and a binding introduced in an inner block stays visible to the
+    /// outer scope after the block ends. That is an **under**-report (a write
+    /// the checker lets through), never a false positive, which is the safe
+    /// direction for a rule this broad.
+    ///
+    /// `let x: T;` (the uninitialized form) is NOT tracked here — it has its
+    /// own first-assignment-is-initialization state machine in `ValueState::
+    /// {Uninit, InitOnce}`, which predates this map and already reports the
+    /// same `ReassignToImmutable` diagnostic on the second write.
+    pub(crate) immutable_lets: HashMap<String, Span>,
     /// `Type.method` → declared receiver mode (`self` / `ref self` /
     /// `mut ref self`). Populated once at construction by walking the
     /// program's impl blocks and trait declarations. Consulted at every
@@ -1127,6 +1160,72 @@ pub struct OwnershipChecker<'a> {
 }
 
 impl<'a> OwnershipChecker<'a> {
+    /// Emit a "wrote to a non-`mut` binding" diagnostic (B-2026-07-27-9).
+    ///
+    /// `write_span` is the offending write site — that is where the message
+    /// points, because that is where the programmer's mistake is visible.
+    /// The machine-applicable edit, however, targets the **declaration**:
+    /// `TextEdit` carries its own `offset`/`length` independent of the
+    /// diagnostic's span, so `karac fix` inserts `mut` at the `let` while the
+    /// message stays at the write. The insertion is a zero-length edit right
+    /// after the three characters of `let`, which renders as `let mut x`
+    /// regardless of how much whitespace separates the keyword from the
+    /// pattern (`let   x` → `let mut   x`).
+    ///
+    /// No-op when `name` is not a non-`mut` `let` binding, so call sites can
+    /// invoke it unconditionally on any write they see.
+    pub(crate) fn report_write_to_immutable_binding(
+        &mut self,
+        name: &str,
+        write_span: &Span,
+        kind: OwnershipErrorKind,
+        message: String,
+    ) {
+        let Some(let_span) = self.immutable_lets.get(name).cloned() else {
+            return;
+        };
+        // A binding whose type is itself a reference handle (`mut ref T` from
+        // `map.entry(k).or_insert(v)`, a raw `*mut T` from `as_mut_ptr()`, a
+        // `shared`/`Rc`/`Arc` value) names a referent it does not own. Every
+        // write rooted at it — `*p = v`, the deref-elided `r += 1`, a field or
+        // element store, a `mut ref self` method — mutates that referent and
+        // leaves the binding pointing exactly where it did before. `let` froze
+        // the handle, and the handle is unchanged, so the rule does not apply.
+        if self.binding_is_reference_handle(name) {
+            return;
+        }
+        self.errors.push(OwnershipError {
+            message: format!(
+                "{} — `{}` is declared without `mut` at line {}:{}",
+                message, name, let_span.line, let_span.column
+            ),
+            span: write_span.clone(),
+            kind,
+            suggestion: Some(format!("change the declaration to `let mut {}`", name)),
+            replacement: Some(Box::new(crate::resolver::TextEdit {
+                offset: let_span.offset + "let".len(),
+                length: 0,
+                replacement: " mut".to_string(),
+            })),
+            consume_span: Some(let_span),
+        });
+    }
+
+    /// Record (or clear) the non-`mut` status of every binding a `let`
+    /// pattern introduces. A `let mut` **removes** the names, so shadowing an
+    /// immutable binding with a mutable one (`let x = 1; let mut x = x;` —
+    /// the idiom design.md § Variable Binding Rules prescribes for making one
+    /// field of a destructure mutable) correctly unlocks writes.
+    pub(crate) fn record_let_mutability(&mut self, pattern: &Pattern, is_mut: bool, span: &Span) {
+        for name in pattern.binding_names() {
+            if is_mut {
+                self.immutable_lets.remove(&name);
+            } else {
+                self.immutable_lets.insert(name, span.clone());
+            }
+        }
+    }
+
     pub fn new(program: &'a Program, typecheck_result: &'a TypeCheckResult) -> Self {
         OwnershipChecker {
             program,
@@ -1156,6 +1255,7 @@ impl<'a> OwnershipChecker<'a> {
             error_fix_diffs: HashMap::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
+            immutable_lets: HashMap::new(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
             method_param_modes: collect_method_param_modes(program),
@@ -1520,6 +1620,125 @@ impl<'a> OwnershipChecker<'a> {
         false
     }
 
+    /// Whether an assignment target reaches its final place **through** a
+    /// `shared` handle — `cmd.cell.value = v` where `cell: Cell` and `Cell`
+    /// is a `shared struct`.
+    ///
+    /// Such a write mutates the reference-counted object the handle points
+    /// at, not the binding that holds the handle: the binding still names the
+    /// same object afterwards, exactly as `let c = rc; c.borrow_mut().x = 1`
+    /// does in Rust. So the binding-level `mut` rule (B-2026-07-27-9) does
+    /// not apply, and the write is governed instead by design.md § shared
+    /// struct's own rule — a `shared struct` field must be declared `mut` to
+    /// be assignable, which is checked independently of the binding.
+    ///
+    /// Walks every proper prefix of the place expression (the chain of
+    /// objects under the final field / index / tuple-index access), so a
+    /// shared hop anywhere along the path exempts the write, not just the
+    /// last one.
+    fn place_writes_through_shared(&self, target: &Expr) -> bool {
+        let mut cursor = target;
+        loop {
+            let object = match &cursor.kind {
+                ExprKind::FieldAccess { object, .. }
+                | ExprKind::Index { object, .. }
+                | ExprKind::TupleIndex { object, .. } => object,
+                _ => return false,
+            };
+            // The type of this prefix — if it is a `shared` struct/enum, the
+            // access that sits on top of it writes through the handle.
+            if self.expr_is_shared_handle(object) {
+                return true;
+            }
+            cursor = object;
+        }
+    }
+
+    /// Whether a method-call receiver is (or is reached through) a `shared`
+    /// handle. Companion to [`Self::place_writes_through_shared`] for the
+    /// `mut ref self` arm of the B-2026-07-27-9 rule: there the receiver
+    /// itself — not just a proper prefix — may be the handle, as in
+    /// `let c = cell; c.bump();`.
+    pub(crate) fn receiver_is_shared_handle(&self, object: &Expr) -> bool {
+        self.expr_is_shared_handle(object) || self.place_writes_through_shared(object)
+    }
+
+    /// Whether an expression's type is a reference handle whose *pointee* is
+    /// what a write through it mutates.
+    ///
+    /// Resolves the type from the binding maps for a bare identifier (which
+    /// are unaliased and therefore reliable) and from the typechecker's
+    /// per-span `expr_types` for projections.
+    fn expr_is_shared_handle(&self, expr: &Expr) -> bool {
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if let Some(n) = self.binding_type_names.get(name) {
+                if self.is_shared_type(n) {
+                    return true;
+                }
+            }
+            if let Some(t) = self.binding_types.get(name) {
+                return self.type_is_shared_handle(t);
+            }
+        }
+        self.typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(&expr.span))
+            .is_some_and(|t| self.type_is_shared_handle(t))
+    }
+
+    /// Whether a `let` binding's own type is a reference handle. Gate for the
+    /// B-2026-07-27-9 rule — see [`Self::report_write_to_immutable_binding`].
+    fn binding_is_reference_handle(&self, name: &str) -> bool {
+        if self
+            .binding_type_names
+            .get(name)
+            .is_some_and(|n| self.is_shared_type(n))
+        {
+            return true;
+        }
+        self.binding_types
+            .get(name)
+            .is_some_and(|t| self.type_is_shared_handle(t))
+    }
+
+    /// The `Type`-level half of [`Self::expr_is_shared_handle`]. Every arm is
+    /// a type whose values are references to storage owned elsewhere, so a
+    /// write through one leaves the binding itself untouched: `Shared`/`Rc`/
+    /// `Arc` are the reference-counted wrappers, `Ref`/`MutRef` the borrow
+    /// forms (a `mut ref T` binding is a handle in its own right — do NOT
+    /// recurse into the referent, or `let r: mut ref i64` would be judged by
+    /// `i64` and lose the exemption), `Pointer` the raw `*mut T` / `*const T`
+    /// from `as_mut_ptr()`, and `Weak` the non-owning RC edge. `Named` is
+    /// also consulted: shared structs normally carry the dedicated
+    /// `Type::Shared` variant, but a `Named` spelling of the same struct must
+    /// not be allowed to defeat the exemption.
+    ///
+    /// The `Named` arm also covers the four **interior-mutability
+    /// primitives** — `Atomic` / `Mutex` / `RwLock` / `Arc`, the same set
+    /// `effectchecker::modbind_synth::type_is_concurrency_primitive`
+    /// recognises, and for the same stated reason: design.md § No `static mut`
+    /// names them as *the* supported paths for mutable shared state, so
+    /// `let m = Mutex.new(0); lock m { m = m + 1; }` is the sanctioned idiom
+    /// and a write to one must not be flagged. Requiring `let mut m` there
+    /// would contradict the section that recommends the pattern.
+    fn type_is_shared_handle(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Shared(_)
+                | Type::Rc(_)
+                | Type::Arc(_)
+                | Type::Ref(_)
+                | Type::MutRef(_)
+                | Type::Weak(_)
+                | Type::Pointer { .. }
+        ) || matches!(
+            ty,
+            Type::Named { name, .. }
+                if self.is_shared_type(name)
+                    || matches!(name.as_str(), "Atomic" | "Mutex" | "RwLock" | "Arc")
+        )
+    }
+
     /// Look up whether a named struct/enum is declared as `shared`.
     fn is_shared_type(&self, name: &str) -> bool {
         if let Some(info) = self.typecheck_result.struct_info.get(name) {
@@ -1666,6 +1885,9 @@ impl<'a> OwnershipChecker<'a> {
         }
         self.binding_type_names.clear();
         self.binding_types.clear();
+        // B-2026-07-27-9 — binding names are function-local, so an immutable
+        // `let x` in one function must not make `x` unwritable in the next.
+        self.immutable_lets.clear();
         // Slice 2 — reset per-function active borrow tracking. The
         // result-surfaced `slice_borrow_sources` is NOT cleared (it
         // accumulates across the program); the other maps are function-
@@ -1992,7 +2214,26 @@ impl<'a> OwnershipChecker<'a> {
         }
     }
 
-    fn define_pattern_states(&self, pattern: &Pattern, states: &mut HashMap<String, ValueState>) {
+    /// Define every binding a pattern introduces as `Live`.
+    ///
+    /// Takes `&mut self` so it can also **clear** each name from
+    /// `immutable_lets` (B-2026-07-27-9). This is the single choke point
+    /// through which every binding form flows — `let`, `let-else`, `if let`,
+    /// `while let`, `for`, and match arms — so clearing here guarantees that
+    /// a non-`let` binding shadowing an earlier immutable `let` of the same
+    /// name is never mistaken for it. Without this, `let cmd = …` in one
+    /// function made a `Some(cmd)` match-arm binding elsewhere unwritable
+    /// (caught on `examples/tangle/src/undo_redo.kara`). The `Let` arm
+    /// re-inserts immediately afterwards when the binding is non-`mut`, so
+    /// ordering (`define_pattern_states` → `record_let_mutability`) matters.
+    fn define_pattern_states(
+        &mut self,
+        pattern: &Pattern,
+        states: &mut HashMap<String, ValueState>,
+    ) {
+        for name in pattern.binding_names() {
+            self.immutable_lets.remove(&name);
+        }
         match &pattern.kind {
             PatternKind::Binding(name) => {
                 states.insert(name.clone(), ValueState::Live);

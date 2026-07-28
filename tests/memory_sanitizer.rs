@@ -23153,12 +23153,12 @@ fn main() {
         let Some((stdout, status)) = run_under_asan(
             r#"
 fn build_id[N](n: i64) -> Tensor[f64, [N, N]] {
-    let out: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);
+    let mut out: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);
     for i in 0..n { out[i, i] = 1.0; }
     out
 }
 fn diag_then_drop[N](n: i64) -> f64 {
-    let t: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);
+    let mut t: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);
     for i in 0..n { t[i, i] = 2.0; }
     let mut s = 0.0;
     for i in 0..n { s = s + t[i, i]; }

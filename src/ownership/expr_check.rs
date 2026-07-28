@@ -33,8 +33,8 @@ use crate::token::Span;
 use crate::typechecker::Type;
 
 use super::{
-    merge_branch_into, merge_states, restore_uninit_after_loop, snapshot_uninit, CapturePath,
-    OwnershipError, OwnershipErrorKind, OwnershipMode, ParamUsage, ValueState,
+    merge_branch_into, merge_states, restore_uninit_after_loop, snapshot_uninit, BorrowKind,
+    CapturePath, OwnershipError, OwnershipErrorKind, OwnershipMode, ParamUsage, ValueState,
 };
 
 impl<'a> super::OwnershipChecker<'a> {
@@ -636,6 +636,30 @@ impl<'a> super::OwnershipChecker<'a> {
                     }
                 } else {
                     self.check_expr_reading(object, states, param_types, param_usage);
+                }
+                // B-2026-07-27-9 — design.md § Variable Binding Rules: "`let`
+                // declares an immutable binding. Reassigning the binding or
+                // calling a method with `mut ref self` on it is a compile
+                // error." `method_self_borrow_kind` resolves the receiver
+                // mode for user `impl` methods AND the stdlib table, so
+                // `seen.insert(k, v)` on a `let seen = Map.new()` — the exact
+                // example in that section — is caught alongside user methods.
+                // Unresolved methods yield `None` and are left alone.
+                // A `shared` receiver is exempt for the same reason a write
+                // through a shared handle is (see `place_writes_through_shared`):
+                // reference semantics mean `let` freezes the handle, not the
+                // reference-counted object it points at.
+                if matches!(self.method_self_borrow_kind(expr), Some(BorrowKind::MutRef))
+                    && !self.receiver_is_shared_handle(object)
+                {
+                    if let Some(root_name) = Self::root_identifier(object) {
+                        self.report_write_to_immutable_binding(
+                            &root_name,
+                            &object.span,
+                            OwnershipErrorKind::MutateImmutableBinding,
+                            format!("cannot call `{}` on `{}`", method, root_name),
+                        );
+                    }
                 }
                 // Slice 1: `.as_slice()` / `.as_slice_mut()` are slice
                 // creation site (i). Record the source attribution so

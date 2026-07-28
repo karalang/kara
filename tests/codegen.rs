@@ -292,7 +292,7 @@ mod codegen_tests {
         // (a) NON-capturing closure pushed then returned — sound (null env).
         assert_eq!(
             run_program(
-                "fn make() -> Vec[Fn(i64) -> i64] { let v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x| x * 2i64); return v; }\n\
+                "fn make() -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x| x * 2i64); return v; }\n\
                  fn main() { let fs = make(); println(f\"{(fs[0])(21i64)}\"); }\n"
             )
             .as_deref(),
@@ -303,7 +303,7 @@ mod codegen_tests {
         // returned — the env is still live at the call, so it is sound.
         assert_eq!(
             run_program(
-                "fn run(k: i64) -> i64 { let v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x: i64| x + k); return (v[0])(5i64); }\n\
+                "fn run(k: i64) -> i64 { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x: i64| x + k); return (v[0])(5i64); }\n\
                  fn main() { println(f\"{run(21i64)}\"); }\n"
             )
             .as_deref(),
@@ -314,7 +314,7 @@ mod codegen_tests {
         // marking must not fire on non-closure pushes.
         assert_eq!(
             run_program(
-                "fn make(k: i64) -> Vec[i64] { let v: Vec[i64] = Vec.new(); v.push(k); return v; }\n\
+                "fn make(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); return v; }\n\
                  fn main() { let v = make(21i64); println(f\"{v[0]}\"); }\n"
             )
             .as_deref(),
@@ -7305,7 +7305,7 @@ fn main() {
              \x20   let mut n = 0i64;\n\
              \x20   for ch in s.chars() { if ch == 'c' { continue; } n = n + 1i64; }\n\
              \x20   println(n);\n\
-             \x20   let g: String = \"abcde\";\n\
+             \x20   let mut g: String = \"abcde\";\n\
              \x20   g.push('\u{e9}');\n\
              \x20   let mut i = 0i64;\n\
              \x20   let mut sum = 0i64;\n\
@@ -7317,7 +7317,7 @@ fn main() {
              \x20   }\n\
              \x20   println(sum);\n\
              \x20   println(count_non_x(\"axbx\u{e9}\"));\n\
-             \x20   let t: String = \"a\u{e9}\";\n\
+             \x20   let mut t: String = \"a\u{e9}\";\n\
              \x20   t.push('z');\n\
              \x20   let mut m = 0i64;\n\
              \x20   outer: for c in t.chars() {\n\
@@ -7476,12 +7476,12 @@ fn main() {
              \x20   let mut t = 0i64;\n\
              \x20   for c in e { t = t + (c as i64); }\n\
              \x20   println(t);\n\
-             \x20   let g: String = \"ab\";\n\
+             \x20   let mut g: String = \"ab\";\n\
              \x20   g.push('\u{e9}');\n\
              \x20   let mut u = 0i64;\n\
              \x20   for c in g.chars() { u = u + (c as i64); }\n\
              \x20   println(u);\n\
-             \x20   let w: String = \"ab\";\n\
+             \x20   let mut w: String = \"ab\";\n\
              \x20   w = \"\u{e9}\";\n\
              \x20   let mut x = 0i64;\n\
              \x20   for c in w.chars() { x = x + (c as i64); }\n\
@@ -32299,7 +32299,7 @@ fn main() {
             r#"
 struct Holder { nums: Vec[i64] }
 fn main() {
-    let h = Holder { nums: Vec.new() };
+    let mut h = Holder { nums: Vec.new() };
     h.nums.push(10);
     h.nums.push(20);
     h.nums.push(30);
@@ -44454,7 +44454,7 @@ fn main() {
             r#"
 fn main() {
     let v: Vec[i64] = Vec.new();
-    let w: Vec[i64] = v.clone();
+    let mut w: Vec[i64] = v.clone();
     println(w.len());
     w.push(7_i64);
     println(w.len());
@@ -49164,7 +49164,7 @@ fn main() {
         let src = r#"
 struct N { val: i64 }
 fn main() {
-    let xs: Vec[N] = Vec.new();
+    let mut xs: Vec[N] = Vec.new();
     xs.push(N { val: 10 });
     xs.push(N { val: 20 });
     let mut sum: i64 = 0;
@@ -49198,7 +49198,7 @@ fn main() {
     let mut m: Map[i64, Node] = Map.new();
     let mut q: VecDeque[Node] = VecDeque.new();
     let n1 = Node { val: 1 };
-    let xs: Vec[Node] = Vec.new();
+    let mut xs: Vec[Node] = Vec.new();
     xs.push(Node { val: 10 });
     xs.push(Node { val: 20 });
     let _ = m.insert(99, n1);
@@ -70671,7 +70671,7 @@ fn main() {
         // (tail-return suppression), the caller owns + frees it.
         let out = run_program(
             "fn matmul[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]], m: i64, k: i64, n: i64) -> Tensor[f64, [M, N]] {\n\
-                 let out: Tensor[f64, [?, ?]] = Tensor.zeros([m, n]);\n\
+                 let mut out: Tensor[f64, [?, ?]] = Tensor.zeros([m, n]);\n\
                  for i in 0..m {\n\
                      for j in 0..n {\n\
                          let mut acc = 0.0;\n\
@@ -70705,12 +70705,12 @@ fn main() {
         // second — the regression both fixes guard.
         let out = run_program(
             "fn build_id[N](n: i64) -> Tensor[f64, [N, N]] {\n\
-                 let out: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);\n\
+                 let mut out: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);\n\
                  for i in 0..n { out[i, i] = 1.0; }\n\
                  out\n\
              }\n\
              fn diag_then_drop[N](n: i64) -> f64 {\n\
-                 let t: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);\n\
+                 let mut t: Tensor[f64, [?, ?]] = Tensor.zeros([n, n]);\n\
                  for i in 0..n { t[i, i] = 2.0; }\n\
                  let mut s = 0.0;\n\
                  for i in 0..n { s = s + t[i, i]; }\n\

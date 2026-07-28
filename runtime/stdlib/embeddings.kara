@@ -111,7 +111,7 @@ pub fn cosine_similarity_matrix[Q, N, D](
     // without naming the shape params in a body annotation (kept as `?`).
     let q = queries.shape()[0];
     let n = corpus.shape()[0];
-    let out: Tensor[f32, [?, ?]] = Tensor.zeros([q, n]);
+    let mut out: Tensor[f32, [?, ?]] = Tensor.zeros([q, n]);
     let qrows = queries.iter_axis(0);
     let crows = corpus.iter_axis(0);
     let mut i = 0;

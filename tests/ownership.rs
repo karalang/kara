@@ -9039,3 +9039,206 @@ fn test_chained_shared_var_method_reuse_ok() {
          }\n",
     );
 }
+
+// ── B-2026-07-27-9: `mut` enforcement on `let` bindings ──────────
+//
+// design.md § Variable Binding Rules: "`let` declares an immutable binding.
+// Reassigning the binding or calling a method with `mut ref self` on it is a
+// compile error." Before this fix the parser recorded `is_mut`, the formatter
+// round-tripped it, and no phase enforced it — both writes below ran and took
+// effect under the interpreter and codegen alike.
+
+#[test]
+fn test_reassign_to_immutable_let_errors() {
+    let errors = ownership_errors(
+        "fn main() {\n\
+            let t: String = \"abc\";\n\
+            t = \"xyz\";\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::ReassignToImmutable),
+        "expected ReassignToImmutable, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_mutating_method_on_immutable_let_errors() {
+    let errors = ownership_errors(
+        "fn main() {\n\
+            let s: String = \"abc\";\n\
+            s.push('z');\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::MutateImmutableBinding),
+        "expected MutateImmutableBinding, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compound_assign_to_immutable_let_errors() {
+    let errors = ownership_errors(
+        "fn main() {\n\
+            let n = 1;\n\
+            n += 1;\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::ReassignToImmutable),
+        "expected ReassignToImmutable, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_field_write_through_immutable_let_errors() {
+    let errors = ownership_errors(
+        "struct P { x: i64, y: i64 }\n\
+         fn main() {\n\
+            let p = P { x: 1, y: 2 };\n\
+            p.x = 9;\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::ReassignToImmutable),
+        "expected ReassignToImmutable, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_immutable_let_diagnostic_carries_mut_insertion_fix() {
+    // The diagnostic points at the WRITE site but the machine-applicable edit
+    // targets the DECLARATION — a zero-length insert of " mut" right after
+    // the three characters of `let`. `karac fix` applies it to yield
+    // `let mut t`, which is what makes this diagnostic auto-fixable.
+    let src = "fn main() {\n    let t = 1;\n    t = 2;\n}";
+    let errors = ownership_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::ReassignToImmutable)
+        .expect("expected ReassignToImmutable");
+    let edit = err
+        .replacement
+        .as_ref()
+        .expect("expected a machine-applicable edit");
+    assert_eq!(edit.length, 0, "insertion, not a replacement");
+    assert_eq!(edit.replacement, " mut");
+    assert_eq!(
+        &src[edit.offset - 3..edit.offset],
+        "let",
+        "edit must land immediately after the `let` keyword"
+    );
+    let mut fixed = src.to_string();
+    fixed.insert_str(edit.offset, &edit.replacement);
+    assert!(fixed.contains("let mut t = 1;"), "got {:?}", fixed);
+}
+
+#[test]
+fn test_let_mut_allows_every_write_form() {
+    ownership_ok(
+        "struct P { x: i64, y: i64 }\n\
+         fn main() {\n\
+            let mut a = 5;\n\
+            a = 10;\n\
+            a += 1;\n\
+            let mut s: String = \"abc\";\n\
+            s.push('z');\n\
+            let mut p = P { x: 1, y: 2 };\n\
+            p.x = 9;\n\
+            let _z = a + p.x + s.len();\n\
+        }",
+    );
+}
+
+#[test]
+fn test_shadowing_immutable_with_mut_unlocks_writes() {
+    // design.md § Variable Binding Rules prescribes exactly this idiom for
+    // making one binding of a destructure mutable.
+    ownership_ok(
+        "fn main() {\n\
+            let b = 1;\n\
+            let mut b = b;\n\
+            b = 2;\n\
+            let _z = b;\n\
+        }",
+    );
+}
+
+#[test]
+fn test_read_only_method_on_immutable_let_is_fine() {
+    ownership_ok(
+        "fn main() {\n\
+            let s: String = \"abc\";\n\
+            let _n = s.len();\n\
+        }",
+    );
+}
+
+#[test]
+fn test_immutability_does_not_leak_across_functions() {
+    // `immutable_lets` is keyed by bare name and must be reset per function,
+    // or an immutable `let cmd` in one function makes `cmd` unwritable in
+    // every later one. Regression for the false positive this fix originally
+    // produced on examples/tangle/src/undo_redo.kara.
+    ownership_ok(
+        "fn first() {\n\
+            let v = 1;\n\
+            let _z = v;\n\
+        }\n\
+         fn second() {\n\
+            let mut v = 1;\n\
+            v = 2;\n\
+            let _z = v;\n\
+        }",
+    );
+}
+
+#[test]
+fn test_match_arm_binding_shadowing_immutable_let_is_writable() {
+    // A match-arm binding is a NEW binding, not the outer `let`. Clearing
+    // happens in `define_pattern_states`, the choke point every binding form
+    // flows through. Same regression as above, via the pattern path.
+    ownership_ok(
+        "fn main() {\n\
+            let cmd = 1;\n\
+            let _z = cmd;\n\
+            let o: Option[i64] = Some(2);\n\
+            match o {\n\
+                None => {}\n\
+                Some(cmd) => { let mut cmd = cmd; cmd = 3; let _w = cmd; }\n\
+            }\n\
+        }",
+    );
+}
+
+#[test]
+fn test_write_through_shared_handle_needs_no_mut() {
+    // A `shared struct` binding holds an RC handle. Writing a field through it
+    // mutates the referent, not the binding — the binding still names the same
+    // object — so binding-level `mut` does not apply. (Whether the FIELD is
+    // writable is design.md § shared struct's own `mut field` rule.)
+    // Regression for the false positive on runtime/stdlib/autograd.kara, where
+    // `let tp = self.tape; tp.values.push(v);` is correct code.
+    ownership_ok(
+        "pub shared struct Tape { mut values: Vec[i64] }\n\
+         fn main() {\n\
+            let t = Tape { values: Vec.new() };\n\
+            t.values.push(1);\n\
+            let tp = t;\n\
+            tp.values.push(2);\n\
+            let _n = tp.values.len();\n\
+        }",
+    );
+}
