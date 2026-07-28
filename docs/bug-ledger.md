@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 29 | 1 |
 | crash | 28 | 0 |
 | soundness | 26 | 1 |
-| diagnostics | 17 | 1 |
+| diagnostics | 18 | 1 |
 | use-after-free | 7 | 0 |
 | other | 4 | 0 |
 
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 1 |
-| other | 18 | 0 |
+| other | 19 | 0 |
 | autopar | 18 | 0 |
 | runtime | 15 | 1 |
 | cli | 15 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **695 surfaced · 5 open · 684 fixed** (2026-05-20 → 2026-07-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **696 surfaced · 5 open · 685 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -136,9 +136,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **695 surfaced 
 | B-2026-07-27-12 | 2026-07-27 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): a `to_string()` result produced INSIDE a match arm and returned from a fn leaks — the caller never frees the returned buffer | — |
 | B-2026-07-27-14 | 2026-07-27 | cli | medium | FOUR diagnostic codes are minted by TWO DIFFERENT PHASES for unrelated errors: E0222 is both resolve `PrivateItemAccess` and typecheck `RefutablePattern`; E0238 is both resolve `ContinueOnBlockLabel` and typecheck `CannotInferTypeParam`; E0239 is both resolve `NonExhaustiveInvalidTarget` and typecheck `AmbiguousMethod`; E0240 is both resolve `TrackCallerInvalidTarget` and typecheck `ConflictingImpl`. The `code` field of a structured diagnostic is therefore NOT a unique key, so any consumer keying on it alone (agent loop, IDE, docs index) can mis-identify the error. | — |
 
-### Fixed (684)
+### Fixed (685)
 
-<details><summary>684 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>685 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -826,6 +826,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **695 surfaced 
 | B-2026-07-27-10 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a DESTRUCTURING `let S { a, b } = s;` bound NOTHING — the Let handler matched only a plain BindingPat… | 7bd2de1 |
 | B-2026-07-27-11 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `.clone()` is UNIMPLEMENTED and silently lowers to the i64 default `0` — `let b = a.clone()` on a Str… | d7707de |
 | B-2026-07-27-13 | cli | medium | `karac explain` REJECTED the diagnostic code the compiler itself emits: every structured diagnostic carries `"code": "E0200"`, but `karac explain E02… | e211e3d |
+| B-2026-07-28-1 | other | medium | stale (not missing) runtime archive soft-skipped every E2E link failure — ~960 codegen assertions silently voided, suite reported green | 1d4ddd9 |
 
 </details>
 
