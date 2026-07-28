@@ -2145,7 +2145,7 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
-    fn inline_temp_vec_te(&self, object: &Expr) -> Option<TypeExpr> {
+    pub(super) fn inline_temp_vec_te(&self, object: &Expr) -> Option<TypeExpr> {
         match &object.kind {
             // Free-function call: the declared return `TypeExpr`. A direct
             // (non-`ref`) `Vec[T]` / `VecDeque[T]` return is a fresh owned

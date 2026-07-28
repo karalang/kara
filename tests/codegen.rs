@@ -5355,6 +5355,47 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_e2e_println_non_identifier_vec_renders_like_the_interpreter() {
+        // B-2026-07-28-12: `println(<Vec expression>)` printed EMPTY under
+        // codegen whenever the operand was not a bare identifier. The Vec/Map
+        // print arms key off per-variable side tables, so a fresh literal or a
+        // call result had no entry and fell through to the value-kind arms,
+        // where a Vec's `{ptr,len,cap}` is indistinguishable from a String's
+        // and got printed AS one — the element bytes came out as text (`[9, 8]`
+        // rendered as 0x09 0x00) and the embedded NUL truncated the line.
+        //
+        // Each case below is a distinct route to the same arm: a fresh literal,
+        // a user call's return, a nested `Vec[Vec[_]]`, a `Vec[String]` whose
+        // elements own heap, a builtin (`shape()`), and the empty vec. The
+        // binding spelling always worked and is kept as the control.
+        assert_eq!(
+            run_program(
+                r#"
+fn mk() -> Vec[i64] { let v: Vec[i64] = [3, 4]; v }
+fn names() -> Vec[String] { let v: Vec[String] = ["ab", "cd"]; v }
+fn nested() -> Vec[Vec[i64]] { let v: Vec[Vec[i64]] = [[1, 2], [3]]; v }
+fn main() {
+    println([9i64, 8i64]);
+    println(mk());
+    println(names());
+    println(["x", "y"]);
+    println(nested());
+    let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);
+    println(t.shape());
+    let e: Vec[i64] = [];
+    println(e);
+    let b = [1i64, 2i64];
+    println(b);
+}
+"#
+            ),
+            Some(
+                "[9, 8]\n[3, 4]\n[ab, cd]\n[x, y]\n[[1, 2], [3]]\n[2, 3]\n[]\n[1, 2]\n".to_string()
+            )
+        );
+    }
+
     /// B-2026-07-28-8: storing into a PLAIN (value-type) struct's
     /// `Option[shared T]` field must retain the new inner BEFORE releasing the
     /// old one.

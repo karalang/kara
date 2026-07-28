@@ -982,6 +982,56 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // All-unit enum arm — render the bare variant name (selected on the
         // tag). Precedes the value-kind arms for the same reason as the struct
+        // B-2026-07-28-12: a NON-identifier Vec operand — `println([9, 8])`,
+        // `println(mk())`, `println(t.shape())`. The identifier arms above key
+        // off per-variable side tables, so a fresh literal or a call result had
+        // no entry and fell through to the value-kind arms at the bottom, where
+        // a Vec's `{ptr,len,cap}` is indistinguishable from a String's and got
+        // printed AS one: the element bytes came out as text (`[9, 8]` rendered
+        // as 0x09 0x00) and a `\0` truncated it, so the line looked empty. The
+        // old comment here called that arm a "fallback" for exactly this case;
+        // it is not a fallback, it is a wrong answer.
+        //
+        // Recover the static type from the span-keyed record the front end
+        // fills for every expression, falling back to the declared return type
+        // of a call. Then materialize the value into a temp and render it with
+        // the same per-element Display fn the identifier path uses, so both
+        // spellings print identically and match the interpreter.
+        if !matches!(&args[0].value.kind, ExprKind::Identifier(_)) {
+            let sp = &args[0].value.span;
+            let vec_te = self
+                .enum_inst_type_exprs
+                .get(&(sp.offset, sp.length))
+                .cloned()
+                .or_else(|| self.inline_temp_vec_te(&args[0].value));
+            if let Some(elem_te) = vec_te
+                .as_ref()
+                .and_then(super::helpers::vec_inner_type_expr)
+            {
+                let v = self.compile_expr(&args[0].value)?;
+                if v.is_struct_value() {
+                    let tmp = self
+                        .builder
+                        .build_alloca(v.get_type(), "print.vec.tmp")
+                        .unwrap();
+                    self.builder.build_store(tmp, v).unwrap();
+                    let display_fn = self.emit_vec_display_fn_te(&elem_te);
+                    let (_acc, sval) = self.render_via_display_fn(display_fn, tmp);
+                    self.emit_print_and_free_string(sval, nl);
+                    // The temp owns everything this expression produced (a
+                    // fresh literal / call result), so drop it here — the
+                    // identifier path leaves that to the binding's own cleanup.
+                    // A DEEP drop, not just the buffer: a `Vec[String]` /
+                    // `Vec[Vec[_]]` temp also owns each element's heap, which a
+                    // buffer-only free strands (measured: 24 bytes over two
+                    // `Vec[String]` prints).
+                    let drop_fn = self.emit_vec_drop_fn(&elem_te);
+                    self.builder.build_call(drop_fn, &[tmp.into()], "").unwrap();
+                    return Ok(zero.into());
+                }
+            }
+        }
+
         // arm below (an enum lowers to a tagged struct value).
         if let Some(ename) = self.expr_user_enum_name(&args[0].value) {
             let (data, len) = self.compile_unit_enum_display(&args[0].value, &ename)?;
