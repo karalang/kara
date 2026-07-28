@@ -823,10 +823,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **697 surfaced 
 | B-2026-07-27-9 | ownership | medium | A non-`mut` `let` binding can be REASSIGNED and MUTATED IN PLACE with no diagnostic — `let s: String = "abc"; s = "xyz";` and `let s: String = "abc";… | 6a855bdc |
 | B-2026-07-27-10 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a DESTRUCTURING `let S { a, b } = s;` bound NOTHING — the Let handler matched only a plain BindingPat… | 7bd2de1 |
 | B-2026-07-27-11 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `.clone()` is UNIMPLEMENTED and silently lowers to the i64 default `0` — `let b = a.clone()` on a Str… | d7707de |
-| B-2026-07-27-12 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): a `to_string()` result produced INSIDE a match arm and returned from a fn leaks — the caller never fr… | 3eab0280 |
+| B-2026-07-27-12 | codegen | medium | SELFHOST EMITTER (codegen.kara, Phase-12 port): a `to_string()` result produced INSIDE a match arm and returned from a fn leaks — the caller never fr… | 416245cc |
 | B-2026-07-27-13 | cli | medium | `karac explain` REJECTED the diagnostic code the compiler itself emits: every structured diagnostic carries `"code": "E0200"`, but `karac explain E02… | e211e3d |
 | B-2026-07-27-14 | cli | medium | FOUR diagnostic codes are minted by TWO DIFFERENT PHASES for unrelated errors: E0222 is both resolve `PrivateItemAccess` and typecheck `RefutablePatt… | 074377c |
-| B-2026-07-27-15 | codegen | high | SELFHOST EMITTER: a heap-owning payload bound by a `match` arm is bound as a BORROW, so returning or consuming it hands out a buffer the scrutinee's… | 3eab0280 |
+| B-2026-07-27-15 | codegen | high | SELFHOST EMITTER: a heap-owning payload bound by a `match` arm is bound as a BORROW, so returning or consuming it hands out a buffer the scrutinee's… | 416245cc |
 | B-2026-07-28-1 | other | medium | stale (not missing) runtime archive soft-skipped every E2E link failure — ~960 codegen assertions silently voided, suite reported green | 1d4ddd9 |
 
 </details>
