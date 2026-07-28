@@ -13,7 +13,7 @@
 //!   2. A synthetic [`Module`] with stub [`Item`]s for every prelude name is
 //!      injected into the [`ProgramTree`] by [`build_program_tree`], so
 //!      cross-module resolution recognises `import std.prelude.X;` without
-//!      `E0224 UnknownModule`.
+//!      `E0112 UnknownModule`.
 //!   3. The same names are still registered directly in the resolver's global
 //!      scope and the typechecker's type environment — `register_builtin_types`
 //!      remains the *placeholder* implementation that backs the synthetic
@@ -1171,7 +1171,7 @@ pub fn synthetic_gated_modules() -> Vec<(Vec<String>, Vec<Item>)> {
                         // gate reads `method.stdlib_origin`). A gated module whose
                         // type has `#[compiler_builtin]` methods (e.g.
                         // `Secret.expose`) needs each method flagged, or the
-                        // splice into user code trips E0237.
+                        // splice into user code trips E0115.
                         Item::ImplBlock(imp) => mark_impl_methods_stdlib(imp),
                         // `EffectResource` and friends carry no
                         // `stdlib_origin`; nothing to flip.

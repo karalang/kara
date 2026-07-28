@@ -12,7 +12,7 @@
 //!
 //! Slice 5 flipped the parser to emit `Item::Import` so this module now sees
 //! real import edges; unresolvable paths are still silently dropped here —
-//! the per-module resolver pass owns `E0224 UnknownModule` / `E0225
+//! the per-module resolver pass owns `E0112 UnknownModule` / `E0113
 //! UnknownItemInModule`.
 //!
 //! Shape mirrors `brainstorming/brainstorming_v41.md § C1` so the plan and
@@ -711,7 +711,7 @@ fn extract_imports(program: &Program) -> Vec<ImportDecl> {
 /// in `a.b`). The resolver in slice 5 disambiguates formally; here we use
 /// the longest-prefix match — the whole dotted path first, then with the
 /// tail segment stripped. Paths that match nothing are dropped silently so
-/// slice 5 can own `E0224`/`E0225`.
+/// slice 5 can own `E0112`/`E0113`.
 fn collect_import_edges(modules: &[Module], graph: &mut ModuleGraph) {
     for m in modules {
         for imp in &m.imports {

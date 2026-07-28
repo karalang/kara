@@ -16050,7 +16050,7 @@ fn test_subsume_function_identity_unchanged() {
 // against) and add their name to env.compiler_builtins (the marker that
 // the body is replaced by Rust dispatch and should not be type-checked).
 // Test fixtures load via `with_stdlib_source(true)` since slice 1's
-// resolver gate (`E0237`) rejects the attribute outside stdlib source.
+// resolver gate (`E0115`) rejects the attribute outside stdlib source.
 
 fn typecheck_stdlib_source(source: &str) -> TypeCheckResult {
     let parsed = parse(source);

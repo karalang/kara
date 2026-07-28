@@ -2883,8 +2883,8 @@ fn test_build_project_surfaces_unknown_module_e0224() {
     assert!(!out.status.success(), "build should fail on unknown module");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[E0224]"),
-        "expected E0224 in stderr, got {stderr}",
+        stderr.contains("error[E0112]"),
+        "expected E0112 in stderr, got {stderr}",
     );
     assert!(
         stderr.contains("greet"),
@@ -2907,8 +2907,8 @@ fn test_build_project_surfaces_unknown_item_e0225() {
     assert!(!out.status.success(), "build should fail on unknown item");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[E0225]"),
-        "expected E0225 in stderr, got {stderr}",
+        stderr.contains("error[E0113]"),
+        "expected E0113 in stderr, got {stderr}",
     );
 }
 
@@ -2931,8 +2931,8 @@ fn test_build_project_json_includes_resolve_diagnostics() {
     assert!(!out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"code\":\"E0224\""),
-        "JSON output should carry E0224, got {stdout}",
+        stdout.contains("\"code\":\"E0112\""),
+        "JSON output should carry E0112, got {stdout}",
     );
     assert!(
         stdout.contains("\"phase\":\"resolve\""),
@@ -2958,8 +2958,8 @@ fn test_build_project_surfaces_e0222_across_directories() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[E0222]"),
-        "expected E0222 in stderr, got {stderr}",
+        stderr.contains("error[E0111]"),
+        "expected E0111 in stderr, got {stderr}",
     );
 }
 
@@ -6727,8 +6727,8 @@ fn test_build_project_json_includes_replacement_for_unknown_module() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"code\":\"E0224\""),
-        "expected E0224 (UnknownModule) in JSON output, got: {stdout}"
+        stdout.contains("\"code\":\"E0112\""),
+        "expected E0112 (UnknownModule) in JSON output, got: {stdout}"
     );
     assert!(
         stdout.contains("\"replacement\":"),
@@ -6747,7 +6747,7 @@ fn test_test_project_jsonl_includes_replacement_for_unknown_item() {
     // `test_pass`, `test_fail`, `resolve_error`, etc.) must also carry
     // the replacement payload when a `resolve_error` event surfaces
     // a fixable diagnostic. The misspelled brace-list item exercises
-    // E0225 (UnknownItemInModule) which flows through
+    // E0113 (UnknownItemInModule) which flows through
     // `resolve_errors_jsonl`. `karac test` always emits JSONL on stdout
     // (no `--output` flag); when compilation fails, the runner exits
     // before the test pipeline starts and dumps the diagnostic events.
@@ -6767,8 +6767,8 @@ fn test_test_project_jsonl_includes_replacement_for_unknown_item() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("\"code\":\"E0225\""),
-        "expected E0225 (UnknownItemInModule) in JSONL output, got: {stdout}"
+        stdout.contains("\"code\":\"E0113\""),
+        "expected E0113 (UnknownItemInModule) in JSONL output, got: {stdout}"
     );
     assert!(
         stdout.contains("\"replacement\":"),
@@ -21073,8 +21073,8 @@ fn test_xpkg_nonpub_item_rejected_across_packages() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(!out.status.success(), "non-pub import must fail");
     assert!(
-        stderr.contains("error[E0222]"),
-        "E0222 expected; stderr={stderr}",
+        stderr.contains("error[E0111]"),
+        "E0111 expected; stderr={stderr}",
     );
     assert!(
         stderr.contains("only `pub` items can be imported across packages"),
@@ -21123,8 +21123,8 @@ fn test_xpkg_local_module_shadows_dep() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(!out.status.success(), "shadowed dep must be inaccessible");
     assert!(
-        stderr.contains("error[E0224]") && stderr.contains("mathx.geo"),
-        "E0224 unknown module expected; stderr={stderr}",
+        stderr.contains("error[E0112]") && stderr.contains("mathx.geo"),
+        "E0112 unknown module expected; stderr={stderr}",
     );
 }
 
@@ -21349,8 +21349,8 @@ fn test_xpkg_test_runner_nonpub_item_rejected() {
         "non-pub import must fail; stdout:\n{stdout}"
     );
     assert!(
-        stdout.contains("\"type\":\"resolve_error\"") && stdout.contains("E0222"),
-        "E0222 resolve_error expected; stdout:\n{stdout}"
+        stdout.contains("\"type\":\"resolve_error\"") && stdout.contains("E0111"),
+        "E0111 resolve_error expected; stdout:\n{stdout}"
     );
     assert!(
         !stdout.contains("run_start"),

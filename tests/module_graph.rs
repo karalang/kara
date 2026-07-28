@@ -5,7 +5,7 @@
 //! `src/module.rs#tests`. This file exercises `build_program_tree` end to end:
 //! it walks a scratch project, parses every file, indexes modules by path,
 //! and reports parse errors plus the slice-5 import edge set. Slice-5 tests
-//! also drive `Resolver::with_tree` so `E0224` / `E0225` diagnostics and the
+//! also drive `Resolver::with_tree` so `E0112` / `E0113` diagnostics and the
 //! real (now non-empty) cycle detection are covered.
 
 use karac::ast::Program;
@@ -258,15 +258,15 @@ fn slice5_import_unknown_item_emits_e0225_with_suggestion() {
         .iter()
         .filter(|e| e.kind == ResolveErrorKind::UnknownItemInModule)
         .collect();
-    assert_eq!(kind_errs.len(), 1, "one E0225; got {errs:?}");
+    assert_eq!(kind_errs.len(), 1, "one E0113; got {errs:?}");
     assert_eq!(kind_errs[0].suggestion.as_deref(), Some("hello"));
 }
 
 #[test]
 fn slice5_import_unknown_item_carries_machine_applicable_replacement() {
-    // Round 12.28: E0225 (UnknownItemInModule) gains the same `replacement`
-    // metadata the resolver already attaches to E0228 (UndefinedName) and
-    // E0229 (UndefinedType). The TextEdit covers the misspelled name only
+    // Round 12.28: E0113 (UnknownItemInModule) gains the same `replacement`
+    // metadata the resolver already attaches to E0100 (UndefinedName) and
+    // E0104 (UndefinedType). The TextEdit covers the misspelled name only
     // (item.span is just the name token, not the optional `as alias` clause),
     // so applying the edit converts `helllo` → `hello` in place. IDE
     // quick-fix UIs and `karac fix` consume this without further dispatcher
@@ -283,11 +283,11 @@ fn slice5_import_unknown_item_carries_machine_applicable_replacement() {
     let err = errs
         .iter()
         .find(|e| e.kind == ResolveErrorKind::UnknownItemInModule)
-        .expect("E0225 not emitted");
+        .expect("E0113 not emitted");
     let edit = err
         .replacement
         .as_deref()
-        .expect("E0225 should carry a TextEdit when a suggestion exists");
+        .expect("E0113 should carry a TextEdit when a suggestion exists");
     assert_eq!(
         edit.replacement, "hello",
         "replacement text should equal the suggestion",
@@ -309,7 +309,7 @@ fn slice5_import_unknown_item_carries_machine_applicable_replacement() {
 fn slice5_import_unknown_item_no_replacement_when_no_suggestion() {
     // Sentinel for the negative case: when the misspelled name is so far
     // from any candidate that `suggest_similar` returns None, the resolver
-    // emits E0225 without a `replacement` payload — no machine-applicable
+    // emits E0113 without a `replacement` payload — no machine-applicable
     // fix is offered. Pinned because the round 12.28 plumbing populates
     // `replacement` only when `suggestion.is_some()`.
     let d = ScratchDir::new("unknown-item-no-suggestion");
@@ -322,7 +322,7 @@ fn slice5_import_unknown_item_no_replacement_when_no_suggestion() {
     let err = errs
         .iter()
         .find(|e| e.kind == ResolveErrorKind::UnknownItemInModule)
-        .expect("E0225 not emitted");
+        .expect("E0113 not emitted");
     assert!(
         err.suggestion.is_none(),
         "expected no suggestion for `zzzzzzzzzz`, got {:?}",
@@ -336,8 +336,8 @@ fn slice5_import_unknown_item_no_replacement_when_no_suggestion() {
 
 #[test]
 fn slice5_import_unknown_module_carries_machine_applicable_replacement() {
-    // Round 12.29: E0223 (UnknownModule) gains the same `replacement`
-    // metadata as E0225/E0228/E0229. The TextEdit covers exactly the
+    // Round 12.29: E0112 (UnknownModule) gains the same `replacement`
+    // metadata as E0113/E0100/E0104. The TextEdit covers exactly the
     // misspelled prefix tokens — `imp.path_spans` is the per-segment span
     // vector populated by the parser — so applying the edit converts
     // `greeet` → `greet` in place without disturbing the trailing item
@@ -361,11 +361,11 @@ fn slice5_import_unknown_module_carries_machine_applicable_replacement() {
     let err = errs
         .iter()
         .find(|e| e.kind == ResolveErrorKind::UnknownModule)
-        .expect("E0223 not emitted");
+        .expect("E0112 not emitted");
     let edit = err
         .replacement
         .as_deref()
-        .expect("E0223 should carry a TextEdit when a suggestion exists");
+        .expect("E0112 should carry a TextEdit when a suggestion exists");
     assert_eq!(
         edit.replacement, "greet",
         "replacement text should equal the suggestion",
@@ -410,11 +410,11 @@ fn slice5_import_unknown_module_multi_segment_replacement_covers_full_prefix() {
     let err = errs
         .iter()
         .find(|e| e.kind == ResolveErrorKind::UnknownModule)
-        .expect("E0223 not emitted");
+        .expect("E0112 not emitted");
     let edit = err
         .replacement
         .as_deref()
-        .expect("E0223 should carry a TextEdit when a suggestion exists");
+        .expect("E0112 should carry a TextEdit when a suggestion exists");
     assert_eq!(edit.replacement, "greet.helpers");
     let original = &typo_src[edit.offset..edit.offset + edit.length];
     assert_eq!(
@@ -433,7 +433,7 @@ fn slice5_import_unknown_module_multi_segment_replacement_covers_full_prefix() {
 fn slice5_import_unknown_module_no_replacement_when_no_suggestion() {
     // Negative-case sentinel: a far-off prefix that `suggest_similar` cannot
     // match returns `replacement: None` alongside `suggestion: None` —
-    // mirrors the round-12.28 negative-case sentinel for E0225.
+    // mirrors the round-12.28 negative-case sentinel for E0113.
     let d = ScratchDir::new("unknown-module-no-suggestion");
     d.write("src/main.kara", "fn main() {}\n");
     d.write(
@@ -455,7 +455,7 @@ fn slice5_import_unknown_module_no_replacement_when_no_suggestion() {
     let err = errs
         .iter()
         .find(|e| e.kind == ResolveErrorKind::UnknownModule)
-        .expect("E0223 not emitted");
+        .expect("E0112 not emitted");
     assert!(
         err.suggestion.is_none(),
         "expected no suggestion for `zzzzzzzzzz`, got {:?}",
@@ -605,7 +605,7 @@ fn slice6_private_item_accessible_from_same_directory() {
 #[test]
 fn slice6_private_item_rejected_across_directories() {
     // `helper` is `private` and lives in `src/db/`. `main.kara` lives in
-    // `src/`, a different directory — import should trip E0222.
+    // `src/`, a different directory — import should trip E0111.
     let d = ScratchDir::new("private-cross-dir");
     d.write("src/main.kara", "import db.helper.secret;\nfn main() {}\n");
     d.write("src/db/helper.kara", "private fn secret() {}\n");
@@ -617,11 +617,11 @@ fn slice6_private_item_rejected_across_directories() {
         .iter()
         .filter(|e| e.kind == ResolveErrorKind::PrivateItemAccess)
         .collect();
-    assert_eq!(priv_errs.len(), 1, "exactly one E0222, got {errs:?}",);
+    assert_eq!(priv_errs.len(), 1, "exactly one E0111, got {errs:?}",);
     let msg = &priv_errs[0].message;
     assert!(
         msg.contains("private"),
-        "E0222 message should mention private visibility, got: {msg}",
+        "E0111 message should mention private visibility, got: {msg}",
     );
 }
 
@@ -647,7 +647,7 @@ fn slice6_default_visibility_reachable_from_other_directory() {
 
 #[test]
 fn slice6_private_struct_rejected_cross_directory() {
-    // E0222 fires on any item kind, not just fns.
+    // E0111 fires on any item kind, not just fns.
     let d = ScratchDir::new("private-struct");
     d.write("src/main.kara", "import db.schema.User;\nfn main() {}\n");
     d.write("src/db/schema.kara", "private struct User {}\n");
@@ -658,7 +658,7 @@ fn slice6_private_struct_rejected_cross_directory() {
     assert!(
         errs.iter()
             .any(|e| e.kind == ResolveErrorKind::PrivateItemAccess),
-        "expected E0222 for private struct, got {errs:?}",
+        "expected E0111 for private struct, got {errs:?}",
     );
 }
 
@@ -836,7 +836,7 @@ fn slice7_non_pub_import_does_not_reexport() {
     assert!(
         errs.iter()
             .any(|e| e.kind == ResolveErrorKind::UnknownItemInModule),
-        "plain import should not re-export — expected E0225, got {errs:?}",
+        "plain import should not re-export — expected E0113, got {errs:?}",
     );
 }
 
@@ -915,7 +915,7 @@ fn slice7_pub_import_private_across_directories_rejected() {
     assert_eq!(
         priv_errs.len(),
         1,
-        "pub-import of cross-dir private item should trip E0222: {errs:?}",
+        "pub-import of cross-dir private item should trip E0111: {errs:?}",
     );
 }
 
@@ -923,7 +923,7 @@ fn slice7_pub_import_private_across_directories_rejected() {
 fn slice7_consumer_cannot_reach_private_through_pub_import() {
     // Even if `mid` is adjacent to `helper` and re-exports a private item
     // with `pub import`, an external caller outside `mid`'s directory still
-    // gets E0222 — re-exports preserve canonical identity, they do not
+    // gets E0111 — re-exports preserve canonical identity, they do not
     // promote visibility past the canonical directory rule.
     let d = ScratchDir::new("reexport-preserves-private");
     d.write("src/main.kara", "import db.secret;\nfn main() {}\n");
@@ -937,7 +937,7 @@ fn slice7_consumer_cannot_reach_private_through_pub_import() {
 
     let w = walked(d.root());
     let built = build_program_tree(&w).expect("build tree");
-    // The re-export site (db.kara) itself trips E0222, confirming re-export
+    // The re-export site (db.kara) itself trips E0111, confirming re-export
     // does not bypass the private-visibility rule.
     let db_id = built
         .tree
@@ -1078,7 +1078,7 @@ fn slice8_explicit_import_with_alias_works() {
 #[test]
 fn slice8_explicit_import_of_unknown_prelude_item_emits_e0225() {
     // The synthetic prelude module exposes a fixed surface — a typo or
-    // unknown name produces the same E0225 with suggestion as any other
+    // unknown name produces the same E0113 with suggestion as any other
     // cross-module import.
     let d = ScratchDir::new("prelude-unknown");
     d.write(
@@ -1089,13 +1089,13 @@ fn slice8_explicit_import_of_unknown_prelude_item_emits_e0225() {
     let w = walked(d.root());
     let built = build_program_tree(&w).expect("build tree");
     let errs = resolve_module_errors(&built.tree, built.tree.root);
-    let e0225s: Vec<_> = errs
+    let e0113s: Vec<_> = errs
         .iter()
         .filter(|e| e.kind == ResolveErrorKind::UnknownItemInModule)
         .collect();
-    assert_eq!(e0225s.len(), 1, "expected one E0225, got {errs:?}");
+    assert_eq!(e0113s.len(), 1, "expected one E0113, got {errs:?}");
     assert_eq!(
-        e0225s[0].suggestion.as_deref(),
+        e0113s[0].suggestion.as_deref(),
         Some("Option"),
         "Levenshtein should suggest `Option` for `Optoin`",
     );
@@ -1319,7 +1319,7 @@ fn std_web_net_fetch_is_importable() {
 
 #[test]
 fn std_web_unknown_item_gets_suggestion() {
-    // Typos against the gated module get the same E0225 + Levenshtein
+    // Typos against the gated module get the same E0113 + Levenshtein
     // treatment as any cross-module import.
     let d = ScratchDir::new("std-web-typo");
     d.write("src/main.kara", "import std.web.Displai;\nfn main() {}\n");
@@ -1327,13 +1327,13 @@ fn std_web_unknown_item_gets_suggestion() {
     let w = walked(d.root());
     let built = build_program_tree(&w).expect("build tree");
     let errs = resolve_module_errors(&built.tree, built.tree.root);
-    let e0225s: Vec<_> = errs
+    let e0113s: Vec<_> = errs
         .iter()
         .filter(|e| e.kind == ResolveErrorKind::UnknownItemInModule)
         .collect();
-    assert_eq!(e0225s.len(), 1, "expected one E0225, got {errs:?}");
+    assert_eq!(e0113s.len(), 1, "expected one E0113, got {errs:?}");
     assert_eq!(
-        e0225s[0].suggestion.as_deref(),
+        e0113s[0].suggestion.as_deref(),
         Some("Display"),
         "Levenshtein should suggest `Display` for `Displai`",
     );

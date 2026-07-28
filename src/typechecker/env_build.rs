@@ -333,7 +333,7 @@ impl<'a> super::TypeChecker<'a> {
             for ii in &imp.items {
                 // Canonical origin walks `pub import` re-exports to the
                 // defining module. Falls back to the direct target when no
-                // matching item exists (E0225 handles that case in the
+                // matching item exists (E0113 handles that case in the
                 // resolver — typechecker skips the entry silently).
                 let Some((origin_path, origin_name)) =
                     crate::module::canonical_origin(tree, &imp.path, &ii.name)

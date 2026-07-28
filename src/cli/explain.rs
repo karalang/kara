@@ -161,9 +161,15 @@ struct CodeEntry {
 /// **Scope.** Covers the two families whose codes an agent loop
 /// actually sees on a failing `karac check`: `typecheck` (the `E02xx`
 /// / `W02xx` band plus the `E08xx` target-gate strays) and `resolve`
-/// (`E01xx` plus its `E022x`–`E024x` strays). Codes minted by the
-/// parse / effect / ownership phases are not here yet; `explain`
-/// reports them as uncatalogued rather than guessing.
+/// (the whole `E01xx` band). Codes minted by the parse / effect /
+/// ownership phases are not here yet; `explain` reports them as
+/// uncatalogued rather than guessing.
+///
+/// The resolve rows must stay COMPLETE, not merely representative: an
+/// absent row makes a collision invisible to
+/// `code_table_has_no_cross_phase_collisions`, which is exactly how
+/// four of the eight B-2026-07-27-14 collisions went unnoticed while
+/// the guard reported only four.
 ///
 /// **Source of truth.** Every row restates a `match err.kind` arm in
 /// `collect_diagnostics` (`src/cli.rs`) crossed with
@@ -173,12 +179,19 @@ struct CodeEntry {
 /// `code_table_class_matches_typechecker` test pins the rows that
 /// would otherwise drift silently.
 ///
-/// **Collisions are real and intentional to surface.** `E0222`,
-/// `E0238`, `E0239`, and `E0240` are each minted by *both* the
-/// resolver and the typechecker for unrelated errors, so a lookup can
-/// return more than one row. That is a pre-existing defect in the code
-/// allocation (see the bug ledger); rendering every match is the
-/// honest response until the codes are split.
+/// **One phase per band.** Each phase allocates from its own numeric
+/// band — resolve `E01xx`, typecheck `E02xx`/`W02xx`, ownership
+/// `E05xx` — so a code identifies exactly one diagnostic and the
+/// `code` field of a structured diagnostic is a usable key on its own.
+/// `E08xx` is deliberately shared across phases for target/GPU
+/// placement errors, but the numbers within it stay disjoint.
+///
+/// It was not always so: the resolver used to mint thirteen codes into
+/// the typechecker's `E02xx` band, eight of which landed on numbers the
+/// typechecker had already taken (B-2026-07-27-14). `lookup_code` still
+/// returns a `Vec` and the renderer still handles multiple rows —
+/// that machinery is what surfaced the collisions in the first place,
+/// and `code_table_has_no_cross_phase_collisions` now holds it at zero.
 const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // ── resolve ─────────────────────────────────────────────────
     (
@@ -204,14 +217,22 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0108", res("OperatorTraitImplRestricted", None)),
     ("E0109", res("IntoTraitImplNotAllowed", None)),
     ("E0110", res("ImplLevelEffectVarNotAllowed", None)),
-    ("E0222", res("PrivateItemAccess", None)),
-    ("E0224", res("UnknownModule", None)),
-    ("E0225", res("UnknownItemInModule", None)),
-    ("E0228", res("ReservedEffectResource", None)),
-    ("E0237", res("CompilerBuiltinReserved", None)),
-    ("E0238", res("ContinueOnBlockLabel", None)),
-    ("E0239", res("NonExhaustiveInvalidTarget", None)),
-    ("E0240", res("TrackCallerInvalidTarget", None)),
+    ("E0111", res("PrivateItemAccess", None)),
+    ("E0112", res("UnknownModule", None)),
+    ("E0113", res("UnknownItemInModule", None)),
+    ("E0114", res("ReservedEffectResource", None)),
+    ("E0115", res("CompilerBuiltinReserved", None)),
+    ("E0116", res("ContinueOnBlockLabel", None)),
+    ("E0117", res("NonExhaustiveInvalidTarget", None)),
+    ("E0118", res("TrackCallerInvalidTarget", None)),
+    ("E0119", res("DeprecatedOnImpl", None)),
+    ("E0120", res("DeprecatedOnField", None)),
+    ("E0121", res("UnknownAttribute", None)),
+    ("E0122", res("ProfileInvalidTarget", None)),
+    ("E0123", res("UnknownProfile", None)),
+    // `E08xx` is the shared target/GPU-placement band — the resolver
+    // owns E0800, the typechecker E0801. Shared band, disjoint numbers.
+    ("E0800", res("GpuInvalidTarget", None)),
     // ── typecheck ───────────────────────────────────────────────
     (
         "E0200",
@@ -953,26 +974,147 @@ mod tests {
     use super::*;
     use crate::typechecker::TypeErrorKind as K;
 
-    /// The four codes that two phases both mint. This test exists to
-    /// make the collision *visible* rather than to bless it: if a
-    /// future commit splits the codes apart, this test fails and the
-    /// fix is to shrink the expected set (and drop the collision note
-    /// from `render_code_text`). If a NEW collision appears, it fails
-    /// too — which is the point, since a silently reused code makes
-    /// `explain` and every agent consuming the `code` field ambiguous.
+    /// No code may be minted by two phases (B-2026-07-27-14). A
+    /// diagnostic's `code` is the stable short key every agent loop,
+    /// IDE, and docs index reads; the moment two phases share a number
+    /// it stops identifying anything on its own.
     #[test]
-    fn code_table_collisions_are_the_documented_set() {
+    fn code_table_has_no_cross_phase_collisions() {
         let mut collided: Vec<&str> = CODE_TABLE
             .iter()
-            .filter(|(code, _)| lookup_code(code).len() > 1)
+            .filter(|(code, _)| {
+                let rows = lookup_code(code);
+                rows.iter().map(|e| e.phase).collect::<Vec<_>>().len() > 1
+            })
             .map(|(code, _)| *code)
             .collect();
         collided.sort_unstable();
         collided.dedup();
-        assert_eq!(
-            collided,
-            vec!["E0222", "E0238", "E0239", "E0240"],
-            "diagnostic-code collisions changed; see CODE_TABLE's doc comment"
+        assert!(
+            collided.is_empty(),
+            "these codes are minted by more than one phase: {collided:?}. \
+             Each phase owns a band (resolve E01xx, typecheck E02xx/W02xx, \
+             ownership E05xx); allocate from the emitting phase's band."
+        );
+    }
+
+    /// Every numeric `(phase, code)` pair the emitter actually mints,
+    /// read out of `src/cli.rs`'s own `match err.kind` arms.
+    ///
+    /// Scanning the source is deliberate. `ResolveErrorKind` /
+    /// `TypeErrorKind` cannot be enumerated at runtime, so any
+    /// hand-maintained copy of the mapping is one more thing that can
+    /// drift — and drift is the whole defect here: the collision guard
+    /// below can only see codes it is told about, so a stale copy
+    /// reports "no collisions" while real ones sit in the emitter.
+    /// That is exactly what happened before B-2026-07-27-14 was fixed
+    /// (`CODE_TABLE` stopped at E0240, hiding four of the eight).
+    fn emitted_codes() -> Vec<(&'static str, &'static str)> {
+        let src = include_str!("../cli.rs");
+        let mut out = Vec::new();
+        for line in src.lines() {
+            let line = line.trim();
+            let phase = if line.contains("ResolveErrorKind::") {
+                "resolve"
+            } else if line.contains("TypeErrorKind::") {
+                "typecheck"
+            } else {
+                continue;
+            };
+            let Some((_, rest)) = line.split_once("=> \"") else {
+                continue;
+            };
+            let Some((code, _)) = rest.split_once('"') else {
+                continue;
+            };
+            // Symbolic codes (E_UNKNOWN_ATTRIBUTE, …) are outside the
+            // numeric bands by design.
+            if code.len() == 5
+                && (code.starts_with('E') || code.starts_with('W'))
+                && code[1..].chars().all(|c| c.is_ascii_digit())
+            {
+                out.push((phase, code));
+            }
+        }
+        assert!(
+            out.len() > 80,
+            "the emitter scan found only {} arms — the match-arm shape in \
+             src/cli.rs changed and this guard has gone blind",
+            out.len()
+        );
+        out
+    }
+
+    /// The emitter itself must mint no code from two phases. This is
+    /// the real invariant; the `CODE_TABLE` check below is downstream
+    /// of it.
+    #[test]
+    fn emitter_mints_no_code_from_two_phases() {
+        let mut collided: Vec<&str> = Vec::new();
+        for (_, code) in emitted_codes() {
+            let phases: Vec<&str> = emitted_codes()
+                .into_iter()
+                .filter(|(_, c)| *c == code)
+                .map(|(p, _)| p)
+                .collect();
+            if phases.iter().any(|p| *p != phases[0]) {
+                collided.push(code);
+            }
+        }
+        collided.sort_unstable();
+        collided.dedup();
+        assert!(
+            collided.is_empty(),
+            "these codes are minted by more than one phase: {collided:?}. \
+             Each phase owns a band (resolve E01xx, typecheck E02xx/W02xx, \
+             ownership E05xx); allocate from the emitting phase's band."
+        );
+    }
+
+    /// The resolver allocates only from its own `E01xx` band (plus the
+    /// deliberately shared `E08xx` target band and symbolic codes).
+    /// Pins the band split so a new resolver diagnostic cannot drift
+    /// back into the typechecker's `E02xx` and re-open the collision.
+    #[test]
+    fn resolver_numeric_codes_live_in_the_resolve_band() {
+        let mut strays: Vec<&str> = emitted_codes()
+            .into_iter()
+            .filter(|(phase, code)| {
+                *phase == "resolve" && !code.starts_with("E01") && !code.starts_with("E08")
+            })
+            .map(|(_, code)| code)
+            .collect();
+        strays.sort_unstable();
+        strays.dedup();
+        assert!(
+            strays.is_empty(),
+            "resolver codes outside the E01xx band: {strays:?}. \
+             The typechecker owns E02xx — allocating there collides."
+        );
+    }
+
+    /// Every numeric resolver code the emitter mints must be
+    /// catalogued in [`CODE_TABLE`], so `karac explain <code>` can
+    /// answer for all of them and the collision guard can see them.
+    #[test]
+    fn code_table_catalogues_every_resolver_code() {
+        let mut missing: Vec<&str> = emitted_codes()
+            .into_iter()
+            .filter(|(phase, code)| {
+                *phase == "resolve"
+                    && !CODE_TABLE
+                        .iter()
+                        .any(|(c, e)| c == code && e.phase == "resolve")
+            })
+            .map(|(_, code)| code)
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "resolver codes missing from CODE_TABLE: {missing:?}. \
+             An absent row hides collisions from \
+             emitter_mints_no_code_from_two_phases."
         );
     }
 
@@ -1094,14 +1236,48 @@ mod tests {
         assert!(text.contains("no class page yet"));
     }
 
+    /// The multi-row renderer is kept even though no code collides
+    /// today (B-2026-07-27-14 split the bands). It is the safety net:
+    /// if a future commit re-introduces a shared code, `explain` still
+    /// tells the truth — names every phase and points at the `phase`
+    /// field — instead of silently showing whichever row sorts first.
+    /// Fed a synthetic pair rather than a real lookup, precisely
+    /// because a real collision must no longer exist.
     #[test]
     fn collision_render_names_every_phase() {
-        let entries = lookup_code("E0222");
-        assert_eq!(entries.len(), 2);
+        let entries = vec![res("PrivateItemAccess", None), ty("RefutablePattern", None)];
         let text = render_code_text("E0222", entries);
         assert!(text.contains("more than one phase"));
         assert!(text.contains("PrivateItemAccess"));
         assert!(text.contains("RefutablePattern"));
+    }
+
+    /// The former collision codes now resolve to exactly one phase.
+    #[test]
+    fn former_collision_codes_resolve_to_one_phase_each() {
+        for (code, phase, kind) in [
+            ("E0222", "typecheck", "RefutablePattern"),
+            ("E0238", "typecheck", "CannotInferTypeParam"),
+            ("E0239", "typecheck", "AmbiguousMethod"),
+            ("E0240", "typecheck", "ConflictingImpl"),
+            ("E0241", "typecheck", "NonExhaustiveCrossPackageLiteral"),
+            ("E0242", "typecheck", "NonExhaustiveCrossPackageMatch"),
+            ("E0243", "typecheck", "NonExhaustiveCrossPackagePattern"),
+            ("E0245", "typecheck", "Deprecated"),
+            ("E0111", "resolve", "PrivateItemAccess"),
+            ("E0116", "resolve", "ContinueOnBlockLabel"),
+            ("E0117", "resolve", "NonExhaustiveInvalidTarget"),
+            ("E0118", "resolve", "TrackCallerInvalidTarget"),
+            ("E0119", "resolve", "DeprecatedOnImpl"),
+            ("E0120", "resolve", "DeprecatedOnField"),
+            ("E0121", "resolve", "UnknownAttribute"),
+            ("E0123", "resolve", "UnknownProfile"),
+        ] {
+            let rows = lookup_code(code);
+            assert_eq!(rows.len(), 1, "{code} should resolve to one row");
+            assert_eq!(rows[0].phase, phase, "{code} phase");
+            assert_eq!(rows[0].kind, kind, "{code} kind");
+        }
     }
 
     #[test]

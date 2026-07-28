@@ -108,19 +108,19 @@ Bucket key: **A✓** applied · **A⚠** emitted-not-applied · **B** mechanical
 | E0108 | OperatorTraitImplRestricted | operator-trait impl on non-stdlib type | C | move code — human |
 | E0109 | IntoTraitImplNotAllowed | impl Into instead of From | C | trait rename needs intent |
 | E0110 | ImplLevelEffectVarNotAllowed | effect var on impl generics | C | structural move to method |
-| E0222 | PrivateItemAccess | item private cross-module | C | make pub vs restructure |
-| E0224 | UnknownModule | module path not found | C | correct path unknown |
-| E0225 | UnknownItemInModule | item not in module | C | correct item unknown |
-| E0228 | ReservedEffectResource | resource uses reserved name | C | replacement name is author's choice |
-| E0237 | CompilerBuiltinReserved | `#[compiler_builtin]` in user code | B | delete attribute |
-| E0238 | ContinueOnBlockLabel | `continue` on labeled block | C | convert block→loop — structural |
-| E0239 | NonExhaustiveInvalidTarget | `#[non_exhaustive]` wrong target | B | delete attribute |
-| E0240 | TrackCallerInvalidTarget | `#[track_caller]` wrong target | B | delete attribute |
-| E0241 | DeprecatedOnImpl | `#[deprecated]` on impl | B | delete attribute |
-| E0242 | DeprecatedOnField | `#[deprecated]` on field | B | delete attribute |
-| E0243 | UnknownAttribute | unknown bare attribute | B | delete attribute |
-| E0244 | ProfileInvalidTarget | `#[profile]` wrong target | B | delete attribute |
-| E0245 | UnknownProfile | invalid profile name | B* | replace iff single valid profile |
+| E0111 | PrivateItemAccess | item private cross-module | C | make pub vs restructure |
+| E0112 | UnknownModule | module path not found | C | correct path unknown |
+| E0113 | UnknownItemInModule | item not in module | C | correct item unknown |
+| E0114 | ReservedEffectResource | resource uses reserved name | C | replacement name is author's choice |
+| E0115 | CompilerBuiltinReserved | `#[compiler_builtin]` in user code | B | delete attribute |
+| E0116 | ContinueOnBlockLabel | `continue` on labeled block | C | convert block→loop — structural |
+| E0117 | NonExhaustiveInvalidTarget | `#[non_exhaustive]` wrong target | B | delete attribute |
+| E0118 | TrackCallerInvalidTarget | `#[track_caller]` wrong target | B | delete attribute |
+| E0119 | DeprecatedOnImpl | `#[deprecated]` on impl | B | delete attribute |
+| E0120 | DeprecatedOnField | `#[deprecated]` on field | B | delete attribute |
+| E0121 | UnknownAttribute | unknown bare attribute | B | delete attribute |
+| E0122 | ProfileInvalidTarget | `#[profile]` wrong target | B | delete attribute |
+| E0123 | UnknownProfile | invalid profile name | B* | replace iff single valid profile |
 | E0800 | GpuInvalidTarget | `#[gpu]` wrong target | B | delete attribute |
 | — | CodegenHintInvalidTarget | codegen hint wrong target | B | delete attribute |
 | — | CodegenHintOnExternDecl | codegen hint on extern | B | delete attribute |

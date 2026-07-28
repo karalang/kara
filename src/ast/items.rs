@@ -208,7 +208,7 @@ pub struct Function {
     /// True iff this item came from baked stdlib source (CR-202 slice 3b).
     /// The parser writes `false`; the bake step in `prelude.rs` flips it
     /// to `true` after parsing. The resolver's `#[compiler_builtin]` gate
-    /// (`E0237`) bypasses items where this is `true` so stdlib source can
+    /// (`E0115`) bypasses items where this is `true` so stdlib source can
     /// use the attribute even when the resolver's session-wide
     /// `is_stdlib_source` flag is unset (e.g. when the bake AST is
     /// spliced into a user-mode program tree).

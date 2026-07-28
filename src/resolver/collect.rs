@@ -1174,7 +1174,7 @@ impl<'a> super::Resolver<'a> {
 
     fn collect_impl(&mut self, imp: &ImplBlock) {
         // `#[compiler_builtin]` is reserved for stdlib source — user code
-        // is rejected (E0237). The other `collect_*` callers gate top-level
+        // is rejected (E0115). The other `collect_*` callers gate top-level
         // items; impl blocks need the same gate at two levels: the block
         // itself, and each method. ImplBlock has no `stdlib_origin` field
         // because baked stdlib impls live in `STDLIB_PROGRAMS` and are
@@ -1448,13 +1448,13 @@ impl<'a> super::Resolver<'a> {
     /// Resolve a CR-24 `import` declaration against the `ProgramTree`:
     ///
     /// 1. Ensure the dotted prefix in `imp.path` names a module in the graph
-    ///    (`E0224 UnknownModule` on miss, with a Levenshtein suggestion over
+    ///    (`E0112 UnknownModule` on miss, with a Levenshtein suggestion over
     ///    all known module paths).
     /// 2. For each brace-listed item, bind `alias.or(name)` in the current
     ///    scope as `SymbolKind::Import { path }`. If the `path + name` is
     ///    itself a submodule, the binding is a module reference; otherwise
     ///    the target module must expose a matching top-level item
-    ///    (`E0225 UnknownItemInModule` on miss).
+    ///    (`E0113 UnknownItemInModule` on miss).
     ///
     /// Single-file mode (no tree attached) skips cross-module validation and
     /// just registers the symbol so downstream passes see the name in scope.
@@ -1689,7 +1689,7 @@ impl<'a> super::Resolver<'a> {
             } else if binds_item {
                 // Slice 6 + 7: enforce three-level visibility against the
                 // canonical defining item. Following the `pub import` chain
-                // ensures re-exports are transparent — E0222 fires based on
+                // ensures re-exports are transparent — E0111 fires based on
                 // where the item is really defined, not the re-exporter's
                 // location. Submodule bindings (`binds_submodule`) have no
                 // item visibility to check.

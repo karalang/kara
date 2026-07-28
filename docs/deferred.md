@@ -2474,7 +2474,7 @@ A build-side tool that diffs a library's effect surface across two versions and 
 
 Whether typechecker `TypeError` and effectchecker `EffectError` should carry `suggestion` / `replacement` fields so their `did you mean`-style diagnostics flow through the same `karac fix` and IDE quick-fix infrastructure that resolver and ownership classes already use. Today neither phase has a `suggestion` field on its error struct; adding one is a per-struct expansion.
 
-**Current lean:** not in v1. The infrastructure is in place — rounds 12.28–12.32 closed the `replacement` thread for resolver E0223 / E0225 / E0228 / E0229 plus ownership N0507, with `karac fix`, single-file JSON, and multi-file JSON / JSONL paths all wired through. Extending coverage to typechecker / effectchecker phases is per-class metadata work that lands opportunistically alongside the per-pass refactors that benefit. Most existing diagnostic surfaces in those phases carry sentence-prose suggestions, not single-token edits — which is why the v1 cutoff stops at resolver + ownership.
+**Current lean:** not in v1. The infrastructure is in place — rounds 12.28–12.32 closed the `replacement` thread for resolver E0112 / E0113 / E0100 / E0104 plus ownership N0507, with `karac fix`, single-file JSON, and multi-file JSON / JSONL paths all wired through. Extending coverage to typechecker / effectchecker phases is per-class metadata work that lands opportunistically alongside the per-pass refactors that benefit. Most existing diagnostic surfaces in those phases carry sentence-prose suggestions, not single-token edits — which is why the v1 cutoff stops at resolver + ownership.
 
 **What's needed:**
 

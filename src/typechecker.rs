@@ -1355,7 +1355,7 @@ pub struct TypeCheckResult {
     /// Names of functions declared with `#[compiler_builtin]` (CR-202
     /// slice 2). The signature lives in `env.functions`; the entry here
     /// flags the function as having its body replaced by Rust dispatch.
-    /// Empty in user-only programs (slice 1's resolver gate `E0237`
+    /// Empty in user-only programs (slice 1's resolver gate `E0115`
     /// prevents the attribute outside stdlib source).
     pub compiler_builtins: HashSet<String>,
     /// `#[must_use]` annotations on free functions and impl methods

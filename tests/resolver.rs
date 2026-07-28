@@ -1940,7 +1940,7 @@ fn test_providers_block_accepts_known_effect_resource() {
     );
 }
 
-// ── Reserved effect resource names (E0228) ──────────────────────
+// ── Reserved effect resource names (E0114) ──────────────────────
 
 #[test]
 fn test_compile_time_env_reserved() {
@@ -2148,7 +2148,7 @@ fn test_impl_block_generic_bound_recorded() {
     );
 }
 
-// ── #[compiler_builtin] gate (CR-202 slice 1, E0237) ─────────────
+// ── #[compiler_builtin] gate (CR-202 slice 1, E0115) ─────────────
 // The attribute is reserved for stdlib source baked into the compiler
 // binary. User code is rejected at the resolver layer; the synthetic
 // stdlib package opts in via `Resolver::with_stdlib_source(true)` (slice 3
@@ -2473,7 +2473,7 @@ fn test_compiler_builtin_per_method_origin_bypasses_gate_on_impl_method() {
     );
 }
 
-// ── #[non_exhaustive] placement validation (E0239) ────────────────
+// ── #[non_exhaustive] placement validation (E0117) ────────────────
 // The attribute is valid only on `pub struct` and `pub enum`. The
 // resolver rejects every other target — private types (no
 // cross-package boundary, so the attribute is meaningless), traits /
@@ -2596,7 +2596,7 @@ fn non_exhaustive_slice1_rejected_on_struct_field() {
 fn non_exhaustive_slice1_rejection_uses_dedicated_error_kind() {
     // Pin that the diagnostic uses the new ResolveErrorKind variant
     // (not the catch-all "compiler builtin reserved" or similar) so
-    // CLI / IDE consumers can map it to the typed `E0239` code.
+    // CLI / IDE consumers can map it to the typed `E0117` code.
     let errs = resolve_errors("#[non_exhaustive]\nfn frob() { }");
     assert!(
         errs.iter()
@@ -2614,7 +2614,7 @@ fn non_exhaustive_slice1_rejection_uses_dedicated_error_kind() {
     );
 }
 
-// ── #[track_caller] placement validation (E0240) ──────────────────
+// ── #[track_caller] placement validation (E0118) ──────────────────
 // The attribute is valid only on `fn` declarations. The resolver
 // rejects every other top-level / impl-block target — struct, enum,
 // trait, marker trait, trait alias, impl block, struct field. Per
@@ -3016,7 +3016,7 @@ fn profile_slice12_rejection_uses_dedicated_error_kinds() {
         .any(|e| e.kind == ResolveErrorKind::UnknownProfile));
 }
 
-// ── #[deprecated] placement validation (E0241 / E0242) ────────────
+// ── #[deprecated] placement validation (E0119 / E0120) ────────────
 // Per design.md § `#[deprecated]` for Item Deprecation > "Where it
 // cannot appear", impl blocks (`E_DEPRECATED_ON_IMPL`) and struct
 // fields (`E_DEPRECATED_ON_FIELD`) are explicit rejection sites.
@@ -3876,7 +3876,7 @@ fn impl_trait_slice2_synthetic_param_bounds_recorded_in_symbol_table() {
 // ── `#[diagnostic::*]` slice 2 — namespace dispatch + E_UNKNOWN_ATTRIBUTE ──
 // Validates the central attribute checker shipped in
 // `src/attribute_validator.rs`. Bare-name attributes that are not in the
-// recognised set produce `error[E_UNKNOWN_ATTRIBUTE]` (`E0243`); members
+// recognised set produce `error[E_UNKNOWN_ATTRIBUTE]` (`E0121`); members
 // of a compiler-reserved namespace (`#[diagnostic::*]`) and tool
 // namespaces are silently accepted at this layer (per-namespace
 // validation lives in slices 3, 4 / item 37).
@@ -4035,7 +4035,7 @@ fn attr_slice2_tool_namespaced_attribute_accepted_silently() {
 #[test]
 fn attr_slice2_unknown_attribute_has_dedicated_error_kind_and_e0243() {
     // Pin the discriminant + the symbolic prefix so CLI / IDE
-    // consumers can branch reliably. The E0243 mapping is asserted
+    // consumers can branch reliably. The E0121 mapping is asserted
     // separately in tests/cli.rs (the cli-side mapping table); here
     // we only pin the kind and the message prefix.
     let errs = resolve_errors("#[no_such_thing]\nfn f() { }");

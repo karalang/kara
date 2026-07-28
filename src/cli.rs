@@ -2964,14 +2964,14 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::OperatorTraitImplRestricted => "E0108",
                 crate::resolver::ResolveErrorKind::IntoTraitImplNotAllowed => "E0109",
                 crate::resolver::ResolveErrorKind::ImplLevelEffectVarNotAllowed => "E0110",
-                crate::resolver::ResolveErrorKind::UnknownModule => "E0224",
-                crate::resolver::ResolveErrorKind::UnknownItemInModule => "E0225",
-                crate::resolver::ResolveErrorKind::PrivateItemAccess => "E0222",
-                crate::resolver::ResolveErrorKind::ReservedEffectResource => "E0228",
-                crate::resolver::ResolveErrorKind::CompilerBuiltinReserved => "E0237",
-                crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0238",
-                crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
-                crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
+                crate::resolver::ResolveErrorKind::UnknownModule => "E0112",
+                crate::resolver::ResolveErrorKind::UnknownItemInModule => "E0113",
+                crate::resolver::ResolveErrorKind::PrivateItemAccess => "E0111",
+                crate::resolver::ResolveErrorKind::ReservedEffectResource => "E0114",
+                crate::resolver::ResolveErrorKind::CompilerBuiltinReserved => "E0115",
+                crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0116",
+                crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0117",
+                crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0118",
                 crate::resolver::ResolveErrorKind::GpuInvalidTarget => "E0800",
                 crate::resolver::ResolveErrorKind::CodegenHintInvalidTarget => {
                     "E_CODEGEN_HINT_INVALID_POSITION"
@@ -2979,11 +2979,11 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::CodegenHintOnExternDecl => {
                     "E_CODEGEN_HINT_ON_EXTERN_DECL"
                 }
-                crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0241",
-                crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0242",
-                crate::resolver::ResolveErrorKind::UnknownAttribute => "E0243",
-                crate::resolver::ResolveErrorKind::ProfileInvalidTarget => "E0244",
-                crate::resolver::ResolveErrorKind::UnknownProfile => "E0245",
+                crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0119",
+                crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0120",
+                crate::resolver::ResolveErrorKind::UnknownAttribute => "E0121",
+                crate::resolver::ResolveErrorKind::ProfileInvalidTarget => "E0122",
+                crate::resolver::ResolveErrorKind::UnknownProfile => "E0123",
                 crate::resolver::ResolveErrorKind::QueryResolutionConflict => {
                     "E_QUERY_RESOLUTION_CONFLICT"
                 }
@@ -7150,7 +7150,7 @@ fn effect_set_to_display(
 
 /// (slice 4), runs Tarjan's SCC to reject circular module dependencies
 /// (`E0223`), and runs cross-module name resolution per module
-/// (slice 5, `E0224` / `E0225`). Visibility enforcement and typechecking
+/// (slice 5, `E0112` / `E0113`). Visibility enforcement and typechecking
 /// across modules arrive in slice 6+.
 // Same flag-shaped-argument posture as `cmd_build` above — a struct
 // here would just move the flag list rather than tighten it.
@@ -7453,7 +7453,7 @@ fn cmd_build_project(
 
     // Slice 5: run cross-module name resolution per module. Only attempt
     // resolution when the graph is acyclic and every file parsed cleanly —
-    // otherwise we would cascade dozens of spurious E0224/E0225s atop the
+    // otherwise we would cascade dozens of spurious E0112/E0113s atop the
     // real failure.
     let resolve_errors: Vec<ModuleResolveErrors> = if parse_errors.is_empty() && cycles.is_empty() {
         resolve_modules(&tree)
@@ -8573,9 +8573,9 @@ fn resolve_modules(tree: &ProgramTree) -> Vec<ModuleResolveErrors> {
 
 fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
     match kind {
-        ResolveErrorKind::UnknownModule => "E0224",
-        ResolveErrorKind::UnknownItemInModule => "E0225",
-        ResolveErrorKind::PrivateItemAccess => "E0222",
+        ResolveErrorKind::UnknownModule => "E0112",
+        ResolveErrorKind::UnknownItemInModule => "E0113",
+        ResolveErrorKind::PrivateItemAccess => "E0111",
         ResolveErrorKind::UndefinedName => "E0100",
         ResolveErrorKind::DuplicateDefinition => "E0101",
         ResolveErrorKind::ReservedIdentifier => "E0102",
@@ -8587,19 +8587,19 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::OperatorTraitImplRestricted => "E0108",
         ResolveErrorKind::IntoTraitImplNotAllowed => "E0109",
         ResolveErrorKind::ImplLevelEffectVarNotAllowed => "E0110",
-        ResolveErrorKind::ReservedEffectResource => "E0228",
-        ResolveErrorKind::CompilerBuiltinReserved => "E0237",
-        ResolveErrorKind::ContinueOnBlockLabel => "E0238",
-        ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
-        ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
+        ResolveErrorKind::ReservedEffectResource => "E0114",
+        ResolveErrorKind::CompilerBuiltinReserved => "E0115",
+        ResolveErrorKind::ContinueOnBlockLabel => "E0116",
+        ResolveErrorKind::NonExhaustiveInvalidTarget => "E0117",
+        ResolveErrorKind::TrackCallerInvalidTarget => "E0118",
         ResolveErrorKind::GpuInvalidTarget => "E0800",
         ResolveErrorKind::CodegenHintInvalidTarget => "E_CODEGEN_HINT_INVALID_POSITION",
         ResolveErrorKind::CodegenHintOnExternDecl => "E_CODEGEN_HINT_ON_EXTERN_DECL",
-        ResolveErrorKind::DeprecatedOnImpl => "E0241",
-        ResolveErrorKind::DeprecatedOnField => "E0242",
-        ResolveErrorKind::UnknownAttribute => "E0243",
-        ResolveErrorKind::ProfileInvalidTarget => "E0244",
-        ResolveErrorKind::UnknownProfile => "E0245",
+        ResolveErrorKind::DeprecatedOnImpl => "E0119",
+        ResolveErrorKind::DeprecatedOnField => "E0120",
+        ResolveErrorKind::UnknownAttribute => "E0121",
+        ResolveErrorKind::ProfileInvalidTarget => "E0122",
+        ResolveErrorKind::UnknownProfile => "E0123",
         ResolveErrorKind::QueryResolutionConflict => "E_QUERY_RESOLUTION_CONFLICT",
         ResolveErrorKind::UnionNonExhaustiveForbidden => "E_UNION_NON_EXHAUSTIVE_FORBIDDEN",
         ResolveErrorKind::DefaultAttributeInvalidPosition => "E_DEFAULT_ATTRIBUTE_INVALID_POSITION",
@@ -8641,7 +8641,7 @@ fn print_resolve_errors_text(per_module: &[ModuleResolveErrors]) {
 /// string when no replacement is attached). Mirrors the single-file
 /// `print_diagnostics_json` path at the top of this file so IDE quick-fix
 /// consumers see the same payload regardless of how `karac check` was
-/// invoked. Multi-file-only diagnostics (E0223 / E0225) reach IDEs only
+/// invoked. Multi-file-only diagnostics (E0112 / E0113) reach IDEs only
 /// through this path.
 fn replacement_json_tail(err: &crate::resolver::ResolveError) -> String {
     match err.replacement.as_deref() {
@@ -10708,8 +10708,8 @@ fn cmd_debug(input: &str, output: OutputMode) {
 /// would-be rewrites to stdout without touching disk.
 ///
 /// Phases that contribute fixes today:
-/// - Resolver: E0223 (UnknownModule, round 12.29), E0225
-///   (UnknownItemInModule, round 12.28), E0228 (UndefinedName) and E0229
+/// - Resolver: E0112 (UnknownModule, round 12.29), E0113
+///   (UnknownItemInModule, round 12.28), E0100 (UndefinedName) and E0104
 ///   (UndefinedType) — both pre-12-era. All four are `did you mean`
 ///   corrections; the suggestion is a concrete identifier and the error
 ///   span is the misspelled token.

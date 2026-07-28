@@ -703,21 +703,21 @@ pub enum ResolveErrorKind {
     /// level. See design.md § Conversion Traits.
     ImplLevelEffectVarNotAllowed,
     /// `import a.b.c;` — the prefix `a.b` does not match any module in the
-    /// project graph (CR-24 slice 5, `E0224`).
+    /// project graph (CR-24 slice 5, `E0112`).
     UnknownModule,
     /// `import a.b.Item;` — `a.b` exists but has no top-level `Item`, and
-    /// `a.b.Item` is not itself a module (CR-24 slice 5, `E0225`).
+    /// `a.b.Item` is not itself a module (CR-24 slice 5, `E0113`).
     UnknownItemInModule,
     /// Cross-module visibility violation: the imported or referenced item is
     /// declared `private` (same-directory-only) and the importer lives in a
-    /// different directory (CR-24 slice 6, `E0222`).
+    /// different directory (CR-24 slice 6, `E0111`).
     PrivateItemAccess,
     /// `effect resource CompileTimeEnv;` or `effect resource CompileTimeHeap;`
-    /// — these names are reserved for the deferred comptime feature (`E0228`).
+    /// — these names are reserved for the deferred comptime feature (`E0114`).
     ReservedEffectResource,
     /// `#[compiler_builtin]` on an item in user code. The attribute is
     /// reserved for stdlib source baked into the compiler binary
-    /// (CR-202 slice 1). `E0237`.
+    /// (CR-202 slice 1). `E0115`.
     CompilerBuiltinReserved,
     /// `#[non_exhaustive]` placed on an item that does not support it.
     /// The attribute is valid only on `pub struct` and `pub enum`
@@ -732,7 +732,7 @@ pub enum ResolveErrorKind {
     /// declarations also accept it once attribute support on trait
     /// methods lands — that's a separate enabling change). See
     /// design.md § Error Handling > "Stdlib panic-emitters report the
-    /// caller's source location". `E0240`.
+    /// caller's source location". `E0118`.
     TrackCallerInvalidTarget,
     /// `#[gpu]` placed on an item that is not a `fn` declaration. The
     /// attribute is the GPU-subset *constraint* marker — it asserts a
@@ -771,12 +771,12 @@ pub enum ResolveErrorKind {
     /// this with `E_DEPRECATED_ON_IMPL` — impl-level deprecation
     /// would be ambiguous (which methods?); the user should
     /// deprecate the underlying methods individually. See design.md §
-    /// `#[deprecated]` for Item Deprecation. `E0241`.
+    /// `#[deprecated]` for Item Deprecation. `E0119`.
     DeprecatedOnImpl,
     /// `#[deprecated]` placed on a struct *field*. The spec defers
     /// field-level deprecation to post-v1 — use-site detection for
     /// field reads/writes is non-trivial and is bundled with the
-    /// post-v1 lint expansion. `E_DEPRECATED_ON_FIELD`. `E0242`.
+    /// post-v1 lint expansion. `E_DEPRECATED_ON_FIELD`. `E0120`.
     DeprecatedOnField,
     /// `continue label` where `label` refers to a labeled block (rather
     /// than a loop). `continue` is only valid for loop labels — reject
@@ -791,7 +791,7 @@ pub enum ResolveErrorKind {
     /// 2 of the `#[diagnostic::*]` attribute namespace entry; see
     /// design.md § Diagnostic Namespace Attributes and design.md §
     /// Tool-Namespaced Attributes for the bare-vs-namespaced
-    /// discriminator). Mapped to `E_UNKNOWN_ATTRIBUTE` / `E0243`.
+    /// discriminator). Mapped to `E_UNKNOWN_ATTRIBUTE` / `E0121`.
     UnknownAttribute,
     /// Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
     /// Two attributes on the same item resolve the same query in
@@ -867,7 +867,7 @@ pub struct ResolveResult {
 
 /// True iff the module at `path` exposes a top-level item called `name` —
 /// either as a real item or via a `pub import` re-export (slice 7).
-/// Visibility is **not** enforced here — `E0221` / `E0222` layer on top.
+/// Visibility is **not** enforced here — `E0221` / `E0111` layer on top.
 pub(crate) fn module_exposes_name(tree: &ProgramTree, path: &[String], name: &str) -> bool {
     module::module_exposes_item(tree, path, name)
 }
@@ -942,7 +942,7 @@ fn module_top_level_names_for_id(tree: &ProgramTree, id: ModuleId) -> Vec<String
 /// Find the `Visibility` that `name` has when looked up at `path` from an
 /// outside module — following `pub import` re-export chains to the canonical
 /// defining item. Returns `None` when the module or the item does not exist
-/// (the slice-5 `E0224`/`E0225` diagnostics already cover those cases).
+/// (the slice-5 `E0112`/`E0113` diagnostics already cover those cases).
 pub(crate) fn module_item_visibility(
     tree: &ProgramTree,
     path: &[String],
@@ -1024,7 +1024,7 @@ pub struct Resolver<'a> {
     pub(crate) par_sibling_bindings: HashMap<String, Span>,
     /// True iff the program being resolved is the synthetic stdlib package
     /// (baked into the compiler binary by CR-202 slice 3). When false,
-    /// `#[compiler_builtin]` on any item is rejected with `E0237`. The flag
+    /// `#[compiler_builtin]` on any item is rejected with `E0115`. The flag
     /// has no other effect — name resolution semantics are otherwise
     /// identical between user code and stdlib source.
     pub(crate) is_stdlib_source: bool,
@@ -1087,7 +1087,7 @@ impl<'a> Resolver<'a> {
 
     /// Mark the program as stdlib source (the synthetic package baked into
     /// the compiler binary by CR-202 slice 3). When set, `#[compiler_builtin]`
-    /// is permitted; when unset (the default), it is rejected with `E0237`.
+    /// is permitted; when unset (the default), it is rejected with `E0115`.
     pub fn with_stdlib_source(mut self, is_stdlib: bool) -> Self {
         self.is_stdlib_source = is_stdlib;
         self

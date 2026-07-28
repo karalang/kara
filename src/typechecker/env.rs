@@ -390,7 +390,7 @@ pub struct TypeEnv {
     /// — the entry here marks the function as having its body replaced by
     /// Rust dispatch, so `check_items` skips body type-checking and the
     /// interpreter knows not to evaluate the placeholder body. Slice 1's
-    /// resolver gate (`E0237`) prevents user code from getting entries
+    /// resolver gate (`E0115`) prevents user code from getting entries
     /// into this set.
     pub compiler_builtins: HashSet<String>,
     /// `#[must_use]` annotations on free functions and impl methods
