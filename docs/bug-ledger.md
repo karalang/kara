@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 81 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
-| run-vs-build | 40 | 0 |
+| run-vs-build | 41 | 1 |
 | perf | 30 | 1 |
 | crash | 29 | 0 |
 | soundness | 26 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 515 | 3 |
 | typecheck | 87 | 0 |
-| interp | 72 | 0 |
+| interp | 73 | 1 |
 | ownership | 28 | 0 |
 | other | 19 | 0 |
 | autopar | 18 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **705 surfaced · 3 open · 696 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **706 surfaced · 4 open · 696 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | The #127/#126 kata deficit is CANDIDATE GENERATION, not `Map[String, _]` — retitled because this entry's original framing has now been refuted by measurement three separate ways and the old title kept sending readers to the map. What remains under this ID is the unattributed residual after the two `.chars()` loops are accounted for: 1.17x on arm64, and on x86 the whole-program I-ref ratio is now 1.235x (was 1.45x). The map's own microbenchmark gap (~1.94x on lookup) is real but demonstrably NOT what drives either kata. | — |
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
 | B-2026-07-28-5 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): `Option[<shared enum>]` has no kind of its own — `kind_of_ty` special-cases only `Option[String]` and collapses every other `Option[T]` to `Option[i64]`, so an `Option[Expr]` field stores the RC handle as a raw i64 payload, is judged POD, and is never released. Emits invalid IR today; would be a silent leak once that IR is fixed. Blocks ast.kara together with B-2026-07-27-6. | — |
+| B-2026-07-28-10 | 2026-07-28 | interp | medium | INTERP: `Column.from_arrow_ipc` (and the Column constructors generally) ignore the binding's declared element type, so `let c: Column[i64] = Column.from_arrow_ipc(<Utf8 stream>)` yields a Column holding Strings under `karac run`, while `karac build` traps. Run-vs-build divergence on a genuinely ill-typed program. | — |
 
 ### Fixed (696)
 

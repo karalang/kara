@@ -29,14 +29,17 @@
 //! schema order, `Tensor` → a single-row `FixedSizeList[numel]` tagged as the
 //! canonical `arrow.fixed_shape_tensor` extension.
 
+use std::io::Cursor;
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, BooleanArray, FixedSizeListArray, Float64Array, Int64Array, RecordBatch,
-    RecordBatchOptions, StringArray,
+    Array, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
+    LargeStringArray, RecordBatch, RecordBatchOptions, StringArray,
 };
-use arrow_ipc::writer::StreamWriter;
+use arrow_ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow_schema::{DataType, Field, Schema};
+
+use crate::file::{control_alloc_bytes, control_alloc_zeroed};
 
 /// Column element classes as codegen tags them in the DataFrame entry / passes
 /// alongside a bare column control block. Mirrors the table in
@@ -400,5 +403,369 @@ pub unsafe extern "C" fn karac_arrow_tensor_to_ipc(
     match write_ipc(vec![field], vec![Arc::new(list)]) {
         Some(bytes) => emit_buffer(&bytes, out_len),
         None => emit_buffer(&[], out_len),
+    }
+}
+
+// ── Read direction (`from_arrow_ipc`) ───────────────────────────────
+//
+// The inverse of everything above, and the harder half: instead of *walking*
+// a control block the runtime must *build* one, laid out exactly as codegen
+// builds frames itself, so the caller's ordinary cleanup frees the whole
+// graph. `karac_runtime_df_read_csv` established that shape (and the
+// allocation pairing, which is why the two share `control_alloc_*`); these
+// entrypoints reuse it verbatim.
+//
+// Failure is signalled by a NULL return — never a partially-built graph.
+// Both builders allocate a control block unconditionally on success (even for
+// a zero-row column), so null is unambiguous. Codegen turns it into a panic
+// with a static message, the same posture as `Regex.compile`'s Err under AOT.
+
+/// Read the first `RecordBatch` from an IPC stream. `Ok(None)` is an EMPTY
+/// stream — a valid, empty result, not a failure; `Err(())` is a malformed
+/// one. The interpreter's reader draws the line in exactly this place.
+fn read_first_batch(bytes: &[u8]) -> Result<Option<RecordBatch>, ()> {
+    let mut reader = StreamReader::try_new(Cursor::new(bytes), None).map_err(|_| ())?;
+    match reader.next() {
+        Some(b) => Ok(Some(b.map_err(|_| ())?)),
+        None => Ok(None),
+    }
+}
+
+/// Decode one Arrow array into the shared `Slot` model. Applies the same
+/// widening as the interpreter's `arrow_to_col` — Int32 → i64, Float32 → f64,
+/// LargeUtf8 → String — so a column a foreign producer wrote in a narrow form
+/// still loads. `None` for an element type outside the supported set.
+fn arrow_to_slots(col: &dyn Array) -> Option<Vec<Option<Slot>>> {
+    let mut slots: Vec<Option<Slot>> = Vec::with_capacity(col.len());
+
+    // Downcast to a concrete array type, then map each slot through `$ctor`
+    // (a null slot becomes `None`, which every conversion below accepts).
+    macro_rules! collect {
+        ($arr:expr, $ctor:expr) => {{
+            let arr = $arr;
+            for i in 0..arr.len() {
+                slots.push(if arr.is_null(i) {
+                    None
+                } else {
+                    Some($ctor(arr.value(i)))
+                });
+            }
+        }};
+    }
+
+    let any = col.as_any();
+    if let Some(a) = any.downcast_ref::<Int64Array>() {
+        collect!(a, Slot::Int);
+    } else if let Some(a) = any.downcast_ref::<Int32Array>() {
+        collect!(a, |x| Slot::Int(i64::from(x)));
+    } else if let Some(a) = any.downcast_ref::<Float64Array>() {
+        collect!(a, Slot::Float);
+    } else if let Some(a) = any.downcast_ref::<Float32Array>() {
+        collect!(a, |x| Slot::Float(f64::from(x)));
+    } else if let Some(a) = any.downcast_ref::<StringArray>() {
+        collect!(a, |x: &str| Slot::Str(x.to_string()));
+    } else if let Some(a) = any.downcast_ref::<LargeStringArray>() {
+        collect!(a, |x: &str| Slot::Str(x.to_string()));
+    } else if let Some(a) = any.downcast_ref::<BooleanArray>() {
+        collect!(a, Slot::Bool);
+    } else {
+        return None;
+    }
+    Some(slots)
+}
+
+/// Store one decoded slot into a compiled column's data buffer at `row`,
+/// converting to the column's declared `(kind, elem_size)`. `false` means the
+/// stream's element type does not convert to the declared one.
+///
+/// Numeric classes convert freely in both directions (int ↔ float, and any
+/// width — a narrower declared type truncates, the same lossy step `as`
+/// performs in Kāra source). `String` and `bool` convert to nothing but
+/// themselves: silently rendering a number as text, or a string as 0, would
+/// turn a type error into corrupt data.
+///
+/// # Safety
+///
+/// `data` must point to at least `(row + 1) * elem_size` writable bytes.
+unsafe fn write_slot(data: *mut u8, row: usize, elem_size: i64, kind: i64, slot: &Slot) -> bool {
+    let p = data.add(row * elem_size as usize);
+    // Numeric source value, in both models — `None` for a non-numeric slot.
+    let as_int = match slot {
+        Slot::Int(v) => Some(*v),
+        Slot::Float(v) => Some(*v as i64),
+        _ => None,
+    };
+    let as_float = match slot {
+        Slot::Int(v) => Some(*v as f64),
+        Slot::Float(v) => Some(*v),
+        _ => None,
+    };
+    match (kind, elem_size) {
+        (kind::SIGNED | kind::UNSIGNED, 1) => match as_int {
+            Some(v) => *p = v as u8,
+            None => return false,
+        },
+        (kind::SIGNED | kind::UNSIGNED, 2) => match as_int {
+            Some(v) => *(p as *mut u16) = v as u16,
+            None => return false,
+        },
+        (kind::SIGNED | kind::UNSIGNED, 4) => match as_int {
+            Some(v) => *(p as *mut u32) = v as u32,
+            None => return false,
+        },
+        (kind::SIGNED | kind::UNSIGNED, 8) => match as_int {
+            Some(v) => *(p as *mut i64) = v,
+            None => return false,
+        },
+        (kind::FLOAT, 4) => match as_float {
+            Some(v) => *(p as *mut f32) = v as f32,
+            None => return false,
+        },
+        (kind::FLOAT, 8) => match as_float {
+            Some(v) => *(p as *mut f64) = v,
+            None => return false,
+        },
+        (kind::OTHER, 1) => match slot {
+            Slot::Bool(v) => *p = u8::from(*v),
+            _ => return false,
+        },
+        (kind::STRING, _) => match slot {
+            Slot::Str(s) => {
+                // The inline 24-byte `{ ptr, i64 len, i64 cap }`. `cap == len`
+                // marks the heap as owned, which is what makes codegen's
+                // cap-guarded per-cell free reclaim it.
+                let bytes = s.as_bytes();
+                *(p as *mut *mut u8) = control_alloc_bytes(bytes);
+                *(p.add(8) as *mut i64) = bytes.len() as i64;
+                *(p.add(16) as *mut i64) = bytes.len() as i64;
+            }
+            _ => return false,
+        },
+        // Unknown (kind, size) — the write-side `read_slot` table's peer, and
+        // it must be extended in lockstep with it.
+        _ => return false,
+    }
+    true
+}
+
+/// Build a compiled Column control block — `{ ptr data, ptr null_bitmap, i64
+/// len, i64 cap }` — holding `slots` at the declared `(elem_size, kind)`.
+/// `None` if any VALID slot fails to convert.
+///
+/// A null slot never fails, and that is load-bearing rather than incidental:
+/// the write side deliberately falls back to `Int64` for a column with no
+/// valid slot (matching the interpreter, which has no value to key its
+/// element type on). So an empty or all-null `Column[String]` serializes as
+/// Int64, and this is what lets it read back into a `Column[String]` instead
+/// of tripping the String-vs-numeric rejection.
+///
+/// # Safety
+///
+/// The returned pointer, when non-null, owns a graph laid out exactly as
+/// codegen builds it; the caller's ordinary Column cleanup frees it.
+unsafe fn build_column_control(
+    slots: &[Option<Slot>],
+    elem_size: i64,
+    kind: i64,
+) -> Option<*mut u8> {
+    if elem_size <= 0 {
+        return None;
+    }
+    let rows = slots.len();
+    let data = control_alloc_zeroed(rows * elem_size as usize);
+    let bitmap = control_alloc_zeroed(rows.div_ceil(8));
+    for (row, slot) in slots.iter().enumerate() {
+        let Some(slot) = slot else { continue };
+        if !write_slot(data, row, elem_size, kind, slot) {
+            // Free what was built before giving up — the caller gets null and
+            // has nothing to clean up, so this is the only chance.
+            free_partial_column(data, bitmap, row, elem_size, kind);
+            return None;
+        }
+        *bitmap.add(row / 8) |= 1 << (row % 8);
+    }
+    let ctrl = control_alloc_zeroed(32);
+    *(ctrl as *mut *mut u8) = data;
+    *(ctrl.add(8) as *mut *mut u8) = bitmap;
+    *(ctrl.add(16) as *mut i64) = rows as i64;
+    *(ctrl.add(24) as *mut i64) = rows as i64;
+    Some(ctrl)
+}
+
+/// Release a column body abandoned mid-build: the first `written` slots'
+/// String heaps (nothing else in a slot is separately allocated), then the
+/// data and bitmap buffers.
+///
+/// # Safety
+///
+/// `data` / `bitmap` must be `control_alloc_zeroed` allocations, with the
+/// first `written` slots of `data` initialised at `(elem_size, kind)`.
+unsafe fn free_partial_column(
+    data: *mut u8,
+    bitmap: *mut u8,
+    written: usize,
+    elem_size: i64,
+    kind: i64,
+) {
+    if kind == kind::STRING && !data.is_null() {
+        for row in 0..written {
+            let p = data.add(row * elem_size as usize);
+            let sptr = *(p as *mut *mut u8);
+            if !sptr.is_null() {
+                crate::alloc::karac_free_buf(sptr, *(p.add(16) as *const i64) as usize);
+            }
+        }
+    }
+    if !data.is_null() {
+        crate::alloc::karac_free_buf(data, written * elem_size as usize);
+    }
+    if !bitmap.is_null() {
+        crate::alloc::karac_free_buf(bitmap, written.div_ceil(8));
+    }
+}
+
+/// `Column.from_arrow_ipc(bytes) -> Column[T]` — parse a one-field (or
+/// first-field-of-many) Arrow IPC stream into a freshly built `Column`
+/// control block at the call site's declared element type.
+///
+/// Returns null when the stream is malformed, carries an unsupported element
+/// type, or holds values that do not convert to `(elem_size, kind)` — codegen
+/// panics on null.
+///
+/// # Safety
+///
+/// `bytes` must describe `len` readable bytes (or be null with `len <= 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_arrow_column_from_ipc(
+    bytes: *const u8,
+    len: i64,
+    elem_size: i64,
+    kind: i64,
+) -> *mut u8 {
+    let buf: &[u8] = if bytes.is_null() || len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(bytes, len as usize)
+    };
+    // An empty input is an empty column, not a failure — the stream a
+    // zero-length `Vec[u8]` describes has no schema to disagree with.
+    if buf.is_empty() {
+        return build_column_control(&[], elem_size, kind).unwrap_or(core::ptr::null_mut());
+    }
+    let slots = match read_first_batch(buf) {
+        Ok(Some(batch)) if batch.num_columns() > 0 => {
+            match arrow_to_slots(batch.column(0).as_ref()) {
+                Some(s) => s,
+                None => return core::ptr::null_mut(),
+            }
+        }
+        Ok(_) => Vec::new(),
+        Err(()) => return core::ptr::null_mut(),
+    };
+    build_column_control(&slots, elem_size, kind).unwrap_or(core::ptr::null_mut())
+}
+
+/// The compiled `(elem_size, kind)` a `DataFrame` column takes for an Arrow
+/// element type. Every integer width lands on `i64` and every float on `f64`
+/// — which is both `karac_runtime_df_read_csv`'s inference table and the
+/// interpreter's value model, so a frame parsed under either backend has the
+/// same column types. `None` for an unsupported type.
+fn df_column_repr(dt: &DataType) -> Option<(i64, i64)> {
+    Some(match dt {
+        DataType::Int64 | DataType::Int32 => (8, kind::SIGNED),
+        DataType::Float64 | DataType::Float32 => (8, kind::FLOAT),
+        DataType::Utf8 | DataType::LargeUtf8 => (24, kind::STRING),
+        DataType::Boolean => (1, kind::OTHER),
+        _ => return None,
+    })
+}
+
+/// `DataFrame.from_arrow_ipc(bytes) -> DataFrame` — parse an Arrow IPC stream
+/// into a freshly built frame: one column per field, names and types from the
+/// batch schema. Unlike the Column entrypoint nothing is declared at the call
+/// site (a `DataFrame` is not generic), so each column's representation comes
+/// from its Arrow type via `df_column_repr` — no conversion can fail, and the
+/// only rejections are a malformed stream or an unsupported field type.
+///
+/// Returns null on failure; codegen panics on null.
+///
+/// # Safety
+///
+/// `bytes` must describe `len` readable bytes (or be null with `len <= 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_arrow_dataframe_from_ipc(bytes: *const u8, len: i64) -> *mut u8 {
+    let buf: &[u8] = if bytes.is_null() || len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(bytes, len as usize)
+    };
+    // Column name + built control block, held until every column has been
+    // built — a failure part-way through must free the ones already made
+    // rather than leak them behind a null return.
+    let mut built: Vec<(String, *mut u8, i64, i64)> = Vec::new();
+
+    if !buf.is_empty() {
+        let batch = match read_first_batch(buf) {
+            Ok(Some(b)) => Some(b),
+            Ok(None) => None,
+            Err(()) => return core::ptr::null_mut(),
+        };
+        if let Some(batch) = batch {
+            let schema = batch.schema();
+            for i in 0..batch.num_columns() {
+                let arr = batch.column(i);
+                let built_col = df_column_repr(arr.data_type())
+                    .zip(arrow_to_slots(arr.as_ref()))
+                    .and_then(|((elem_size, kind), slots)| {
+                        build_column_control(&slots, elem_size, kind).map(|c| (c, elem_size, kind))
+                    });
+                match built_col {
+                    Some((ctrl, elem_size, kind)) => {
+                        built.push((schema.field(i).name().clone(), ctrl, elem_size, kind))
+                    }
+                    None => {
+                        free_built_columns(&built);
+                        return core::ptr::null_mut();
+                    }
+                }
+            }
+        }
+    }
+
+    // Entries (stride 40: name*, name_len, col_ctrl*, elem_size, kind) and the
+    // frame control block `{ entries, len, capacity }` — `df_read_csv`'s
+    // layout exactly, so `FreeDataFrame` cleanup frees the whole graph.
+    let width = built.len();
+    let entries = control_alloc_zeroed(width * 40);
+    for (ci, (name, ctrl, elem_size, kind)) in built.iter().enumerate() {
+        let e = entries.add(ci * 40);
+        let nbytes = name.as_bytes();
+        *(e as *mut *mut u8) = control_alloc_bytes(nbytes);
+        *(e.add(8) as *mut i64) = nbytes.len() as i64;
+        *(e.add(16) as *mut *mut u8) = *ctrl;
+        *(e.add(24) as *mut i64) = *elem_size;
+        *(e.add(32) as *mut i64) = *kind;
+    }
+    let control = control_alloc_zeroed(24);
+    *(control as *mut *mut u8) = entries;
+    *(control.add(8) as *mut i64) = width as i64;
+    *(control.add(16) as *mut i64) = width as i64;
+    control
+}
+
+/// Release columns built before a later one failed — nothing outside this
+/// function knows they exist, so this is their only cleanup path.
+///
+/// # Safety
+///
+/// Each entry must be a `build_column_control` result at the stated
+/// `(elem_size, kind)`.
+unsafe fn free_built_columns(built: &[(String, *mut u8, i64, i64)]) {
+    for (_, ctrl, elem_size, kind) in built {
+        let data = *(*ctrl as *mut *mut u8);
+        let bitmap = *((*ctrl).add(8) as *mut *mut u8);
+        let rows = *((*ctrl).add(16) as *const i64);
+        free_partial_column(data, bitmap, rows.max(0) as usize, *elem_size, *kind);
+        crate::alloc::karac_free_buf(*ctrl, 32);
     }
 }

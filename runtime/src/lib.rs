@@ -240,6 +240,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(arrow_ipc::karac_arrow_dataframe_to_ipc);
     #[cfg(feature = "arrow")]
     keep!(arrow_ipc::karac_arrow_tensor_to_ipc);
+    #[cfg(feature = "arrow")]
+    keep!(arrow_ipc::karac_arrow_column_from_ipc);
+    #[cfg(feature = "arrow")]
+    keep!(arrow_ipc::karac_arrow_dataframe_from_ipc);
     // String runtime — `clone.rs` methods (trim/case/strip/replace/sorted) and
     // the split/lines FFI (`string_split_ffi` module + crate-root
     // `karac_runtime_string_to_cstring`). Codegen emits these for `String`/`str`

@@ -21854,9 +21854,20 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
     /// empty column and a zero-column frame (the `max(len,1)` corner where
     /// len == 0 but a real allocation still happened), and a Tensor (whose
     /// FixedSizeList wrapper allocates an extra layer).
+    ///
+    /// The read direction inverts the risk: there the RUNTIME builds the
+    /// control-block graph and the compiled caller's ordinary cleanup frees it,
+    /// so any drift from the layout codegen builds itself shows up as a leak or
+    /// a double-free. The String cases carry per-cell heaps (freed through the
+    /// `cap == len` guard) and the frame cases carry a copied name per entry.
+    /// Both temporary-argument round-trips are here too: the intermediate
+    /// `Vec[u8]` has no other owner, so the call site must free it — and only
+    /// after the runtime has read it, which is the ordering a first cut of this
+    /// lowering got wrong (freed at extraction, handing the runtime a dangling
+    /// pointer).
     #[test]
-    fn asan_arrow_to_ipc_no_leak() {
-        let label = "arrow_to_ipc";
+    fn asan_arrow_ipc_no_leak() {
+        let label = "arrow_ipc";
         if !asan_available() {
             eprintln!("[{label}] ASAN unavailable on this host — skipping");
             return;
@@ -21885,6 +21896,29 @@ fn main() {
     let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);
     let b6 = t.to_arrow_ipc();
     total = total + b6.len();
+
+    // Read direction: the runtime BUILDS these graphs (data buffer, validity
+    // bitmap, control block, per-cell String heaps, and for a frame the entry
+    // array + copied names), and only the caller's ordinary Column/DataFrame
+    // cleanup frees them. A layout that doesn't match what codegen builds
+    // itself leaks or double-frees here.
+    let r1: Column[i64] = Column.from_arrow_ipc(b1);
+    total = total + r1.len();
+    let r2: Column[String] = Column.from_arrow_ipc(b2);
+    total = total + r2.len();
+    let r3: Column[i64] = Column.from_arrow_ipc(b3);
+    total = total + r3.len();
+    let r4: DataFrame = DataFrame.from_arrow_ipc(b4);
+    total = total + r4.width();
+    let r5: DataFrame = DataFrame.from_arrow_ipc(b5);
+    total = total + r5.width();
+    // TEMPORARY argument — the round-trip shape. Nothing else owns the
+    // intermediate buffer, so the call site must free it, and only AFTER the
+    // runtime has read it.
+    let r6: Column[String] = Column.from_arrow_ipc(r2.to_arrow_ipc());
+    total = total + r6.len();
+    let r7: DataFrame = DataFrame.from_arrow_ipc(r4.to_arrow_ipc());
+    total = total + r7.width();
     println(total > 0);
 }
 "#;
@@ -21895,8 +21929,8 @@ fn main() {
         assert!(
             status.success(),
             "[{label}] ASAN reported a memory error (exit code {:?}) — check the \
-             karac_arrow_*_to_ipc buffer adoption (cap = max(len, 1)) and the \
-             Vec[u8] drop",
+             karac_arrow_*_to_ipc buffer adoption (cap = max(len, 1)), the \
+             from_ipc control-block layout, and the temp-argument free ordering",
             status.code()
         );
         assert_eq!(

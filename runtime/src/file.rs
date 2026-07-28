@@ -1023,7 +1023,11 @@ fn csv_split_records(text: &str) -> Result<Vec<Vec<Option<String>>>, String> {
 /// malloc-compatible allocation of `size` bytes (8-aligned), zeroed.
 /// Freed by codegen's `free` (the same pairing `fs_read_lines` relies on).
 /// Returns null for `size == 0` — codegen's frees are null-guarded.
-unsafe fn df_alloc_zeroed(size: usize) -> *mut u8 {
+///
+/// Shared with `arrow_ipc`'s `from_arrow_ipc` builders: both construct
+/// control-block graphs laid out exactly as codegen builds them itself, so
+/// they must allocate through the same pairing.
+pub(crate) unsafe fn control_alloc_zeroed(size: usize) -> *mut u8 {
     if size == 0 {
         return ptr::null_mut();
     }
@@ -1036,7 +1040,8 @@ unsafe fn df_alloc_zeroed(size: usize) -> *mut u8 {
 }
 
 /// Copy `bytes` into a fresh malloc-compatible buffer (null for empty).
-unsafe fn df_alloc_bytes(bytes: &[u8]) -> *mut u8 {
+/// Shared with `arrow_ipc` — see `control_alloc_zeroed`.
+pub(crate) unsafe fn control_alloc_bytes(bytes: &[u8]) -> *mut u8 {
     if bytes.is_empty() {
         return ptr::null_mut();
     }
@@ -1125,7 +1130,7 @@ pub unsafe extern "C" fn karac_runtime_df_read_csv(
     let rows = records.len() - 1;
 
     // Build entries (stride 40: name*, name_len, col_ctrl*, elem_size, kind).
-    let entries = df_alloc_zeroed(width * 40);
+    let entries = control_alloc_zeroed(width * 40);
     for (ci, name) in names.iter().enumerate() {
         let cells: Vec<&Option<String>> = records.iter().skip(1).map(|r| &r[ci]).collect();
         let all_i64 = cells
@@ -1144,8 +1149,8 @@ pub unsafe extern "C" fn karac_runtime_df_read_csv(
         };
         // Data buffer + validity bitmap (bit i = valid). Zero-initialized,
         // so NULL slots need no store and String NULLs are `{null,0,0}`.
-        let data = df_alloc_zeroed(rows * elem_size);
-        let bitmap = df_alloc_zeroed(rows.div_ceil(8));
+        let data = control_alloc_zeroed(rows * elem_size);
+        let bitmap = control_alloc_zeroed(rows.div_ceil(8));
         for (ri, cell) in cells.iter().enumerate() {
             let Some(s) = cell.as_ref() else { continue };
             *bitmap.add(ri / 8) |= 1 << (ri % 8);
@@ -1155,14 +1160,14 @@ pub unsafe extern "C" fn karac_runtime_df_read_csv(
                 3 => *(p as *mut f64) = s.parse::<f64>().unwrap(),
                 _ => {
                     let bytes = s.as_bytes();
-                    *(p as *mut *mut u8) = df_alloc_bytes(bytes);
+                    *(p as *mut *mut u8) = control_alloc_bytes(bytes);
                     *(p.add(8) as *mut i64) = bytes.len() as i64;
                     *(p.add(16) as *mut i64) = bytes.len() as i64; // cap == len → owned
                 }
             }
         }
         // Column control {data, bitmap, len, cap}.
-        let ctrl = df_alloc_zeroed(32);
+        let ctrl = control_alloc_zeroed(32);
         *(ctrl as *mut *mut u8) = data;
         *(ctrl.add(8) as *mut *mut u8) = bitmap;
         *(ctrl.add(16) as *mut i64) = rows as i64;
@@ -1170,14 +1175,14 @@ pub unsafe extern "C" fn karac_runtime_df_read_csv(
         // Entry.
         let e = entries.add(ci * 40);
         let nbytes = name.as_bytes();
-        *(e as *mut *mut u8) = df_alloc_bytes(nbytes);
+        *(e as *mut *mut u8) = control_alloc_bytes(nbytes);
         *(e.add(8) as *mut i64) = nbytes.len() as i64;
         *(e.add(16) as *mut *mut u8) = ctrl;
         *(e.add(24) as *mut i64) = elem_size as i64;
         *(e.add(32) as *mut i64) = kind;
     }
     // DataFrame control {entries, len, capacity}.
-    let control = df_alloc_zeroed(24);
+    let control = control_alloc_zeroed(24);
     *(control as *mut *mut u8) = entries;
     *(control.add(8) as *mut i64) = width as i64;
     *(control.add(16) as *mut i64) = width as i64;

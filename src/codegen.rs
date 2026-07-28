@@ -4988,6 +4988,34 @@ impl<'ctx> Codegen<'ctx> {
             ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
             Some(Linkage::External),
         );
+        //   `*mut u8 karac_arrow_column_from_ipc(*const u8 bytes, i64 len,
+        //    i64 elem_size, i64 kind)` — the read direction: parse a stream and
+        //    BUILD a Column control block at the declared element type (the
+        //    element type lives in the Kāra type, not in the stream, so it has
+        //    to cross). Returns NULL on a malformed stream / a non-converting
+        //    element type — never a partial graph; codegen guards on null.
+        module.add_function(
+            "karac_arrow_column_from_ipc",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        //   `*mut u8 karac_arrow_dataframe_from_ipc(*const u8 bytes, i64 len)`
+        //    — builds the whole frame graph. No element description crosses:
+        //    a `DataFrame` is not generic, so each column's representation is
+        //    derived from its Arrow type. NULL on failure, as above.
+        module.add_function(
+            "karac_arrow_dataframe_from_ipc",
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+            Some(Linkage::External),
+        );
         //   `*mut u8 karac_arrow_tensor_to_ipc(*const u8 t_ptr, i64 elem_size,
         //    i64 kind, *mut i64 out_len)` — the `arrow.fixed_shape_tensor`
         //    extension. Rank and dims come from the tensor block's own header,

@@ -2351,7 +2351,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Branch-to-panic guard: continue in a fresh block when `ok`,
     /// panic with `message` otherwise.
-    fn emit_tensor_guard(&mut self, ok: IntValue<'ctx>, message: &str) -> Result<(), String> {
+    pub(super) fn emit_tensor_guard(
+        &mut self,
+        ok: IntValue<'ctx>,
+        message: &str,
+    ) -> Result<(), String> {
         let fn_val = self
             .current_fn
             .ok_or_else(|| "tensor guard outside function".to_string())?;

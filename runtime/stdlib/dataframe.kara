@@ -178,7 +178,11 @@ impl DataFrame {
     // Parse an Arrow IPC stream (`Vec[u8]`) into a table — the round-trip peer
     // of `to_arrow_ipc`. One Column per field; names and per-column types come
     // from the batch schema. The reader also accepts Int32/Float32 (widened)
-    // and LargeUtf8 so a foreign producer's batch still loads.
+    // and LargeUtf8 so a foreign producer's batch still loads. Unlike
+    // `Column.from_arrow_ipc` nothing is declared at the call site (a
+    // `DataFrame` is not generic), so no conversion can fail — the only
+    // runtime errors are a malformed stream or a field type outside the
+    // supported set. Works under `karac build` as well as the interpreter.
     #[compiler_builtin]
     fn from_arrow_ipc(bytes: Vec[u8]) -> DataFrame {
         DataFrame.new()

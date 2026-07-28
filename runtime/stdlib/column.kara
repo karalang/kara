@@ -165,7 +165,13 @@ impl[T] Column[T] {
     // Parse an Arrow IPC stream (`Vec[u8]`) into a column — the round-trip peer
     // of `to_arrow_ipc`. Reads the first RecordBatch's first column. `T` is
     // supplied by the call-site expected type (`let c: Column[i64] =
-    // Column.from_arrow_ipc(bytes)`), like `Column.new`.
+    // Column.from_arrow_ipc(bytes)`), like `Column.new`. Under `karac build`
+    // the runtime builds the column at that declared type, so a stream whose
+    // element type does not convert to it is a runtime error — numeric types
+    // convert freely (widening or narrowing), while `String` and `bool`
+    // convert only to themselves. A null slot never converts, which is what
+    // lets an empty / all-null column (serialized as Int64 by the write side's
+    // fallback) read back at any `T`.
     #[compiler_builtin]
     fn from_arrow_ipc(bytes: Vec[u8]) -> Column[T] {
         Column { handle_id: 0 }

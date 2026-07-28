@@ -527,17 +527,17 @@ mod codegen_tests {
 
     #[test]
     fn arrow_ipc_builtins_rejected_by_codegen() {
-        // Arrow IPC interchange. The WRITE direction (`to_arrow_ipc`) now has
-        // AOT twins for all three receivers, so each must COMPILE to its
-        // runtime call; the PARSE direction (`from_arrow_ipc`) is still
-        // interpreter-only and must be REJECTED with an actionable message
-        // rather than silently miscompiled. Rejection is the important half:
-        // as an ASSOC call, `from_arrow_ipc` would otherwise fall through to
-        // the `const 0` default and return the integer 0 in place of a
-        // `Column`/`DataFrame`/`Tensor` (the B-2026-07-18-20 run-vs-build
+        // Arrow IPC interchange. The WRITE direction, and the READ direction
+        // for the two TABULAR receivers, now have AOT twins — each must
+        // COMPILE to its runtime call. `Tensor.from_arrow_ipc` is the one leg
+        // still interpreter-only, and it must be REJECTED with an actionable
+        // message rather than silently miscompiled: as an ASSOC call it would
+        // otherwise fall through to the `const 0` default and return the
+        // integer 0 in place of a `Tensor` (the B-2026-07-18-20 run-vs-build
         // divergence class). `karac run` routes these programs to the
         // interpreter. Byte-parity of the write direction is asserted by
-        // `test_e2e_*_to_arrow_ipc_matches_interpreter_bytes`.
+        // `test_e2e_to_arrow_ipc_matches_interpreter_bytes`; the read
+        // direction's round-trip by `test_e2e_from_arrow_ipc_round_trips`.
         for (to_ipc, sym) in [
             (
                 "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
@@ -561,30 +561,37 @@ mod codegen_tests {
             assert!(ir.contains(sym), "to_arrow_ipc must lower to `{sym}`");
         }
 
-        for (from_ipc, ty) in [
+        // Read direction, tabular receivers — these now lower too.
+        for (from_ipc, sym) in [
             (
                 "fn main() { let bytes: Vec[u8] = Vec.new(); \
                  let d: Column[i64] = Column.from_arrow_ipc(bytes); println(d.len()); }",
-                "Column.from_arrow_ipc",
+                "karac_arrow_column_from_ipc",
             ),
             (
                 "fn main() { let bytes: Vec[u8] = Vec.new(); \
                  let d = DataFrame.from_arrow_ipc(bytes); println(d.height()); }",
-                "DataFrame.from_arrow_ipc",
-            ),
-            (
-                "fn main() { let bytes: Vec[u8] = Vec.new(); \
-                 let t: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(bytes); println(t.rank()); }",
-                "Tensor.from_arrow_ipc",
+                "karac_arrow_dataframe_from_ipc",
             ),
         ] {
-            let err = ir_result(from_ipc).expect_err("from_arrow_ipc must be rejected by codegen");
-            assert!(
-                err.contains(&format!("`{ty}(...)` is interpreter-only")),
-                "got: {err}"
-            );
-            assert!(err.contains("silently return 0"), "got: {err}");
+            let ir = ir_result(from_ipc)
+                .unwrap_or_else(|e| panic!("{sym}: from_arrow_ipc has a codegen twin: {e}"));
+            assert!(ir.contains(sym), "from_arrow_ipc must lower to `{sym}`");
         }
+
+        // `Tensor.from_arrow_ipc` — the remaining deferral. Unlike the tabular
+        // pair it must also reconcile the stream's shape metadata against the
+        // receiver's declared shape, which is why it lands separately.
+        let err = ir_result(
+            "fn main() { let bytes: Vec[u8] = Vec.new(); \
+             let t: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(bytes); println(t.rank()); }",
+        )
+        .expect_err("Tensor.from_arrow_ipc must be rejected by codegen");
+        assert!(
+            err.contains("`Tensor.from_arrow_ipc(...)` is interpreter-only"),
+            "got: {err}"
+        );
+        assert!(err.contains("silently return 0"), "got: {err}");
     }
 
     #[test]
@@ -719,6 +726,126 @@ mod codegen_tests {
                     aot, expected,
                     "{label}: AOT `to_arrow_ipc` must emit byte-identical \
                      Arrow IPC to the interpreter (len + checksum)",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_e2e_from_arrow_ipc_round_trips() {
+        // Phase-11 Arrow IPC read direction — `karac_arrow_column_from_ipc` /
+        // `karac_arrow_dataframe_from_ipc` parse a stream and BUILD the
+        // control-block graph codegen would have built itself.
+        //
+        // The oracle is again the in-process interpreter, but the assertion is
+        // stronger than the write direction's: each case round-trips through
+        // `to_arrow_ipc` and then reads VALUES back out, so a graph that is
+        // merely well-formed (right length, freeable) but holds the wrong
+        // bytes still fails. Sums and null counts, not just shapes.
+        //
+        // Cases target where the two directions can disagree:
+        //
+        //   * **Declared vs. stream type** — the stream carries Int64/Float64
+        //     regardless of the column's declared width (the write side's
+        //     widening rule), so reading into `Column[i32]` / `Column[f32]`
+        //     exercises the narrowing half of the conversion.
+        //   * **Nulls** — a null slot must stay null through both directions
+        //     and must never attempt a conversion.
+        //   * **The all-null Int64 fallback** — an empty `Column[String]`
+        //     serializes as Int64; reading it back into `Column[String]` only
+        //     works because a null (or absent) slot bypasses the
+        //     String-vs-numeric rejection.
+        //   * **Frame reconstruction** — names, order, and per-column types
+        //     all come from the schema, and a String column additionally
+        //     allocates a per-cell heap the frame must own.
+        //   * **Temporary argument** — `from(to())` in one expression: the
+        //     intermediate buffer has no other owner, so the call site frees
+        //     it, and only after the runtime has read it.
+        let cases = [
+            (
+                "column i64 with nulls",
+                "let mut c: Column[i64] = Column.new();\n\
+                 c.push(10); c.push(20); c.push_null(); c.push(40);\n\
+                 let b = c.to_arrow_ipc();\n\
+                 let r: Column[i64] = Column.from_arrow_ipc(b);\n\
+                 println(r.len()); println(r.null_count()); println(r.sum());",
+            ),
+            (
+                "column i32 (narrowing back from the Int64 stream)",
+                "let c: Column[i32] = Column.from_vec([1i32, -2i32, 3i32]);\n\
+                 let r: Column[i32] = Column.from_arrow_ipc(c.to_arrow_ipc());\n\
+                 println(r.len()); println(r.sum());",
+            ),
+            (
+                "column f32 (narrowing back from the Float64 stream)",
+                "let c: Column[f32] = Column.from_vec([1.5f32, 2.25f32]);\n\
+                 let r: Column[f32] = Column.from_arrow_ipc(c.to_arrow_ipc());\n\
+                 println(r.len()); println(r.sum());",
+            ),
+            (
+                "column String",
+                "let c: Column[String] = Column.from_vec([\"alpha\", \"beta\"]);\n\
+                 let b = c.to_arrow_ipc();\n\
+                 let r: Column[String] = Column.from_arrow_ipc(b);\n\
+                 println(r.len()); println(r.null_count());",
+            ),
+            (
+                "column bool",
+                "let c: Column[bool] = Column.from_vec([true, false, true]);\n\
+                 let r: Column[bool] = Column.from_arrow_ipc(c.to_arrow_ipc());\n\
+                 println(r.len()); println(r.null_count());",
+            ),
+            (
+                "column empty String (all-null Int64 fallback must be accepted)",
+                "let c: Column[String] = Column.new();\n\
+                 let r: Column[String] = Column.from_arrow_ipc(c.to_arrow_ipc());\n\
+                 println(r.len()); println(r.null_count());",
+            ),
+            (
+                "dataframe i64 + f64 + String",
+                "let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"age\", Column.from_vec([30i64, 25i64, 41i64]));\n\
+                 df.insert(\"score\", Column.from_vec([91.5, 78.25, 88.0]));\n\
+                 df.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"eve\"]));\n\
+                 let r: DataFrame = DataFrame.from_arrow_ipc(df.to_arrow_ipc());\n\
+                 println(r.width()); println(r.height());",
+            ),
+            (
+                "dataframe nullable + bool",
+                "let mut df: DataFrame = DataFrame.new();\n\
+                 let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+                 df.insert(\"nullable\", Column.from_iter_nullable(nn));\n\
+                 df.insert(\"flag\", Column.from_vec([true, false, true]));\n\
+                 let r: DataFrame = DataFrame.from_arrow_ipc(df.to_arrow_ipc());\n\
+                 println(r.width()); println(r.height());",
+            ),
+            (
+                "dataframe zero columns",
+                "let df: DataFrame = DataFrame.new();\n\
+                 let r: DataFrame = DataFrame.from_arrow_ipc(df.to_arrow_ipc());\n\
+                 println(r.width()); println(r.height());",
+            ),
+            (
+                "double round-trip (a parsed graph must re-serialize)",
+                "let c: Column[i64] = Column.from_vec([7i64, 8i64, 9i64]);\n\
+                 let r1: Column[i64] = Column.from_arrow_ipc(c.to_arrow_ipc());\n\
+                 let r2: Column[i64] = Column.from_arrow_ipc(r1.to_arrow_ipc());\n\
+                 println(r2.len()); println(r2.sum());",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!("fn main() {{\n{body}\n}}");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errors: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, expected,
+                    "{label}: AOT `from_arrow_ipc` must reconstruct the same \
+                     values the interpreter does",
                 );
             }
         }

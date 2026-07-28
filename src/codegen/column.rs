@@ -837,6 +837,14 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             "from_vec" => self.compile_column_from_vec(info.elem, args),
             "from_iter_nullable" => self.compile_column_from_iter_nullable(info.elem, args),
+            // Arrow IPC read direction — the runtime parses the stream and
+            // builds the control block at the declared `(elem_size, kind)`.
+            // See `src/codegen/arrow.rs`.
+            "from_arrow_ipc" => {
+                let elem_size = self.column_elem_size(info.elem)?;
+                let kind = self.dataframe_kind_for_info(&info);
+                self.compile_arrow_column_from_ipc(args, elem_size, kind)
+            }
             other => Err(format!("unknown Column constructor '{}'", other)),
         }
     }
