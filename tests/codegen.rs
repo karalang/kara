@@ -527,26 +527,44 @@ mod codegen_tests {
 
     #[test]
     fn arrow_ipc_builtins_rejected_by_codegen() {
-        // Arrow IPC interchange (`Column.to_arrow_ipc` / `Column.from_arrow_ipc`)
-        // is interpreter-only — codegen must REJECT it with an actionable
-        // message rather than silently miscompile. `from_arrow_ipc` is the
-        // important case: as an ASSOC call it would otherwise fall through to the
-        // `const 0` default and return the integer 0 in place of a `Column` (the
-        // B-2026-07-18-20 run-vs-build divergence class). `karac run` routes
-        // these programs to the interpreter.
-        let to_ipc = "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
-                      let b = c.to_arrow_ipc(); println(b.len()); }";
-        let err = ir_result(to_ipc).expect_err("to_arrow_ipc must be rejected by codegen");
-        assert!(err.contains("interpreter-only in Arrow IPC"), "got: {err}");
+        // Arrow IPC interchange (`Column`/`DataFrame` `to_arrow_ipc` /
+        // `from_arrow_ipc`) is interpreter-only — codegen must REJECT it with an
+        // actionable message rather than silently miscompile. `from_arrow_ipc`
+        // is the important case: as an ASSOC call it would otherwise fall
+        // through to the `const 0` default and return the integer 0 in place of
+        // a `Column`/`DataFrame` (the B-2026-07-18-20 run-vs-build divergence
+        // class). `karac run` routes these programs to the interpreter.
+        for to_ipc in [
+            "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
+             let b = c.to_arrow_ipc(); println(b.len()); }",
+            "fn main() { let mut d = DataFrame.new(); \
+             d.insert(\"x\", Column.from_vec([1, 2])); \
+             let b = d.to_arrow_ipc(); println(b.len()); }",
+        ] {
+            let err = ir_result(to_ipc).expect_err("to_arrow_ipc must be rejected by codegen");
+            assert!(err.contains("Arrow IPC interchange"), "got: {err}");
+            assert!(err.contains("interpreter-only"), "got: {err}");
+        }
 
-        let from_ipc = "fn main() { let bytes: Vec[u8] = Vec.new(); \
-                        let d: Column[i64] = Column.from_arrow_ipc(bytes); println(d.len()); }";
-        let err = ir_result(from_ipc).expect_err("from_arrow_ipc must be rejected by codegen");
-        assert!(
-            err.contains("`Column.from_arrow_ipc(...)` is interpreter-only"),
-            "got: {err}"
-        );
-        assert!(err.contains("silently return 0"), "got: {err}");
+        for (from_ipc, ty) in [
+            (
+                "fn main() { let bytes: Vec[u8] = Vec.new(); \
+                 let d: Column[i64] = Column.from_arrow_ipc(bytes); println(d.len()); }",
+                "Column.from_arrow_ipc",
+            ),
+            (
+                "fn main() { let bytes: Vec[u8] = Vec.new(); \
+                 let d = DataFrame.from_arrow_ipc(bytes); println(d.height()); }",
+                "DataFrame.from_arrow_ipc",
+            ),
+        ] {
+            let err = ir_result(from_ipc).expect_err("from_arrow_ipc must be rejected by codegen");
+            assert!(
+                err.contains(&format!("`{ty}(...)` is interpreter-only")),
+                "got: {err}"
+            );
+            assert!(err.contains("silently return 0"), "got: {err}");
+        }
     }
 
     #[test]

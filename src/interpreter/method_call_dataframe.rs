@@ -413,6 +413,20 @@ impl<'a> super::Interpreter<'a> {
                     Err(e) => io_err_value(io_error_from_std(&e)),
                 })
             }
+            // Serialize the whole table to an Arrow IPC stream (`Vec[u8]`) — one
+            // RecordBatch, one field per column (name = column name, in schema
+            // order), interoperable with any Arrow reader (pyarrow / polars /
+            // DuckDB). Pure in-memory (no FileSystem effect, unlike write_csv);
+            // an arrow-side failure surfaces as an ordinary runtime error. The
+            // binary sibling of `write_csv`; round-trips through
+            // `DataFrame.from_arrow_ipc`. See `src/interpreter/arrow_ipc.rs`.
+            "to_arrow_ipc" => {
+                let cols = columns.read().unwrap();
+                match super::arrow_ipc::dataframe_to_ipc(&cols) {
+                    Ok(bytes) => Some(super::method_call_column::bytes_to_value(bytes)),
+                    Err(e) => Some(self.record_runtime_error(e, span)),
+                }
+            }
             // Start a lazy query: a LazyFrame holding a live VIEW of this
             // frame's column list (the same Arc — eager mutations before
             // collect are visible, the Column view semantics) and an empty

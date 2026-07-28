@@ -157,6 +157,32 @@ impl DataFrame {
         Err(IoError.Other("placeholder"))
     }
 
+    // --- Arrow IPC interchange (phase-11 Arrow IPC). ---
+    // Serialize the whole table to the Apache Arrow **IPC stream** format — one
+    // RecordBatch with one field per column (name = column name, in schema
+    // order), interoperable with any Arrow reader (pyarrow `ipc.open_stream`,
+    // polars, DuckDB). The binary sibling of `write_csv`, and the canonical
+    // Arrow tabular mapping. Per-column element types: `i64` (Int64), `f64`
+    // (Float64), `String` (Utf8), `bool` (Boolean); each column's validity
+    // bitmap maps to Arrow's null buffer. Pure in-memory (no FileSystem
+    // effect). Round-trips through `from_arrow_ipc`. Interpreter reference impl
+    // in `src/interpreter/arrow_ipc.rs`; codegen + the runtime
+    // `libkarac_runtime_arrow.a` archive are a later slice — `karac run` routes
+    // an arrow program to the interpreter until then.
+    #[compiler_builtin]
+    fn to_arrow_ipc(ref self) -> Vec[u8] {
+        Vec.new()
+    }
+
+    // Parse an Arrow IPC stream (`Vec[u8]`) into a table — the round-trip peer
+    // of `to_arrow_ipc`. One Column per field; names and per-column types come
+    // from the batch schema. The reader also accepts Int32/Float32 (widened)
+    // and LargeUtf8 so a foreign producer's batch still loads.
+    #[compiler_builtin]
+    fn from_arrow_ipc(bytes: Vec[u8]) -> DataFrame {
+        DataFrame.new()
+    }
+
     // Start a lazy query over this table (phase-11 `LazyDataFrame`,
     // Option A v1 — slice 1). Returns a `LazyFrame` recording a logical
     // plan over a VIEW of this table's columns; nothing executes until

@@ -1011,6 +1011,56 @@ impl<'a> super::Interpreter<'a> {
                         }),
                     };
                 }
+                // Phase-11 Arrow IPC — parse a `Vec[u8]` IPC stream into a table
+                // (the inverse of `df.to_arrow_ipc`): one Column per field, names
+                // and per-column types from the batch schema. Pure in-memory (no
+                // FileSystem effect, unlike read_csv); an arrow-side failure
+                // surfaces as an ordinary runtime error. See
+                // `src/interpreter/arrow_ipc.rs`.
+                "DataFrame.from_arrow_ipc" => {
+                    let bytes = match args.first() {
+                        Some(arg) => {
+                            let v = self.eval_expr_inner(&arg.value);
+                            match super::method_call_column::value_to_bytes(&v) {
+                                Some(b) => b,
+                                None => {
+                                    return self.record_runtime_error(
+                                        "DataFrame.from_arrow_ipc expects a Vec[u8] byte buffer",
+                                        span,
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            return self.record_runtime_error(
+                                "DataFrame.from_arrow_ipc expects a Vec[u8] byte buffer",
+                                span,
+                            );
+                        }
+                    };
+                    return match super::arrow_ipc::dataframe_from_ipc(&bytes) {
+                        Ok(cols) => {
+                            let columns: Vec<(String, Value)> = cols
+                                .into_iter()
+                                .map(|(name, data, valid)| {
+                                    (
+                                        name,
+                                        Value::Column {
+                                            data: std::sync::Arc::new(std::sync::RwLock::new(data)),
+                                            valid: std::sync::Arc::new(std::sync::RwLock::new(
+                                                valid,
+                                            )),
+                                        },
+                                    )
+                                })
+                                .collect();
+                            Value::DataFrame {
+                                columns: std::sync::Arc::new(std::sync::RwLock::new(columns)),
+                            }
+                        }
+                        Err(msg) => self.record_runtime_error(msg, span),
+                    };
+                }
                 "Semaphore.new" => {
                     if let Some(v) = self.eval_semaphore_new(args) {
                         return v;

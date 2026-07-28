@@ -490,6 +490,21 @@ impl<'ctx> super::Codegen<'ctx> {
         if type_name == "DataFrame" && method == "new" {
             return self.compile_dataframe_new();
         }
+        // Arrow IPC interchange is interpreter-only (same posture as
+        // `Column.from_arrow_ipc` above). Without this arm `DataFrame`'s
+        // `from_arrow_ipc` (an ASSOC call) falls through to the silent
+        // `Ok(const 0)` tail and MISCOMPILES a DataFrame to the integer 0 —
+        // the B-2026-07-18-20 run-vs-build divergence class. `karac run` routes
+        // Arrow IPC programs to the interpreter; give a loud error under `build`.
+        if type_name == "DataFrame" && method == "from_arrow_ipc" {
+            return Err(format!(
+                "codegen: `DataFrame.{method}(...)` is interpreter-only (AOT codegen + \
+                 the `libkarac_runtime_arrow.a` archive are a later slice); run with \
+                 `karac run` (which routes Arrow IPC programs to the tree-walk interpreter) \
+                 or `karac run --interp`. Emitting it under `karac build` would silently \
+                 return 0."
+            ));
+        }
         // Phase 6 line 218 slice 5: `TaskGroup.new()` — allocate a
         // runtime-side group via `karac_runtime_taskgroup_new()` and
         // wrap the returned pointer (cast to i64) as `TaskGroup { id: <i64> }`.

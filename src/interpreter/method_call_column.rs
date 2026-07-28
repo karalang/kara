@@ -75,17 +75,19 @@ fn none_value() -> Value {
 }
 
 /// Wrap a raw byte buffer as a `Vec[u8]` value (the interpreter's `Value::Array`
-/// of `Value::Int`, 0..=255) — the return shape of `Column.to_arrow_ipc`.
-fn bytes_to_value(bytes: Vec<u8>) -> Value {
+/// of `Value::Int`, 0..=255) — the return shape of `Column.to_arrow_ipc` (and
+/// `DataFrame.to_arrow_ipc`, hence `pub(super)`).
+pub(super) fn bytes_to_value(bytes: Vec<u8>) -> Value {
     Value::Array(Arc::new(RwLock::new(
         bytes.into_iter().map(|b| Value::Int(b as i64)).collect(),
     )))
 }
 
 /// Read a `Vec[u8]` value back into a raw byte buffer — the arg shape of
-/// `Column.from_arrow_ipc`. `None` if the value is not an array of integer
-/// bytes (the typechecker enforces `Vec[u8]`, so this is defensive).
-fn value_to_bytes(v: &Value) -> Option<Vec<u8>> {
+/// `Column.from_arrow_ipc` (and `DataFrame.from_arrow_ipc`, hence `pub(super)`).
+/// `None` if the value is not an array of integer bytes (the typechecker
+/// enforces `Vec[u8]`, so this is defensive).
+pub(super) fn value_to_bytes(v: &Value) -> Option<Vec<u8>> {
     match v {
         Value::Array(a) => {
             let g = a.read().unwrap();

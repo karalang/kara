@@ -3899,6 +3899,54 @@ fn test_column_arrow_ipc_roundtrip_bool() {
     assert_eq!(out, "4\n1\ntrue\nfalse\ntrue\n");
 }
 
+// A whole `DataFrame` serializes to a multi-field Arrow IPC RecordBatch (one
+// field per column, name = column name) and round-trips column names,
+// per-column element types, and values — the canonical Arrow tabular mapping.
+#[test]
+fn test_dataframe_arrow_ipc_roundtrip_types_and_names() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df = DataFrame.new();\n\
+             df.insert(\"id\", Column.from_vec([10, 20, 30]));\n\
+             df.insert(\"score\", Column.from_vec([1.5, 2.5, 3.5]));\n\
+             let bytes = df.to_arrow_ipc();\n\
+             let d = DataFrame.from_arrow_ipc(bytes);\n\
+             println(d.width());\n\
+             println(d.height());\n\
+             let id: Column[i64] = d.column(\"id\");\n\
+             println(id.sum());\n\
+             let score: Column[f64] = d.column(\"score\");\n\
+             println(score.sum());\n\
+         }",
+    );
+    // 2 columns, 3 rows; i64 sum 60, f64 sum 7.5 — types and names preserved.
+    assert_eq!(out, "2\n3\n60\n7.5\n");
+}
+
+// A DataFrame with a nullable String column round-trips the null pattern and
+// string values through the batch.
+#[test]
+fn test_dataframe_arrow_ipc_roundtrip_string_nulls() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut names: Column[String] = Column.new();\n\
+             names.push(\"ann\"); names.push_null(); names.push(\"cat\");\n\
+             let mut df = DataFrame.new();\n\
+             df.insert(\"name\", names);\n\
+             let bytes = df.to_arrow_ipc();\n\
+             let d = DataFrame.from_arrow_ipc(bytes);\n\
+             let n: Column[String] = d.column(\"name\");\n\
+             println(n.len());\n\
+             println(n.null_count());\n\
+             println(n.is_null(1));\n\
+             let vals = n.iter_valid();\n\
+             println(vals[0]);\n\
+             println(vals[1]);\n\
+         }",
+    );
+    assert_eq!(out, "3\n1\ntrue\nann\ncat\n");
+}
+
 #[test]
 fn test_column_narrow_element_binop_in_range_ok() {
     // Non-overflowing narrow element ops keep working after the peel.
