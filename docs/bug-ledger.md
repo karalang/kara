@@ -100,22 +100,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 42 | 0 |
 | run-vs-build | 42 | 2 |
 | perf | 30 | 1 |
-| crash | 29 | 0 |
+| crash | 30 | 1 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
-| use-after-free | 11 | 1 |
+| use-after-free | 11 | 0 |
 | other | 4 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 517 | 4 |
+| codegen | 517 | 3 |
 | typecheck | 87 | 0 |
 | interp | 73 | 1 |
 | ownership | 28 | 0 |
 | other | 19 | 0 |
-| autopar | 18 | 0 |
+| autopar | 19 | 1 |
 | runtime | 15 | 1 |
 | cli | 15 | 0 |
 | resolver | 11 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **708 surfaced · 5 open · 697 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **709 surfaced · 5 open · 698 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,12 +133,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **708 surfaced 
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | The #127/#126 kata deficit is CANDIDATE GENERATION, not `Map[String, _]` — retitled because this entry's original framing has now been refuted by measurement three separate ways and the old title kept sending readers to the map. What remains under this ID is the unattributed residual after the two `.chars()` loops are accounted for: 1.17x on arm64, and on x86 the whole-program I-ref ratio is now 1.235x (was 1.45x). The map's own microbenchmark gap (~1.94x on lookup) is real but demonstrably NOT what drives either kata. | — |
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
 | B-2026-07-28-10 | 2026-07-28 | interp | medium | INTERP: `Column.from_arrow_ipc` (and the Column constructors generally) ignore the binding's declared element type, so `let c: Column[i64] = Column.from_arrow_ipc(<Utf8 stream>)` yields a Column holding Strings under `karac run`, while `karac build` traps. Run-vs-build divergence on a genuinely ill-typed program. | — |
-| B-2026-07-28-11 | 2026-07-28 | codegen | high | CODEGEN: `Vec[<struct carrying a shared handle>].clone()` does not retain the cloned elements' handles, so the clone's drop and the original's drop both release — use-after-free on the second, and heap corruption (`malloc(): unaligned tcache chunk detected`) in a larger program. The clone-path twin of B-2026-07-28-9. | — |
 | B-2026-07-28-12 | 2026-07-28 | codegen | medium | CODEGEN: `println(<Vec expression>)` renders EMPTY (or a stray tab) when the operand is not an identifier — `println(vec![9i64, 8i64])`, `println(t.shape())`, `println(mk())` all print blank under `karac build` while the interpreter prints `[9, 8]`. Binding to a `let` first prints correctly on both. | — |
+| B-2026-07-28-13 | 2026-07-28 | autopar | high | explicit `par {}` over 18 arms that all READ one shared graph crashes nondeterministically (~0.8%): silent exit 133 (SIGTRAP) and 139 (SIGSEGV), empty stderr, correct output whenever it does exit 0 — failure rate scales with worker count (0/200 at 1-2 workers, 2/200 at 18) | — |
 
-### Fixed (697)
+### Fixed (698)
 
-<details><summary>697 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>698 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -839,6 +839,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **708 surfaced 
 | B-2026-07-28-7 | interp | high | INTERPRETER: an assignment to the scrutinee inside a match arm is SILENTLY REVERTED — `match cur { Some(n) => { cur = n.next } }` leaves `cur` at its… | 7e1729f |
 | B-2026-07-28-8 | codegen | high | CODEGEN: storing into a PLAIN (value-type) struct's `Option[shared T]` field drops the old value BEFORE retaining the new one, so an aliasing RHS (`h… | fa8ae31 |
 | B-2026-07-28-9 | codegen | high | CODEGEN: a whole-struct MOVE does not null a `shared struct` / `shared enum` HANDLE field, so the moved-out source's drop rc-dec's a second time for… | e2dfc58 |
+| B-2026-07-28-11 | codegen | high | CODEGEN: `Vec[<struct carrying a shared handle>].clone()` does not retain the cloned elements' handles, so the clone's drop and the original's drop b… | a4711ca |
 
 </details>
 
