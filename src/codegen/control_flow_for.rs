@@ -2999,6 +2999,232 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 
+    /// Dual-region sibling of [`Self::compile_for_string_chars_inner`] for
+    /// RUNTIME strings (B-2026-07-28-2) — the general `.chars()` loop rebuilt
+    /// so that the overwhelmingly common ASCII stretch runs as a properly
+    /// nested, stride-1 inner loop.
+    ///
+    /// # Why the general loop is slow, and why no proof is needed here
+    ///
+    /// [`super::ascii_const_chars`] can only unlock the branch-free shape for
+    /// a string it proves all-ASCII at compile time; a `ref String` parameter
+    /// — the shape of every real string-processing function — can never
+    /// satisfy that. This lowering needs no proof at all, because the ASCII
+    /// check is a RUNTIME branch: correctness comes from the check, not from
+    /// an analysis, so it is sound for every string.
+    ///
+    /// The trick is purely CFG shape. The general loop is one loop whose
+    /// offset is a PHI of "advance 1" and "whatever the decoder returned", so
+    /// LLVM cannot recover a stride-1 induction variable. Here the ASCII scan
+    /// is an INNER loop whose only backedge advances by exactly 1, nested
+    /// inside an outer loop that the multibyte path re-enters. LLVM then sees
+    /// textbook stride-1 induction in the hot loop, and — because `fast.peek`
+    /// dominates the fast body with `byte < 0x80` — the bound `char` carries
+    /// that range, so a `out.push(ch)` inside the body folds its branchless
+    /// UTF-8 width computation down to the 1-byte arm.
+    ///
+    /// Measured on a 400k-call `replace_char(word: ref String, …)` probe
+    /// (callgrind Ir): 243.5M for the general loop, 195.6M for a stride-1
+    /// byte walk without the dominating check, 181.5M with it. Both halves of
+    /// that gap are what this shape recovers.
+    ///
+    /// # Shape
+    ///
+    /// ```text
+    ///   entry      off = alloca i64 = 0; cp_slot = alloca i32   -> outer
+    ///   outer      (empty; outer-loop header)                   -> cond
+    ///   cond       off < len ?                            cond -> peek | exit
+    ///   peek       b = data[off]; b < 0x80 ?              cond -> body | slow
+    ///   body       bind zext b; <BODY COPY 1>                   -> latch
+    ///   latch      off += 1                                     -> cond
+    ///   slow       decode(data,len,off,&cp); bind cp;
+    ///              <BODY COPY 2>                                -> slow.latch
+    ///   slow.latch off = decoded offset                         -> outer
+    ///   exit
+    /// ```
+    ///
+    /// `outer` is deliberately an empty block: it exists so the ASCII loop is
+    /// a nested inner loop rather than a second backedge into `cond`. Merging
+    /// the two would restore the very 3-way offset PHI this shape exists to
+    /// avoid. It survives simplifycfg because it has two predecessors.
+    ///
+    /// # Correctness notes
+    ///
+    /// The body is emitted TWICE, so each copy gets its own [`LoopFrame`]:
+    /// `continue` from the fast copy must reach `latch` (advance 1) and from
+    /// the slow copy must reach `slow.latch` (advance by the decoded width).
+    /// Both `break` to the shared `exit`. This is the B-2026-07-27-8 lesson
+    /// applied by construction — the advance lives in the continue target of
+    /// each region, so no path can skip it.
+    ///
+    /// Duplicating the body is only sound for bodies whose codegen has no
+    /// identity-keyed global side effect; [`super::chars_bailout`] is the
+    /// fail-closed allowlist that decides, and also caps the size so the
+    /// doubled IR stays bounded.
+    pub(super) fn compile_for_string_chars_bailout_inner(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        data: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let i8_t = self.context.i8_type();
+
+        let off = self.create_entry_alloca(fn_val, "for.sb.off", i64_t.into());
+        self.builder
+            .build_store(off, i64_t.const_int(0, false))
+            .unwrap();
+        let cp_slot = self.create_entry_alloca(fn_val, "for.sb.cp", i32_t.into());
+
+        let outer_bb = self.context.append_basic_block(fn_val, "for.sb.outer");
+        let cond_bb = self.context.append_basic_block(fn_val, "for.sb.cond");
+        let peek_bb = self.context.append_basic_block(fn_val, "for.sb.peek");
+        let body_bb = self.context.append_basic_block(fn_val, "for.sb.body");
+        let latch_bb = self.context.append_basic_block(fn_val, "for.sb.latch");
+        let slow_bb = self.context.append_basic_block(fn_val, "for.sb.slow");
+        let slow_latch_bb = self.context.append_basic_block(fn_val, "for.sb.slow.latch");
+        let exit_bb = self.context.append_basic_block(fn_val, "for.sb.exit");
+
+        self.builder.build_unconditional_branch(outer_bb).unwrap();
+
+        // Outer header — intentionally empty. See the shape note above: it is
+        // what makes the ASCII scan a nested loop instead of a second backedge.
+        self.builder.position_at_end(outer_bb);
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        // Inner header: off < len. (Empty string: len == 0, straight to exit.)
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), off, "for.sb.i")
+            .unwrap()
+            .into_int_value();
+        let in_bounds = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, cur, len, "for.sb.cmp")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(in_bounds, peek_bb, exit_bb)
+            .unwrap();
+
+        // Peek the lead byte. `off < len` is guaranteed by the header, so the
+        // load is in bounds. A byte < 0x80 is a complete 1-byte UTF-8 scalar.
+        self.builder.position_at_end(peek_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), off, "for.sb.i")
+            .unwrap()
+            .into_int_value();
+        let byte_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, data, &[cur], "for.sb.ptr")
+                .unwrap()
+        };
+        let byte = self
+            .builder
+            .build_load(i8_t, byte_ptr, "for.sb.byte")
+            .unwrap()
+            .into_int_value();
+        let byte_z = self
+            .builder
+            .build_int_z_extend(byte, i32_t, "for.sb.byte.z")
+            .unwrap();
+        let is_ascii = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULT,
+                byte_z,
+                i32_t.const_int(0x80, false),
+                "for.sb.ascii",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_ascii, body_bb, slow_bb)
+            .unwrap();
+
+        // ── Fast region: body copy 1, continue advances by exactly 1 ──
+        // `byte_z` is defined in `peek_bb`, the sole predecessor, so it
+        // dominates the whole copy.
+        self.builder.position_at_end(body_bb);
+        self.bind_pattern(pattern, byte_z.into())?;
+        if let PatternKind::Binding(bind_name) = &pattern.kind {
+            self.var_type_names
+                .insert(bind_name.clone(), "char".to_string());
+        }
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: latch_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+        self.compile_loop_body_with_cleanup(body, latch_bb)?;
+        self.loop_stack.pop();
+
+        self.builder.position_at_end(latch_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), off, "for.sb.i")
+            .unwrap()
+            .into_int_value();
+        let next = self
+            .builder
+            .build_int_add(cur, i64_t.const_int(1, false), "for.sb.next")
+            .unwrap();
+        self.builder.build_store(off, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        // ── Slow region: body copy 2, continue advances by the decoded width ──
+        self.builder.position_at_end(slow_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), off, "for.sb.i")
+            .unwrap()
+            .into_int_value();
+        let new_off = self
+            .builder
+            .build_call(
+                self.karac_string_decode_char_fn,
+                &[data.into(), len.into(), cur.into(), cp_slot.into()],
+                "for.sb.decode",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let cp_val = self
+            .builder
+            .build_load(i32_t, cp_slot, "for.sb.cp.load")
+            .unwrap();
+        self.bind_pattern(pattern, cp_val)?;
+        if let PatternKind::Binding(bind_name) = &pattern.kind {
+            self.var_type_names
+                .insert(bind_name.clone(), "char".to_string());
+        }
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: slow_latch_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+        self.compile_loop_body_with_cleanup(body, slow_latch_bb)?;
+        self.loop_stack.pop();
+
+        // `new_off` is defined in `slow_bb`, which dominates every block of
+        // copy 2 and therefore this latch — including the `continue` edges.
+        self.builder.position_at_end(slow_latch_bb);
+        self.builder.build_store(off, new_off).unwrap();
+        self.builder.build_unconditional_branch(outer_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
     /// Inner per-char loop driver — takes already-extracted `data` and `len`
     /// from any String value (variable alloca, string literal, interpolated
     /// string, function return). Iterates per Unicode scalar value via the
@@ -3013,6 +3239,11 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   &out_codepoint)`; bind the pattern to the loaded `i32` codepoint;
     ///   run the user body; store the returned byte offset back.
     /// - incr block: branch back to cond.
+    ///
+    /// Delegates to [`Self::compile_for_string_chars_bailout_inner`] — the
+    /// dual-region shape that recovers stride-1 indexing without needing any
+    /// compile-time proof — whenever the body is safe and small enough to
+    /// emit twice (B-2026-07-28-2).
     pub(super) fn compile_for_string_chars_inner(
         &mut self,
         label: Option<&str>,
@@ -3021,6 +3252,9 @@ impl<'ctx> super::Codegen<'ctx> {
         len: IntValue<'ctx>,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        if super::chars_bailout::body_is_duplicable(body) {
+            return self.compile_for_string_chars_bailout_inner(label, pattern, data, len, body);
+        }
         let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
         let i32_t = self.context.i32_type();

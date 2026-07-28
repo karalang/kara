@@ -33,6 +33,7 @@ mod cabi;
 mod call_dispatch;
 mod calls;
 mod channel;
+mod chars_bailout;
 mod clone_drop;
 mod closures;
 mod collections;

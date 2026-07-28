@@ -7396,9 +7396,15 @@ fn main() {
     #[test]
     fn test_ir_non_const_and_multibyte_chars_loops_keep_the_decode_path() {
         // B-2026-07-27-7 fail-closed guard — the half that keeps the fix
-        // sound. Each of these must KEEP the general decode loop, because the
-        // branch-free walk binds one `char` per BYTE and would silently split
-        // a multibyte scalar into its UTF-8 bytes:
+        // sound. Each of these must keep a loop that really DECODES, because
+        // the proof-gated branch-free walk binds one `char` per BYTE and would
+        // silently split a multibyte scalar into its UTF-8 bytes.
+        //
+        // "Decodes" is the invariant, not any one lowering: since
+        // B-2026-07-28-2 the `param` case takes the dual-region ASCII bailout,
+        // whose multibyte region calls the same decoder. What must never
+        // happen is the byte walk, and the surviving call is what proves it
+        // didn't. The cases:
         //   - a String PARAMETER (contents unknown at compile time),
         //   - a multibyte literal,
         //   - an ASCII literal binding that is later MUTATED (`push`), so the
@@ -7442,8 +7448,9 @@ fn main() {
                 .unwrap_or_else(|| panic!("@walk not found in IR for {}", name));
             assert!(
                 w.contains("@karac_string_decode_char"),
-                "{}: must fail CLOSED to the general UTF-8 decode loop — the \
-                 branch-free walk would mis-iterate multibyte text; got:\n{}",
+                "{}: must fail CLOSED to a lowering that really decodes UTF-8 \
+                 — the branch-free walk would mis-iterate multibyte text; \
+                 got:\n{}",
                 name,
                 w
             );
@@ -7537,6 +7544,190 @@ fn main() {
                 // "ab" so rule 4 must disqualify it: 97+98+233=428 (a byte-wise walk
                 // would give 4 chars summing 559).
                 "561\n9258\n326\n8827\n225\n428\n233\n296\n0\nxyz\n195\n8827\n428\n"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ir_runtime_string_chars_loop_takes_the_ascii_bailout() {
+        // B-2026-07-28-2: a `ref String` parameter can never satisfy
+        // B-2026-07-27-7's compile-time all-ASCII proof, so before this fix
+        // every `.chars()` loop over a runtime string kept an offset PHI that
+        // blocked stride-1 induction recovery. The dual-region lowering needs
+        // no proof — the ASCII check is a runtime branch.
+        //
+        // Assert BOTH halves are present, because either alone would be a bug:
+        // the `for.sb.*` blocks mean the fast region exists, and the surviving
+        // decode call means multibyte input is still decoded rather than
+        // walked a byte at a time.
+        let ir = ir_for(
+            "fn walk(word: ref String) -> String {\n\
+             \x20   let mut out: String = \"\";\n\
+             \x20   for ch in word.chars() { out.push(ch); }\n\
+             \x20   return out;\n\
+             }\n\
+             fn main() { println(walk(\"ab\".to_string())); }",
+        );
+        let w = ir
+            .split("define")
+            .find(|f| f.contains("@walk("))
+            .expect("@walk not found in IR");
+        assert!(
+            w.contains("for.sb.peek"),
+            "a runtime-string chars loop with a duplicable body must take the \
+             dual-region ASCII bailout (for.sb.* blocks); got:\n{}",
+            w
+        );
+        assert!(
+            w.contains("@karac_string_decode_char"),
+            "the bailout must KEEP a real decode for the multibyte region — \
+             without it the loop would bind one char per byte; got:\n{}",
+            w
+        );
+    }
+
+    #[test]
+    fn test_ir_chars_bailout_fails_closed_on_unduplicable_bodies() {
+        // B-2026-07-28-2 fail-closed guard. The bailout emits the user body
+        // TWICE, which is only safe when the body's codegen has no side effect
+        // keyed by identity rather than position. Each of these must keep the
+        // single-copy loop (`for.s.*`, no `for.sb.*`):
+        //   - a NESTED LOOP, which is where auto-par / `par` reduction
+        //     lowering mints spawn-site rows, and which would also make
+        //     duplication compound to 2^depth through nested chars loops;
+        //   - a CLOSURE, which emits a module-level function per occurrence;
+        //   - a body over the node budget, so even an allowlisted body cannot
+        //     silently double an unbounded amount of IR.
+        let long_body = "out = out + 1i64; ".repeat(120);
+        for (name, body) in [
+            (
+                "nested-loop",
+                "let mut k = 0i64; while k < 3i64 { out = out + 1i64; k = k + 1i64; }".to_string(),
+            ),
+            (
+                "closure",
+                "let f = |x: i64| x + 1i64; out = f(out);".to_string(),
+            ),
+            ("over-budget", long_body),
+        ] {
+            let ir = ir_for(&format!(
+                "fn walk(word: ref String) -> i64 {{\n\
+                 \x20   let mut out = 0i64;\n\
+                 \x20   for ch in word.chars() {{ {body} }}\n\
+                 \x20   return out;\n\
+                 }}\n\
+                 fn main() {{ println(walk(\"ab\".to_string())); }}"
+            ));
+            let w = ir
+                .split("define")
+                .find(|f| f.contains("@walk("))
+                .unwrap_or_else(|| panic!("@walk not found in IR for {}", name));
+            assert!(
+                !w.contains("for.sb.peek"),
+                "{}: must fail CLOSED to the single-copy chars loop rather \
+                 than duplicate this body; got:\n{}",
+                name,
+                w
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_chars_bailout_matches_the_single_copy_loop() {
+        // B-2026-07-28-2 behavioural oracle. The expectation below was
+        // captured from the SINGLE-COPY lowering
+        // (`KARAC_CHARS_ASCII_BAILOUT=0`), so this pins the dual-region shape
+        // to pre-existing semantics rather than to itself.
+        //
+        // The failure mode being policed is a silent miscompile — a bailout
+        // that hands off wrongly binds bytes as chars, or resumes at a stale
+        // offset, with no crash and no diagnostic. So the cases are chosen to
+        // make a wrong offset observable: MIXED strings (the fast region must
+        // hand off mid-string and resume past the decode), `é`/`€`/`ß`/`𝄞`
+        // covering 2-, 3- and 4-byte scalars, `continue` and `break` from BOTH
+        // body copies, a labeled jump out of the loop from both copies, and an
+        // index-sensitive `at()` whose output moves if any advance is wrong
+        // (a byte-wise walk would put the `Q` in a different place).
+        if let Some(out) = run_program(
+            "fn echo(s: ref String) -> String {\n\
+             \x20   let mut out: String = \"\";\n\
+             \x20   for ch in s.chars() { out.push(ch); }\n\
+             \x20   return out;\n\
+             }\n\
+             fn cps(s: ref String) -> i64 {\n\
+             \x20   let mut a = 0i64;\n\
+             \x20   for ch in s.chars() { a = a + (ch as i64); }\n\
+             \x20   return a;\n\
+             }\n\
+             fn skip(s: ref String) -> i64 {\n\
+             \x20   let mut a = 0i64;\n\
+             \x20   for ch in s.chars() {\n\
+             \x20       if ch == 'a' { continue; }\n\
+             \x20       if ch == '\u{e9}' { continue; }\n\
+             \x20       a = a + (ch as i64);\n\
+             \x20   }\n\
+             \x20   return a;\n\
+             }\n\
+             fn stop_at(s: ref String, k: char) -> i64 {\n\
+             \x20   let mut a = 0i64;\n\
+             \x20   for ch in s.chars() {\n\
+             \x20       if ch == k { break; }\n\
+             \x20       a = a + (ch as i64);\n\
+             \x20   }\n\
+             \x20   return a;\n\
+             }\n\
+             fn at(s: ref String, pos: i64) -> String {\n\
+             \x20   let mut out: String = \"\";\n\
+             \x20   let mut i = 0i64;\n\
+             \x20   for ch in s.chars() {\n\
+             \x20       if i == pos { out.push('Q'); } else { out.push(ch); }\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             \x20   return out;\n\
+             }\n\
+             fn outer_jump(s: ref String) -> i64 {\n\
+             \x20   let mut a = 0i64;\n\
+             \x20   let mut r = 0i64;\n\
+             \x20   rounds: while r < 2i64 {\n\
+             \x20       r = r + 1i64;\n\
+             \x20       for ch in s.chars() {\n\
+             \x20           if ch == 'z' { continue rounds; }\n\
+             \x20           if ch == '\u{df}' { break rounds; }\n\
+             \x20           a = a + (ch as i64);\n\
+             \x20       }\n\
+             \x20       a = a + 1000i64;\n\
+             \x20   }\n\
+             \x20   return a;\n\
+             }\n\
+             fn probe(s: ref String) {\n\
+             \x20   println(f\"{echo(s)}|{cps(s)}|{skip(s)}|{stop_at(s, 'c')}|\
+             {at(s, 2i64)}|{outer_jump(s)}\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   probe(\"\");\n\
+             \x20   probe(\"a\");\n\
+             \x20   probe(\"\u{e9}\");\n\
+             \x20   probe(\"ab\u{e9}cd\");\n\
+             \x20   probe(\"\u{e9}abcd\");\n\
+             \x20   probe(\"abcd\u{e9}\");\n\
+             \x20   probe(\"a\u{e9}\u{e9}b\");\n\
+             \x20   probe(\"a\u{20ac}b\u{1d11e}c\u{df}d\");\n\
+             \x20   probe(\"azb\u{df}c\");\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                // echo|cps|skip|stop_at('c')|at(2)|outer_jump
+                "|0|0|0||2000\n\
+                 a|97|0|97|a|2194\n\
+                 \u{e9}|233|0|233|\u{e9}|2466\n\
+                 ab\u{e9}cd|627|297|428|abQcd|3254\n\
+                 \u{e9}abcd|627|297|428|\u{e9}aQcd|3254\n\
+                 abcd\u{e9}|627|297|195|abQd\u{e9}|3254\n\
+                 a\u{e9}\u{e9}b|661|98|661|a\u{e9}Qb|3322\n\
+                 a\u{20ac}b\u{1d11e}c\u{df}d|128051|127954|127629|\
+                 a\u{20ac}Q\u{1d11e}c\u{df}d|127728\n\
+                 azb\u{df}c|639|542|540|azQ\u{df}c|194\n"
             );
         }
     }
