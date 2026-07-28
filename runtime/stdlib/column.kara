@@ -152,10 +152,11 @@ impl[T] Column[T] {
     // Arrow's null buffer. Round-trips through `from_arrow_ipc`. Element types:
     // `i64` (Int64), `f64` (Float64), `String` (Utf8), `bool` (Boolean); the
     // reader also accepts Int32/Float32 (widened) and LargeUtf8 so a foreign
-    // producer's column still loads (interpreter reference impl in
-    // `src/interpreter/arrow_ipc.rs`; codegen + the runtime
-    // `libkarac_runtime_arrow.a` archive are a later slice — `karac run` routes
-    // an arrow program to the interpreter until then).
+    // producer's column still loads. Interpreter reference impl in
+    // `src/interpreter/arrow_ipc.rs`; `karac build` (AOT) emits the same
+    // stream via `libkarac_runtime_arrow.a` (byte-identity is asserted E2E).
+    // `karac run` routes an arrow program to the interpreter, because the JIT
+    // runner links the runtime without the opt-in `arrow` feature.
     #[compiler_builtin]
     fn to_arrow_ipc(ref self) -> Vec[u8] {
         Vec.new()

@@ -4475,6 +4475,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             return self
                                 .compile_tensor_iter_axis(t_ptr, elem, rank, args, call_span);
                         }
+                        // Phase-11 Arrow IPC twin: the tensor block's header
+                        // carries rank + dims, so only the element
+                        // description crosses to the runtime
+                        // (`src/codegen/arrow.rs`).
+                        "to_arrow_ipc" => {
+                            let (elem, unsigned) = (info.elem, info.elem_unsigned);
+                            let t_ptr = self.tensor_ptr_for_var(name)?;
+                            let (elem_size, kind) = self.tensor_arrow_elem_desc(elem, unsigned)?;
+                            return self.compile_arrow_tensor_to_ipc(t_ptr, elem_size, kind);
+                        }
                         _ => {}
                     }
                 }
@@ -6462,19 +6472,22 @@ impl<'ctx> super::Codegen<'ctx> {
                  (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
             ));
         }
-        // Arrow IPC interchange. `Column.to_arrow_ipc` HAS an AOT twin
-        // (`src/codegen/column.rs` → `karac_arrow_column_to_ipc`), so a landing
-        // here means a DataFrame / Tensor receiver — those legs are still
-        // interpreter-only. Give a clean, actionable error instead of the
-        // generic "this is a codegen bug" fall-through; `karac run` routes these
-        // programs to the interpreter automatically
-        // (phase-11-stdlib-longtail.md § Arrow IPC).
+        // Arrow IPC interchange. All three receivers — Column, DataFrame,
+        // Tensor — now have AOT twins (`src/codegen/arrow.rs` → the
+        // `karac_arrow_*_to_ipc` entrypoints), each reached from its own
+        // receiver-typed dispatcher. A landing HERE therefore means a receiver
+        // shape none of those classifiers could name (an unregistered binding,
+        // a chained/value receiver), not a deferred leg. Say so, rather than
+        // fall through to the generic "this is a codegen bug" message which
+        // would send the reader looking for a missing dispatcher arm.
         if method == "to_arrow_ipc" {
             return Err(format!(
-                "codegen: `.{method}()` on this receiver (Arrow IPC interchange) is \
-                 interpreter-only — the AOT twin currently covers `Column.to_arrow_ipc`; \
-                 the DataFrame / Tensor legs are a later slice. Run with `karac run` (which \
-                 routes Arrow IPC programs to the tree-walk interpreter) or `karac run --interp`"
+                "codegen: `.{method}()` (Arrow IPC interchange) has AOT twins for Column, \
+                 DataFrame, and Tensor receivers, but this receiver isn't classified as any \
+                 of them — bind it to a variable of the concrete type first, or run with \
+                 `karac run` (which routes Arrow IPC programs to the tree-walk interpreter). \
+                 If the receiver IS one of the three, this is a codegen bug in the receiver \
+                 classifier (tracker: phase-11-stdlib-longtail.md § Arrow IPC)"
             ));
         }
         let receiver_desc = match &object.kind {

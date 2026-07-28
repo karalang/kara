@@ -698,6 +698,19 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_lazy_plan_handle(handle);
             return Ok(Some(self.build_lazy_struct_value("LazyFrame", handle)));
         }
+        if method == "to_arrow_ipc" {
+            // Phase-11 Arrow IPC twin — the binary sibling of `write_csv`, and
+            // the same division of labour: the runtime
+            // (`karac_arrow_dataframe_to_ipc`) walks this control block and
+            // its stride-40 entries and serializes with the same arrow-rs the
+            // interpreter links, so the stream is byte-identical across
+            // backends; codegen only passes the block and adopts the returned
+            // buffer as an owned `Vec[u8]` (`src/codegen/arrow.rs`). Each
+            // entry carries its own `elem_size` / `kind`, so nothing else
+            // needs passing.
+            let control = self.dataframe_ptr_for_var(var)?;
+            return Ok(Some(self.compile_arrow_dataframe_to_ipc(control)?));
+        }
         if method == "write_csv" {
             // Phase-11 CSV leg — the codegen twin. The serialization itself
             // lives in the runtime (`karac_runtime_df_write_csv` walks the

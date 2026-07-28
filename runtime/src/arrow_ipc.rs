@@ -1,6 +1,6 @@
-//! Arrow IPC serialization for compiled (AOT) `Column` values — the codegen
-//! twin of the interpreter's `src/interpreter/arrow_ipc.rs` (phase-11 Arrow
-//! IPC codegen twin).
+//! Arrow IPC serialization for compiled (AOT) `Column`, `DataFrame`, and
+//! `Tensor` values — the codegen twin of the interpreter's
+//! `src/interpreter/arrow_ipc.rs` (phase-11 Arrow IPC codegen twin).
 //!
 //! Gated behind the opt-in `arrow` feature, which produces the separate
 //! `libkarac_runtime_arrow.a` archive. `karac` auto-selects that archive only
@@ -23,11 +23,17 @@
 //!    `Column[String]` with no valid slot emits `Int64` exactly like the
 //!    interpreter does. Without this the two backends would diverge on
 //!    degenerate columns only — the worst kind of divergence to discover late.
+//!
+//! The three entrypoints mirror the interpreter's three mappings exactly:
+//! `Column` → a one-field (`col`) batch, `DataFrame` → an N-field batch in
+//! schema order, `Tensor` → a single-row `FixedSizeList[numel]` tagged as the
+//! canonical `arrow.fixed_shape_tensor` extension.
 
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, BooleanArray, Float64Array, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
+    Array, BooleanArray, FixedSizeListArray, Float64Array, Int64Array, RecordBatch,
+    RecordBatchOptions, StringArray,
 };
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Field, Schema};
@@ -149,15 +155,16 @@ fn slots_to_arrow(slots: &[Option<Slot>], kind: i64, elem_size: i64) -> (DataTyp
     }
 }
 
-/// Write one field's array as a single-batch Arrow IPC stream. Mirrors the
-/// interpreter's `write_ipc` (explicit row count so a column-less batch is
-/// still valid).
-fn write_ipc(name: &str, dt: DataType, arr: Arc<dyn Array>) -> Option<Vec<u8>> {
-    let schema = Arc::new(Schema::new(vec![Field::new(name, dt, true)]));
-    let rows = arr.len();
+/// Write a set of fields + arrays as a single-batch Arrow IPC stream. Mirrors
+/// the interpreter's `write_ipc` down to the explicit row count, which is what
+/// lets a zero-column `DataFrame` still produce a valid batch (arrow can't
+/// infer the row count with no arrays to ask).
+fn write_ipc(fields: Vec<Field>, arrays: Vec<Arc<dyn Array>>) -> Option<Vec<u8>> {
+    let schema = Arc::new(Schema::new(fields));
+    let rows = arrays.first().map_or(0, |a| a.len());
     let batch = RecordBatch::try_new_with_options(
         schema.clone(),
-        vec![arr],
+        arrays,
         &RecordBatchOptions::new().with_row_count(Some(rows)),
     )
     .ok()?;
@@ -189,30 +196,18 @@ unsafe fn emit_buffer(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
     buf
 }
 
-/// `col.to_arrow_ipc() -> Vec[u8]` — serialize a compiled `Column` to a
-/// one-field (`col`) Arrow IPC stream. The AOT twin of the interpreter's
-/// `column_to_ipc`; the two emit byte-identical streams (asserted E2E).
-///
-/// Walks codegen's fixed Column control-block layout — `{ ptr data, ptr
-/// null_bitmap, i64 len, i64 cap }` — with `elem_size` / `kind` passed
-/// alongside, since a bare column control block (unlike a DataFrame entry)
-/// carries no element tag. Returns the malloc'd stream buffer; `out_len`
-/// receives its length.
+/// Decode every slot of a compiled Column control block — `{ ptr data, ptr
+/// null_bitmap, i64 len, i64 cap }` — into the interpreter's value model.
+/// `elem_size` / `kind` travel alongside because a bare control block carries
+/// no element tag (a DataFrame entry does, in its own trailing fields).
 ///
 /// # Safety
 ///
-/// `col_ctrl` must be a live Column control block laid out as above, with a
-/// data buffer holding `len` slots of `elem_size` bytes; `out_len` must point
-/// to a writable `i64`.
-#[no_mangle]
-pub unsafe extern "C" fn karac_arrow_column_to_ipc(
-    col_ctrl: *const u8,
-    elem_size: i64,
-    kind: i64,
-    out_len: *mut i64,
-) -> *mut u8 {
+/// `col_ctrl`, when non-null, must be a live Column control block laid out as
+/// above, with a data buffer holding `len` slots of `elem_size` bytes.
+unsafe fn read_column_slots(col_ctrl: *const u8, elem_size: i64, kind: i64) -> Vec<Option<Slot>> {
     if col_ctrl.is_null() {
-        return emit_buffer(&[], out_len);
+        return Vec::new();
     }
     let data = *(col_ctrl as *const *const u8);
     let bitmap = *(col_ctrl.add(8) as *const *const u8);
@@ -226,13 +221,184 @@ pub unsafe extern "C" fn karac_arrow_column_to_ipc(
             None
         });
     }
+    slots
+}
 
+/// `col.to_arrow_ipc() -> Vec[u8]` — serialize a compiled `Column` to a
+/// one-field (`col`) Arrow IPC stream. The AOT twin of the interpreter's
+/// `column_to_ipc`; the two emit byte-identical streams (asserted E2E).
+///
+/// Returns the malloc'd stream buffer; `out_len` receives its length.
+///
+/// # Safety
+///
+/// `col_ctrl` must satisfy `read_column_slots`' contract; `out_len` must point
+/// to a writable `i64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_arrow_column_to_ipc(
+    col_ctrl: *const u8,
+    elem_size: i64,
+    kind: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let slots = read_column_slots(col_ctrl, elem_size, kind);
     let (dt, arr) = slots_to_arrow(&slots, kind, elem_size);
-    match write_ipc("col", dt, arr) {
+    match write_ipc(vec![Field::new("col", dt, true)], vec![arr]) {
         Some(bytes) => emit_buffer(&bytes, out_len),
         // An arrow-side failure yields an empty stream rather than aborting the
         // program — the same "surface it as data" posture as the other
         // buffer-returning runtime entrypoints.
+        None => emit_buffer(&[], out_len),
+    }
+}
+
+/// `df.to_arrow_ipc() -> Vec[u8]` — serialize a compiled `DataFrame` to an
+/// N-field Arrow IPC batch, one field per column in schema order. The AOT twin
+/// of the interpreter's `dataframe_to_ipc`.
+///
+/// Walks the DataFrame control block `{ ptr entries, i64 len, i64 cap }` and
+/// its stride-40 entries `{ ptr name_data, i64 name_len, ptr col_ctrl, i64
+/// elem_size, i64 kind }` — the same walk as `karac_runtime_df_write_csv`, so
+/// the two share one view of the layout. Each entry carries its own
+/// `elem_size` / `kind`, so unlike the Column entrypoint nothing extra needs
+/// passing from codegen.
+///
+/// # Safety
+///
+/// `df_ctrl` must be a live DataFrame control block laid out as above, with
+/// every entry's `col_ctrl` satisfying `read_column_slots`' contract;
+/// `out_len` must point to a writable `i64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_arrow_dataframe_to_ipc(
+    df_ctrl: *const u8,
+    out_len: *mut i64,
+) -> *mut u8 {
+    if df_ctrl.is_null() {
+        return emit_buffer(&[], out_len);
+    }
+    let entries = *(df_ctrl as *const *const u8);
+    let n_cols = (*(df_ctrl.add(8) as *const i64)).max(0) as usize;
+
+    let mut fields: Vec<Field> = Vec::with_capacity(n_cols);
+    let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(n_cols);
+    for i in 0..n_cols {
+        let e = entries.add(i * 40);
+        let name_data = *(e as *const *const u8);
+        let name_len = *(e.add(8) as *const i64);
+        let col_ctrl = *(e.add(16) as *const *const u8);
+        let elem_size = *(e.add(24) as *const i64);
+        let kind = *(e.add(32) as *const i64);
+
+        let name = if name_data.is_null() || name_len <= 0 {
+            String::new()
+        } else {
+            String::from_utf8_lossy(std::slice::from_raw_parts(name_data, name_len as usize))
+                .into_owned()
+        };
+        let slots = read_column_slots(col_ctrl, elem_size, kind);
+        let (dt, arr) = slots_to_arrow(&slots, kind, elem_size);
+        fields.push(Field::new(name, dt, true));
+        arrays.push(arr);
+    }
+
+    match write_ipc(fields, arrays) {
+        Some(bytes) => emit_buffer(&bytes, out_len),
+        None => emit_buffer(&[], out_len),
+    }
+}
+
+/// Arrow's canonical extension-type metadata keys (Arrow columnar spec §
+/// "Extension types") and the fixed-shape-tensor extension name. Must match
+/// the interpreter's constants verbatim — they land in the schema, which is
+/// part of the byte stream.
+const EXT_NAME_KEY: &str = "ARROW:extension:name";
+const EXT_META_KEY: &str = "ARROW:extension:metadata";
+const FIXED_SHAPE_TENSOR: &str = "arrow.fixed_shape_tensor";
+
+/// The extension metadata payload: `{"shape":[d0,d1,…]}`.
+///
+/// The interpreter builds this with `serde_json`; here it is formatted by
+/// hand, which is byte-identical because serde_json's compact `to_string`
+/// emits no whitespace and renders `i64` exactly as `Display` does. Hand
+/// formatting keeps `serde_json` out of the runtime's dependency tree for one
+/// object with one integer-array field — and the E2E byte-identity test is
+/// what actually holds the two in agreement.
+fn shape_metadata(dims: &[i64]) -> String {
+    let mut s = String::from("{\"shape\":[");
+    for (i, d) in dims.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&d.to_string());
+    }
+    s.push_str("]}");
+    s
+}
+
+/// `t.to_arrow_ipc() -> Vec[u8]` — serialize a compiled `Tensor` as the
+/// canonical `arrow.fixed_shape_tensor` extension: a single-row
+/// `FixedSizeList[numel]` over the row-major values, with the shape in the
+/// field's extension metadata. The AOT twin of the interpreter's
+/// `tensor_to_ipc`.
+///
+/// Rank and dims come from the tensor block's own header — `[i64 rank][rank ×
+/// i64 dims][C-order data]` (`src/codegen/tensor.rs`) — which is authoritative
+/// at runtime, so codegen passes only the element description. Tensor slots
+/// are never null (a tensor has no validity concept), so every slot is read as
+/// valid.
+///
+/// # Safety
+///
+/// `t_ptr` must be a live tensor block laid out as above, whose data region
+/// holds `product(dims)` slots of `elem_size` bytes; `out_len` must point to a
+/// writable `i64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_arrow_tensor_to_ipc(
+    t_ptr: *const u8,
+    elem_size: i64,
+    kind: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    if t_ptr.is_null() {
+        return emit_buffer(&[], out_len);
+    }
+    let rank = (*(t_ptr as *const i64)).max(0) as usize;
+    let mut dims: Vec<i64> = Vec::with_capacity(rank);
+    for i in 0..rank {
+        dims.push(*(t_ptr.add(8 * (1 + i)) as *const i64));
+    }
+    let numel: i64 = dims.iter().product::<i64>().max(0);
+    let data = t_ptr.add(8 * (1 + rank));
+
+    let mut slots: Vec<Option<Slot>> = Vec::with_capacity(numel as usize);
+    for row in 0..numel as usize {
+        slots.push(read_slot(data, row, elem_size, kind));
+    }
+    let (item_dt, values) = slots_to_arrow(&slots, kind, elem_size);
+
+    let Ok(list_size) = i32::try_from(numel) else {
+        return emit_buffer(&[], out_len);
+    };
+    // Items are non-nullable — a tensor slot always holds a value.
+    let item_field = Arc::new(Field::new("item", item_dt, false));
+    let Ok(list) = FixedSizeListArray::try_new(Arc::clone(&item_field), list_size, values, None)
+    else {
+        return emit_buffer(&[], out_len);
+    };
+
+    let metadata = std::collections::HashMap::from([
+        (EXT_NAME_KEY.to_string(), FIXED_SHAPE_TENSOR.to_string()),
+        (EXT_META_KEY.to_string(), shape_metadata(&dims)),
+    ]);
+    let field = Field::new(
+        "tensor",
+        DataType::FixedSizeList(item_field, list_size),
+        false,
+    )
+    .with_metadata(metadata);
+
+    match write_ipc(vec![field], vec![Arc::new(list)]) {
+        Some(bytes) => emit_buffer(&bytes, out_len),
         None => emit_buffer(&[], out_len),
     }
 }

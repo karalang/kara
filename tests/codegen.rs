@@ -527,36 +527,38 @@ mod codegen_tests {
 
     #[test]
     fn arrow_ipc_builtins_rejected_by_codegen() {
-        // Arrow IPC interchange (`Column`/`DataFrame` `to_arrow_ipc` /
-        // `from_arrow_ipc`) is interpreter-only — codegen must REJECT it with an
-        // actionable message rather than silently miscompile. `from_arrow_ipc`
-        // is the important case: as an ASSOC call it would otherwise fall
-        // through to the `const 0` default and return the integer 0 in place of
-        // a `Column`/`DataFrame` (the B-2026-07-18-20 run-vs-build divergence
-        // class). `karac run` routes these programs to the interpreter.
-        // `Column.to_arrow_ipc` HAS an AOT twin (karac_arrow_column_to_ipc) —
-        // it must compile, not reject. Byte-parity with the interpreter is
-        // asserted by `test_e2e_column_to_arrow_ipc_matches_interpreter_bytes`.
-        let column_to_ipc = "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
-                             let b = c.to_arrow_ipc(); println(b.len()); }";
-        let ir = ir_result(column_to_ipc)
-            .expect("Column.to_arrow_ipc has a codegen twin and must compile");
-        assert!(
-            ir.contains("karac_arrow_column_to_ipc"),
-            "Column.to_arrow_ipc must lower to the runtime call"
-        );
-
-        // The DataFrame / Tensor legs are still interpreter-only.
-        for to_ipc in [
-            "fn main() { let mut d = DataFrame.new(); \
-             d.insert(\"x\", Column.from_vec([1, 2])); \
-             let b = d.to_arrow_ipc(); println(b.len()); }",
-            "fn main() { let t = Tensor.from([[1, 2], [3, 4]]); \
-             let b = t.to_arrow_ipc(); println(b.len()); }",
+        // Arrow IPC interchange. The WRITE direction (`to_arrow_ipc`) now has
+        // AOT twins for all three receivers, so each must COMPILE to its
+        // runtime call; the PARSE direction (`from_arrow_ipc`) is still
+        // interpreter-only and must be REJECTED with an actionable message
+        // rather than silently miscompiled. Rejection is the important half:
+        // as an ASSOC call, `from_arrow_ipc` would otherwise fall through to
+        // the `const 0` default and return the integer 0 in place of a
+        // `Column`/`DataFrame`/`Tensor` (the B-2026-07-18-20 run-vs-build
+        // divergence class). `karac run` routes these programs to the
+        // interpreter. Byte-parity of the write direction is asserted by
+        // `test_e2e_*_to_arrow_ipc_matches_interpreter_bytes`.
+        for (to_ipc, sym) in [
+            (
+                "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
+                 let b = c.to_arrow_ipc(); println(b.len()); }",
+                "karac_arrow_column_to_ipc",
+            ),
+            (
+                "fn main() { let mut d = DataFrame.new(); \
+                 d.insert(\"x\", Column.from_vec([1, 2])); \
+                 let b = d.to_arrow_ipc(); println(b.len()); }",
+                "karac_arrow_dataframe_to_ipc",
+            ),
+            (
+                "fn main() { let t = Tensor.from([[1, 2], [3, 4]]); \
+                 let b = t.to_arrow_ipc(); println(b.len()); }",
+                "karac_arrow_tensor_to_ipc",
+            ),
         ] {
-            let err = ir_result(to_ipc).expect_err("to_arrow_ipc must be rejected by codegen");
-            assert!(err.contains("Arrow IPC interchange"), "got: {err}");
-            assert!(err.contains("interpreter-only"), "got: {err}");
+            let ir = ir_result(to_ipc)
+                .unwrap_or_else(|e| panic!("{sym}: to_arrow_ipc has a codegen twin: {e}"));
+            assert!(ir.contains(sym), "to_arrow_ipc must lower to `{sym}`");
         }
 
         for (from_ipc, ty) in [
@@ -586,11 +588,12 @@ mod codegen_tests {
     }
 
     #[test]
-    fn test_e2e_column_to_arrow_ipc_matches_interpreter_bytes() {
-        // Phase-11 Arrow IPC codegen twin — `karac_arrow_column_to_ipc`
-        // (runtime/src/arrow_ipc.rs) walks the Column control block and
-        // serializes with arrow-rs, the same crate + version the interpreter
-        // uses, so the two must emit BYTE-IDENTICAL IPC streams.
+    fn test_e2e_to_arrow_ipc_matches_interpreter_bytes() {
+        // Phase-11 Arrow IPC codegen twin — the `karac_arrow_*_to_ipc`
+        // entrypoints (runtime/src/arrow_ipc.rs) walk codegen's control blocks
+        // and serialize with arrow-rs, the same crate + version the
+        // interpreter uses, so the two must emit BYTE-IDENTICAL IPC streams
+        // for every receiver.
         //
         // The oracle is the interpreter run in-process, not a hard-coded byte
         // string: arrow-rs owns the IPC framing, so pinning exact bytes would
@@ -598,33 +601,95 @@ mod codegen_tests {
         // + checksum over the stream catches any divergence in schema, buffer
         // layout, or null encoding.
         //
-        // The cases are chosen for the two parity rules the runtime implements
-        // deliberately (see the module header): width widening (a compiled
-        // `Column[i64]`/`[f64]` must serialize as the interpreter's Int64 /
-        // Float64) and the all-null fallback (an EMPTY `Column[String]` must
-        // emit Int64, matching the interpreter's "no valid slot to key on"
-        // default, rather than the statically-known Utf8).
+        // The cases target the places the two backends could plausibly drift,
+        // i.e. the parity rules the runtime implements deliberately (see its
+        // module header):
+        //
+        //   * **Width widening** — the interpreter's `Value` erases int/float
+        //     width, so a compiled `Column[i32]` / `Tensor[i32, …]` must
+        //     serialize as Int64, not the physically narrower Arrow type.
+        //   * **All-null fallback** — an EMPTY `Column[String]` must emit
+        //     Int64, matching the interpreter's "no valid slot to key on"
+        //     default rather than the statically-known Utf8.
+        //   * **Explicit row count** — a zero-column DataFrame still has to
+        //     produce a valid batch, which only works because both sides pass
+        //     the row count explicitly (arrow can't infer it with no arrays).
+        //   * **Header-derived shape** — a Tensor's rank/dims come from its
+        //     runtime header on the codegen side but from the interpreter's
+        //     `dims` on the other; the `arrow.fixed_shape_tensor` extension
+        //     metadata carries them into the stream, so any mismatch shows.
         let cases = [
             (
-                "i64 with a null",
+                "column: i64 with a null",
                 "let mut c: Column[i64] = Column.new();\n\
                  c.push(10); c.push(20); c.push_null(); c.push(40);\n\
                  let bytes = c.to_arrow_ipc();",
             ),
             (
-                "f64",
+                "column: f64",
                 "let c: Column[f64] = Column.from_vec([1.5, 2.5, 3.5]);\n\
                  let bytes = c.to_arrow_ipc();",
             ),
             (
-                "String",
+                "column: String",
                 "let c: Column[String] = Column.from_vec([\"alpha\", \"beta\"]);\n\
                  let bytes = c.to_arrow_ipc();",
             ),
             (
-                "empty column (all-null Int64 fallback parity)",
+                "column: empty (all-null Int64 fallback parity)",
                 "let c: Column[String] = Column.new();\n\
                  let bytes = c.to_arrow_ipc();",
+            ),
+            (
+                "dataframe: i64 + f64 + String",
+                "let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"age\", Column.from_vec([30i64, 25i64, 41i64]));\n\
+                 df.insert(\"score\", Column.from_vec([91.5, 78.25, 88.0]));\n\
+                 df.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"eve\"]));\n\
+                 let bytes = df.to_arrow_ipc();",
+            ),
+            (
+                "dataframe: nullable + bool + String",
+                "let mut df: DataFrame = DataFrame.new();\n\
+                 let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];\n\
+                 df.insert(\"nullable\", Column.from_iter_nullable(nn));\n\
+                 df.insert(\"flag\", Column.from_vec([true, false, true]));\n\
+                 df.insert(\"name\", Column.from_vec([\"ada\", \"bob\", \"eve\"]));\n\
+                 let bytes = df.to_arrow_ipc();",
+            ),
+            (
+                "dataframe: narrow + unsigned columns (width-widening parity)",
+                "let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"u\", Column.from_vec([1u64, 2u64, 3u64]));\n\
+                 df.insert(\"s\", Column.from_vec([-1i32, 0i32, 7i32]));\n\
+                 df.insert(\"f\", Column.from_vec([1.5f32, 2.5f32, 3.5f32]));\n\
+                 let bytes = df.to_arrow_ipc();",
+            ),
+            (
+                "dataframe: zero columns (explicit row-count parity)",
+                "let df: DataFrame = DataFrame.new();\n\
+                 let bytes = df.to_arrow_ipc();",
+            ),
+            (
+                "tensor: 2-D i64",
+                "let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let bytes = t.to_arrow_ipc();",
+            ),
+            (
+                "tensor: 3-D f64",
+                "let t: Tensor[f64, [2, 2, 2]] = \
+                 Tensor.from([[[1.5, 2.5], [3.5, 4.5]], [[5.5, 6.5], [7.5, 8.5]]]);\n\
+                 let bytes = t.to_arrow_ipc();",
+            ),
+            (
+                "tensor: i32 (width-widening parity)",
+                "let t: Tensor[i32, [2, 3]] = Tensor.zeros([2, 3]);\n\
+                 let bytes = t.to_arrow_ipc();",
+            ),
+            (
+                "tensor: bool",
+                "let t: Tensor[bool, [2, 2]] = Tensor.full([2, 2], true);\n\
+                 let bytes = t.to_arrow_ipc();",
             ),
         ];
         for (label, body) in cases {
@@ -652,7 +717,7 @@ mod codegen_tests {
             if let Some(aot) = run_program(&src) {
                 assert_eq!(
                     aot, expected,
-                    "{label}: AOT `Column.to_arrow_ipc` must emit byte-identical \
+                    "{label}: AOT `to_arrow_ipc` must emit byte-identical \
                      Arrow IPC to the interpreter (len + checksum)",
                 );
             }

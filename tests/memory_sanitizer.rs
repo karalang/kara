@@ -21750,18 +21750,20 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
         );
     }
 
-    /// Phase-11 Arrow IPC codegen twin: `col.to_arrow_ipc()` adopts a buffer
-    /// the RUNTIME allocated (`karac_arrow_column_to_ipc` →
-    /// `karac_alloc_or_panic`) as an owned `Vec[u8]`. That hand-off is the leak
-    /// / double-free surface — codegen must set `cap = max(len, 1)` to match
-    /// the runtime's allocation and free the buffer exactly once when the Vec
-    /// drops. Covers a String column too (the runtime clones each cell into an
-    /// arrow array, so a mismatch there leaks on the Rust side), and an empty
-    /// column (the `max(len,1)` corner where len == 0 but a real allocation
-    /// still happened).
+    /// Phase-11 Arrow IPC codegen twin: `to_arrow_ipc()` adopts a buffer the
+    /// RUNTIME allocated (`karac_arrow_*_to_ipc` → `karac_alloc_or_panic`) as
+    /// an owned `Vec[u8]`. That hand-off is the leak / double-free surface —
+    /// codegen must set `cap = max(len, 1)` to match the runtime's allocation
+    /// and free the buffer exactly once when the Vec drops. All three
+    /// receivers are covered, plus the shapes where the runtime side allocates
+    /// most: a String column and a String-bearing DataFrame (each cell is
+    /// cloned into an arrow array, so a mismatch leaks on the Rust side), an
+    /// empty column and a zero-column frame (the `max(len,1)` corner where
+    /// len == 0 but a real allocation still happened), and a Tensor (whose
+    /// FixedSizeList wrapper allocates an extra layer).
     #[test]
-    fn asan_column_to_arrow_ipc_no_leak() {
-        let label = "column_to_arrow_ipc";
+    fn asan_arrow_to_ipc_no_leak() {
+        let label = "arrow_to_ipc";
         if !asan_available() {
             eprintln!("[{label}] ASAN unavailable on this host — skipping");
             return;
@@ -21779,6 +21781,17 @@ fn main() {
     let ce: Column[i64] = Column.new();
     let b3 = ce.to_arrow_ipc();
     total = total + b3.len();
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([30i64, 25i64]));
+    df.insert("name", Column.from_vec(["ada", "bob"]));
+    let b4 = df.to_arrow_ipc();
+    total = total + b4.len();
+    let empty: DataFrame = DataFrame.new();
+    let b5 = empty.to_arrow_ipc();
+    total = total + b5.len();
+    let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let b6 = t.to_arrow_ipc();
+    total = total + b6.len();
     println(total > 0);
 }
 "#;
@@ -21789,7 +21802,7 @@ fn main() {
         assert!(
             status.success(),
             "[{label}] ASAN reported a memory error (exit code {:?}) — check the \
-             karac_arrow_column_to_ipc buffer adoption (cap = max(len, 1)) and the \
+             karac_arrow_*_to_ipc buffer adoption (cap = max(len, 1)) and the \
              Vec[u8] drop",
             status.code()
         );

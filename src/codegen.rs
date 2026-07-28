@@ -23,6 +23,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 mod accum_overflow;
+mod arrow;
 mod ascii_const_chars;
 mod assoc_call;
 mod backpressure;
@@ -4967,6 +4968,32 @@ impl<'ctx> Codegen<'ctx> {
         //    (`driver.rs § SpecialArchive::Arrow`).
         module.add_function(
             "karac_arrow_column_to_ipc",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        //   `*mut u8 karac_arrow_dataframe_to_ipc(*const u8 df_ctrl,
+        //    *mut i64 out_len)` — the N-field batch. Takes no element
+        //    description: each stride-40 DataFrame entry already carries its
+        //    own `elem_size` / `kind`.
+        module.add_function(
+            "karac_arrow_dataframe_to_ipc",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+            Some(Linkage::External),
+        );
+        //   `*mut u8 karac_arrow_tensor_to_ipc(*const u8 t_ptr, i64 elem_size,
+        //    i64 kind, *mut i64 out_len)` — the `arrow.fixed_shape_tensor`
+        //    extension. Rank and dims come from the tensor block's own header,
+        //    so only the element description crosses the boundary.
+        module.add_function(
+            "karac_arrow_tensor_to_ipc",
             ptr_type.fn_type(
                 &[
                     ptr_type.into(),

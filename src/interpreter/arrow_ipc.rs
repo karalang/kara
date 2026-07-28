@@ -34,9 +34,17 @@
 //! a foreign producer (pyarrow `int32`, `float32`, `large_string`) still loads.
 //! The element type is inferred per column from its first valid slot; an empty
 //! or all-null column defaults to `Int64` (its length and null pattern still
-//! round-trip exactly). Codegen + the runtime `libkarac_runtime_arrow.a`
-//! archive are a later slice; `karac run` routes an arrow program to this
-//! interpreter path in the meantime (mirroring the `gpu` / `regex` fallback).
+//! round-trip exactly).
+//!
+//! This module is the **reference implementation**: the AOT twin
+//! (`runtime/src/arrow_ipc.rs`, behind `libkarac_runtime_arrow.a`) covers the
+//! write direction for all three types and is required to emit BYTE-IDENTICAL
+//! streams — a change to the mapping rules here is a change to that contract,
+//! and `tests/codegen.rs` will catch a one-sided edit. The parse direction is
+//! still interpreter-only (codegen rejects it loudly). `karac run` routes an
+//! arrow program here regardless, because the JIT runner links the runtime
+//! without the opt-in `arrow` feature (mirroring the `gpu` / `regex`
+//! fallback).
 
 use std::io::Cursor;
 use std::sync::Arc;

@@ -1308,61 +1308,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // `to_arrow_ipc() -> Vec[u8]` — hand the column's control block to
             // the runtime, which walks it and serializes an Arrow IPC stream
             // (`runtime/src/arrow_ipc.rs`, the interpreter twin's byte-identical
-            // peer). `elem_size` + `kind` travel alongside because a bare
-            // control block, unlike a DataFrame entry, carries no element tag —
-            // `kind` uses the same encoding as the DataFrame entry field, so the
-            // runtime's decode table is shared. The returned malloc'd buffer is
-            // adopted as an owned `Vec[u8]` with `cap = max(len, 1)` (the
-            // `karac_regex_replace_all` convention).
+            // peer). Lowering in `src/codegen/arrow.rs`.
             "to_arrow_ipc" => {
                 let elem_size = self.column_elem_size(info.elem)?;
                 let kind = self.dataframe_kind_for_info(&info);
-                let fn_val = self.current_fn.unwrap();
-                let len_slot = self.create_entry_alloca(fn_val, "arrow.col.len", i64_t.into());
-                self.builder
-                    .build_store(len_slot, i64_t.const_zero())
-                    .unwrap();
-                let to_ipc = self
-                    .module
-                    .get_function("karac_arrow_column_to_ipc")
-                    .expect("karac_arrow_column_to_ipc declared in Codegen::new");
-                let ptr = self
-                    .builder
-                    .build_call(
-                        to_ipc,
-                        &[
-                            control.into(),
-                            i64_t.const_int(elem_size, false).into(),
-                            i64_t.const_int(kind, false).into(),
-                            len_slot.into(),
-                        ],
-                        "arrow.col.ptr",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
-                let len = self
-                    .builder
-                    .build_load(i64_t, len_slot, "arrow.col.len.v")
-                    .unwrap()
-                    .into_int_value();
-                // cap = max(len, 1) — the runtime allocated max(len, 1) bytes.
-                let len_pos = self
-                    .builder
-                    .build_int_compare(
-                        inkwell::IntPredicate::UGT,
-                        len,
-                        i64_t.const_zero(),
-                        "arrow.col.pos",
-                    )
-                    .unwrap();
-                let cap = self
-                    .builder
-                    .build_select(len_pos, len, i64_t.const_int(1, false), "arrow.col.cap")
-                    .unwrap()
-                    .into_int_value();
-                Ok(Some(self.build_vec_value(ptr, len, cap)))
+                Ok(Some(
+                    self.compile_arrow_column_to_ipc(control, elem_size, kind)?,
+                ))
             }
             "null_count" => Ok(Some(self.compile_column_count(control, false)?)),
             "valid_count" => Ok(Some(self.compile_column_count(control, true)?)),

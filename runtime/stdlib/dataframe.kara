@@ -166,9 +166,10 @@ impl DataFrame {
     // (Float64), `String` (Utf8), `bool` (Boolean); each column's validity
     // bitmap maps to Arrow's null buffer. Pure in-memory (no FileSystem
     // effect). Round-trips through `from_arrow_ipc`. Interpreter reference impl
-    // in `src/interpreter/arrow_ipc.rs`; codegen + the runtime
-    // `libkarac_runtime_arrow.a` archive are a later slice — `karac run` routes
-    // an arrow program to the interpreter until then.
+    // in `src/interpreter/arrow_ipc.rs`; `karac build` (AOT) emits the same
+    // stream via `libkarac_runtime_arrow.a` (byte-identity is asserted E2E).
+    // `karac run` routes an arrow program to the interpreter, because the JIT
+    // runner links the runtime without the opt-in `arrow` feature.
     #[compiler_builtin]
     fn to_arrow_ipc(ref self) -> Vec[u8] {
         Vec.new()

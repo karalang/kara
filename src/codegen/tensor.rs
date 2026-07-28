@@ -5135,6 +5135,28 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// `(elem_size, kind)` for a tensor element, as the Arrow IPC runtime
+    /// entrypoint expects them (phase-11 Arrow IPC twin). `kind` reuses the
+    /// DataFrame entry's element-class encoding — 0 = other (bool at width 1),
+    /// 1 = signed, 2 = unsigned, 3 = float — so the runtime decodes tensor and
+    /// column slots through one shared table. Tensors admit no `String`
+    /// element, so kind 4 can't arise here.
+    pub(super) fn tensor_arrow_elem_desc(
+        &self,
+        elem: BasicTypeEnum<'ctx>,
+        elem_unsigned: bool,
+    ) -> Result<(u64, u64), String> {
+        let size = self.tensor_elem_size(elem)?;
+        let kind = match elem {
+            BasicTypeEnum::FloatType(_) => 3,
+            BasicTypeEnum::IntType(it) if it.get_bit_width() == 1 => 0, // bool
+            BasicTypeEnum::IntType(_) if elem_unsigned => 2,
+            BasicTypeEnum::IntType(_) => 1,
+            _ => 0,
+        };
+        Ok((size, kind))
+    }
+
     /// Register a tensor binding's cleanup (scope-exit free of the
     /// single heap block). Mirrors `track_vec_var`.
     pub(super) fn track_tensor_var(&mut self, tensor_alloca: PointerValue<'ctx>) {
