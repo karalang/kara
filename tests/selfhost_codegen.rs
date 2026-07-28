@@ -708,6 +708,15 @@ const CORPUS: &[&str] = &[
     // (5) Leak direction, `match`: the LAST arm is borrowed, so the join
     //     disclaimed the FIRST arm's freshly allocated buffer.
     "enum Val { N(i64), S(String) }\nfn render(e: Val) -> String {\n    match e { N(k) => \"(\" + \"n\" + \")\", S(s) => s }\n}\nfn main() {\n    let a = Val.N(1);\n    println(render(a));\n}",
+    // (6) B-2026-07-27-12, filed separately over three slices and closed by the
+    //     same fix — it is this defect reached by a THIRD route to disagreeing
+    //     arms: `.to_string()` on a scalar allocates (owned) while the same call
+    //     on a literal does not (borrowed), so `Num(n) => n.to_string()` next to
+    //     `Nothing => "none".to_string()` disagrees even though the two arms
+    //     look identical. Pre-fix this leaked 32 bytes; the control with a
+    //     literal in BOTH arms was clean, which is what made it look like a
+    //     `.to_string()` bug rather than a join bug.
+    "enum V {\n    Num(i64),\n    Nothing,\n}\nfn show(v: ref V) -> String {\n    match v {\n        Num(n) => n.to_string(),\n        Nothing => \"none\".to_string(),\n    }\n}\nfn main() {\n    let a = V.Num(7);\n    println(show(a));\n    let e = V.Nothing;\n    println(show(e));\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
