@@ -76,8 +76,14 @@ fi
 "$TMP/cg" > "$TMP/raw.ll" 2> "$TMP/emit.err" || {
   echo "!! emitter panicked"; cat "$TMP/emit.err"; exit 1; }
 
-# ---- 2. header-only rewrite so the IR links against libSystem ----
-python3 - "$TMP/raw.ll" > "$TMP/prog.ll" <<'PY'
+# ---- 2. header-only rewrite, macOS ONLY ----
+# The port emits a Linux triple and glibc's `@stdout`, neither of which resolves
+# against libSystem. On Linux that header is already correct and rewriting it
+# would BREAK the link (there is no `@__stdoutp` in glibc), so this is gated on
+# the host. Either way only the header changes — function bodies are untouched,
+# so what runs is exactly what the emitter produced.
+if [ "$(uname -s)" = "Darwin" ]; then
+  python3 - "$TMP/raw.ll" > "$TMP/prog.ll" <<'PY'
 import sys, re
 ir = open(sys.argv[1]).read()
 ir = re.sub(r'^target (datalayout|triple) = .*\n', '', ir, flags=re.M)
@@ -85,6 +91,9 @@ ir = ir.replace('@stdout = external global ptr', '@__stdoutp = external global p
 ir = re.sub(r'(?<![\w.$])@stdout(?![\w.$])', '@__stdoutp', ir)
 sys.stdout.write(ir)
 PY
+else
+  cp "$TMP/raw.ll" "$TMP/prog.ll"
+fi
 
 # The one runtime symbol the emitted IR needs beyond libc.
 cat > "$TMP/stub.c" <<'C'
@@ -123,11 +132,27 @@ else
   echo "   !! clang could not build the emitted IR"; sed 's/^/   /' "$TMP/asan.cc.err"
 fi
 
-# ---- 5. leaks leg (separate, non-ASAN build) ----
-echo "== emitted, under leaks --atExit =="
+# ---- 5. leak leg (separate, non-ASAN build — the two allocators don't compose)
+# macOS has `leaks`, Linux has valgrind. Both answer the same question; valgrind
+# is the stronger of the two and is what the port's oracle prescribes.
 if [ "$(uname -s)" != "Darwin" ]; then
-  echo "   skipped: leaks(1) is macOS-only. On Linux use: valgrind --leak-check=full"
-elif clang -O0 -g -o "$TMP/plain" -x ir "$TMP/prog.ll" -x c "$TMP/stub.c" 2>/dev/null; then
+  echo "== emitted, under valgrind --leak-check=full =="
+  if ! command -v valgrind >/dev/null 2>&1; then
+    echo "   skipped: valgrind not installed (apt-get install valgrind)"
+  elif clang -O0 -g -o "$TMP/plain" -x ir "$TMP/prog.ll" -x c "$TMP/stub.c" 2>/dev/null; then
+    set +e
+    valgrind --leak-check=full --error-exitcode=0 "$TMP/plain" > /dev/null 2> "$TMP/vg.out"
+    set -e
+    grep -E 'definitely lost|indirectly lost|ERROR SUMMARY' "$TMP/vg.out" | sed 's/^/   /' \
+      || echo "   (no valgrind summary)"
+  else
+    echo "   !! clang could not build the emitted IR"
+  fi
+  exit 0
+fi
+
+echo "== emitted, under leaks --atExit =="
+if clang -O0 -g -o "$TMP/plain" -x ir "$TMP/prog.ll" -x c "$TMP/stub.c" 2>/dev/null; then
   # `leaks` EXITS NONZERO when it finds something, and `pipefail` is on, so
   # capture first and inspect after — piping it straight into grep makes the
   # leak-found case look like a script failure. The summary line reads "N leak
