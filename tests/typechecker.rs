@@ -34129,3 +34129,38 @@ fn weak_field_store_rejects_unrelated_type() {
         "expected a weak-store type error; got: {errs:?}"
     );
 }
+
+/// B-2026-07-28-13 sibling surface. A plain `shared struct`'s refcount is a
+/// non-atomic load/add/store — only a `par struct` / `par enum` gets
+/// `atomicrmw` — so a plain shared value reachable from two concurrently
+/// running tasks races on its refcount: a lost increment frees the object while
+/// another task still holds it, surfacing as an intermittent SIGSEGV whose rate
+/// rises with worker count.
+///
+/// `par {}` branches are gated in the ownership checker (see
+/// `tests/ownership.rs::test_shared_struct_across_par_branches_rejected`);
+/// `TaskGroup.spawn` captures are gated HERE, as `E_NOT_CROSS_TASK`. Gating only
+/// one surface would leave the identical race reachable through the other, and
+/// nothing pinned either.
+#[test]
+fn test_shared_struct_captured_by_two_taskgroup_spawns_rejected() {
+    let errors = typecheck_errors(
+        "shared struct Node { val: i64, mut neighbors: Vec[Node] }\n\
+         fn walk(n: Node) -> i64 { n.val }\n\
+         fn main() {\n\
+             let root = Node { val: 1, neighbors: Vec.new() };\n\
+             let mut tg = TaskGroup.new();\n\
+             tg.spawn(|| { let _ = walk(root); });\n\
+             tg.spawn(|| { let _ = walk(root); });\n\
+             tg.wait();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("cannot cross a TaskGroup.spawn task boundary")),
+        "a plain `shared struct` captured by two TaskGroup tasks must be \
+         rejected — its refcount ops are non-atomic. Got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

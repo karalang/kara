@@ -9242,3 +9242,61 @@ fn test_write_through_shared_handle_needs_no_mut() {
         }",
     );
 }
+
+// ── Cross-task sharing of a plain `shared struct` is rejected (B-2026-07-28-13)
+// A `shared struct`'s refcount is a plain non-atomic load/add/store; only a
+// `par struct` / `par enum` (or an Arc-promoted binding) gets `atomicrmw`. So a
+// plain shared value reachable from two concurrently-running tasks is a data
+// race on its refcount — a lost increment frees the object while another task
+// still holds it, which shows up as an intermittent SIGSEGV whose rate rises
+// with worker count. The ownership checker is the gate that makes that
+// unrepresentable, and nothing pinned it: these tests do.
+//
+// The shape is `kara-katas .../133-clone-graph/bench/clone_bfs_par.kara`,
+// reported as an intermittent crash (~1%) under B-2026-07-28-13. Current
+// `karac build` refuses it — the report's binary predates the gate.
+
+#[test]
+fn test_shared_struct_across_par_branches_rejected() {
+    let errors = ownership_errors(
+        "shared struct Node { val: i64, mut neighbors: Vec[Node] }\n\
+         fn walk(n: Node) -> i64 { n.val }\n\
+         fn main() {\n\
+             let root = Node { val: 1, neighbors: Vec.new() };\n\
+             let (a, b) = par {\n\
+                 let a = walk(root);\n\
+                 let b = walk(root);\n\
+                 (a, b)\n\
+             };\n\
+             println(a + b);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("multiple concurrent tasks")),
+        "a plain `shared struct` read by two par branches must be rejected — \
+         its refcount ops are non-atomic. Got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_single_par_branch_shared_struct_is_fine() {
+    // The gate must not over-fire: ONE branch reading the value is sequential
+    // with respect to that value, so there is no race and no reason to reject.
+    ownership_ok(
+        "shared struct Node { val: i64, mut neighbors: Vec[Node] }\n\
+         fn walk(n: Node) -> i64 { n.val }\n\
+         fn main() {\n\
+             let root = Node { val: 1, neighbors: Vec.new() };\n\
+             let x: i64 = 2;\n\
+             let (a, b) = par {\n\
+                 let a = walk(root);\n\
+                 let b = x + 1;\n\
+                 (a, b)\n\
+             };\n\
+             println(a + b);\n\
+         }",
+    );
+}
