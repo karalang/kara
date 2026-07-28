@@ -831,6 +831,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
                 let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+                if !is_ref {
+                    // B-2026-07-28-4: by-value struct arg whose param declined
+                    // the entry copy — move it, don't leave both sides owning it.
+                    self.move_declined_copy_struct_arg(&arg.value);
+                }
                 let slice_elem = slice_elems.get(i).copied().flatten();
                 let val: BasicValueEnum<'ctx> = if is_ref {
                     if let ExprKind::Identifier(var_name) = &arg.value.kind {
@@ -1028,6 +1033,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .expect("GEP state struct field for arg");
 
                 let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+                if !is_ref {
+                    // B-2026-07-28-4: by-value struct arg whose param declined
+                    // the entry copy — move it, don't leave both sides owning it.
+                    self.move_declined_copy_struct_arg(&arg.value);
+                }
                 let slice_elem = slice_elems.get(i).copied().flatten();
 
                 let to_store: BasicValueEnum<'ctx> = if is_ref {
@@ -1268,6 +1278,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             }
             let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+            if !is_ref {
+                // B-2026-07-28-4: by-value struct arg whose param declined the
+                // entry copy — move it, don't leave both sides owning it.
+                self.move_declined_copy_struct_arg(&a.value);
+            }
             if is_ref {
                 // `ref Slice[T]` / `mut ref Slice[T]` param fed an `Array[T, N]`:
                 // the callee receives a POINTER to a `{ptr,len}` slice header,
@@ -3799,6 +3814,48 @@ impl<'ctx> super::Codegen<'ctx> {
     /// binding's `StructDrop` from whichever frame holds it (a move site can fire
     /// with a transient inner arg/method-eval frame on top — same rationale as
     /// the Map sibling).
+    /// B-2026-07-28-4 (cross_graph): a by-value struct argument whose parameter
+    /// DECLINED the callee entry-copy must be a true MOVE — the caller gives up
+    /// its drop.
+    ///
+    /// Normally a by-value aggregate param is "callee-owned": the callee
+    /// deep-copies on entry, so caller and callee hold disjoint buffers and each
+    /// legitimately frees its own. When `aggregate_param_copy_supported_struct`
+    /// declines (B-2026-07-28-3 makes it decline for a self-referential
+    /// `struct N { edges: Vec[N] }`, because the per-element copy is unrolled at
+    /// emission and has no finite form), the param falls back to caller-retains
+    /// and the callee receives an ALIAS. That is safe only while the callee just
+    /// reads it. The moment the callee stores it into an owning container —
+    /// `self.edges.push(t)`, the entire point of an adjacency list — the
+    /// container and the caller's binding both own the same buffers, and both
+    /// free them.
+    ///
+    /// So the decline swapped a compiler stack overflow for a runtime
+    /// double-free. Suppressing the caller's drop restores the language-level
+    /// semantics (a bare `T` param is owned, so the argument is moved in) for
+    /// exactly the shape that cannot be copied. Narrow by construction: it fires
+    /// only for an Identifier argument of a non-shared user struct that the
+    /// copy-support analysis rejects — every copy-supported struct keeps the
+    /// existing entry-copy behaviour untouched.
+    pub(super) fn move_declined_copy_struct_arg(&mut self, arg: &Expr) {
+        let ExprKind::Identifier(var) = &arg.kind else {
+            return;
+        };
+        let Some(type_name) = self.var_type_names.get(var.as_str()).cloned() else {
+            return;
+        };
+        if !self.struct_types.contains_key(type_name.as_str())
+            || self.shared_types.contains_key(type_name.as_str())
+        {
+            return;
+        }
+        if self.aggregate_param_copy_supported_struct(&type_name, &mut Vec::new()) {
+            return;
+        }
+        let var = var.clone();
+        self.suppress_struct_cleanup_for_tail_identifier(&var);
+    }
+
     pub(super) fn suppress_struct_cleanup_for_tail_identifier(&mut self, name: &str) {
         let slot_ptr = match self.variables.get(name) {
             Some(s) => s.ptr,

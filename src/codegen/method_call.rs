@@ -1974,6 +1974,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 for (i, arg) in args.iter().enumerate() {
                     let param_idx = i + 1;
                     let is_ref = ref_flags.get(param_idx).copied().unwrap_or(false);
+                    if !is_ref {
+                        // B-2026-07-28-4: by-value struct arg whose param
+                        // declined the entry copy — move it, don't leave both
+                        // sides owning it.
+                        self.move_declined_copy_struct_arg(&arg.value);
+                    }
                     let slice_elem = slice_elems.get(param_idx).copied().flatten();
                     let val: BasicValueEnum<'ctx> = if is_ref {
                         if let ExprKind::Identifier(var_name) = &arg.value.kind {
@@ -2148,6 +2154,12 @@ impl<'ctx> super::Codegen<'ctx> {
 
                     let param_idx = i + 1;
                     let is_ref = ref_flags.get(param_idx).copied().unwrap_or(false);
+                    if !is_ref {
+                        // B-2026-07-28-4: by-value struct arg whose param
+                        // declined the entry copy — move it, don't leave both
+                        // sides owning it.
+                        self.move_declined_copy_struct_arg(&arg.value);
+                    }
                     let slice_elem = slice_elems.get(param_idx).copied().flatten();
 
                     let to_store: BasicValueEnum<'ctx> = if is_ref {
@@ -5176,6 +5188,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 for (i, a) in args.iter().enumerate() {
                     let pidx = i + 1;
                     let is_ref = ref_flags.get(pidx).copied().unwrap_or(false);
+                    if !is_ref {
+                        // B-2026-07-28-4: by-value struct arg whose param
+                        // declined the entry copy — move it, don't leave both
+                        // sides owning it.
+                        self.move_declined_copy_struct_arg(&a.value);
+                    }
                     if is_ref {
                         // Identifier place — pass its data pointer.
                         if let ExprKind::Identifier(var_name) = &a.value.kind {
