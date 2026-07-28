@@ -6444,18 +6444,19 @@ impl<'ctx> super::Codegen<'ctx> {
                  (tracker: phase-11-stdlib-longtail.md § LazyDataFrame)"
             ));
         }
-        // Arrow IPC interchange (`to_arrow_ipc` on Column / DataFrame / Tensor)
-        // is interpreter-only (codegen + the runtime `libkarac_runtime_arrow.a`
-        // archive are a later slice). Give a clean, actionable error instead of
-        // the generic "this is a codegen bug" fall-through — `karac run` routes
-        // these programs to the interpreter automatically
+        // Arrow IPC interchange. `Column.to_arrow_ipc` HAS an AOT twin
+        // (`src/codegen/column.rs` → `karac_arrow_column_to_ipc`), so a landing
+        // here means a DataFrame / Tensor receiver — those legs are still
+        // interpreter-only. Give a clean, actionable error instead of the
+        // generic "this is a codegen bug" fall-through; `karac run` routes these
+        // programs to the interpreter automatically
         // (phase-11-stdlib-longtail.md § Arrow IPC).
         if method == "to_arrow_ipc" {
             return Err(format!(
-                "codegen: `.{method}()` (Arrow IPC interchange) is interpreter-only \
-                 (AOT codegen + the `libkarac_runtime_arrow.a` archive are a later slice); \
-                 run with `karac run` (which routes Arrow IPC programs to the tree-walk \
-                 interpreter) or `karac run --interp`"
+                "codegen: `.{method}()` on this receiver (Arrow IPC interchange) is \
+                 interpreter-only — the AOT twin currently covers `Column.to_arrow_ipc`; \
+                 the DataFrame / Tensor legs are a later slice. Run with `karac run` (which \
+                 routes Arrow IPC programs to the tree-walk interpreter) or `karac run --interp`"
             ));
         }
         let receiver_desc = match &object.kind {

@@ -21750,6 +21750,56 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
         );
     }
 
+    /// Phase-11 Arrow IPC codegen twin: `col.to_arrow_ipc()` adopts a buffer
+    /// the RUNTIME allocated (`karac_arrow_column_to_ipc` →
+    /// `karac_alloc_or_panic`) as an owned `Vec[u8]`. That hand-off is the leak
+    /// / double-free surface — codegen must set `cap = max(len, 1)` to match
+    /// the runtime's allocation and free the buffer exactly once when the Vec
+    /// drops. Covers a String column too (the runtime clones each cell into an
+    /// arrow array, so a mismatch there leaks on the Rust side), and an empty
+    /// column (the `max(len,1)` corner where len == 0 but a real allocation
+    /// still happened).
+    #[test]
+    fn asan_column_to_arrow_ipc_no_leak() {
+        let label = "column_to_arrow_ipc";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+fn main() {
+    let mut total: i64 = 0;
+    let mut c: Column[i64] = Column.new();
+    c.push(10); c.push(20); c.push_null(); c.push(40);
+    let b1 = c.to_arrow_ipc();
+    total = total + b1.len();
+    let cs: Column[String] = Column.from_vec(["alpha", "beta"]);
+    let b2 = cs.to_arrow_ipc();
+    total = total + b2.len();
+    let ce: Column[i64] = Column.new();
+    let b3 = ce.to_arrow_ipc();
+    total = total + b3.len();
+    println(total > 0);
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — check the \
+             karac_arrow_column_to_ipc buffer adoption (cap = max(len, 1)) and the \
+             Vec[u8] drop",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim(),
+            "true",
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// std.secret Zeroize-on-drop (design.md § Clone/Drop/Zeroize): a
     /// `Secret[String]` overwrites its inner buffer with zeros before freeing
     /// it. The added `memset` runs inside the Secret drop, right before the

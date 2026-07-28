@@ -4958,6 +4958,26 @@ impl<'ctx> Codegen<'ctx> {
             ),
             Some(Linkage::External),
         );
+        //   `*mut u8 karac_arrow_column_to_ipc(*const u8 col_ctrl, i64 elem_size,
+        //    i64 kind, *mut i64 out_len)` — serialize a Column to an Arrow IPC
+        //    stream; returns a malloc'd buffer (caller owns as a `Vec[u8]`) +
+        //    byte length, the `karac_regex_replace_all` convention. Resolved
+        //    only by the opt-in `libkarac_runtime_arrow.a`, which `karac`
+        //    auto-selects when this symbol is referenced
+        //    (`driver.rs § SpecialArchive::Arrow`).
+        module.add_function(
+            "karac_arrow_column_to_ipc",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
         //   `*mut u8 karac_regex_replace_all(*const u8 pat, i64 pat_len,
         //    *const u8 s, i64 s_len, *const u8 repl, i64 repl_len,
         //    *mut i64 out_len)` — a malloc'd result buffer (caller owns as an

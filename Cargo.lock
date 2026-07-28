@@ -1313,6 +1313,9 @@ dependencies = [
 name = "karac-runtime"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
  "bytes",
  "http-body-util",
  "hyper",

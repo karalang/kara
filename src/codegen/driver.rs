@@ -491,9 +491,20 @@ pub(super) fn link_executable_impl(
     // a non-GPU program never sees it. Computed once — also gates the macOS
     // Metal-framework flags below.
     let references_gpu = object_references_gpu(obj_path);
-    let references_regex = !references_gpu && object_references_regex(obj_path);
-    let prefer_min = !references_gpu && !references_regex && !object_references_tls(obj_path);
-    let runtime_path = resolve_runtime_path(prefer_min, references_gpu, references_regex)?;
+    let references_arrow = !references_gpu && object_references_arrow(obj_path);
+    let references_regex =
+        !references_gpu && !references_arrow && object_references_regex(obj_path);
+    let special = if references_gpu {
+        SpecialArchive::Gpu
+    } else if references_arrow {
+        SpecialArchive::Arrow
+    } else if references_regex {
+        SpecialArchive::Regex
+    } else {
+        SpecialArchive::None
+    };
+    let prefer_min = special == SpecialArchive::None && !object_references_tls(obj_path);
+    let runtime_path = resolve_runtime_path(prefer_min, special)?;
 
     // Windows uses a separate link path (MSVC toolchain): a `clang` driver
     // (not `cc`), the Windows system import libs the runtime archive
@@ -694,9 +705,20 @@ pub fn link_native_library(
     export_symbols: &[String],
 ) -> Result<(), String> {
     let references_gpu = object_references_gpu(obj_path);
-    let references_regex = !references_gpu && object_references_regex(obj_path);
-    let prefer_min = !references_gpu && !references_regex && !object_references_tls(obj_path);
-    let runtime_path = resolve_runtime_path(prefer_min, references_gpu, references_regex)?;
+    let references_arrow = !references_gpu && object_references_arrow(obj_path);
+    let references_regex =
+        !references_gpu && !references_arrow && object_references_regex(obj_path);
+    let special = if references_gpu {
+        SpecialArchive::Gpu
+    } else if references_arrow {
+        SpecialArchive::Arrow
+    } else if references_regex {
+        SpecialArchive::Regex
+    } else {
+        SpecialArchive::None
+    };
+    let prefer_min = special == SpecialArchive::None && !object_references_tls(obj_path);
+    let runtime_path = resolve_runtime_path(prefer_min, special)?;
     match kind {
         NativeLibKind::StaticLib => link_static_library(obj_path, out_path, &runtime_path),
         NativeLibKind::CDylib => link_shared_library(
@@ -1186,6 +1208,23 @@ fn symbol_listing_references_regex(nm_output: &str) -> bool {
     nm_output.lines().any(|line| line.contains("karac_regex_"))
 }
 
+/// Whether the emitted object references a `karac_arrow_*` symbol — i.e. the
+/// program serializes Arrow IPC (`to_arrow_ipc`). Those symbols live only in
+/// the opt-in `libkarac_runtime_arrow.a`, so a hit selects that archive.
+/// Mirrors `object_references_regex`.
+fn object_references_arrow(obj_path: &str) -> bool {
+    match std::process::Command::new("nm").arg(obj_path).output() {
+        Ok(o) if o.status.success() => {
+            symbol_listing_references_arrow(&String::from_utf8_lossy(&o.stdout))
+        }
+        _ => false,
+    }
+}
+
+fn symbol_listing_references_arrow(nm_output: &str) -> bool {
+    nm_output.lines().any(|line| line.contains("karac_arrow_"))
+}
+
 /// Pure predicate over `nm`-style symbol-listing text: true iff any line
 /// names a TLS-only runtime symbol. Split out from the `nm` shell-out so
 /// the marker matching — in particular the `serve_http` vs `serve_https`
@@ -1217,10 +1256,26 @@ fn symbol_listing_references_tls(nm_output: &str) -> bool {
 /// undefined `_karac_runtime_test_bind_and_print_port` whenever a lean
 /// archive existed on disk. The min preference now applies only to the
 /// directory-search tiers (2 and 3), where no specific file was named.
+/// Which opt-in *superset* archive a program needs, if any. These are distinct
+/// artifacts built from the full archive plus one heavy backend, each resolving
+/// a symbol family nothing else carries — so a hit takes priority and never
+/// falls back to the lean/full archives. Mutually exclusive by construction:
+/// the caller picks the first family the emitted object references.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SpecialArchive {
+    /// No opt-in backend — the ordinary lean/full axis applies.
+    None,
+    /// `karac_runtime_gpu_*` — `libkarac_runtime_gpu.a` (wgpu backend).
+    Gpu,
+    /// `karac_regex_*` — `libkarac_runtime_regex.a` (the `regex` crate).
+    Regex,
+    /// `karac_arrow_*` — `libkarac_runtime_arrow.a` (the arrow-rs IPC crates).
+    Arrow,
+}
+
 pub(super) fn resolve_runtime_path(
     prefer_min: bool,
-    gpu: bool,
-    regex: bool,
+    special: SpecialArchive,
 ) -> Result<String, String> {
     // Windows (MSVC) names a `staticlib` crate `karac_runtime.lib`, not the
     // unix `libkarac_runtime.a`. The `KARAC_RUNTIME` override (tier 1) is
@@ -1233,6 +1288,8 @@ pub(super) fn resolve_runtime_path(
     const GPU: &str = "karac_runtime_gpu.lib";
     #[cfg(windows)]
     const REGEX: &str = "karac_runtime_regex.lib";
+    #[cfg(windows)]
+    const ARROW: &str = "karac_runtime_arrow.lib";
     #[cfg(not(windows))]
     const FULL: &str = "libkarac_runtime.a";
     #[cfg(not(windows))]
@@ -1241,25 +1298,24 @@ pub(super) fn resolve_runtime_path(
     const GPU: &str = "libkarac_runtime_gpu.a";
     #[cfg(not(windows))]
     const REGEX: &str = "libkarac_runtime_regex.a";
+    #[cfg(not(windows))]
+    const ARROW: &str = "libkarac_runtime_arrow.a";
 
-    // Pick the archive name within a directory. The GPU archive (a superset of
-    // the full archive, with the wgpu backend) is a distinct artifact — when a
-    // program references `karac_runtime_gpu_*` only that archive resolves the
-    // symbol, so `gpu` takes priority and never falls back to min/full.
-    // Otherwise: lean first when `prefer_min`, else the full archive.
+    // Pick the archive name within a directory. An opt-in superset archive
+    // (GPU / regex / Arrow) is a distinct artifact: only it resolves the symbol
+    // family the program referenced, so it takes priority and never falls back
+    // to min/full — those don't carry those symbols. Otherwise: lean first when
+    // `prefer_min`, else the full archive.
     let pick = |dir: &std::path::Path| -> Option<String> {
-        if gpu {
-            let g = dir.join(GPU);
-            return g.exists().then(|| g.to_string_lossy().into_owned());
-        }
-        // A program that uses `Regex.compile` / `is_match` references
-        // `karac_regex_*`, resolved only by the opt-in `libkarac_runtime_regex.a`
-        // (a superset of the full archive + the `regex` crate). Like `gpu`, it
-        // is a distinct artifact that takes priority and never falls back to
-        // min/full — those don't carry the symbol.
-        if regex {
-            let r = dir.join(REGEX);
-            return r.exists().then(|| r.to_string_lossy().into_owned());
+        let special_name = match special {
+            SpecialArchive::Gpu => Some(GPU),
+            SpecialArchive::Regex => Some(REGEX),
+            SpecialArchive::Arrow => Some(ARROW),
+            SpecialArchive::None => None,
+        };
+        if let Some(name) = special_name {
+            let p = dir.join(name);
+            return p.exists().then(|| p.to_string_lossy().into_owned());
         }
         if prefer_min {
             let m = dir.join(MIN);
@@ -1299,7 +1355,7 @@ pub(super) fn resolve_runtime_path(
         return Ok(found);
     }
 
-    if gpu {
+    if special == SpecialArchive::Gpu {
         return Err(
             "this program calls `gpu.dispatch`, which needs the GPU runtime archive \
              `libkarac_runtime_gpu.a` — not found. Build it with `cargo rustc -p karac-runtime \
@@ -1312,7 +1368,7 @@ pub(super) fn resolve_runtime_path(
                 .to_string(),
         );
     }
-    if regex {
+    if special == SpecialArchive::Regex {
         return Err(
             "this program uses `Regex.compile` / `is_match`, which needs the regex runtime \
              archive `libkarac_runtime_regex.a` — not found. Build it with `cargo rustc -p \
@@ -1323,6 +1379,20 @@ pub(super) fn resolve_runtime_path(
              the canonical name is the non-regex archive again. Or set KARAC_RUNTIME to an \
              explicit regex archive path. The regex archive carries the `regex` crate, so it \
              is opt-in — only programs that use Regex link it."
+                .to_string(),
+        );
+    }
+    if special == SpecialArchive::Arrow {
+        return Err(
+            "this program uses Arrow IPC interchange (`to_arrow_ipc`), which needs the arrow \
+             runtime archive `libkarac_runtime_arrow.a` — not found. Build it with `cargo rustc \
+             -p karac-runtime --release --features arrow --crate-type staticlib` then `cp \
+             target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a` (the \
+             `--features arrow` build reuses the canonical archive name; the rename keeps it \
+             distinct from the non-arrow archives). Re-run the plain full build afterward so the \
+             canonical name is the non-arrow archive again. Or set KARAC_RUNTIME to an explicit \
+             arrow archive path. The arrow archive carries the arrow-rs IPC crates, so it is \
+             opt-in — only programs that serialize Arrow link it."
                 .to_string(),
         );
     }

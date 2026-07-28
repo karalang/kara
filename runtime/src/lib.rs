@@ -66,6 +66,10 @@ mod lazy;
 mod map;
 mod mutex;
 mod once;
+// Arrow IPC FFI (`karac_arrow_*`) — opt-in `arrow` feature →
+// `libkarac_runtime_arrow.a`.
+#[cfg(feature = "arrow")]
+mod arrow_ipc;
 // Regex FFI (`karac_regex_*`) — opt-in `regex` feature → `libkarac_runtime_regex.a`.
 #[cfg(feature = "regex")]
 mod regex;
@@ -223,6 +227,15 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         regex::karac_regex_find_all,
         regex::karac_regex_replace_all,
     );
+    // Arrow IPC FFI (`runtime/src/arrow_ipc.rs`, opt-in `arrow` feature) — same
+    // keep-list class as the regex surface above. AOT links
+    // `libkarac_runtime_arrow.a`; the JIT would need these resolvable from the
+    // running `karac_jit_runner`, which does NOT build the opt-in `arrow`
+    // feature — so `karac run` routes Arrow IPC programs to the interpreter
+    // (the `gpu` / `regex` JIT posture). The entry is here so the symbol
+    // survives `-dead_strip` in any build that does carry the feature.
+    #[cfg(feature = "arrow")]
+    keep!(arrow_ipc::karac_arrow_column_to_ipc);
     // String runtime — `clone.rs` methods (trim/case/strip/replace/sorted) and
     // the split/lines FFI (`string_split_ffi` module + crate-root
     // `karac_runtime_string_to_cstring`). Codegen emits these for `String`/`str`

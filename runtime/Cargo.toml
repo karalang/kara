@@ -136,6 +136,15 @@ gpu = ["dep:wgpu", "dep:pollster"]
 # carry the dep.
 regex = ["dep:regex"]
 
+# Arrow IPC interchange backend for `Column`/`DataFrame`/`Tensor`
+# `to_arrow_ipc` (phase-11 Arrow IPC codegen twin). Opt-in ONLY, like `gpu`
+# and `regex`: never in `default` / lean / wasm archives. Pulls the
+# arrow-array / arrow-schema / arrow-ipc sub-crates (and flatbuffers, which
+# the IPC metadata format requires). Built into `libkarac_runtime_arrow.a`,
+# which `karac` selects only when the emitted object references a
+# `karac_arrow_*` symbol, so non-arrow binaries never carry the dep.
+arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:arrow-ipc"]
+
 [dependencies]
 # Slice F (`std.json`): backing impl for `karac_runtime_json_parse` /
 # `karac_runtime_json_stringify`. Locked design choice (iii) — use
@@ -255,6 +264,13 @@ pollster = { version = "0.4.0", optional = true }
 # major as the top-level `regex` in the workspace `Cargo.toml`, so the
 # interpreter (in-process) and the AOT runtime agree on match semantics.
 regex = { version = "1", optional = true }
+# Arrow IPC backend (opt-in `arrow` feature → `libkarac_runtime_arrow.a`).
+# Same major as the top-level arrow sub-crates in the workspace
+# `Cargo.toml`, so the interpreter (in-process) and the AOT runtime emit
+# byte-identical IPC streams — which the E2E round-trip test asserts.
+arrow-array = { version = "55", optional = true }
+arrow-schema = { version = "55", optional = true }
+arrow-ipc = { version = "55", optional = true }
 
 [dev-dependencies]
 # Hermetic test-cert generation for `src/tls.rs`'s unit tests. Slice 4

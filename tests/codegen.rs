@@ -534,9 +534,20 @@ mod codegen_tests {
         // through to the `const 0` default and return the integer 0 in place of
         // a `Column`/`DataFrame` (the B-2026-07-18-20 run-vs-build divergence
         // class). `karac run` routes these programs to the interpreter.
+        // `Column.to_arrow_ipc` HAS an AOT twin (karac_arrow_column_to_ipc) —
+        // it must compile, not reject. Byte-parity with the interpreter is
+        // asserted by `test_e2e_column_to_arrow_ipc_matches_interpreter_bytes`.
+        let column_to_ipc = "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
+                             let b = c.to_arrow_ipc(); println(b.len()); }";
+        let ir = ir_result(column_to_ipc)
+            .expect("Column.to_arrow_ipc has a codegen twin and must compile");
+        assert!(
+            ir.contains("karac_arrow_column_to_ipc"),
+            "Column.to_arrow_ipc must lower to the runtime call"
+        );
+
+        // The DataFrame / Tensor legs are still interpreter-only.
         for to_ipc in [
-            "fn main() { let c: Column[i64] = Column.from_vec([1, 2]); \
-             let b = c.to_arrow_ipc(); println(b.len()); }",
             "fn main() { let mut d = DataFrame.new(); \
              d.insert(\"x\", Column.from_vec([1, 2])); \
              let b = d.to_arrow_ipc(); println(b.len()); }",
@@ -571,6 +582,80 @@ mod codegen_tests {
                 "got: {err}"
             );
             assert!(err.contains("silently return 0"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_to_arrow_ipc_matches_interpreter_bytes() {
+        // Phase-11 Arrow IPC codegen twin — `karac_arrow_column_to_ipc`
+        // (runtime/src/arrow_ipc.rs) walks the Column control block and
+        // serializes with arrow-rs, the same crate + version the interpreter
+        // uses, so the two must emit BYTE-IDENTICAL IPC streams.
+        //
+        // The oracle is the interpreter run in-process, not a hard-coded byte
+        // string: arrow-rs owns the IPC framing, so pinning exact bytes would
+        // make this test a version tripwire rather than a parity check. Length
+        // + checksum over the stream catches any divergence in schema, buffer
+        // layout, or null encoding.
+        //
+        // The cases are chosen for the two parity rules the runtime implements
+        // deliberately (see the module header): width widening (a compiled
+        // `Column[i64]`/`[f64]` must serialize as the interpreter's Int64 /
+        // Float64) and the all-null fallback (an EMPTY `Column[String]` must
+        // emit Int64, matching the interpreter's "no valid slot to key on"
+        // default, rather than the statically-known Utf8).
+        let cases = [
+            (
+                "i64 with a null",
+                "let mut c: Column[i64] = Column.new();\n\
+                 c.push(10); c.push(20); c.push_null(); c.push(40);\n\
+                 let bytes = c.to_arrow_ipc();",
+            ),
+            (
+                "f64",
+                "let c: Column[f64] = Column.from_vec([1.5, 2.5, 3.5]);\n\
+                 let bytes = c.to_arrow_ipc();",
+            ),
+            (
+                "String",
+                "let c: Column[String] = Column.from_vec([\"alpha\", \"beta\"]);\n\
+                 let bytes = c.to_arrow_ipc();",
+            ),
+            (
+                "empty column (all-null Int64 fallback parity)",
+                "let c: Column[String] = Column.new();\n\
+                 let bytes = c.to_arrow_ipc();",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!(
+                "fn main() {{\n\
+                     {body}\n\
+                     println(bytes.len());\n\
+                     let mut sum: i64 = 0;\n\
+                     for b in bytes {{ sum = sum + (b as i64); }}\n\
+                     println(sum);\n\
+                 }}"
+            );
+            // Interpreter oracle, in-process.
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errors: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            // A zero-length stream would make the checksum vacuous.
+            assert!(
+                expected.lines().next().and_then(|l| l.parse::<i64>().ok()) > Some(8),
+                "{label}: interpreter produced an implausibly short stream: {expected:?}"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, expected,
+                    "{label}: AOT `Column.to_arrow_ipc` must emit byte-identical \
+                     Arrow IPC to the interpreter (len + checksum)",
+                );
+            }
         }
     }
 
