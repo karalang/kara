@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 180 | 0 |
+| miscompile | 181 | 1 |
 | leak | 98 | 0 |
 | double-free | 81 | 0 |
 | codegen-gap | 80 | 1 |
@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
 | perf | 30 | 1 |
-| crash | 28 | 0 |
+| crash | 29 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
 | use-after-free | 8 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 509 | 2 |
+| codegen | 511 | 3 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 0 |
@@ -124,18 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **698 surfaced · 2 open · 690 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **700 surfaced · 3 open · 691 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | The #127/#126 kata deficit is CANDIDATE GENERATION, not `Map[String, _]` — retitled because this entry's original framing has now been refuted by measurement three separate ways and the old title kept sending readers to the map. What remains under this ID is the unattributed residual after the two `.chars()` loops are accounted for: 1.17x on arm64, and on x86 the whole-program I-ref ratio is now 1.235x (was 1.45x). The map's own microbenchmark gap (~1.94x on lookup) is real but demonstrably NOT what drives either kata. | — |
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
+| B-2026-07-28-4 | 2026-07-28 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README documents, and nothing in CI runs them. | — |
 
-### Fixed (690)
+### Fixed (691)
 
-<details><summary>690 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>691 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -829,6 +830,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **698 surfaced 
 | B-2026-07-27-15 | codegen | high | SELFHOST EMITTER: a heap-owning payload bound by a `match` arm is bound as a BORROW, so returning or consuming it hands out a buffer the scrutinee's… | 416245cc |
 | B-2026-07-28-1 | other | medium | stale (not missing) runtime archive soft-skipped every E2E link failure — ~960 codegen assertions silently voided, suite reported green | 1d4ddd9 |
 | B-2026-07-28-2 | codegen | medium | `for ch in <runtime-string>.chars()` cannot take the branch-free stride-1 loop, because that lowering requires a compile-time all-ASCII proof (B-2026… | d73e5fb |
+| B-2026-07-28-3 | codegen | high | A plain (non-`shared`) struct that reaches ITSELF through a `Vec` field OVERFLOWS THE COMPILER'S STACK during codegen — every adjacency-list graph (`… | cb38efe |
 
 </details>
 
