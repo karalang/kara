@@ -174,16 +174,23 @@ struct Emitter {
     // so (i64,String) and (String,i64) both work; same-kind pairs are out of
     // surface (slot collision).
     en_var_pl2: Vec[i64],
-    // Per-ENUM (parallel to `en_names`, Slice 39): the single STRUCT payload
-    // kind (10+si) any variant of this enum carries, -1 if none. An enum with
-    // a struct payload lays out as { tag, i64, { ptr, i64 }, <struct> } —
-    // the always-widened base plus one struct slot (slot 3). One distinct
-    // struct payload type per enum (corpus discipline).
-    en_extra: Vec[i64],
-    // Per-ENUM (parallel to en_names, Slice 43): a SECOND distinct aggregate
-    // payload kind (slot 4), -1 if the enum has 0 or 1 aggregate types. Two
-    // slots cover the real token.kara (CStr struct + Vec[InterpPart]).
-    en_extra2: Vec[i64],
+    // AGGREGATE payload slots (Slices 39/41/43; generalized for
+    // B-2026-07-27-6). A by-value enum lays out as the always-widened base
+    // `{ tag, i64, { ptr, i64 } }` followed by ONE SLOT PER DISTINCT aggregate
+    // payload kind (struct 10+si, or a vec 3/4/2000+/4000+), in first-mention
+    // order: slot 3, slot 4, slot 5, … Variants sharing a payload type share
+    // the slot, so an enum needs as many slots as it has distinct aggregate
+    // payload TYPES, not variants.
+    //
+    // This used to be two fixed fields (`en_extra`/`en_extra2`), which capped
+    // an enum at two distinct aggregate payloads and made a third a hard
+    // refusal. ast.kara needs three (`Stmt`) and ten (`Item`), so the cap was
+    // the thing standing between this port and the AST module — see
+    // B-2026-07-27-6. Flat table + per-enum run, the same shape `en_off` /
+    // `en_cnt` use for variants.
+    en_agg: Vec[i64],
+    en_agg_off: Vec[i64],
+    en_agg_cnt: Vec[i64],
     // Loop-control label stack (Slice 47): the break/continue target labels
     // of the enclosing loops, innermost last. `break` jumps to the top
     // break label, `continue` to the top continue label.
@@ -199,9 +206,9 @@ struct Emitter {
     // variants, which is what makes the tag load legal through any handle).
     // This is what makes a RECURSIVE enum representable: a `shared` field
     // inside a payload lowers to `ptr` (one word), so the node has a finite
-    // size. Contrast the by-value path, whose payload lives in fixed
-    // `en_extra`/`en_extra2` aggregate slots and therefore cannot express a
-    // type that contains itself (B-2026-07-27-6).
+    // size. Contrast the by-value path, whose payload lives INLINE in an
+    // aggregate slot and therefore cannot express a type that contains itself
+    // (B-2026-07-27-6).
     en_shared: Vec[bool],
 }
 
@@ -241,8 +248,9 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
         en_var_names: Vec.new(),
         en_var_pl: Vec.new(),
         en_var_pl2: Vec.new(),
-        en_extra: Vec.new(),
-        en_extra2: Vec.new(),
+        en_agg: Vec.new(),
+        en_agg_off: Vec.new(),
+        en_agg_cnt: Vec.new(),
         loop_break: Vec.new(),
         loop_cont: Vec.new(),
         en_off: Vec.new(),
@@ -330,7 +338,7 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
             _ => {}
         }
     }
-    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_extra, en_extra2, loop_break, loop_cont, en_off, en_cnt, en_shared } = e;
+    let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_agg, en_agg_off, en_agg_cnt, loop_break, loop_cont, en_off, en_cnt, en_shared } = e;
     let mut out = "".to_string();
     out = out
         + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
@@ -426,11 +434,9 @@ impl Emitter {
         while self.en_var_pl2.len() < self.en_var_pl.len() {
             self.en_var_pl2.push(0 - 1);
         }
-        while self.en_extra.len() < self.en_names.len() {
-            self.en_extra.push(0 - 1);
-        }
-        while self.en_extra2.len() < self.en_names.len() {
-            self.en_extra2.push(0 - 1);
+        while self.en_agg_off.len() < self.en_names.len() {
+            self.en_agg_off.push(0);
+            self.en_agg_cnt.push(0);
         }
         // The synthetic Option/Result family is never `shared` (Slice 63).
         while self.en_shared.len() < self.en_names.len() {
@@ -515,37 +521,42 @@ impl Emitter {
                         vi = vi + 1;
                     }
                     self.en_cnt.push(cnt);
-                    // Aggregate payload slots (Slices 39/41/43): record up to
-                    // TWO distinct AGGREGATE payload kinds (struct 10+ or vec
-                    // 3/4/2000+/4000+) → slot 3 and slot 4.
+                    // Aggregate payload slots (Slices 39/41/43): record EVERY
+                    // distinct AGGREGATE payload kind (struct 10+ or vec
+                    // 3/4/2000+/4000+) in first-mention order → slots 3, 4, 5, …
                     // Slice 63: a `shared enum` is an RC pointer handle, so it
                     // has NO by-value aggregate slots — its payload lives in a
-                    // per-variant heap node instead. Recording `-1/-1` below is
-                    // what keeps a 30-variant recursive enum like `ast.Expr`
-                    // off the two-slot ceiling (the `en_agg_slot` sentinel).
+                    // per-variant heap node instead. Recording an EMPTY run
+                    // below is what keeps a 30-variant recursive enum like
+                    // `ast.Expr` off this layout entirely.
                     let eshared = ed.is_shared;
                     // `en_shared` and `en_names` are filled by Pass A0, so the
                     // CURRENT enum's index is derived from `en_off` (which this
                     // pass pushes in item order) — NOT from `en_names.len() - 1`,
                     // which now names the last enum in the whole program.
                     let eoff2 = self.en_off[self.en_off.len() - 1];
-                    let mut ex = 0 - 1;
-                    let mut ex2 = 0 - 1;
+                    let aoff = self.en_agg.len();
                     let mut vj = 0;
                     while vj < cnt and eshared == false {
                         let p1 = self.en_var_pl[eoff2 + vj];
                         let is_agg = (p1 >= 10 and p1 < 1000) or p1 == 3 or p1 == 4 or p1 >= 2000;
                         if is_agg {
-                            if ex < 0 {
-                                ex = p1;
-                            } else if p1 != ex and ex2 < 0 {
-                                ex2 = p1;
+                            let mut seen = false;
+                            let mut aj = aoff;
+                            while aj < self.en_agg.len() {
+                                if self.en_agg[aj] == p1 {
+                                    seen = true;
+                                }
+                                aj = aj + 1;
+                            }
+                            if seen == false {
+                                self.en_agg.push(p1);
                             }
                         }
                         vj = vj + 1;
                     }
-                    self.en_extra.push(ex);
-                    self.en_extra2.push(ex2);
+                    self.en_agg_off.push(aoff);
+                    self.en_agg_cnt.push(self.en_agg.len() - aoff);
                 }
                 _ => {}
             }
@@ -796,11 +807,13 @@ impl Emitter {
             // instantiation shares one layout and Ok/Err construction is
             // context-free. An aggregate-payload enum (Slices 39/41) appends
             // its aggregate(s) as slot 3 (and slot 4, Slice 43) to the base.
-            if self.en_extra[kind - 1000] >= 0 {
-                let mut ty = "{ i64, i64, { ptr, i64 }, ".to_string()
-                    + self.ty_text(self.en_extra[kind - 1000]);
-                if self.en_extra2[kind - 1000] >= 0 {
-                    ty = ty + ", " + self.ty_text(self.en_extra2[kind - 1000]);
+            let an = self.en_agg_n(kind - 1000);
+            if an > 0 {
+                let mut ty = "{ i64, i64, { ptr, i64 }".to_string();
+                let mut aj = 0;
+                while aj < an {
+                    ty = ty + ", " + self.ty_text(self.en_agg_kind(kind - 1000, aj));
+                    aj = aj + 1;
                 }
                 return ty + " }";
             }
@@ -997,20 +1010,16 @@ impl Emitter {
     }
 
     // B-2026-07-27-6: can the BY-VALUE enum `ei` be released from inside a
-    // shared node by `sh_byval_enum_release_text`? True when every variant's
-    // payload is either nothing or a String — the only heap a by-value enum
-    // carries in the non-extras layout `{ tag, i64, { ptr, i64 } }`. A scalar
-    // payload owns nothing, so `Option[i64]` qualifies trivially (and is
-    // already skipped as POD by `en_has_heap`).
+    // shared node by `sh_byval_enum_release_text`? A by-value enum's heap is
+    // whatever its live variant's payload owns: a String buffer in slot 2, or
+    // an AGGREGATE (struct / Vec) in that payload type's own slot — releasable
+    // exactly when the aggregate itself is. A scalar payload owns nothing, so
+    // `Option[i64]` qualifies trivially (and is already skipped as POD by
+    // `en_has_heap`).
     //
-    // An enum with AGGREGATE slots (`en_extra >= 0`) is still refused: those
-    // slots hold structs / Vecs whose own release needs the recursive walk, and
-    // widening this to cover them is a separate slice. The shape ast.kara needs
-    // — `LoopExpr.label: Option[String]` — is in the non-extras layout.
+    // Aggregate slots used to be refused outright here, which is what left
+    // ast.kara's `Stmt` (three struct-payload variants) unreleasable.
     fn sh_byval_enum_ok(ref self, ei: i64) -> bool {
-        if self.en_extra[ei] >= 0 {
-            return false;
-        }
         let off = self.en_off[ei];
         let cnt = self.en_cnt[ei];
         let mut vi = 0;
@@ -1018,6 +1027,29 @@ impl Emitter {
             let plk = self.en_var_pl[off + vi];
             // -1 = no payload; 0/1/5 = scalar (owns nothing); 2 = String.
             if plk >= 0 and plk != 0 and plk != 1 and plk != 5 and plk != 2 {
+                if plk >= 10 and plk < 1000 {
+                    if self.sh_struct_ok(plk - 10) == false {
+                        return false;
+                    }
+                } else if plk == 3 or plk == 4 or plk >= 2000 {
+                    if self.sh_vec_ok(plk) == false {
+                        return false;
+                    }
+                } else {
+                    // A by-value enum nested directly in another enum's
+                    // payload; the language forbids it
+                    // (E_ENUM_NESTED_ENUM_PAYLOAD) and no slot is allocated.
+                    return false;
+                }
+            }
+            // The SECOND payload of a two-payload variant (Slice 35) routes to
+            // slot 1 (i64) or slot 2 (String) — never to an aggregate slot — so
+            // only those kinds are releasable here. Checking it at all closes a
+            // hole: `sh_byval_enum_release_text` used to key the String free off
+            // `en_var_pl` ALONE, so a `V(i64, String)` variant passed this gate
+            // and then leaked its buffer with no diagnostic.
+            let pl2 = self.en_var_pl2[off + vi];
+            if pl2 >= 0 and pl2 != 0 and pl2 != 1 and pl2 != 5 and pl2 != 2 {
                 return false;
             }
             vi = vi + 1;
@@ -1026,13 +1058,18 @@ impl Emitter {
     }
 
     // B-2026-07-27-6: free what a BY-VALUE enum field owns, tag-conditionally.
-    // The layout is `{ tag, i64 payload, { ptr, i64 } String payload }`, so the
-    // only heap is the String buffer in slot 2, live exactly when the tag names
-    // a String-payload variant. Emits one compare-and-branch per such variant,
-    // which is why this needs `mut ref self` — the labels come off the shared
-    // `nlbl` counter, the same discipline `sh_vec_release_text` uses (`pfx`
-    // carries the leading `%` its registers need, and a label is bare at its
-    // definition and `%`-prefixed only at a `br`).
+    // A by-value enum lays out as `{ tag, i64, { ptr, i64 }, <agg slots…> }`,
+    // so the heap it owns is whatever the LIVE variant's payload owns: a String
+    // buffer in slot 2, or a struct / Vec in that payload type's aggregate slot.
+    // Emits one compare-and-branch per heap-owning variant — the tags are
+    // mutually exclusive at runtime, so per-variant legs need no or-chain — and
+    // recurses through `sh_struct_release_text` / `sh_vec_release_text` for an
+    // aggregate.
+    //
+    // Needs `mut ref self` because the labels come off the shared `nlbl`
+    // counter, the same discipline `sh_vec_release_text` uses (`pfx` carries the
+    // leading `%` its registers need, and a label is bare at its definition and
+    // `%`-prefixed only at a `br`).
     fn sh_byval_enum_release_text(mut ref self, ei: i64, val: String, pfx: String) -> String {
         let off = self.en_off[ei];
         let cnt = self.en_cnt[ei];
@@ -1040,15 +1077,24 @@ impl Emitter {
         let mut out = "".to_string();
         let mut vi = 0;
         while vi < cnt {
-            if self.en_var_pl[off + vi] == 2 {
+            let plk = self.en_var_pl[off + vi];
+            // A String reaches slot 2 from EITHER payload position of a
+            // two-payload variant (Slice 35 routes by kind, not by index), so
+            // both are consulted — keying off `en_var_pl` alone silently
+            // leaked a `V(i64, String)` buffer.
+            let is_str = plk == 2 or self.en_var_pl2[off + vi] == 2;
+            let is_agg = (plk >= 10 and plk < 1000) or plk == 3 or plk == 4 or plk >= 2000;
+            let mut owns = is_str;
+            if is_agg {
+                owns = self.en_extra_has_heap(plk);
+            }
+            if owns {
                 let lid = self.nlbl;
                 self.nlbl = self.nlbl + 1;
                 let lf = "sbe" + lid.to_string();
                 let ld = "sbed" + lid.to_string();
                 let t = pfx.clone() + "t" + vi.to_string();
                 let c = pfx.clone() + "c" + vi.to_string();
-                let s = pfx.clone() + "s" + vi.to_string();
-                let b = pfx.clone() + "b" + vi.to_string();
                 out = out
                     + "  "
                     + t.clone()
@@ -1072,27 +1118,45 @@ impl Emitter {
                     + ld.clone()
                     + "\n"
                     + lf
-                    + ":\n"
-                    + "  "
-                    + s.clone()
-                    + " = extractvalue "
-                    + ety.clone()
-                    + " "
-                    + val.clone()
-                    + ", 2\n"
-                    + "  "
-                    + b.clone()
-                    + " = extractvalue { ptr, i64 } "
-                    + s
-                    + ", 0\n"
-                    + "  call void @free(ptr "
-                    + b
-                    + ")\n"
-                    + "  br label %"
-                    + ld.clone()
-                    + "\n"
-                    + ld
                     + ":\n";
+                if is_agg {
+                    let a = pfx.clone() + "a" + vi.to_string();
+                    out = out
+                        + "  "
+                        + a.clone()
+                        + " = extractvalue "
+                        + ety.clone()
+                        + " "
+                        + val.clone()
+                        + ", "
+                        + self.en_agg_slot(ei, plk).to_string()
+                        + "\n";
+                    if plk >= 10 and plk < 1000 {
+                        out = out + self.sh_struct_release_text(plk - 10, a.clone(), a + "n");
+                    } else {
+                        out = out + self.sh_vec_release_text(plk, a.clone(), a + "v");
+                    }
+                } else {
+                    let s = pfx.clone() + "s" + vi.to_string();
+                    let b = pfx.clone() + "b" + vi.to_string();
+                    out = out
+                        + "  "
+                        + s.clone()
+                        + " = extractvalue "
+                        + ety.clone()
+                        + " "
+                        + val.clone()
+                        + ", 2\n"
+                        + "  "
+                        + b.clone()
+                        + " = extractvalue { ptr, i64 } "
+                        + s
+                        + ", 0\n"
+                        + "  call void @free(ptr "
+                        + b
+                        + ")\n";
+                }
+                out = out + "  br label %" + ld.clone() + "\n" + ld + ":\n";
             }
             vi = vi + 1;
         }
@@ -1103,9 +1167,9 @@ impl Emitter {
     // `sh_vec_release_text`? Vec[i64]/Vec[bool] own only the buffer;
     // Vec[String] frees a buffer per element; Vec[<struct>] recurses through
     // `sh_struct_ok`; Vec[<shared enum>] releases a handle per element — the
-    // `Vec[Expr]` case. A Vec of a heap-bearing BY-VALUE enum is still refused:
-    // freeing those needs the tag-conditional walk `emit_free_enum_val` emits
-    // into `self.body`, which this text-returning path has no way to call.
+    // `Vec[Expr]` case. B-2026-07-27-6: a Vec of a heap-bearing BY-VALUE enum
+    // is admitted too, when the element enum is itself releasable — that is
+    // `ast.Block.stmts: Vec[Stmt]`, and it was the emitter's stop on ast.kara.
     fn sh_vec_ok(ref self, k: i64) -> bool {
         if k == 3 or k == 4 {
             return true;
@@ -1119,7 +1183,10 @@ impl Emitter {
                 return true;
             }
             // A POD by-value enum owns nothing, so the buffer free suffices.
-            return self.en_has_heap(eei) == false;
+            if self.en_has_heap(eei) == false {
+                return true;
+            }
+            return self.sh_byval_enum_ok(eei);
         }
         false
     }
@@ -1151,7 +1218,11 @@ impl Emitter {
         // buffer free below is the whole job.
         let mut per_elem = k == 4 or esi >= 0;
         if eei >= 0 {
-            per_elem = self.en_is_shared(eei);
+            // A `shared` element is a handle to release; a heap-bearing
+            // BY-VALUE element owns a String buffer or an aggregate in its live
+            // variant's slot (B-2026-07-27-6). Either way the buffer free alone
+            // is not enough.
+            per_elem = self.en_is_shared(eei) or self.en_has_heap(eei);
         }
         let b = pfx.clone() + "b";
         let mut out = "  ".to_string()
@@ -1229,8 +1300,10 @@ impl Emitter {
                 + ", ptr "
                 + ep
                 + ", align 8\n";
-            if eei >= 0 {
+            if eei >= 0 and self.en_is_shared(eei) {
                 out = out + "  call void @sh_release_" + eei.to_string() + "(ptr " + el + ")\n";
+            } else if eei >= 0 {
+                out = out + self.sh_byval_enum_release_text(eei, el.clone(), el + "e");
             } else if esi >= 0 {
                 out = out + self.sh_struct_release_text(esi, el, pfx.clone() + "v");
             } else {
@@ -5346,47 +5419,61 @@ impl Emitter {
             }
             vi = vi + 1;
         }
-        if self.en_extra[ei] >= 0 {
-            // A heap-bearing STRUCT/VEC payload (Slices 39/41) makes the enum
-            // own heap too.
-            if self.en_extra_has_heap(self.en_extra[ei]) {
+        // A heap-bearing STRUCT/VEC payload in ANY aggregate slot (Slices
+        // 39/41/43) makes the enum own heap too.
+        let an = self.en_agg_n(ei);
+        let mut aj = 0;
+        while aj < an {
+            if self.en_extra_has_heap(self.en_agg_kind(ei, aj)) {
                 return true;
             }
-        }
-        if self.en_extra2[ei] >= 0 {
-            // A SECOND aggregate slot (Slice 43).
-            if self.en_extra_has_heap(self.en_extra2[ei]) {
-                return true;
-            }
+            aj = aj + 1;
         }
         false
     }
 
-    // Slot index (3 or 4) for aggregate payload kind `aggkind` in enum `ei`
-    // (Slice 43), -1 if it is neither aggregate slot.
+    // How many AGGREGATE payload slots enum `ei` carries — one per distinct
+    // aggregate payload kind. 0 for a POD enum, a str-enum, or any `shared`
+    // enum (whose payload lives in its heap node instead).
+    fn en_agg_n(ref self, ei: i64) -> i64 {
+        if ei < 0 {
+            return 0;
+        }
+        if ei >= self.en_agg_cnt.len() {
+            return 0;
+        }
+        self.en_agg_cnt[ei]
+    }
+
+    // The aggregate payload kind held in slot `3 + j` of enum `ei`.
+    fn en_agg_kind(ref self, ei: i64, j: i64) -> i64 {
+        self.en_agg[self.en_agg_off[ei] + j]
+    }
+
+    // Layout slot index for aggregate payload kind `aggkind` in enum `ei`.
+    // The base layout occupies slots 0..2, so the j-th distinct aggregate
+    // payload type lives at slot `3 + j`.
+    //
+    // B-2026-07-27-6: this used to be a two-way test against `en_extra` /
+    // `en_extra2` and a loud refusal for anything else, because the layout
+    // carried exactly two aggregate slots. ast.kara needs three (`Stmt`) and
+    // ten (`Item`), so the cap has been lifted rather than reported. Reaching
+    // the panic below is now an INTERNAL inconsistency — every distinct
+    // aggregate payload kind gets a slot in `collect_sigs`, so a miss means the
+    // layout table and the variant table disagree — not a user-facing limit.
+    // NOTE: the seed's `panic` only propagates a STRING-LITERAL message (a
+    // computed one degrades to "explicit panic"), so the text is a literal.
     fn en_agg_slot(ref self, ei: i64, aggkind: i64) -> i64 {
-        if self.en_extra[ei] == aggkind {
-            return 3;
+        let an = self.en_agg_n(ei);
+        let mut aj = 0;
+        while aj < an {
+            if self.en_agg_kind(ei, aj) == aggkind {
+                return 3 + aj;
+            }
+            aj = aj + 1;
         }
-        if self.en_extra2[ei] == aggkind {
-            return 4;
-        }
-        // B-2026-07-27-6: an enum payload layout carries only TWO aggregate
-        // slots (`en_extra` = slot 3, `en_extra2` = slot 4). A THIRD distinct
-        // aggregate payload type has nowhere to live, and both callers
-        // interpolate this result straight into an `extractvalue`/`insertvalue`
-        // index — so returning the old -1 sentinel emitted literal
-        // `extractvalue <ty> %x, -1`, which LLVM rejects with a bare "expected
-        // integer" that names neither the enum nor the payload. REFUSE loudly
-        // instead: the -1 path could never produce runnable IR, so failing here
-        // cannot regress a working program, and the message names exactly what
-        // is unsupported. Lifting this needs a union-style payload area (one
-        // max-size aggregate region + per-variant offsets) to replace the
-        // fixed two slots — see the ledger entry.
-        // NOTE: the seed's `panic` only propagates a STRING-LITERAL message (a
-        // computed one degrades to "explicit panic"), so the text is a literal.
         panic(
-            "codegen.kara: this enum needs a THIRD distinct aggregate payload slot, but the enum layout provides only two (en_extra/en_extra2). Unsupported — see bug B-2026-07-27-6.",
+            "codegen.kara: internal — a variant's aggregate payload kind has no layout slot. collect_sigs assigns a slot to every DISTINCT aggregate payload kind, so this means the layout table and the variant table disagree.",
         );
         0 - 1
     }
@@ -5418,11 +5505,15 @@ impl Emitter {
         if (ei >= 2 and ei <= 5) or self.en_has_heap(ei) {
             n = 32;
         }
-        if self.en_extra[ei] >= 0 {
-            // Aggregate-slot layout (Slices 39/41/43).
-            n = 32 + self.en_extra_stride(self.en_extra[ei]);
-            if self.en_extra2[ei] >= 0 {
-                n = n + self.en_extra_stride(self.en_extra2[ei]);
+        let an = self.en_agg_n(ei);
+        if an > 0 {
+            // Aggregate-slot layout (Slices 39/41/43): the widened base plus
+            // every aggregate slot.
+            n = 32;
+            let mut aj = 0;
+            while aj < an {
+                n = n + self.en_extra_stride(self.en_agg_kind(ei, aj));
+                aj = aj + 1;
             }
         }
         n
@@ -5472,39 +5563,6 @@ impl Emitter {
         let mut vi = 0;
         while vi < cnt {
             if self.en_var_pl[off + vi] == aggkind {
-                let c = self.fresh();
-                self.body = self.body
-                    + "  "
-                    + c.clone()
-                    + " = icmp eq i64 "
-                    + tg.clone()
-                    + ", "
-                    + vi.to_string()
-                    + "\n";
-                if acc == "" {
-                    acc = c;
-                } else {
-                    let o = self.fresh();
-                    self.body = self.body + "  " + o.clone() + " = or i1 " + acc + ", " + c + "\n";
-                    acc = o;
-                }
-            }
-            vi = vi + 1;
-        }
-        if acc == "" {
-            acc = "false".to_string();
-        }
-        acc
-    }
-
-    fn emit_enum_extratag_test(mut ref self, tg: String, ei: i64) -> String {
-        let off = self.en_off[ei];
-        let cnt = self.en_cnt[ei];
-        let ex = self.en_extra[ei];
-        let mut acc = "".to_string();
-        let mut vi = 0;
-        while vi < cnt {
-            if self.en_var_pl[off + vi] == ex {
                 let c = self.fresh();
                 self.body = self.body
                     + "  "
@@ -5639,28 +5697,25 @@ impl Emitter {
             + ", align 8\n";
         self.body = self.body + "  br label %" + ld.clone() + "\n";
         self.body = self.body + ld + ":\n";
-        if self.en_extra[ei] >= 0 {
-            // AGGREGATE-slot deep copies (Slices 39/41/43), one tag-gated leg
-            // per aggregate slot. Exclusive with the string leg AND each other
-            // per runtime tag, so each leg loads/stores the result slot
-            // independently.
-            if self.en_extra_has_heap(self.en_extra[ei]) {
-                self.emit_enum_aggslot_copy(op.clone(), slot.clone(), ety.clone(), ei, 3);
+        // AGGREGATE-slot deep copies (Slices 39/41/43), one tag-gated leg per
+        // aggregate slot. Exclusive with the string leg AND each other per
+        // runtime tag, so each leg loads/stores the result slot independently.
+        let an = self.en_agg_n(ei);
+        let mut aj = 0;
+        while aj < an {
+            if self.en_extra_has_heap(self.en_agg_kind(ei, aj)) {
+                self.emit_enum_aggslot_copy(op.clone(), slot.clone(), ety.clone(), ei, 3 + aj);
             }
-        }
-        if self.en_extra2[ei] >= 0 {
-            if self.en_extra_has_heap(self.en_extra2[ei]) {
-                self.emit_enum_aggslot_copy(op.clone(), slot.clone(), ety.clone(), ei, 4);
-            }
+            aj = aj + 1;
         }
         let r = self.fresh();
         self.body = self.body + "  " + r.clone() + " = load " + ety + ", ptr " + slot + ", align 8\n";
         Val { op: r, kind: 1000 + ei, heap: true }
     }
 
-    // Tag-gated deep copy of ONE aggregate slot (`slotnum` 3 or 4, Slice 43):
-    // if the runtime tag is one of that slot's aggregate variants, extract the
-    // slot, materialize an owned copy, and re-insert into the result slot.
+    // Tag-gated deep copy of ONE aggregate slot (`slotnum` 3, 4, 5, …): if the
+    // runtime tag is one of that slot's aggregate variants, extract the slot,
+    // materialize an owned copy, and re-insert into the result slot.
     fn emit_enum_aggslot_copy(
         mut ref self,
         op: String,
@@ -5669,10 +5724,7 @@ impl Emitter {
         ei: i64,
         slotnum: i64,
     ) {
-        let mut aggkind = self.en_extra[ei];
-        if slotnum == 4 {
-            aggkind = self.en_extra2[ei];
-        }
+        let aggkind = self.en_agg_kind(ei, slotnum - 3);
         let tg = self.fresh();
         self.body =
             self.body + "  " + tg.clone() + " = extractvalue " + ety.clone() + " " + op.clone() + ", 0\n";
@@ -5792,25 +5844,20 @@ impl Emitter {
         self.emit_free_val(s);
         self.body = self.body + "  br label %" + ld.clone() + "\n";
         self.body = self.body + ld + ":\n";
-        if self.en_extra[ei] >= 0 {
-            // Free each AGGREGATE slot's heap (Slices 39/41/43), tag-gated.
-            if self.en_extra_has_heap(self.en_extra[ei]) {
-                self.emit_enum_aggslot_free(op.clone(), ety.clone(), ei, 3);
+        // Free each AGGREGATE slot's heap (Slices 39/41/43), tag-gated.
+        let an = self.en_agg_n(ei);
+        let mut aj = 0;
+        while aj < an {
+            if self.en_extra_has_heap(self.en_agg_kind(ei, aj)) {
+                self.emit_enum_aggslot_free(op.clone(), ety.clone(), ei, 3 + aj);
             }
-        }
-        if self.en_extra2[ei] >= 0 {
-            if self.en_extra_has_heap(self.en_extra2[ei]) {
-                self.emit_enum_aggslot_free(op.clone(), ety.clone(), ei, 4);
-            }
+            aj = aj + 1;
         }
     }
 
-    // Tag-gated free of ONE aggregate slot (`slotnum` 3 or 4, Slice 43).
+    // Tag-gated free of ONE aggregate slot (`slotnum` 3, 4, 5, …).
     fn emit_enum_aggslot_free(mut ref self, op: String, ety: String, ei: i64, slotnum: i64) {
-        let mut aggkind = self.en_extra[ei];
-        if slotnum == 4 {
-            aggkind = self.en_extra2[ei];
-        }
+        let aggkind = self.en_agg_kind(ei, slotnum - 3);
         let tg = self.fresh();
         self.body =
             self.body + "  " + tg.clone() + " = extractvalue " + ety.clone() + " " + op.clone() + ", 0\n";

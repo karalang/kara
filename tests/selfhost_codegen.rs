@@ -797,6 +797,39 @@ const CORPUS: &[&str] = &[
     //
     //    `ast.kara` has 17 `Option[String]` fields (e.g. `LoopExpr.label`).
     "struct S { lbl: Option[String], k: i64 }\nshared enum E { V(S) }\nfn main() {\n    let a = E.V(S { lbl: Some(\"hi\"), k: 1 });\n    match a { V(s) => println(s.k.to_string()) }\n    let b = E.V(S { lbl: None, k: 2 });\n    match b { V(s) => println(s.k.to_string()) }\n}\n",
+
+    // ── B-2026-07-27-6: heap-bearing BY-VALUE enums with AGGREGATE payloads,
+    //    and the N-slot layout that makes them expressible.
+    //
+    //    A by-value enum lays out as `{ tag, i64, { ptr, i64 } }` plus one slot
+    //    per DISTINCT aggregate payload TYPE. That count used to be capped at
+    //    TWO (`en_extra` / `en_extra2`), and a third was a hard refusal. It is
+    //    now unbounded — slots 3, 4, 5, … — which is what let `ast.kara` emit:
+    //    its `Stmt` needs three and its `Item` needs ten.
+    //
+    //    (1) THREE distinct struct payloads, reached through a shared node. The
+    //        third variant is what tripped the old ceiling; all three are
+    //        constructed and matched so every slot is exercised, and the String
+    //        each carries must be freed through the tag-conditional walk (a
+    //        wrong tag frees an uninitialised slot rather than leaking).
+    "struct A {\n    s: String,\n    n: i64,\n}\nstruct B {\n    t: String,\n}\nstruct C {\n    u: String,\n}\nenum St {\n    Aa(A),\n    Bb(B),\n    Cc(C),\n}\nstruct Blk {\n    st: St,\n    k: i64,\n}\nshared enum E {\n    V(Blk),\n}\nfn label(e: ref E) -> String {\n    match e {\n        V(b) => {\n            match b.st {\n                Aa(a) => a.s,\n                Bb(x) => x.t,\n                Cc(y) => y.u,\n            }\n        }\n    }\n}\nfn main() {\n    let x = E.V(Blk { st: St.Aa(A { s: \"aa\".to_string(), n: 1 }), k: 1 });\n    println(label(x));\n    let y = E.V(Blk { st: St.Bb(B { t: \"bb\".to_string() }), k: 2 });\n    println(label(y));\n    let z = E.V(Blk { st: St.Cc(C { u: \"cc\".to_string() }), k: 3 });\n    println(label(z));\n}\n",
+    //    (2) `Vec[<heap-bearing by-value enum>]` as a field of a shared node —
+    //        `ast.Block.stmts: Vec[Stmt]` exactly, and the shape the emitter
+    //        actually stopped on when fed ast.kara. Dropping the Vec now runs
+    //        the per-element tag-conditional release before freeing the buffer;
+    //        before, the whole element kind was refused. `Never(Cc)` is DECLARED
+    //        and never constructed on purpose: a release arm is emitted for
+    //        every declared variant, so it is the arm no construction-site check
+    //        would ever have seen.
+    "struct A {\n    s: String,\n}\nstruct B {\n    t: String,\n}\nstruct Cc {\n    u: String,\n}\nenum St {\n    Aa(A),\n    Bb(B),\n    Never(Cc),\n}\nstruct Blk {\n    stmts: Vec[St],\n    k: i64,\n}\nshared enum E {\n    V(Blk),\n}\nfn render(e: ref E) -> String {\n    match e {\n        V(b) => {\n            let mut out = \"\".to_string();\n            for s in b.stmts {\n                match s {\n                    Aa(a) => {\n                        out = out + a.s;\n                    }\n                    Bb(x) => {\n                        out = out + x.t;\n                    }\n                    Never(y) => {\n                        out = out + y.u;\n                    }\n                }\n            }\n            out\n        }\n    }\n}\nfn main() {\n    let mut v: Vec[St] = Vec.new();\n    v.push(St.Aa(A { s: \"one\".to_string() }));\n    v.push(St.Bb(B { t: \"two\".to_string() }));\n    v.push(St.Aa(A { s: \"three\".to_string() }));\n    let x = E.V(Blk { stmts: v, k: 3 });\n    println(render(x));\n    match x {\n        V(b) => println(b.stmts.len().to_string()),\n    }\n}\n",
+    //    (3) A two-payload variant `Named(i64, String)` inside a shared node.
+    //        Both payloads route by KIND (i64 → slot 1, String → slot 2), so the
+    //        String can arrive from the SECOND position — and the release keyed
+    //        off the first payload alone, so this shape emitted valid IR, printed
+    //        the right answer, exited 0, and leaked the buffer with no
+    //        diagnostic. Pinned here because output parity alone cannot see it;
+    //        the oracle's valgrind leg is what fails.
+    "enum Tok {\n    Num(i64),\n    Named(i64, String),\n    Blank,\n}\nstruct Node {\n    tok: Tok,\n    k: i64,\n}\nshared enum E {\n    V(Node),\n}\nfn show(e: ref E) -> String {\n    match e {\n        V(n) => {\n            match n.tok {\n                Num(v) => \"num\".to_string(),\n                Named(v, s) => s,\n                Blank => \"blank\".to_string(),\n            }\n        }\n    }\n}\nfn main() {\n    let a = E.V(Node { tok: Tok.Named(1, \"hello\".to_string()), k: 1 });\n    println(show(a));\n    let b = E.V(Node { tok: Tok.Num(9), k: 2 });\n    println(show(b));\n    let c = E.V(Node { tok: Tok.Blank, k: 3 });\n    println(show(c));\n}\n",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
