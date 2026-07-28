@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 81 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
-| run-vs-build | 41 | 1 |
+| run-vs-build | 42 | 2 |
 | perf | 30 | 1 |
 | crash | 29 | 0 |
 | soundness | 26 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 516 | 3 |
+| codegen | 517 | 4 |
 | typecheck | 87 | 0 |
 | interp | 73 | 1 |
 | ownership | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **707 surfaced · 4 open · 697 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **708 surfaced · 5 open · 697 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **707 surfaced 
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
 | B-2026-07-28-10 | 2026-07-28 | interp | medium | INTERP: `Column.from_arrow_ipc` (and the Column constructors generally) ignore the binding's declared element type, so `let c: Column[i64] = Column.from_arrow_ipc(<Utf8 stream>)` yields a Column holding Strings under `karac run`, while `karac build` traps. Run-vs-build divergence on a genuinely ill-typed program. | — |
 | B-2026-07-28-11 | 2026-07-28 | codegen | high | CODEGEN: `Vec[<struct carrying a shared handle>].clone()` does not retain the cloned elements' handles, so the clone's drop and the original's drop both release — use-after-free on the second, and heap corruption (`malloc(): unaligned tcache chunk detected`) in a larger program. The clone-path twin of B-2026-07-28-9. | — |
+| B-2026-07-28-12 | 2026-07-28 | codegen | medium | CODEGEN: `println(<Vec expression>)` renders EMPTY (or a stray tab) when the operand is not an identifier — `println(vec![9i64, 8i64])`, `println(t.shape())`, `println(mk())` all print blank under `karac build` while the interpreter prints `[9, 8]`. Binding to a `let` first prints correctly on both. | — |
 
 ### Fixed (697)
 

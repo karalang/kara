@@ -306,4 +306,79 @@ impl<'ctx> super::Codegen<'ctx> {
         )?;
         Ok(ctrl.into())
     }
+
+    /// `Tensor.from_arrow_ipc(bytes) -> Tensor[T, S]`. The one leg that also
+    /// has to reconcile SHAPES: the stream carries its own dims, while the
+    /// receiver declares a rank and, per axis, either a concrete extent or `?`.
+    ///
+    /// The expected shape crosses as a stack array of `i64`, one per axis,
+    /// with `-1` encoding `?` ("accept whatever the stream says"). Passing it
+    /// down rather than checking the built block afterwards means a rejected
+    /// shape never allocates — and it keeps the whole reconciliation in the
+    /// one place that can see both the annotation and the stream.
+    pub(super) fn compile_arrow_tensor_from_ipc(
+        &mut self,
+        args: &[CallArg],
+        elem_size: u64,
+        kind: u64,
+        dims: &[Option<i64>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Tensor.from_arrow_ipc outside fn".to_string())?;
+        let rank = dims.len();
+        let want_ty = i64_t.array_type(rank.max(1) as u32);
+        let want_slot = self.create_entry_alloca(fn_val, "arrow.t.want", want_ty.into());
+        for (i, d) in dims.iter().enumerate() {
+            let slot = unsafe {
+                self.builder
+                    .build_gep(
+                        i64_t,
+                        want_slot,
+                        &[i64_t.const_int(i as u64, false)],
+                        &format!("arrow.t.want.{i}"),
+                    )
+                    .unwrap()
+            };
+            // `?` → -1: match any extent on this axis.
+            let v = d.unwrap_or(-1);
+            self.builder
+                .build_store(slot, i64_t.const_int(v as u64, true))
+                .unwrap();
+        }
+
+        let (data, len, temp_cap) = self.arrow_bytes_parts(args, "Tensor.from_arrow_ipc")?;
+        let callee = self
+            .module
+            .get_function("karac_arrow_tensor_from_ipc")
+            .expect("karac_arrow_tensor_from_ipc declared in Codegen::new");
+        let block = self
+            .builder
+            .build_call(
+                callee,
+                &[
+                    data.into(),
+                    len.into(),
+                    i64_t.const_int(elem_size, false).into(),
+                    i64_t.const_int(kind, false).into(),
+                    i64_t.const_int(rank as u64, false).into(),
+                    want_slot.into(),
+                ],
+                "arrow.t.rd",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.arrow_free_temp_bytes(data, temp_cap);
+        self.arrow_guard_non_null(
+            block,
+            "Tensor.from_arrow_ipc: the byte buffer is not a readable Arrow IPC \
+             stream, its element type does not convert to the tensor's declared \
+             type, or its shape does not match the declared shape (the ranks \
+             must be equal, and every non-`?` axis must match exactly)",
+        )?;
+        Ok(block.into())
+    }
 }

@@ -5016,6 +5016,26 @@ impl<'ctx> Codegen<'ctx> {
             ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
             Some(Linkage::External),
         );
+        //   `*mut u8 karac_arrow_tensor_from_ipc(*const u8 bytes, i64 len,
+        //    i64 elem_size, i64 kind, i64 want_rank, *const i64 want_dims)` —
+        //    builds the `[rank][dims][data]` block. `want_dims` is the declared
+        //    shape, one i64 per axis with -1 for a `?` axis, so the runtime can
+        //    reject a mismatched stream BEFORE allocating. NULL on failure.
+        module.add_function(
+            "karac_arrow_tensor_from_ipc",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
         //   `*mut u8 karac_arrow_tensor_to_ipc(*const u8 t_ptr, i64 elem_size,
         //    i64 kind, *mut i64 out_len)` — the `arrow.fixed_shape_tensor`
         //    extension. Rank and dims come from the tensor block's own header,

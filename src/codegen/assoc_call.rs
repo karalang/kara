@@ -446,24 +446,12 @@ impl<'ctx> super::Codegen<'ctx> {
             match method {
                 "zeros" | "ones" | "full" => return self.compile_tensor_new(method, args),
                 "from" => return self.compile_tensor_from(args),
-                // The Arrow IPC READ direction lands for `Column` and
-                // `DataFrame` but not yet for `Tensor`: unlike the tabular
-                // pair, a tensor must reconcile the stream's shape metadata
-                // against the receiver's declared shape (which may be static,
-                // `?`-bearing, or splice-generic) before a block can be built.
-                // Without this arm the ASSOC call falls through to the silent
-                // `Ok(const 0)` tail and MISCOMPILES a Tensor to the integer 0
-                // — the B-2026-07-18-20 run-vs-build divergence class.
-                "from_arrow_ipc" => {
-                    return Err(format!(
-                        "codegen: `Tensor.{method}(...)` is interpreter-only (the shape \
-                         reconciliation between the stream's extension metadata and the \
-                         receiver's declared shape is a later slice; `Column` and `DataFrame` \
-                         already parse under `karac build`); run with `karac run` (which routes \
-                         Arrow IPC programs to the tree-walk interpreter) or `karac run \
-                         --interp`. Emitting it under `karac build` would silently return 0."
-                    ));
-                }
+                // Arrow IPC read direction. Unlike the tabular pair this leg
+                // also reconciles the stream's shape metadata against the
+                // receiver's declared shape, so it needs `dims` (with `?`
+                // axes) from `pending_let_tensor_info`. See
+                // `src/codegen/arrow.rs`.
+                "from_arrow_ipc" => return self.compile_tensor_from_arrow_ipc(args),
                 _ => {}
             }
         }

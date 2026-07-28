@@ -21864,7 +21864,10 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
     /// `Vec[u8]` has no other owner, so the call site must free it — and only
     /// after the runtime has read it, which is the ordering a first cut of this
     /// lowering got wrong (freed at extraction, handing the runtime a dangling
-    /// pointer).
+    /// pointer). The Tensor read is the one graph that is a SINGLE allocation
+    /// (`[rank][dims][data]`), so it fails differently from the tabular pair —
+    /// a wrong header size would corrupt the data region rather than orphan a
+    /// buffer.
     #[test]
     fn asan_arrow_ipc_no_leak() {
         let label = "arrow_ipc";
@@ -21919,6 +21922,12 @@ fn main() {
     total = total + r6.len();
     let r7: DataFrame = DataFrame.from_arrow_ipc(r4.to_arrow_ipc());
     total = total + r7.width();
+    // Tensor: one allocation for [rank][dims][data], freed as a whole. The
+    // `?`-axis case takes the same path with the extent supplied by the stream.
+    let r8: Tensor[i64, [2, 3]] = Tensor.from_arrow_ipc(b6);
+    total = total + r8.sum();
+    let r9: Tensor[i64, [?, 3]] = Tensor.from_arrow_ipc(r8.to_arrow_ipc());
+    total = total + r9.sum();
     println(total > 0);
 }
 "#;

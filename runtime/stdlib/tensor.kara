@@ -117,7 +117,13 @@ impl[T, ...S] Tensor[T, S] {
     // of `to_arrow_ipc`. The shape comes from the field's extension metadata; a
     // stream carrying no shape (a plain FixedSizeList, or a producer that
     // dropped the metadata) reads as a 1-D tensor over the flattened values, so
-    // the data still round-trips even when the shape doesn't.
+    // the data still round-trips even when the shape doesn't. Under `karac
+    // build` the stream's shape is RECONCILED against this binding's
+    // annotation: the ranks must be equal and every non-`?` axis must match
+    // exactly, so a `[2, 3]` stream read as `Tensor[i64, [3, 2]]` is a runtime
+    // error rather than a silent reinterpretation. A `?` axis takes whatever
+    // extent the stream carries. Element types convert as for `Column`
+    // (numeric widths freely, in both directions).
     #[compiler_builtin]
     fn from_arrow_ipc(bytes: Vec[u8]) -> Tensor[T, S] {
         Tensor { handle_id: 0 }

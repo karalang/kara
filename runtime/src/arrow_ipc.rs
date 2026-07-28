@@ -769,3 +769,167 @@ unsafe fn free_built_columns(built: &[(String, *mut u8, i64, i64)]) {
         crate::alloc::karac_free_buf(*ctrl, 32);
     }
 }
+
+/// Parse the shape of a tensor stream and its flat values.
+///
+/// Mirrors the interpreter's `tensor_from_ipc` decision-for-decision, because
+/// the two must agree on which streams are readable and what shape they carry:
+/// a `FixedSizeList` column is unwrapped to its FIRST row's values (this
+/// surface serializes exactly one tensor per stream), a plain non-list column
+/// is read as 1-D over its own values, and the dims come from the
+/// `arrow.fixed_shape_tensor` extension metadata — accepted only when it is
+/// non-empty and its product matches the value count, so a producer that
+/// dropped or corrupted the metadata still yields a valid 1-D tensor rather
+/// than a mis-shaped one.
+fn tensor_shape_and_slots(bytes: &[u8]) -> Option<(Vec<i64>, Vec<Option<Slot>>)> {
+    let batch = match read_first_batch(bytes) {
+        Ok(Some(b)) if b.num_columns() > 0 => b,
+        // An empty stream (or a batch with no columns) is the empty tensor,
+        // matching the interpreter's `(vec![0], vec![])`.
+        Ok(_) => return Some((vec![0], Vec::new())),
+        Err(()) => return None,
+    };
+    let field = batch.schema().field(0).clone();
+    let col = batch.column(0);
+
+    let values: Arc<dyn Array> = match col.as_any().downcast_ref::<FixedSizeListArray>() {
+        Some(list) => {
+            if list.is_empty() {
+                return Some((vec![0], Vec::new()));
+            }
+            list.value(0)
+        }
+        None => Arc::clone(col),
+    };
+    let slots = arrow_to_slots(values.as_ref())?;
+
+    let dims = parse_shape_metadata(field.metadata().get(EXT_META_KEY).map(String::as_str))
+        .filter(|d| !d.is_empty() && d.iter().product::<i64>() == slots.len() as i64)
+        .unwrap_or_else(|| vec![slots.len() as i64]);
+    Some((dims, slots))
+}
+
+/// Extract `shape` from the extension metadata `{"shape":[d0,d1,…]}`.
+///
+/// The write side hand-formats this object (see `shape_metadata`), so the read
+/// side hand-parses it: it is one key holding one integer array, and pulling
+/// `serde_json` into the runtime to read it back would add a dependency for a
+/// grammar this small. Anything that isn't that exact shape yields `None`,
+/// which the caller turns into the 1-D fallback — the same tolerance the
+/// interpreter's `serde_json` path gets from its `.ok()` / `.filter(…)` chain.
+fn parse_shape_metadata(meta: Option<&str>) -> Option<Vec<i64>> {
+    let meta = meta?;
+    let start = meta.find("\"shape\"")?;
+    let rest = &meta[start + "\"shape\"".len()..];
+    let open = rest.find('[')?;
+    // Only whitespace and the `:` separator may sit between key and array.
+    if !rest[..open]
+        .trim_matches(|c: char| c.is_whitespace() || c == ':')
+        .is_empty()
+    {
+        return None;
+    }
+    let close = rest.find(']')?;
+    if close < open {
+        return None;
+    }
+    let body = rest[open + 1..close].trim();
+    if body.is_empty() {
+        return Some(Vec::new());
+    }
+    body.split(',')
+        .map(|t| t.trim().parse::<i64>().ok())
+        .collect()
+}
+
+/// `Tensor.from_arrow_ipc(bytes) -> Tensor[T, S]` — parse a stream into a
+/// freshly built tensor block `[i64 rank][rank × i64 dims][C-order data]`, the
+/// single allocation `src/codegen/tensor.rs` makes for a tensor, so the
+/// caller's ordinary free reclaims it.
+///
+/// Unlike the tabular pair this leg must also RECONCILE shapes. The stream
+/// carries its own dims; the receiver declares a rank and, per axis, either a
+/// concrete extent or `?`. `want_dims[i] < 0` encodes `?` ("accept whatever
+/// the stream says"); any other value must match exactly, and the ranks must
+/// always match. This is the construction-boundary check of design.md
+/// § Runtime equality check, moved runtime-side because the stream's shape
+/// isn't known until it is parsed.
+///
+/// Tensors have no null concept, so a null slot (which a canonical
+/// `arrow.fixed_shape_tensor` cannot contain — its items are non-nullable —
+/// but a foreign producer could send) reads as the zero value rather than
+/// failing: the allocation is already zeroed, and there is nothing in a Kāra
+/// tensor that could preserve the distinction.
+///
+/// Returns null on a malformed stream, an unsupported or non-converting
+/// element type, or a shape the receiver's annotation rejects.
+///
+/// # Safety
+///
+/// `bytes` must describe `len` readable bytes (or be null with `len <= 0`);
+/// `want_dims` must point to `want_rank` readable `i64`s.
+#[no_mangle]
+pub unsafe extern "C" fn karac_arrow_tensor_from_ipc(
+    bytes: *const u8,
+    len: i64,
+    elem_size: i64,
+    kind: i64,
+    want_rank: i64,
+    want_dims: *const i64,
+) -> *mut u8 {
+    // A tensor element is always a scalar — no String tensors exist at this
+    // surface, which is what lets the failure path below free the block as the
+    // whole graph rather than walking per-cell heaps.
+    if elem_size <= 0 || want_rank < 0 || kind == kind::STRING {
+        return core::ptr::null_mut();
+    }
+    let buf: &[u8] = if bytes.is_null() || len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(bytes, len as usize)
+    };
+    let Some((dims, slots)) = tensor_shape_and_slots(buf) else {
+        return core::ptr::null_mut();
+    };
+
+    // Shape reconciliation against the receiver's annotation.
+    let want_rank = want_rank as usize;
+    if dims.len() != want_rank {
+        return core::ptr::null_mut();
+    }
+    if !want_dims.is_null() {
+        for (i, d) in dims.iter().enumerate() {
+            let want = *want_dims.add(i);
+            if want >= 0 && want != *d {
+                return core::ptr::null_mut();
+            }
+        }
+    }
+
+    let numel: i64 = dims.iter().product::<i64>().max(0);
+    if numel != slots.len() as i64 {
+        return core::ptr::null_mut();
+    }
+
+    let header_bytes = 8 * (1 + want_rank);
+    let block = control_alloc_zeroed(header_bytes + numel as usize * elem_size as usize);
+    if block.is_null() {
+        return core::ptr::null_mut();
+    }
+    *(block as *mut i64) = want_rank as i64;
+    for (i, d) in dims.iter().enumerate() {
+        *(block.add(8 * (1 + i)) as *mut i64) = *d;
+    }
+    let data = block.add(header_bytes);
+    for (row, slot) in slots.iter().enumerate() {
+        // A null slot keeps the zeroed value — see the doc comment.
+        let Some(slot) = slot else { continue };
+        if !write_slot(data, row, elem_size, kind, slot) {
+            // A tensor element is never separately allocated (String tensors
+            // don't exist at this surface), so the block IS the whole graph.
+            crate::alloc::karac_free_buf(block, header_bytes + numel as usize * elem_size as usize);
+            return core::ptr::null_mut();
+        }
+    }
+    block
+}

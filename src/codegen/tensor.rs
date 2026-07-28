@@ -190,6 +190,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// is length-asserted against the static rank and value-asserted
     /// against every static dim — the construction-boundary check of
     /// design.md § Runtime equality check.
+    /// `Tensor.from_arrow_ipc(bytes)` — like the other constructors, element
+    /// type and shape come from the destination binding's annotation via
+    /// `pending_let_tensor_info`. Both are needed here for different reasons:
+    /// the element description tells the runtime how to lay out each slot, and
+    /// the dims (with `?` axes) are what the stream's own shape is checked
+    /// against. Lowering in `src/codegen/arrow.rs`.
+    pub(super) fn compile_tensor_from_arrow_ipc(
+        &mut self,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let info = self.pending_let_tensor_info.clone().ok_or_else(|| {
+            "Tensor.from_arrow_ipc: element type and rank unknown — requires a \
+             `let t: Tensor[T, [dims]] = ...` annotation"
+                .to_string()
+        })?;
+        let (elem_size, kind) = self.tensor_arrow_elem_desc(info.elem, info.elem_unsigned)?;
+        self.compile_arrow_tensor_from_ipc(args, elem_size, kind, &info.dims)
+    }
+
     pub(super) fn compile_tensor_new(
         &mut self,
         method: &str,

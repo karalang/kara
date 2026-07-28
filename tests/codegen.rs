@@ -527,16 +527,15 @@ mod codegen_tests {
 
     #[test]
     fn arrow_ipc_builtins_rejected_by_codegen() {
-        // Arrow IPC interchange. The WRITE direction, and the READ direction
-        // for the two TABULAR receivers, now have AOT twins — each must
-        // COMPILE to its runtime call. `Tensor.from_arrow_ipc` is the one leg
-        // still interpreter-only, and it must be REJECTED with an actionable
-        // message rather than silently miscompiled: as an ASSOC call it would
-        // otherwise fall through to the `const 0` default and return the
-        // integer 0 in place of a `Tensor` (the B-2026-07-18-20 run-vs-build
-        // divergence class). `karac run` routes these programs to the
-        // interpreter. Byte-parity of the write direction is asserted by
-        // `test_e2e_to_arrow_ipc_matches_interpreter_bytes`; the read
+        // Arrow IPC interchange — BOTH directions now have AOT twins for all
+        // three receivers, so every one must COMPILE to its runtime call. This
+        // test began life asserting the opposite (loud deferral) and has been
+        // flipped a leg at a time; what it guards now is that no leg silently
+        // regresses to the `const 0` ASSOC-call default, which would return
+        // the integer 0 in place of a `Column`/`DataFrame`/`Tensor` (the
+        // B-2026-07-18-20 run-vs-build divergence class). Byte-parity of the
+        // write direction is asserted by
+        // `test_e2e_to_arrow_ipc_matches_interpreter_bytes`, the read
         // direction's round-trip by `test_e2e_from_arrow_ipc_round_trips`.
         for (to_ipc, sym) in [
             (
@@ -561,7 +560,6 @@ mod codegen_tests {
             assert!(ir.contains(sym), "to_arrow_ipc must lower to `{sym}`");
         }
 
-        // Read direction, tabular receivers — these now lower too.
         for (from_ipc, sym) in [
             (
                 "fn main() { let bytes: Vec[u8] = Vec.new(); \
@@ -573,25 +571,16 @@ mod codegen_tests {
                  let d = DataFrame.from_arrow_ipc(bytes); println(d.height()); }",
                 "karac_arrow_dataframe_from_ipc",
             ),
+            (
+                "fn main() { let bytes: Vec[u8] = Vec.new(); \
+                 let t: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(bytes); println(t.rank()); }",
+                "karac_arrow_tensor_from_ipc",
+            ),
         ] {
             let ir = ir_result(from_ipc)
                 .unwrap_or_else(|e| panic!("{sym}: from_arrow_ipc has a codegen twin: {e}"));
             assert!(ir.contains(sym), "from_arrow_ipc must lower to `{sym}`");
         }
-
-        // `Tensor.from_arrow_ipc` — the remaining deferral. Unlike the tabular
-        // pair it must also reconcile the stream's shape metadata against the
-        // receiver's declared shape, which is why it lands separately.
-        let err = ir_result(
-            "fn main() { let bytes: Vec[u8] = Vec.new(); \
-             let t: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(bytes); println(t.rank()); }",
-        )
-        .expect_err("Tensor.from_arrow_ipc must be rejected by codegen");
-        assert!(
-            err.contains("`Tensor.from_arrow_ipc(...)` is interpreter-only"),
-            "got: {err}"
-        );
-        assert!(err.contains("silently return 0"), "got: {err}");
     }
 
     #[test]
@@ -758,6 +747,11 @@ mod codegen_tests {
         //   * **Frame reconstruction** — names, order, and per-column types
         //     all come from the schema, and a String column additionally
         //     allocates a per-cell heap the frame must own.
+        //   * **Shape reconciliation** — a Tensor's dims come from the
+        //     stream's `arrow.fixed_shape_tensor` metadata but must satisfy
+        //     the receiver's annotation, so both a fully-static shape and one
+        //     with a `?` axis are exercised. Rejection of a MISMATCHED shape
+        //     is `test_e2e_tensor_from_arrow_ipc_shape_mismatch_traps`.
         //   * **Temporary argument** — `from(to())` in one expression: the
         //     intermediate buffer has no other owner, so the call site frees
         //     it, and only after the runtime has read it.
@@ -832,6 +826,38 @@ mod codegen_tests {
                  let r2: Column[i64] = Column.from_arrow_ipc(r1.to_arrow_ipc());\n\
                  println(r2.len()); println(r2.sum());",
             ),
+            (
+                "tensor 2-D i64",
+                "let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let r: Tensor[i64, [2, 3]] = Tensor.from_arrow_ipc(t.to_arrow_ipc());\n\
+                 println(r.rank()); println(r.sum());",
+            ),
+            (
+                "tensor 3-D f64",
+                "let t: Tensor[f64, [2, 2, 2]] = \
+                 Tensor.from([[[1.5, 2.5], [3.5, 4.5]], [[5.5, 6.5], [7.5, 8.5]]]);\n\
+                 let r: Tensor[f64, [2, 2, 2]] = Tensor.from_arrow_ipc(t.to_arrow_ipc());\n\
+                 println(r.rank()); println(r.sum());",
+            ),
+            (
+                "tensor i32 (narrowing back from the Int64 stream)",
+                "let t: Tensor[i32, [2, 2]] = Tensor.full([2, 2], 7i32);\n\
+                 let r: Tensor[i32, [2, 2]] = Tensor.from_arrow_ipc(t.to_arrow_ipc());\n\
+                 println(r.rank()); println(r.sum());",
+            ),
+            (
+                "tensor with a `?` axis (extent taken from the stream)",
+                "let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                 let r: Tensor[i64, [?, 3]] = Tensor.from_arrow_ipc(t.to_arrow_ipc());\n\
+                 println(r.rank()); println(r.sum());",
+            ),
+            (
+                "tensor double round-trip",
+                "let t = Tensor.from([[2, 4], [6, 8]]);\n\
+                 let r1: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(t.to_arrow_ipc());\n\
+                 let r2: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(r1.to_arrow_ipc());\n\
+                 println(r2.rank()); println(r2.sum());",
+            ),
         ];
         for (label, body) in cases {
             let src = format!("fn main() {{\n{body}\n}}");
@@ -846,6 +872,54 @@ mod codegen_tests {
                     aot, expected,
                     "{label}: AOT `from_arrow_ipc` must reconstruct the same \
                      values the interpreter does",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_from_arrow_ipc_shape_mismatch_traps() {
+        // The half of shape reconciliation the round-trip test can't show: a
+        // stream whose shape does NOT satisfy the receiver's annotation must
+        // trap, not be silently reinterpreted. Both cases below carry the
+        // right element COUNT (6) and would "work" if the reader merely
+        // reshaped, which is exactly why they are the interesting ones — a
+        // [2,3] tensor read as [3,2] is a different tensor, and read as [6] a
+        // different rank.
+        //
+        // No interpreter oracle here: the interpreter builds its tensor from
+        // the stream's own dims without consulting the annotation at all, so
+        // it accepts both (B-2026-07-28-10's Tensor face). The compiled
+        // behaviour is the correct one, so this asserts it directly.
+        for (label, annotated) in [
+            ("transposed shape", "Tensor[i64, [3, 2]]"),
+            ("flattened rank", "Tensor[i64, [6]]"),
+        ] {
+            let src = format!(
+                "fn main() {{\n\
+                     let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                     let bad: {annotated} = Tensor.from_arrow_ipc(t.to_arrow_ipc());\n\
+                     println(bad.sum());\n\
+                 }}"
+            );
+            if let Some(cap) = run_program_capturing(&src) {
+                assert_eq!(
+                    cap.status.code(),
+                    Some(1),
+                    "{label}: expected a trap; stdout={:?} stderr={:?}",
+                    cap.stdout,
+                    cap.stderr
+                );
+                assert!(
+                    !cap.stdout.contains("21"),
+                    "{label}: a mismatched shape must not produce a tensor"
+                );
+                // `emit_panic` printfs, so the fault lands on STDOUT.
+                assert!(
+                    cap.stdout
+                        .contains("shape does not match the declared shape"),
+                    "{label}: expected the shape-reconciliation panic, got stdout={:?}",
+                    cap.stdout
                 );
             }
         }
