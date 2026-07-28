@@ -3722,7 +3722,10 @@ impl<'ctx> super::Codegen<'ctx> {
             const CAPACITY_OFFSET: u64 = 16;
             const KEY_SIZE_OFFSET: u64 = 40;
             const VAL_SIZE_OFFSET: u64 = 48;
-            const BUCKET_OCCUPIED: u64 = 1;
+            // Walk only live buckets. Under the B-2026-07-26-2 control-byte
+            // encoding an occupied byte is `0x80 | hash_tag`, so the test is a
+            // high-bit compare rather than equality with a flag — see
+            // `runtime/src/map.rs`'s module header.
             let i8_t = self.context.i8_type();
             let hdr = |cg: &Self, off: u64, ty: BasicTypeEnum<'ctx>, name: &str| {
                 let p = unsafe {
@@ -3790,15 +3793,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(i8_t, st_p, "mw.st")
                 .unwrap()
                 .into_int_value();
-            let occupied = self
-                .builder
-                .build_int_compare(
-                    IntPredicate::EQ,
-                    st,
-                    self.context.i8_type().const_int(BUCKET_OCCUPIED, false),
-                    "mw.occ",
-                )
-                .unwrap();
+            let occupied = self.emit_map_is_occupied(st, "mw.occ");
             let next_i = self
                 .builder
                 .build_int_add(i, i64_t.const_int(1, false), "mw.i.next")

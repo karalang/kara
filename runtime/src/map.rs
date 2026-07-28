@@ -5,12 +5,50 @@
 //! `hash_fn`/`eq_fn` function pointers for the monomorphised K type.
 //!
 //! Layout: two parallel heap allocations —
-//!   `status[capacity]`       — u8 per bucket: EMPTY | OCCUPIED | TOMBSTONE
+//!   `status[capacity]`       — u8 control byte per bucket (see below)
 //!   `kv[capacity*(ks+vs)]`   — packed (key, val) pairs, no alignment padding
 //!
 //! Collision resolution: linear probing. Load factor ceiling 3/4; resize
 //! doubles capacity and rehashes. Deletion marks tombstones; tombstones count
 //! toward the load factor so a tombstone-heavy table still triggers a resize.
+//!
+//! ## The control byte (B-2026-07-26-2)
+//!
+//! An occupied bucket's status byte carries a 7-bit fragment of its key's hash,
+//! hashbrown-style, rather than a bare "occupied" flag:
+//!
+//! ```text
+//!   0x00           EMPTY
+//!   0x01           TOMBSTONE
+//!   0x80 | tag7    OCCUPIED, tag7 = bits 57..63 of the key's hash
+//! ```
+//!
+//! Both sentinels are `< 0x80` and every occupied byte is `>= 0x80`, so "is
+//! this bucket occupied" is one high-bit test and a control byte can never be
+//! confused with a sentinel.
+//!
+//! The point is what the probe no longer has to do. With a bare flag, every
+//! occupied slot on the probe chain called `eq_fn`, which for a `String` key
+//! dereferences a `{ptr,len,cap}` header and then a scattered heap buffer.
+//! `karac_eq_String` was measured at 5,988,829 of the #127 Word Ladder kata's
+//! 8,483,251 L1-D read misses — 70.6%, more than Rust's entire program at
+//! 3,594,102 — while running only 1.09 times per lookup. The cost was never
+//! long probe chains; it was one cold key dereference per probed slot. Matching
+//! the control byte first rejects a non-matching key without touching it, so
+//! `eq_fn` runs on a real hit or a ~1-in-128 tag collision.
+//!
+//! The tag comes from the HIGH bits because the bucket index takes the low ones
+//! (`hash & (capacity - 1)`) — a tag drawn from the same bits the index uses
+//! would be constant along a probe chain and reject nothing.
+//!
+//! **This encoding is a codegen ABI**, not a runtime-private detail: the
+//! monomorphized Map/Set probes in `src/codegen/mono.rs` emit their own copies
+//! of this loop, and `src/codegen/control_flow_for.rs` / `src/codegen/runtime.rs`
+//! walk occupied slots directly. All of them must agree with the constants and
+//! helpers below. The failure mode of disagreement is a lookup that misses a
+//! present key — a silent wrong answer, not a crash — so `ctrl_of` and
+//! `is_occupied` are the single source of truth on this side and
+//! `Codegen::emit_map_ctrl_of` / `emit_map_is_occupied` are their mirrors.
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::ffi::c_void;
@@ -28,9 +66,29 @@ extern "C" {
 }
 
 const INITIAL_CAPACITY: usize = 16;
+/// Vacant and never used — the probe stops here. Must stay 0 so freshly
+/// allocated storage reads as empty after a single `write_bytes(_, 0, _)`.
 const BUCKET_EMPTY: u8 = 0;
-const BUCKET_OCCUPIED: u8 = 1;
-const BUCKET_TOMBSTONE: u8 = 2;
+/// Vacated by a `remove` — the probe skips it but must keep going, since a key
+/// inserted before the deletion may live further along the chain.
+const BUCKET_TOMBSTONE: u8 = 1;
+/// Set in every occupied control byte; the low 7 bits hold the hash tag. Also
+/// the threshold: `byte >= BUCKET_OCCUPIED_BIT` iff the bucket is occupied.
+const BUCKET_OCCUPIED_BIT: u8 = 0x80;
+
+/// The control byte for a bucket holding a key with this hash — see the module
+/// header. Takes the TOP 7 bits, because the bucket index consumes the bottom
+/// ones and a tag sharing them would be invariant along a probe chain.
+#[inline(always)]
+fn ctrl_of(hash: u64) -> u8 {
+    BUCKET_OCCUPIED_BIT | ((hash >> 57) as u8 & 0x7f)
+}
+
+/// Is this control byte an occupied bucket (rather than EMPTY or TOMBSTONE)?
+#[inline(always)]
+fn is_occupied(status: u8) -> bool {
+    status >= BUCKET_OCCUPIED_BIT
+}
 
 /// `#[repr(C)]` is load-bearing — codegen-side monomorphized
 /// `Map[K, V]` symbols (`src/codegen.rs`, see
@@ -154,48 +212,55 @@ impl KaracMap {
     // Find an occupied slot holding `key`. Returns Some(slot) or None.
     unsafe fn lookup(&self, key: *const c_void) -> Option<usize> {
         let hash = (self.hash_fn)(key);
+        let ctrl = ctrl_of(hash);
         let start = (hash as usize) & (self.capacity - 1);
         for i in 0..self.capacity {
             let slot = (start + i) & (self.capacity - 1);
-            match *self.status.add(slot) {
-                BUCKET_EMPTY => return None,
-                BUCKET_OCCUPIED if (self.eq_fn)(self.key_ptr(slot), key) => {
-                    return Some(slot);
-                }
-                _ => {} // TOMBSTONE or non-matching OCCUPIED — keep probing
+            let s = *self.status.add(slot);
+            if s == BUCKET_EMPTY {
+                return None;
+            }
+            // The tag test rejects a non-matching key WITHOUT dereferencing it,
+            // which is the whole point of the control byte — see the module
+            // header. It also subsumes the occupancy test: `ctrl >= 0x80` and
+            // both sentinels are below it, so a sentinel can never compare
+            // equal. Past it, `eq_fn` runs only on a real hit or a ~1/128 tag
+            // collision.
+            if s == ctrl && (self.eq_fn)(self.key_ptr(slot), key) {
+                return Some(slot);
             }
         }
         None
     }
 
-    // Find the slot to write a new key into. Also returns whether the key
-    // already exists (update vs. fresh insert).
-    unsafe fn find_insert_slot(&self, key: *const c_void) -> (usize, bool) {
+    // Find the slot to write a new key into. Returns the slot, whether the key
+    // already exists (update vs. fresh insert), and the control byte the caller
+    // must store — callers cannot derive it themselves without re-hashing.
+    unsafe fn find_insert_slot(&self, key: *const c_void) -> (usize, bool, u8) {
         let hash = (self.hash_fn)(key);
+        let ctrl = ctrl_of(hash);
         let start = (hash as usize) & (self.capacity - 1);
         let mut first_tombstone: Option<usize> = None;
         for i in 0..self.capacity {
             let slot = (start + i) & (self.capacity - 1);
-            match *self.status.add(slot) {
-                BUCKET_EMPTY => {
-                    let target = first_tombstone.unwrap_or(slot);
-                    return (target, false);
+            let s = *self.status.add(slot);
+            if s == BUCKET_EMPTY {
+                let target = first_tombstone.unwrap_or(slot);
+                return (target, false, ctrl);
+            }
+            if s == BUCKET_TOMBSTONE {
+                if first_tombstone.is_none() {
+                    first_tombstone = Some(slot);
                 }
-                BUCKET_TOMBSTONE => {
-                    if first_tombstone.is_none() {
-                        first_tombstone = Some(slot);
-                    }
-                }
-                BUCKET_OCCUPIED => {
-                    if (self.eq_fn)(self.key_ptr(slot), key) {
-                        return (slot, true);
-                    }
-                }
-                _ => unreachable!(),
+                continue;
+            }
+            // Occupied: same tag-first test as `lookup`.
+            if s == ctrl && (self.eq_fn)(self.key_ptr(slot), key) {
+                return (slot, true, ctrl);
             }
         }
         // Should not reach here if resize policy is respected.
-        (first_tombstone.unwrap_or(0), false)
+        (first_tombstone.unwrap_or(0), false, ctrl)
     }
 
     unsafe fn insert(&mut self, key: *const c_void, val: *const c_void) {
@@ -203,7 +268,7 @@ impl KaracMap {
         if (self.len + self.tombstones + 1) * 4 > self.capacity * 3 {
             self.resize();
         }
-        let (slot, exists) = self.find_insert_slot(key);
+        let (slot, exists, ctrl) = self.find_insert_slot(key);
         let was_tombstone = *self.status.add(slot) == BUCKET_TOMBSTONE;
         let kv_offset = slot * (self.key_size + self.val_size);
         if !exists {
@@ -218,7 +283,7 @@ impl KaracMap {
             self.kv.add(kv_offset + self.key_size),
             self.val_size,
         );
-        *self.status.add(slot) = BUCKET_OCCUPIED;
+        *self.status.add(slot) = ctrl;
     }
 
     unsafe fn get(&self, key: *const c_void, out_val: *mut c_void) -> bool {
@@ -295,8 +360,8 @@ impl KaracMap {
     /// * **`find_insert_slot`'s tombstone bookkeeping and `eq_fn` call site are
     ///   unreachable.** The destination came straight from `alloc_storage`, so
     ///   every status byte is `BUCKET_EMPTY`: the probe stops at the first slot
-    ///   it touches and the `BUCKET_TOMBSTONE` / `BUCKET_OCCUPIED` arms never
-    ///   run. Keys are also unique by construction (they were unique in the old
+    ///   it touches and the tombstone / occupied arms never run. Keys are also
+    ///   unique by construction (they were unique in the old
     ///   table and rehashing preserves that), so no equality test is *needed*
     ///   even in principle — the erased `eq_fn` is an indirect call the
     ///   optimizer cannot see through, and this removes its call site entirely.
@@ -319,7 +384,7 @@ impl KaracMap {
         let kv_size = self.key_size + self.val_size;
         let mask = self.capacity - 1;
         for i in 0..old_cap {
-            if *old_status.add(i) != BUCKET_OCCUPIED {
+            if !is_occupied(*old_status.add(i)) {
                 continue;
             }
             let src = old_kv.add(i * kv_size);
@@ -331,7 +396,9 @@ impl KaracMap {
                 slot = (slot + 1) & mask;
             }
             ptr::copy_nonoverlapping(src, self.kv.add(slot * kv_size), kv_size);
-            *self.status.add(slot) = BUCKET_OCCUPIED;
+            // The tag is re-derived, not carried over: it depends only on the
+            // hash, which is the one thing this loop must recompute anyway.
+            *self.status.add(slot) = ctrl_of(hash);
             self.len += 1;
         }
     }
@@ -478,7 +545,7 @@ pub unsafe extern "C" fn karac_map_free_with_drop_vec(
     let mut m = Box::from_raw(map as *mut KaracMap);
     if drop_key != 0 || drop_val != 0 {
         for slot in 0..m.capacity {
-            if *m.status.add(slot) != BUCKET_OCCUPIED {
+            if !is_occupied(*m.status.add(slot)) {
                 continue;
             }
             if drop_key != 0 {
@@ -522,7 +589,7 @@ pub unsafe extern "C" fn karac_map_free_with_val_drop_fn(
     let mut m = Box::from_raw(map as *mut KaracMap);
     if drop_key != 0 || val_drop_fn.is_some() {
         for slot in 0..m.capacity {
-            if *m.status.add(slot) != BUCKET_OCCUPIED {
+            if !is_occupied(*m.status.add(slot)) {
                 continue;
             }
             if drop_key != 0 {
@@ -560,7 +627,7 @@ pub unsafe extern "C" fn karac_map_insert_old(
     if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
         m.resize();
     }
-    let (slot, exists) = m.find_insert_slot(key);
+    let (slot, exists, ctrl) = m.find_insert_slot(key);
     let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
     let kv_offset = slot * (m.key_size + m.val_size);
     if exists {
@@ -582,7 +649,7 @@ pub unsafe extern "C" fn karac_map_insert_old(
         m.kv.add(kv_offset + m.key_size),
         m.val_size,
     );
-    *m.status.add(slot) = BUCKET_OCCUPIED;
+    *m.status.add(slot) = ctrl;
     exists
 }
 
@@ -624,7 +691,7 @@ pub unsafe extern "C" fn karac_map_try_insert(
             return 2;
         }
     }
-    let (slot, exists) = m.find_insert_slot(key);
+    let (slot, exists, ctrl) = m.find_insert_slot(key);
     let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
     let kv_offset = slot * (m.key_size + m.val_size);
     if exists {
@@ -645,7 +712,7 @@ pub unsafe extern "C" fn karac_map_try_insert(
         m.kv.add(kv_offset + m.key_size),
         m.val_size,
     );
-    *m.status.add(slot) = BUCKET_OCCUPIED;
+    *m.status.add(slot) = ctrl;
     if exists {
         1
     } else {
@@ -686,7 +753,7 @@ pub unsafe extern "C" fn karac_map_insert_borrowed_str_old(
     }
     // hash_fn / eq_fn read the borrowed view's {ptr, len} — identical to an
     // owned String key — so probing works unchanged.
-    let (slot, exists) = m.find_insert_slot(key);
+    let (slot, exists, ctrl) = m.find_insert_slot(key);
     let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
     let kv_offset = slot * (m.key_size + m.val_size);
     if exists {
@@ -725,7 +792,7 @@ pub unsafe extern "C" fn karac_map_insert_borrowed_str_old(
         m.kv.add(kv_offset + m.key_size),
         m.val_size,
     );
-    *m.status.add(slot) = BUCKET_OCCUPIED;
+    *m.status.add(slot) = ctrl;
     exists
 }
 
@@ -827,7 +894,7 @@ pub unsafe extern "C" fn karac_map_sorted_keys(
     // keeps the comparator operating on the map's stable key storage.
     let mut keys: Vec<*const u8> = Vec::with_capacity(n);
     for slot in 0..m.capacity {
-        if *m.status.add(slot) == BUCKET_OCCUPIED {
+        if is_occupied(*m.status.add(slot)) {
             keys.push(m.key_ptr(slot) as *const u8);
         }
     }
@@ -871,12 +938,12 @@ pub unsafe extern "C" fn karac_map_entry(
     if (m.len + m.tombstones + 1) * 4 > m.capacity * 3 {
         m.resize();
     }
-    let (slot, exists) = m.find_insert_slot(key);
+    let (slot, exists, ctrl) = m.find_insert_slot(key);
     if !exists {
         let was_tombstone = *m.status.add(slot) == BUCKET_TOMBSTONE;
         let kv_offset = slot * (m.key_size + m.val_size);
         ptr::copy_nonoverlapping(key as *const u8, m.kv.add(kv_offset), m.key_size);
-        *m.status.add(slot) = BUCKET_OCCUPIED;
+        *m.status.add(slot) = ctrl;
         m.len += 1;
         if was_tombstone {
             m.tombstones -= 1;
@@ -954,7 +1021,7 @@ pub unsafe extern "C" fn karac_map_clear_with_drop_vec(
     if drop_key != 0 || drop_val != 0 {
         let entry_stride = m.key_size + m.val_size;
         for slot in 0..m.capacity {
-            if *m.status.add(slot) != BUCKET_OCCUPIED {
+            if !is_occupied(*m.status.add(slot)) {
                 continue;
             }
             if drop_key != 0 {
@@ -997,7 +1064,7 @@ pub unsafe extern "C" fn karac_map_clear_with_val_drop_fn(
     let m = &mut *(map as *mut KaracMap);
     if drop_key != 0 || val_drop_fn.is_some() {
         for slot in 0..m.capacity {
-            if *m.status.add(slot) != BUCKET_OCCUPIED {
+            if !is_occupied(*m.status.add(slot)) {
                 continue;
             }
             if drop_key != 0 {
@@ -1035,7 +1102,7 @@ pub unsafe extern "C" fn karac_map_iter_next(
     while it.index < m.capacity {
         let i = it.index;
         it.index += 1;
-        if *m.status.add(i) == BUCKET_OCCUPIED {
+        if is_occupied(*m.status.add(i)) {
             let kv_size = m.key_size + m.val_size;
             ptr::copy_nonoverlapping(m.kv.add(i * kv_size), out_key as *mut u8, m.key_size);
             ptr::copy_nonoverlapping(
@@ -1058,7 +1125,9 @@ pub unsafe extern "C" fn karac_map_iter_free(iter: *mut c_void) {
 
 #[cfg(test)]
 mod tests {
-    use super::KaracMap;
+    use super::{
+        ctrl_of, is_occupied, KaracMap, BUCKET_EMPTY, BUCKET_OCCUPIED_BIT, BUCKET_TOMBSTONE,
+    };
     use std::mem::offset_of;
 
     /// Codegen-side monomorphized `Map[K, V]` symbols load
@@ -1085,6 +1154,139 @@ mod tests {
         assert_eq!(offset_of!(KaracMap, val_size), 48);
         assert_eq!(offset_of!(KaracMap, hash_fn), 56);
         assert_eq!(offset_of!(KaracMap, eq_fn), 64);
+    }
+
+    /// Sibling of the offsets test for the CONTROL BYTE (B-2026-07-26-2). The
+    /// same argument applies: `src/codegen/mono.rs` emits its own probe loops
+    /// against this encoding, so drift is a lookup that misses a present key —
+    /// a silent wrong answer, not a link error or a crash.
+    ///
+    /// This side cannot see codegen's constants (different crate), so it pins
+    /// the properties codegen relies on. Codegen's mirrors are
+    /// `Codegen::BUCKET_EMPTY` / `BUCKET_TOMBSTONE` / `BUCKET_OCCUPIED_BIT` and
+    /// `emit_map_ctrl_of` / `emit_map_is_occupied`.
+    #[test]
+    fn control_byte_encoding_matches_codegen() {
+        // The literal values codegen hardcodes.
+        assert_eq!(BUCKET_EMPTY, 0x00);
+        assert_eq!(BUCKET_TOMBSTONE, 0x01);
+        assert_eq!(BUCKET_OCCUPIED_BIT, 0x80);
+
+        // Neither sentinel may read as occupied — this is what lets a lookup
+        // test occupancy and hash tag in a single compare against `ctrl_of`.
+        assert!(!is_occupied(BUCKET_EMPTY));
+        assert!(!is_occupied(BUCKET_TOMBSTONE));
+
+        // Every control byte is occupied, for every possible hash, and carries
+        // the TOP 7 bits — low bits belong to the bucket index, and a tag drawn
+        // from them would be invariant along a probe chain.
+        for shift in 0..64 {
+            let h = 1u64 << shift;
+            assert!(is_occupied(ctrl_of(h)), "ctrl_of(1<<{shift}) not occupied");
+        }
+        assert!(is_occupied(ctrl_of(0)));
+        assert!(is_occupied(ctrl_of(u64::MAX)));
+        assert_eq!(ctrl_of(0), 0x80);
+        assert_eq!(ctrl_of(u64::MAX), 0xff);
+        // Bits below 57 must not reach the tag.
+        assert_eq!(ctrl_of((1 << 57) - 1), 0x80);
+        assert_eq!(ctrl_of(1 << 57), 0x81);
+    }
+
+    /// The tag must not break the map under the conditions it changes: probe
+    /// chains that walk past tombstones and non-matching occupied buckets, and
+    /// resizes that re-derive every control byte. Drives enough keys through
+    /// insert / lookup / remove / re-insert to force several growths, then
+    /// asserts every surviving key is still findable and every removed one is
+    /// not — the exact failure mode a wrong tag produces.
+    #[test]
+    fn tagged_probe_survives_tombstones_and_resize() {
+        unsafe extern "C" fn hash_i64(k: *const c_void) -> u64 {
+            // Deliberately WEAK in the low bits so buckets collide and probe
+            // chains get long: the tag lives in the high bits, so this is the
+            // shape that exercises it.
+            let v = *(k as *const i64) as u64;
+            v.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        }
+        unsafe extern "C" fn eq_i64(a: *const c_void, b: *const c_void) -> bool {
+            *(a as *const i64) == *(b as *const i64)
+        }
+
+        unsafe {
+            let m = KaracMap::new(8, 8, hash_i64, eq_i64);
+            let map = &mut *m;
+            const N: i64 = 2000;
+
+            for k in 0..N {
+                let v = k * 7;
+                map.insert(
+                    &k as *const i64 as *const c_void,
+                    &v as *const i64 as *const c_void,
+                );
+            }
+            assert_eq!(map.len, N as usize);
+
+            // Remove every third key, leaving tombstones mid-chain.
+            for k in (0..N).step_by(3) {
+                assert!(
+                    map.remove(&k as *const i64 as *const c_void, false, false),
+                    "remove({k}) missed a present key"
+                );
+            }
+
+            // Survivors must still be findable THROUGH those tombstones.
+            for k in 0..N {
+                let mut out: i64 = -1;
+                let found = map.get(
+                    &k as *const i64 as *const c_void,
+                    &mut out as *mut i64 as *mut c_void,
+                );
+                if k % 3 == 0 {
+                    assert!(!found, "removed key {k} still found");
+                } else {
+                    assert!(found, "live key {k} not found after tombstoning");
+                    assert_eq!(out, k * 7, "key {k} read the wrong value");
+                }
+            }
+
+            // Re-inserting reclaims tombstones and forces more growth; every
+            // control byte is re-derived on each resize.
+            for k in (0..N).step_by(3) {
+                let v = k * 11;
+                map.insert(
+                    &k as *const i64 as *const c_void,
+                    &v as *const i64 as *const c_void,
+                );
+            }
+            assert_eq!(map.len, N as usize);
+            for k in 0..N {
+                let mut out: i64 = -1;
+                assert!(
+                    map.get(
+                        &k as *const i64 as *const c_void,
+                        &mut out as *mut i64 as *mut c_void
+                    ),
+                    "key {k} lost after re-insert"
+                );
+                assert_eq!(out, if k % 3 == 0 { k * 11 } else { k * 7 });
+            }
+
+            // A key that was never inserted must still miss — the direction a
+            // too-permissive tag test would break.
+            for k in N..N + 100 {
+                let mut out: i64 = -1;
+                assert!(
+                    !map.get(
+                        &k as *const i64 as *const c_void,
+                        &mut out as *mut i64 as *mut c_void
+                    ),
+                    "absent key {k} was found"
+                );
+            }
+
+            map.free_storage();
+            drop(Box::from_raw(m));
+        }
     }
 
     use std::ffi::c_void;

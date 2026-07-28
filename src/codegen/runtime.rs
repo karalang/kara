@@ -7292,7 +7292,9 @@ impl<'ctx> super::Codegen<'ctx> {
         const CAPACITY_OFFSET: u64 = 16;
         const KEY_SIZE_OFFSET: u64 = 40;
         const VAL_SIZE_OFFSET: u64 = 48;
-        const BUCKET_OCCUPIED: u64 = 1;
+        // Live buckets only. B-2026-07-26-2 made an occupied control byte
+        // `0x80 | hash_tag`, so this is a high-bit test — see
+        // `runtime/src/map.rs`'s module header.
 
         // Null guard — the registration site stores a fresh
         // `karac_map_new` handle which is non-null, but defensive
@@ -7457,15 +7459,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i8_t, status_slot_p, "cleanup.map.shared.status.byte")
             .unwrap()
             .into_int_value();
-        let is_occupied = self
-            .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                status_byte,
-                i8_t.const_int(BUCKET_OCCUPIED, false),
-                "cleanup.map.shared.is_occupied",
-            )
-            .unwrap();
+        let is_occupied = self.emit_map_is_occupied(status_byte, "cleanup.map.shared.is_occupied");
         self.builder
             .build_conditional_branch(is_occupied, occupied_bb, next_bb)
             .unwrap();

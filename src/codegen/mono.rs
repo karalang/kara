@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -2896,13 +2896,71 @@ impl<'ctx> super::Codegen<'ctx> {
     /// vs `clone`/set-ops) may store different-but-self-consistent hashes, so
     /// the mono probe must hash the same way the buckets were filled.
     const KARAC_MAP_HASH_FN_OFFSET: u64 = 56;
-    /// Bucket status-byte sentinels for the monomorphized probe
-    /// loop. Must match the runtime's `BUCKET_EMPTY` /
-    /// `BUCKET_OCCUPIED` / `BUCKET_TOMBSTONE` constants in
-    /// `runtime/src/map.rs`.
+    /// Bucket control-byte encoding for the monomorphized probe loops. Must
+    /// match `runtime/src/map.rs` — see its module header for the layout and
+    /// for why disagreement here is a silent wrong answer rather than a crash.
+    ///
+    ///   `0x00`        EMPTY
+    ///   `0x01`        TOMBSTONE
+    ///   `0x80 | tag7` OCCUPIED, `tag7` = bits 57..63 of the key's hash
+    ///
+    /// B-2026-07-26-2 replaced a bare `OCCUPIED = 1` flag with the tagged form.
+    /// The probes exploit it in two different ways depending on shape: a LOOKUP
+    /// probe (`get` / `contains`) compares the byte against the searched key's
+    /// own control byte, which tests occupancy and tag in ONE instruction and
+    /// skips the key dereference entirely on a mismatch; an INSERT probe still
+    /// reaches its occupied arm by elimination (not EMPTY, not TOMBSTONE),
+    /// which stays correct verbatim under the new encoding.
     const BUCKET_EMPTY: u64 = 0;
-    const BUCKET_OCCUPIED: u64 = 1;
-    const BUCKET_TOMBSTONE: u64 = 2;
+    const BUCKET_TOMBSTONE: u64 = 1;
+    const BUCKET_OCCUPIED_BIT: u64 = 0x80;
+
+    /// Mirror of the runtime's `ctrl_of`: the control byte for a bucket holding
+    /// a key with this hash. Takes the TOP 7 bits because the bucket index
+    /// consumes the low ones — a tag sharing them would be constant along a
+    /// probe chain and would reject nothing.
+    pub(super) fn emit_map_ctrl_of(&self, hash: IntValue<'ctx>) -> IntValue<'ctx> {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let shifted = self
+            .builder
+            .build_right_shift(hash, i64_t.const_int(57, false), false, "ctrl.sh")
+            .unwrap();
+        let narrowed = self
+            .builder
+            .build_int_truncate(shifted, i8_t, "ctrl.tr")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_and(narrowed, i8_t.const_int(0x7f, false), "ctrl.tag")
+            .unwrap();
+        self.builder
+            .build_or(
+                tag,
+                i8_t.const_int(Self::BUCKET_OCCUPIED_BIT, false),
+                "ctrl",
+            )
+            .unwrap()
+    }
+
+    /// Mirror of the runtime's `is_occupied`: true for any control byte that is
+    /// not EMPTY or TOMBSTONE. Both sentinels are below `0x80` and every
+    /// occupied byte is at or above it, so this is one unsigned compare.
+    pub(super) fn emit_map_is_occupied(
+        &self,
+        status_byte: IntValue<'ctx>,
+        name: &str,
+    ) -> IntValue<'ctx> {
+        let i8_t = self.context.i8_type();
+        self.builder
+            .build_int_compare(
+                IntPredicate::UGE,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_OCCUPIED_BIT, false),
+                name,
+            )
+            .unwrap()
+    }
 
     /// Cache key for the monomorphized Map[K, V] symbol family —
     /// `"{key_mangle}_{val_mangle}"` (e.g. `"i64_i64"`). Mirrors the
@@ -3273,6 +3331,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_sub(cap, i64_t.const_int(1, false), "mask")
             .unwrap();
         let start = self.builder.build_and(hash, mask, "start").unwrap();
+        // The searched key's control byte (B-2026-07-26-2). A LOOKUP probe
+        // compares the bucket byte against this directly — occupancy and hash
+        // tag in one instruction; an INSERT probe stores it when claiming a
+        // bucket. Loop-invariant, so it is hoisted here with `start`.
+        let ctrl = self.emit_map_ctrl_of(hash);
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -3372,12 +3435,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_in_bounds_gep(i8_t, status_ptr, &[target_slot], "target.status.p")
                 .unwrap()
         };
-        self.builder
-            .build_store(
-                target_status_p,
-                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
-            )
-            .unwrap();
+        self.builder.build_store(target_status_p, ctrl).unwrap();
         // len += 1
         let new_len = self
             .builder
@@ -3607,6 +3665,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_sub(cap, i64_t.const_int(1, false), "mask")
             .unwrap();
         let start = self.builder.build_and(hash, mask, "start").unwrap();
+        // The searched key's control byte (B-2026-07-26-2). A LOOKUP probe
+        // compares the bucket byte against this directly — occupancy and hash
+        // tag in one instruction; an INSERT probe stores it when claiming a
+        // bucket. Loop-invariant, so it is hoisted here with `start`.
+        let ctrl = self.emit_map_ctrl_of(hash);
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -3653,14 +3716,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // ── check.occupied: tombstone → continue, occupied → eq ──
         self.builder.position_at_end(check_occupied_bb);
+        // Occupied AND the hash tag matches, in ONE compare. `ctrl >= 0x80`
+        // and both sentinels are below it, so a tombstone or empty bucket can
+        // never compare equal — and a bucket whose tag differs is rejected
+        // WITHOUT touching its key, which is where the win is (a `String` key
+        // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
+        // false-positive rate is ~1/128, so `eq` runs on real hits.
         let is_occupied = self
             .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                status_byte,
-                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
-                "is.occupied",
-            )
+            .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
             .unwrap();
         let tomb_i_next = self
             .builder
@@ -3919,6 +3983,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_sub(cap, i64_t.const_int(1, false), "mask")
             .unwrap();
         let start = self.builder.build_and(hash, mask, "start").unwrap();
+        // The searched key's control byte (B-2026-07-26-2). A LOOKUP probe
+        // compares the bucket byte against this directly — occupancy and hash
+        // tag in one instruction; an INSERT probe stores it when claiming a
+        // bucket. Loop-invariant, so it is hoisted here with `start`.
+        let ctrl = self.emit_map_ctrl_of(hash);
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -3965,14 +4034,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // ── check.occupied: tombstone → continue, occupied → eq ──
         self.builder.position_at_end(check_occupied_bb);
+        // Occupied AND the hash tag matches, in ONE compare. `ctrl >= 0x80`
+        // and both sentinels are below it, so a tombstone or empty bucket can
+        // never compare equal — and a bucket whose tag differs is rejected
+        // WITHOUT touching its key, which is where the win is (a `String` key
+        // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
+        // false-positive rate is ~1/128, so `eq` runs on real hits.
         let is_occupied = self
             .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                status_byte,
-                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
-                "is.occupied",
-            )
+            .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
             .unwrap();
         let tomb_i_next = self
             .builder
@@ -4265,6 +4335,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_sub(cap, i64_t.const_int(1, false), "mask")
             .unwrap();
         let start = self.builder.build_and(hash, mask, "start").unwrap();
+        // The searched key's control byte (B-2026-07-26-2). A LOOKUP probe
+        // compares the bucket byte against this directly — occupancy and hash
+        // tag in one instruction; an INSERT probe stores it when claiming a
+        // bucket. Loop-invariant, so it is hoisted here with `start`.
+        let ctrl = self.emit_map_ctrl_of(hash);
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -4352,12 +4427,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_in_bounds_gep(i8_t, status_ptr, &[target_slot], "target.status.p")
                 .unwrap()
         };
-        self.builder
-            .build_store(
-                target_status_p,
-                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
-            )
-            .unwrap();
+        self.builder.build_store(target_status_p, ctrl).unwrap();
         let new_len = self
             .builder
             .build_int_add(len, i64_t.const_int(1, false), "len.new")
@@ -4605,6 +4675,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_sub(cap, i64_t.const_int(1, false), "mask")
             .unwrap();
         let start = self.builder.build_and(hash, mask, "start").unwrap();
+        // The searched key's control byte (B-2026-07-26-2). A LOOKUP probe
+        // compares the bucket byte against this directly — occupancy and hash
+        // tag in one instruction; an INSERT probe stores it when claiming a
+        // bucket. Loop-invariant, so it is hoisted here with `start`.
+        let ctrl = self.emit_map_ctrl_of(hash);
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -4651,14 +4726,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // ── check.occupied: tombstone → continue, occupied → eq ──
         self.builder.position_at_end(check_occupied_bb);
+        // Occupied AND the hash tag matches, in ONE compare. `ctrl >= 0x80`
+        // and both sentinels are below it, so a tombstone or empty bucket can
+        // never compare equal — and a bucket whose tag differs is rejected
+        // WITHOUT touching its key, which is where the win is (a `String` key
+        // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
+        // false-positive rate is ~1/128, so `eq` runs on real hits.
         let is_occupied = self
             .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                status_byte,
-                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
-                "is.occupied",
-            )
+            .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
             .unwrap();
         let tomb_i_next = self
             .builder

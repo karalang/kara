@@ -5259,6 +5259,152 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// B-2026-07-26-2: the bucket control byte carries a 7-bit hash tag, and
+    /// `src/codegen/mono.rs` emits its own probe loops against that encoding —
+    /// so the runtime and the emitted code have to agree. They cannot be
+    /// checked against each other directly (different crates), and disagreement
+    /// is a lookup that MISSES A PRESENT KEY: a silent wrong answer, not a
+    /// crash or a link error. This exercises the emitted probes end-to-end on
+    /// the conditions that would expose it.
+    ///
+    /// Three probe families, since each is emitted separately: the scalar Map
+    /// (`Map[i64, i64]`), the String-key Map, and `Set[String].contains`. Each
+    /// drives enough keys to force several resizes — every control byte is
+    /// re-derived on a resize, so a tag written one way and tested another
+    /// survives an unresized table and fails here — then removes a third of
+    /// them to leave tombstones mid-chain and re-inserts, and finally asserts
+    /// BOTH directions: every live key is found with its right value, and every
+    /// absent key still misses (the direction a too-permissive tag breaks).
+    #[test]
+    fn map_control_byte_tag_survives_resize_and_tombstones() {
+        let src = r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut i = 0;
+    while i < 900 {
+        let _ = m.insert(i, i * 7);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 900 {
+        let _ = m.remove(j);
+        j = j + 3;
+    }
+    let mut k = 0;
+    while k < 900 {
+        let _ = m.insert(k, k * 11);
+        k = k + 3;
+    }
+    let mut live = 0;
+    let mut wrong = 0;
+    let mut n = 0;
+    while n < 900 {
+        match m.get(n) {
+            Some(v) => {
+                live = live + 1;
+                let want = if n % 3 == 0 { n * 11 } else { n * 7 };
+                if v != want { wrong = wrong + 1; }
+            }
+            None => {}
+        }
+        n = n + 1;
+    }
+    let mut ghost = 0;
+    let mut g = 900;
+    while g < 1000 {
+        match m.get(g) {
+            Some(v) => {
+                ghost = ghost + 1;
+            }
+            None => {}
+        }
+        g = g + 1;
+    }
+    println(live);
+    println(wrong);
+    println(ghost);
+    println(m.len() as i64);
+
+    let mut sm: Map[String, i64] = Map.new();
+    let mut a = 0;
+    while a < 600 {
+        let _ = sm.insert("key" + a.to_string(), a * 3);
+        a = a + 1;
+    }
+    let mut b = 0;
+    while b < 600 {
+        let _ = sm.remove("key" + b.to_string());
+        b = b + 4;
+    }
+    let mut sfound = 0;
+    let mut swrong = 0;
+    let mut c = 0;
+    while c < 600 {
+        match sm.get("key" + c.to_string()) {
+            Some(v) => {
+                sfound = sfound + 1;
+                if v != c * 3 { swrong = swrong + 1; }
+            }
+            None => {}
+        }
+        c = c + 1;
+    }
+    let mut sghost = 0;
+    let mut d = 600;
+    while d < 700 {
+        match sm.get("key" + d.to_string()) {
+            Some(v) => {
+                sghost = sghost + 1;
+            }
+            None => {}
+        }
+        d = d + 1;
+    }
+    println(sfound);
+    println(swrong);
+    println(sghost);
+
+    let mut st: Set[String] = Set.new();
+    let mut e = 0;
+    while e < 600 {
+        st.insert("w" + e.to_string());
+        e = e + 1;
+    }
+    let mut hits = 0;
+    let mut f = 0;
+    while f < 600 {
+        if st.contains("w" + f.to_string()) { hits = hits + 1; }
+        f = f + 1;
+    }
+    let mut misses = 0;
+    let mut h = 600;
+    while h < 700 {
+        if st.contains("w" + h.to_string()) { misses = misses + 1; }
+        h = h + 1;
+    }
+    println(hits);
+    println(misses);
+}
+"#;
+        let out = run_program(src).expect("map control-byte program should build and run");
+        let got: Vec<&str> = out.lines().collect();
+        // 900 live keys (removed ones were all re-inserted), none with a wrong
+        // value, no phantom hits, len back to 900.
+        assert_eq!(
+            got[0], "900",
+            "scalar map lost keys across resize+tombstones"
+        );
+        assert_eq!(got[1], "0", "scalar map returned a wrong value");
+        assert_eq!(got[2], "0", "scalar map found an absent key");
+        assert_eq!(got[3], "900", "scalar map len drifted");
+        // 450 String keys survive (every 4th of 600 removed = 150 gone).
+        assert_eq!(got[4], "450", "String-key map lost keys");
+        assert_eq!(got[5], "0", "String-key map returned a wrong value");
+        assert_eq!(got[6], "0", "String-key map found an absent key");
+        assert_eq!(got[7], "600", "Set[String].contains missed a present key");
+        assert_eq!(got[8], "0", "Set[String].contains found an absent key");
+    }
+
     /// B-2026-07-28-6: assigning through a `shared struct` FIELD of a plain
     /// struct must write through the RC handle, so the mutation is visible to
     /// every other holder of that cell.
