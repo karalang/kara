@@ -13434,6 +13434,99 @@ fn main() {
         );
     }
 
+    /// B-2026-07-28-9: moving a plain struct that holds a `shared` HANDLE
+    /// field must null that handle in the moved-out source.
+    ///
+    /// `zero_struct_move_caps` neuters every heap-bearing field of a moved-out
+    /// struct so the source's drop is a no-op — `cap`/`len` for Vec/String, the
+    /// tag for Option, the handle for Map/Set. A `shared struct` / `shared enum`
+    /// handle field had no arm: a shared enum has an `enum_layouts` entry that
+    /// the loop skips for `is_shared`, and a shared struct is explicitly
+    /// excluded from the nested-struct recursion, so both fell through to
+    /// nothing. The source stayed live and rc-dec'd a second time for one owned
+    /// reference — the second dec reading the refcount word of a block the
+    /// first already freed.
+    ///
+    /// Alloc/free counts still BALANCE (the garbage refcount the second dec
+    /// reads is rarely 1, so no second `free` fires), so only a sanitizer sees
+    /// it — which is why `examples/tangle/src/undo_redo.kara` printed correct
+    /// output while corrupting the heap.
+    #[test]
+    fn asan_struct_move_nulls_shared_handle_field() {
+        // The undo_redo shape: a command struct captures a shared cell, is
+        // let-bound, then moved into a Vec. Inline construction was always
+        // fine — the `let` is what gives the source a cleanup slot to fire.
+        assert_clean_asan_run(
+            r#"
+shared struct Cell { mut value: i64 }
+struct Cmd { cell: Cell }
+fn main() {
+    let c = Cell { value: 1 };
+    let mut v: Vec[Cmd] = Vec.new();
+    let cmd = Cmd { cell: c };
+    v.push(cmd);
+    c.value = 9;
+    println(c.value);
+    println(v[0].cell.value);
+}
+"#,
+            &["9", "9"],
+            "struct_move_nulls_shared_handle_field",
+        );
+    }
+
+    #[test]
+    fn asan_struct_move_nulls_shared_handle_field_through_owned_param() {
+        // Same move reached through an owned `shared` param and a `mut ref
+        // self` method — the undo_redo call shape exactly.
+        assert_clean_asan_run(
+            r#"
+shared struct Cell { mut value: i64 }
+struct Cmd { cell: Cell }
+struct Ed { stack: Vec[Cmd] }
+impl Ed {
+    fn record(mut ref self, cell: Cell) {
+        let cmd = Cmd { cell: cell };
+        self.stack.push(cmd);
+    }
+}
+fn main() {
+    let mut ed = Ed { stack: Vec.new() };
+    let c = Cell { value: 5 };
+    ed.record(c);
+    ed.record(c);
+    println(c.value);
+}
+"#,
+            &["5"],
+            "struct_move_nulls_shared_handle_field_through_owned_param",
+        );
+    }
+
+    #[test]
+    fn asan_struct_move_nulls_shared_enum_handle_field() {
+        // The `shared enum` sibling: its handle is the same inline `ptr`, and
+        // it fell through the same gap (skipped by the `is_shared` guard on the
+        // `enum_layouts` arm). Read back through the Vec rather than through a
+        // second binding — unlike a shared STRUCT handle, the ownership checker
+        // treats a shared enum handle moved into a struct field as a real move
+        // and rejects a later use of the source.
+        assert_clean_asan_run(
+            r#"
+shared enum Node { Leaf(i64) }
+struct Holder { node: Node }
+fn main() {
+    let mut v: Vec[Holder] = Vec.new();
+    let h = Holder { node: Node.Leaf(3) };
+    v.push(h);
+    match v[0].node { Leaf(x) => println(x) }
+}
+"#,
+            &["3"],
+            "struct_move_nulls_shared_enum_handle_field",
+        );
+    }
+
     #[test]
     fn asan_compound_enum_drop_skips_no_payload_variant() {
         // No-payload variant lands on the default `ret` arm of the

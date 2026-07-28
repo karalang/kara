@@ -4289,6 +4289,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // a pure codegen null-store, exactly parallel to the Vec cap-zero.
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
+            } else if self.shared_types.contains_key(fname) {
+                // B-2026-07-28-9 — a `shared struct` / `shared enum` HANDLE
+                // field is one inline `ptr`, and the struct's drop rc-dec's it
+                // (`__karac_vec_elem_full_drop_<S>`'s `nstr.sh.*` block). A
+                // whole-struct move that left the source handle live therefore
+                // rc-dec'd TWICE for one owned reference: once from the
+                // moved-out source's drop and once from the destination's. The
+                // second dec then reads the refcount word of a block the first
+                // already freed — a use-after-free, and the following `free`
+                // is skipped only because the garbage it reads is rarely 1, so
+                // alloc/free counts still balance and only a sanitizer sees it.
+                //
+                // Null the source handle. The drop's `nstr.sh.isnull` guard
+                // makes it a no-op, exactly parallel to the Map/Set arm above.
+                // Must precede the `enum_layouts` / `struct_types` arms below:
+                // a shared ENUM has an `enum_layouts` entry (skipped there for
+                // `is_shared`) and a shared STRUCT is explicitly excluded from
+                // the nested-struct recursion, so both fell through to nothing.
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
             } else if fname != "Result" {
                 if let Some(layout) = self.enum_layouts.get(fname).cloned() {
                     if !layout.is_shared {
