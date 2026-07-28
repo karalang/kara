@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 40 | 0 |
-| perf | 29 | 1 |
+| perf | 30 | 2 |
 | crash | 28 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 508 | 2 |
+| codegen | 509 | 3 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **697 surfaced · 2 open · 689 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **698 surfaced · 3 open · 689 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | `Map[String, _]` build + probe runs ~2x behind an EQUAL-HASH Rust HashMap. PARTIALLY ADDRESSED: two measured fixes landed (direct rehash on growth e91200a; monomorphized String-key `Map.get` probe 54aac61), each ~1.13x on the path it targets. STILL OPEN because the ORIGINAL ATTRIBUTION WAS WRONG TWICE -- the cost is not the indirect hash_fn/eq_fn calls (disproven by controlled experiment), and the map is not where the #127/#126 kata deficit lives (disproven by intervention). | — |
+| B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | The #127/#126 kata deficit is CANDIDATE GENERATION, not `Map[String, _]` — retitled because this entry's original framing has now been refuted by measurement three separate ways and the old title kept sending readers to the map. What remains under this ID is the unattributed residual after the two `.chars()` loops are accounted for: 1.17x on arm64, and on x86 the whole-program I-ref ratio is now 1.235x (was 1.45x). The map's own microbenchmark gap (~1.94x on lookup) is real but demonstrably NOT what drives either kata. | — |
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
+| B-2026-07-28-2 | 2026-07-28 | codegen | medium | `for ch in <runtime-string>.chars()` cannot take the branch-free stride-1 loop, because that lowering requires a compile-time all-ASCII proof (B-2026-07-27-7) which a `ref String` parameter can never satisfy — so every `.chars()` loop over a runtime string still advances its byte offset through a PHI and keeps the codepoint in an address-taken alloca. A DYNAMIC bailout needs no proof and would cover all of them. | — |
 
 ### Fixed (689)
 
