@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 182 | 1 |
+| miscompile | 183 | 1 |
 | leak | 98 | 0 |
 | codegen-gap | 81 | 2 |
 | double-free | 81 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 513 | 4 |
 | typecheck | 87 | 0 |
-| interp | 71 | 0 |
+| interp | 72 | 0 |
 | ownership | 28 | 0 |
 | other | 19 | 0 |
 | autopar | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **702 surfaced · 4 open · 692 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **703 surfaced · 4 open · 693 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **702 surfaced 
 | B-2026-07-28-4 | 2026-07-28 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README documents, and nothing in CI runs them. | — |
 | B-2026-07-28-5 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): `Option[<shared enum>]` has no kind of its own — `kind_of_ty` special-cases only `Option[String]` and collapses every other `Option[T]` to `Option[i64]`, so an `Option[Expr]` field stores the RC handle as a raw i64 payload, is judged POD, and is never released. Emits invalid IR today; would be a silent leak once that IR is fixed. Blocks ast.kara together with B-2026-07-27-6. | — |
 
-### Fixed (692)
+### Fixed (693)
 
-<details><summary>692 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>693 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -833,6 +833,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **702 surfaced 
 | B-2026-07-28-2 | codegen | medium | `for ch in <runtime-string>.chars()` cannot take the branch-free stride-1 loop, because that lowering requires a compile-time all-ASCII proof (B-2026… | d73e5fb |
 | B-2026-07-28-3 | codegen | high | A plain (non-`shared`) struct that reaches ITSELF through a `Vec` field OVERFLOWS THE COMPILER'S STACK during codegen — every adjacency-list graph (`… | cb38efe |
 | B-2026-07-28-6 | codegen | high | Assigning through a `shared struct` field of a plain struct (`h.cell.value = v`) writes into the FIELD SLOT instead of through the RC handle, so the… | 85fc58c |
+| B-2026-07-28-7 | interp | high | INTERPRETER: an assignment to the scrutinee inside a match arm is SILENTLY REVERTED — `match cur { Some(n) => { cur = n.next } }` leaves `cur` at its… | 7e1729f |
 
 </details>
 
