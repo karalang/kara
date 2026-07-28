@@ -794,6 +794,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # `rust-toolchain.toml` pins the toolchain repo-wide, so the `cargo
+      # check` below runs on the PINNED toolchain — not the `stable` the
+      # action installed the target onto. Add the matrix target to the
+      # pinned toolchain explicitly (the override file makes this `rustup`
+      # target the pinned one), or `cargo check` dies with E0463 "can't
+      # find crate for `core`". The wasm-wasi leg survives without this only
+      # because its target is already in `rust-toolchain.toml`'s `targets`.
+      - name: Add target to pinned toolchain
+        run: rustup target add ${{ matrix.target }}
+
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
         with:

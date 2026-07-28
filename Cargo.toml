@@ -140,7 +140,11 @@ llvm-sys = { version = "181", features = ["prefer-dynamic"], optional = true }
 # `[dev-dependencies]`. The same crate continues to be statically
 # linked as a `.a` for AOT builds via `link_executable`, untouched
 # by this dep wiring.
-karac-runtime = { path = "runtime", optional = true }
+# `version` pins the wildcard cargo-deny would otherwise flag: `karac` is a
+# public crate (no `publish = false`), so `allow-wildcard-paths` does not
+# exempt its path deps. A concrete version req makes the dep non-wildcard;
+# path still wins for local/workspace builds.
+karac-runtime = { path = "runtime", version = "0.1.0", optional = true }
 # slice c-repl.B.A: `karac_jit_runner` needs raw libc fds (`dup`, `dup2`,
 # `fflush`) for the per-cell stdout/stderr redirect dance. Promoted from
 # `[dev-dependencies]` (which `[[bin]]` targets can't see) to an optional

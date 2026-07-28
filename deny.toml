@@ -35,11 +35,18 @@ all-features = false
 
 [advisories]
 version = 2
-# Deliberately empty. An advisory is either fixed, or it gets an
-# explicit entry here with a comment saying why it does not apply to
-# our usage. An empty list means "nothing is currently waived", which
-# is the state worth defending.
-ignore = []
+# An advisory is either fixed, or it gets an explicit entry here with a
+# comment saying why it does not apply to our usage.
+ignore = [
+    # rustls-pemfile is unmaintained (archived Aug 2025). It reaches us
+    # only transitively through the rustls TLS stack (karac-runtime ->
+    # rustls tree), the advisory records "No safe upgrade is available",
+    # and it is an `unmaintained` notice, not a vulnerability — the crate
+    # is a thin wrapper around the PEM parser now living in
+    # rustls-pki-types. Waived until the rustls stack drops it upstream;
+    # revisit when a rustls bump removes rustls-pemfile from the lockfile.
+    "RUSTSEC-2025-0134",
+]
 
 [bans]
 multiple-versions = "warn"

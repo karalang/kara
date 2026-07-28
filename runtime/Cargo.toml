@@ -3,6 +3,9 @@ name = "karac-runtime"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# Same license as the root `karac` crate — declared so cargo-deny's
+# license gate does not flag this first-party crate as `unlicensed`.
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "karac_runtime"
