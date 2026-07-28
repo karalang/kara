@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 183 | 0 |
+| miscompile | 184 | 1 |
 | leak | 98 | 0 |
-| codegen-gap | 81 | 1 |
+| codegen-gap | 82 | 1 |
 | double-free | 81 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 517 | 2 |
+| codegen | 519 | 3 |
 | typecheck | 87 | 0 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
@@ -124,18 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **709 surfaced · 2 open · 701 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **711 surfaced · 3 open · 702 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | #127 kata: instruction counts are now at PARITY with Rust (kara 1.782G vs rust 1.790G) yet kara is still 1.27x slower in wall time — the residual is entirely IPC, and it is ATTRIBUTED: `karac_eq_String` causes 70.6% of kara's L1-D read misses (6.0M of 8.5M, more than Rust's WHOLE program at 3.6M) because the map's status byte carries no hash fragment, so every occupied slot probed dereferences a cold key. Fix is a hashbrown-style 7-bit tag, but it is a COORDINATED runtime+codegen change, not one file. | — |
-| B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a heap-bearing payload inside a `shared enum` cannot always be released. Progressively narrowed across slices 63/65/67 and 2026-07-28; what REMAINS is one shape — an AGGREGATE-slot by-value enum field (`Option[<plain struct>]`), which needs the recursive struct release run inside a tag-conditional branch. That is the last Option shape ast.kara uses and the only thing still blocking it. | — |
+| B-2026-07-28-14 | 2026-07-28 | codegen | medium | SELFHOST EMITTER (codegen.kara): `Option[<plain struct>]` has no representation — `kind_of_ty` collapses it to `Option$i`, whose payload slot is an i64, so constructing `Some(<struct>)` emits `insertvalue { i64, i64 } %t6, i64 %t5, 1` with `%t5` a struct. Fails at LLVM parse. The third member of the `Option[T]` family after B-2026-07-28-5 (shared enum) and the `Option[String]` leg of B-2026-07-27-6. | — |
+| B-2026-07-28-15 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct lowers to a bare integer and the emitter produces well-formed IR for a program the seed REFUSES. This, not any payload shape, is what gates module-level self-hosting. | — |
 
-### Fixed (701)
+### Fixed (702)
 
-<details><summary>701 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>702 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -818,6 +819,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **709 surfaced 
 | B-2026-07-27-3 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a BOOL-valued `if` or `match` in VALUE position emitted INVALID IR | 6740872 |
 | B-2026-07-27-4 | codegen+cli | medium | No working per-function / per-line PROFILING attribution for an AOT kara binary | f569aac |
 | B-2026-07-27-5 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): value-position `if` and `match` used a HARDCODED `alloca i64` result slot, so a STRING / struct / enu… | 999cd9c |
+| B-2026-07-27-6 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a heap-bearing payload inside a `shared enum` could not always be released | dd14643 |
 | B-2026-07-27-7 | codegen | medium | `for ch in <str>.chars()` over a COMPILE-TIME-CONSTANT string runs ~21.7x the instructions of the identical Rust source, because the ASCII/multibyte… | de5da39 |
 | B-2026-07-27-8 | codegen | high | `continue` inside `for ch in <s>.chars()` is an INFINITE LOOP in compiled code on every backend (JIT and AOT, -O0 and -O2), because the general chars… | 6f1c706 |
 | B-2026-07-27-9 | ownership | medium | A non-`mut` `let` binding can be REASSIGNED and MUTATED IN PLACE with no diagnostic — `let s: String = "abc"; s = "xyz";` and `let s: String = "abc";… | 6a855bdc |
