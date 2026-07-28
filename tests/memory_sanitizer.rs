@@ -13503,6 +13503,89 @@ fn main() {
         );
     }
 
+    /// B-2026-07-28-11: CLONING a value that carries a `shared` handle must
+    /// RETAIN it — the clone-path mirror of `asan_struct_move_nulls_*` above.
+    ///
+    /// A handle is one `ptr`, so the shallow primitive clone copied it
+    /// correctly; what it did not do is retain. A copy of a handle is a new
+    /// OWNER, so the source's drop and the clone's drop then released for one
+    /// owned reference — the first freeing, the second reading the refcount
+    /// word of freed memory. Alloc/free counts still balanced, so this printed
+    /// the right answer everywhere except under a sanitizer, until enough
+    /// instances accumulated to corrupt the allocator outright (which is how it
+    /// surfaced: the self-host emitter cloning a `Vec[MatchArm]`).
+    ///
+    /// All four shapes below were confirmed RED with the fix disabled.
+    #[test]
+    fn asan_clone_retains_shared_handle() {
+        // Vec of a struct that CARRIES a handle — the shape that surfaced it.
+        assert_clean_asan_run(
+            r#"
+shared enum E { V(i64) }
+struct Row { e: E, n: i64 }
+fn main() {
+    let mut v: Vec[Row] = Vec.new();
+    v.push(Row { e: E.V(1), n: 10 });
+    v.push(Row { e: E.V(2), n: 20 });
+    let mut t = 0;
+    for r in v.clone() { t = t + r.n; }
+    println(t);
+}
+"#,
+            &["30"],
+            "clone_retains_shared_handle_vec_of_struct",
+        );
+        // Vec whose ELEMENT IS the handle — reaches the same dispatcher arm
+        // directly rather than through a struct field.
+        assert_clean_asan_run(
+            r#"
+shared enum E { V(i64) }
+fn main() {
+    let mut v: Vec[E] = Vec.new();
+    v.push(E.V(1));
+    v.push(E.V(2));
+    let w = v.clone();
+    println(w.len());
+}
+"#,
+            &["2"],
+            "clone_retains_shared_handle_vec_of_handle",
+        );
+        // Map VALUE carrying a handle — the map clone delegates per-value to
+        // the same dispatcher.
+        assert_clean_asan_run(
+            r#"
+shared enum E { V(i64) }
+struct Row { e: E, n: i64 }
+fn main() {
+    let mut m: Map[String, Row] = Map.new();
+    m.insert("a", Row { e: E.V(1), n: 5 });
+    let m2 = m.clone();
+    println(m2.len());
+}
+"#,
+            &["1"],
+            "clone_retains_shared_handle_map_value",
+        );
+        // A `shared struct` handle, not just a `shared enum` — both live in
+        // `shared_types`, and the arm keys off that map rather than on which
+        // kind of shared type it is.
+        assert_clean_asan_run(
+            r#"
+shared struct Cell { mut v: i64 }
+struct Row { c: Cell, n: i64 }
+fn main() {
+    let mut v: Vec[Row] = Vec.new();
+    v.push(Row { c: Cell { v: 1 }, n: 7 });
+    let w = v.clone();
+    println(w.len());
+}
+"#,
+            &["1"],
+            "clone_retains_shared_struct_handle",
+        );
+    }
+
     #[test]
     fn asan_struct_move_nulls_shared_enum_handle_field() {
         // The `shared enum` sibling: its handle is the same inline `ptr`, and

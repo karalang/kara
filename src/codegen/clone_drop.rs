@@ -14,7 +14,7 @@ use crate::ast::*;
 use super::state::EnumDropKind;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
-use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{FunctionValue, IntValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -140,6 +140,106 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => self.emit_primitive_clone_fn(&type_name, te),
         }
+    }
+
+    /// B-2026-07-28-11: clone dispatcher for the CONTENTS of a container being
+    /// duplicated — a Vec/Map/Set element, a struct field, a tuple element, an
+    /// enum payload. Identical to `emit_clone_fn_for_type_expr` except that a
+    /// `shared struct` / `shared enum` HANDLE is copied *and retained*.
+    ///
+    /// Duplicating a container gives every handle inside it a second OWNER, and
+    /// nothing was retaining them: both the source's drop and the copy's drop
+    /// then released for one owned reference, the first freeing and the second
+    /// reading the refcount word of freed memory. Alloc/free counts still
+    /// balanced, so the program printed the right answer and only a sanitizer
+    /// saw it — until enough instances accumulated to corrupt the allocator,
+    /// which is how it surfaced (`malloc(): unaligned tcache chunk detected`
+    /// from the self-host emitter cloning a `Vec[MatchArm]`). This is the mirror
+    /// of B-2026-07-28-9: there a moved-out source had to STOP releasing, here a
+    /// copy has to START retaining.
+    ///
+    /// It is a SEPARATE entry point rather than a change to the shared
+    /// dispatcher because that dispatcher has twenty-odd other callers which are
+    /// move/transfer contexts, not duplications, and which manage RC themselves
+    /// — `nodes[0].neighbors.push(nodes[1])` already emits its own retain
+    /// (B-2026-07-21-13). Retaining there too double-counts and leaks, which is
+    /// exactly what the first attempt did.
+    pub(super) fn emit_owning_clone_fn_for_type_expr(
+        &mut self,
+        te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(name) = p.segments.first().map(String::as_str) {
+                if let Some(heap_type) = self.shared_types.get(name).map(|i| i.heap_type) {
+                    let type_name = Self::display_mangle_te(te);
+                    return self.emit_shared_handle_clone_fn(&type_name, heap_type);
+                }
+            }
+        }
+        self.emit_clone_fn_for_type_expr(te)
+    }
+
+    /// Emit `karac_cloneown_<typename>(*const ptr, *mut ptr)` for a `shared
+    /// struct` / `shared enum` HANDLE — copy the pointer AND retain it, so the
+    /// copy is a genuine second owner rather than an uncounted alias.
+    /// Null-guarded, because the handle slot is legitimately null for a `None`
+    /// under the `Option[shared]` niche and for a not-yet-assigned field.
+    ///
+    /// Deliberately a DIFFERENT symbol and cache key from `karac_clone_<t>`:
+    /// the non-retaining clone of the same type is still the right thing for
+    /// the move/transfer callers, so the two must coexist rather than one
+    /// overwriting the other in the cache.
+    fn emit_shared_handle_clone_fn(
+        &mut self,
+        type_name: &str,
+        heap_type: StructType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let cache_key = format!("cloneown_{type_name}");
+        if let Some(&f) = self.clone_fn_cache.get(&cache_key) {
+            return f;
+        }
+        let fn_name = format!("karac_cloneown_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(cache_key, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        self.clone_fn_cache.insert(cache_key, clone_fn);
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        let inc_bb = self.context.append_basic_block(clone_fn, "rc_inc");
+        let done_bb = self.context.append_basic_block(clone_fn, "done");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let h = self
+            .builder
+            .build_load(ptr_ty, src, "sh.h")
+            .unwrap()
+            .into_pointer_value();
+        self.builder.build_store(dst, h).unwrap();
+        let is_null = self.builder.build_is_null(h, "sh.isnull").unwrap();
+        self.builder
+            .build_conditional_branch(is_null, done_bb, inc_bb)
+            .unwrap();
+        self.builder.position_at_end(inc_bb);
+        self.emit_rc_inc(heap_type, h);
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+        self.builder.position_at_end(done_bb);
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        clone_fn
     }
 
     /// Emit a primitive `karac_clone_<typename>(*const T, *mut T)` whose
@@ -322,7 +422,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let elem_ty = self.llvm_type_for_type_expr(elem_te);
         // Recurse first — emit may switch the builder's insert block.
-        let elem_clone = self.emit_clone_fn_for_type_expr(elem_te);
+        let elem_clone = self.emit_owning_clone_fn_for_type_expr(elem_te);
 
         let saved_bb = self.builder.get_insert_block();
         let clone_fn_ty = self
@@ -525,8 +625,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let val_ty = self.llvm_type_for_type_expr(val_te);
         let hash_fn = self.emit_hash_fn_for_type_expr(key_te);
         let eq_fn = self.emit_eq_fn_for_type_expr(key_te);
-        let key_clone = self.emit_clone_fn_for_type_expr(key_te);
-        let val_clone = self.emit_clone_fn_for_type_expr(val_te);
+        let key_clone = self.emit_owning_clone_fn_for_type_expr(key_te);
+        let val_clone = self.emit_owning_clone_fn_for_type_expr(val_te);
 
         let saved_bb = self.builder.get_insert_block();
         let clone_fn_ty = self
@@ -684,7 +784,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let child_fns: Vec<FunctionValue<'ctx>> = elems_owned
             .iter()
-            .map(|e| self.emit_clone_fn_for_type_expr(e))
+            .map(|e| self.emit_owning_clone_fn_for_type_expr(e))
             .collect();
         let field_tys: Vec<BasicTypeEnum<'ctx>> = elems_owned
             .iter()
@@ -780,7 +880,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // builder, so finish them before filling this fn's entry block).
         let child_fns: Vec<FunctionValue<'ctx>> = field_tes
             .iter()
-            .map(|te| self.emit_clone_fn_for_type_expr(te))
+            .map(|te| self.emit_owning_clone_fn_for_type_expr(te))
             .collect();
 
         let entry_bb = self.context.append_basic_block(clone_fn, "entry");
@@ -893,7 +993,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(field_te) = field_tes.get(fi).cloned() else {
                     continue;
                 };
-                let child_fn = self.emit_clone_fn_for_type_expr(&field_te);
+                let child_fn = self.emit_owning_clone_fn_for_type_expr(&field_te);
                 // Field index in `llvm_type`: data/struct word at `start_word
                 // + 1` (tag is field 0), matching `emit_enum_drop_switch`.
                 field_clones.push((variant_name.clone(), (*start_word + 1) as u32, child_fn));
