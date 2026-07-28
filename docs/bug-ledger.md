@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 29 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
-| use-after-free | 8 | 0 |
+| use-after-free | 9 | 0 |
 | other | 4 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 513 | 4 |
+| codegen | 514 | 4 |
 | typecheck | 87 | 0 |
 | interp | 72 | 0 |
 | ownership | 28 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **703 surfaced · 4 open · 693 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **704 surfaced · 4 open · 694 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **703 surfaced 
 | B-2026-07-28-4 | 2026-07-28 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README documents, and nothing in CI runs them. | — |
 | B-2026-07-28-5 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): `Option[<shared enum>]` has no kind of its own — `kind_of_ty` special-cases only `Option[String]` and collapses every other `Option[T]` to `Option[i64]`, so an `Option[Expr]` field stores the RC handle as a raw i64 payload, is judged POD, and is never released. Emits invalid IR today; would be a silent leak once that IR is fixed. Blocks ast.kara together with B-2026-07-27-6. | — |
 
-### Fixed (693)
+### Fixed (694)
 
-<details><summary>693 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>694 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -834,6 +834,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **703 surfaced 
 | B-2026-07-28-3 | codegen | high | A plain (non-`shared`) struct that reaches ITSELF through a `Vec` field OVERFLOWS THE COMPILER'S STACK during codegen — every adjacency-list graph (`… | cb38efe |
 | B-2026-07-28-6 | codegen | high | Assigning through a `shared struct` field of a plain struct (`h.cell.value = v`) writes into the FIELD SLOT instead of through the RC handle, so the… | 85fc58c |
 | B-2026-07-28-7 | interp | high | INTERPRETER: an assignment to the scrutinee inside a match arm is SILENTLY REVERTED — `match cur { Some(n) => { cur = n.next } }` leaves `cur` at its… | 7e1729f |
+| B-2026-07-28-8 | codegen | high | CODEGEN: storing into a PLAIN (value-type) struct's `Option[shared T]` field drops the old value BEFORE retaining the new one, so an aliasing RHS (`h… | fa8ae31 |
 
 </details>
 
