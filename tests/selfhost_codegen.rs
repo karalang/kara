@@ -717,6 +717,33 @@ const CORPUS: &[&str] = &[
     //     literal in BOTH arms was clean, which is what made it look like a
     //     `.to_string()` bug rather than a join bug.
     "enum V {\n    Num(i64),\n    Nothing,\n}\nfn show(v: ref V) -> String {\n    match v {\n        Num(n) => n.to_string(),\n        Nothing => \"none\".to_string(),\n    }\n}\nfn main() {\n    let a = V.Num(7);\n    println(show(a));\n    let e = V.Nothing;\n    println(show(e));\n}",
+    // ── Slice 67: Vec of a `shared enum`, and a Vec FIELD inside a shared
+    //    node (B-2026-07-27-6). `ast.Expr`'s `CallExpr.args: Vec[Expr]` is the
+    //    shape that blocks ast.kara, and it needs three things that were all
+    //    wrong or missing:
+    //
+    //    · A `Vec[<shared enum>]` local. Its scope-exit free routed each
+    //      element through the BY-VALUE enum free, emitting
+    //      `extractvalue ptr %el, 0` — IR that LLVM rejects outright
+    //      ("extractvalue operand must be aggregate type"), emitted silently.
+    //      An element is an RC HANDLE, so dropping the vec releases each one.
+    //    · The element STRIDE. `en_has_heap` is true for every shared enum, so
+    //      the 16/32 ladder sized a handle at 32 while `ty_text` renders it
+    //      `ptr` (8) and element access GEPs at 8 — so `emit_materialize_vec`
+    //      would malloc/memcpy `len*32` out of a `len*8` buffer (heap
+    //      over-read) and scatter the copies. `en_stride` is now the one
+    //      source of truth for all three sites that needed it.
+    //    · A Vec FIELD inside a shared node. `sh_struct_release_text` never
+    //      set `deep` for any Vec kind, so the field was skipped entirely and
+    //      the buffer plus every element handle leaked with no diagnostic.
+    //
+    //    The last program declares the Vec-bearing variant WITHOUT
+    //    constructing it — the case that used to slip past the
+    //    construction-site refusal and emit a silently-leaking release arm.
+    "shared enum E {\n    A(i64),\n    B(i64),\n}\nfn val(e: ref E) -> i64 {\n    match e {\n        A(n) => n,\n        B(n) => n * 10,\n    }\n}\nfn main() {\n    let mut v: Vec[E] = Vec.new();\n    v.push(E.A(1));\n    v.push(E.B(2));\n    v.push(E.A(3));\n    println(v.len().to_string());\n    let mut t = 0;\n    for e in v {\n        t = t + val(e);\n    }\n    println(t.to_string());\n}",
+    "struct Lit {\n    v: i64,\n}\nstruct Cal {\n    name: String,\n    args: Vec[E],\n}\nshared enum E {\n    N(Lit),\n    C(Cal),\n}\nfn total(e: E) -> i64 {\n    match e {\n        N(l) => l.v,\n        C(c) => {\n            let mut s = 0;\n            for a in c.args {\n                s = s + total(a);\n            }\n            s\n        }\n    }\n}\nfn main() {\n    let mut xs: Vec[E] = Vec.new();\n    xs.push(E.N(Lit { v: 1 }));\n    xs.push(E.N(Lit { v: 2 }));\n    xs.push(E.N(Lit { v: 4 }));\n    let c = E.C(Cal { name: \"f\", args: xs });\n    println(total(c).to_string());\n}",
+    "struct Row {\n    tag: String,\n    ns: Vec[i64],\n}\nshared enum Box2 {\n    Empty,\n    Full(Row),\n}\nfn sum(b: ref Box2) -> i64 {\n    match b {\n        Empty => 0,\n        Full(r) => {\n            let mut s = 0;\n            for n in r.ns {\n                s = s + n;\n            }\n            s\n        }\n    }\n}\nfn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(5);\n    v.push(6);\n    let b = Box2.Full(Row { tag: \"r\", ns: v });\n    println(sum(b).to_string());\n    let e = Box2.Empty;\n    println(sum(e).to_string());\n}",
+    "struct Lit {\n    v: i64,\n}\nstruct Cal {\n    name: String,\n    args: Vec[E],\n}\nshared enum E {\n    N(Lit),\n    C(Cal),\n}\nfn main() {\n    let a = E.N(Lit { v: 9 });\n    match a {\n        N(l) => println(l.v.to_string()),\n        C(c) => println(c.name),\n    }\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
