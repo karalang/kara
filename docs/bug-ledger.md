@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 184 | 1 |
+| miscompile | 184 | 0 |
 | leak | 98 | 0 |
-| codegen-gap | 82 | 1 |
-| double-free | 81 | 0 |
+| codegen-gap | 82 | 0 |
+| double-free | 82 | 1 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 42 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 519 | 2 |
+| codegen | 520 | 1 |
 | typecheck | 87 | 0 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **711 surfaced · 2 open · 703 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **712 surfaced · 1 open · 705 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-28-14 | 2026-07-28 | codegen | medium | SELFHOST EMITTER (codegen.kara): `Option[<plain struct>]` has no representation — `kind_of_ty` collapses it to `Option$i`, whose payload slot is an i64, so constructing `Some(<struct>)` emits `insertvalue { i64, i64 } %t6, i64 %t5, 1` with `%t5` a struct. Fails at LLVM parse. The third member of the `Option[T]` family after B-2026-07-28-5 (shared enum) and the `Option[String]` leg of B-2026-07-27-6. | — |
-| B-2026-07-28-15 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct lowers to a bare integer and the emitter produces well-formed IR for a program the seed REFUSES. This, not any payload shape, is what gates module-level self-hosting. | — |
+| B-2026-07-28-16 | 2026-07-28 | codegen | high | SEED CODEGEN: reading an `Option[<struct that owns heap>]` out of a STRUCT FIELD and passing it to an OWNING parameter double-frees. The field read is a shallow borrow, the callee's epilogue frees the payload's buffer, and the struct's own scope-exit drop frees it again. Interpreter is correct; JIT and AOT both abort. | — |
 
-### Fixed (703)
+### Fixed (705)
 
-<details><summary>703 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>705 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -842,6 +841,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **711 surfaced 
 | B-2026-07-28-11 | codegen | high | CODEGEN: `Vec[<struct carrying a shared handle>].clone()` does not retain the cloned elements' handles, so the clone's drop and the original's drop b… | a4711ca |
 | B-2026-07-28-12 | codegen | medium | CODEGEN: `println(<Vec expression>)` renders EMPTY (or a stray tab) when the operand is not an identifier — `println(vec![9i64, 8i64])`, `println(t.s… | 0e3d0dd |
 | B-2026-07-28-13 | autopar | high | explicit `par {}` over 18 arms that all READ one shared graph crashes nondeterministically (~0.8%): silent exit 133 (SIGTRAP) and 139 (SIGSEGV), empt… | c1eeed5 |
+| B-2026-07-28-14 | codegen | medium | SELFHOST EMITTER (codegen.kara): `Option[<plain struct>]` has no representation — `kind_of_ty` collapses it to `Option$i`, whose payload slot is an i… | 46acf5b |
+| B-2026-07-28-15 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct… | 04964fa |
 
 </details>
 
