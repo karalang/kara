@@ -131,7 +131,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **709 surfaced 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | The #127/#126 kata deficit is CANDIDATE GENERATION, not `Map[String, _]` — retitled because this entry's original framing has now been refuted by measurement three separate ways and the old title kept sending readers to the map. What remains under this ID is the unattributed residual after the two `.chars()` loops are accounted for: 1.17x on arm64, and on x86 the whole-program I-ref ratio is now 1.235x (was 1.45x). The map's own microbenchmark gap (~1.94x on lookup) is real but demonstrably NOT what drives either kata. | — |
-| B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
+| B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a heap-bearing payload inside a `shared enum` cannot always be released. Progressively narrowed across slices 63/65/67 and 2026-07-28; what REMAINS is one shape — an AGGREGATE-slot by-value enum field (`Option[<plain struct>]`), which needs the recursive struct release run inside a tag-conditional branch. That is the last Option shape ast.kara uses and the only thing still blocking it. | — |
 
 ### Fixed (701)
 
