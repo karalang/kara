@@ -277,7 +277,7 @@ mod par_codegen_tests {
         ) {
             panic!("codegen failed for test program: {}", e);
         }
-        link_executable(&obj_path, &exe_path).ok()?;
+        super::common::link_or_skip(link_executable(&obj_path, &exe_path))?;
 
         let output = super::common::output_with_hang_watchdog(
             std::process::Command::new(&exe_path),

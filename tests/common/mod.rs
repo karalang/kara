@@ -182,6 +182,51 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
 /// threads (e.g. `--test-threads=1` runs on the main thread) the
 /// allowlist can't match and grandfathered tests fail too — run the
 /// suite with the default parallel runner.
+/// Triage a `link_executable` failure: soft-skip a genuinely archive-less
+/// environment, but PANIC on a stale archive.
+///
+/// Every E2E harness links against `libkarac_runtime.a` and soft-skips
+/// (`.ok()?` → `None`) when linking fails, because a checkout without the
+/// archive built is a legitimate skip (CLAUDE.md's documented "skip with a
+/// stderr notice" contract). The hole: an archive that EXISTS but is STALE —
+/// built before a runtime symbol current codegen emits — also fails to link,
+/// and the same soft-skip swallowed it. Because ~960 of the codegen suite's
+/// call sites use the tolerant `if let Some(out) = out { assert!(…) }` shape,
+/// a stale archive silently voided most of the E2E suite: it reported green
+/// while asserting nothing. Only the ~300 strict `assert_eq!(run(…), Some(…))`
+/// sites noticed, and there the symptom (`left: None`) hid the linker error.
+///
+/// The discriminator is the error text. An UNDEFINED-SYMBOL failure means the
+/// linker found the archive and it lacked a symbol — always a stale archive
+/// (or a genuine missing keep-list entry), never "this environment has no
+/// archive". Any other link error (archive absent, no linker, permissions)
+/// keeps the soft-skip.
+///
+/// Returns `Some(())` to continue; `None` to soft-skip (propagate with `?`).
+pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
+    let Err(e) = result else {
+        return Some(());
+    };
+    let undefined_symbol = e.contains("undefined reference")
+        || e.contains("undefined symbol")
+        // macOS ld: "Undefined symbols for architecture arm64:"
+        || e.contains("Undefined symbols");
+    if undefined_symbol {
+        panic!(
+            "link failed with an UNDEFINED SYMBOL — the runtime archive is STALE \
+             (built before a symbol current codegen emits), not missing. This would \
+             otherwise soft-skip and silently void most of the E2E suite. Rebuild it \
+             (CLAUDE.md § Commands, lean FIRST then full):\n\
+             \x20 cargo rustc -p karac-runtime --release --no-default-features \
+             --features net --crate-type staticlib\n\
+             \x20 cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a\n\
+             \x20 cargo rustc -p karac-runtime --release --crate-type staticlib\n\n\
+             linker error:\n{e}"
+        );
+    }
+    None
+}
+
 pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult, src: &str) {
     if ownership.errors.is_empty() {
         return;

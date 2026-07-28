@@ -74,7 +74,7 @@ fn build_and_run_test_fn_with_fixtures(
     ) {
         panic!("codegen failed: {}", e);
     }
-    link_executable(&obj_path, &exe_path).ok()?;
+    common::link_or_skip(link_executable(&obj_path, &exe_path))?;
 
     let output = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),

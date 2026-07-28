@@ -18558,7 +18558,10 @@ fn main() {
         // Codegen failures are also programming bugs (in the compiler or in
         // the test program) — surface them loudly. Link and exec failures
         // stay as soft-skip because they can fire in environments that
-        // lack libkarac_runtime.a or a working linker.
+        // lack libkarac_runtime.a or a working linker — EXCEPT an
+        // undefined-symbol link failure, which means the archive was found
+        // but is stale; `link_or_skip` panics on that rather than letting a
+        // stale archive silently void the suite (see its doc comment).
         if let Err(e) = compile_to_object_with_options(
             &parsed.program,
             &obj_path,
@@ -18569,7 +18572,7 @@ fn main() {
         ) {
             panic!("codegen failed for test program: {}", e);
         }
-        link_executable(&obj_path, &exe_path).ok()?;
+        super::common::link_or_skip(link_executable(&obj_path, &exe_path))?;
 
         let output = output_with_hang_watchdog(std::process::Command::new(&exe_path))?;
 
@@ -41853,7 +41856,7 @@ fn main() {
         ) {
             panic!("codegen failed for test program: {}", e);
         }
-        link_executable(&obj_path, &exe_path).ok()?;
+        super::common::link_or_skip(link_executable(&obj_path, &exe_path))?;
 
         let mut cmd = std::process::Command::new(&exe_path);
         for (k, v) in env {
@@ -49054,7 +49057,7 @@ fn main() {
             }
             // Link or exec failure → soft skip (matches the rest of the
             // codegen E2E suite — runtime archive may be missing in CI).
-            link_executable(&obj_path, &exe_path).ok()?;
+            super::common::link_or_skip(link_executable(&obj_path, &exe_path))?;
             let output = output_with_hang_watchdog(std::process::Command::new(&exe_path))?;
             let _ = std::fs::remove_file(&obj_path);
             let _ = std::fs::remove_file(&exe_path);

@@ -511,7 +511,7 @@ mod parallax_tests {
             None,
         )
         .ok()?;
-        link_executable(&obj, &exe).ok()?;
+        super::common::link_or_skip(link_executable(&obj, &exe))?;
         let out = super::common::output_with_hang_watchdog(
             std::process::Command::new(&exe),
             std::time::Duration::from_secs(60),
@@ -550,7 +550,7 @@ mod parallax_tests {
             None,
         )
         .ok()?;
-        link_executable(&obj, &exe).ok()?;
+        super::common::link_or_skip(link_executable(&obj, &exe))?;
         // Warmup once, then measure one run. Single-run timing is
         // intentionally simple — the 2.0x threshold has enough headroom
         // to absorb single-run variance.

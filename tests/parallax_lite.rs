@@ -464,7 +464,7 @@ mod parallax_lite_tests {
             None,
         )
         .ok()?;
-        link_executable(&obj, &exe).ok()?;
+        super::common::link_or_skip(link_executable(&obj, &exe))?;
         // Discard the dummy `compile_to_object` import; the link path
         // is what we exercise.
         let _ = compile_to_object;
