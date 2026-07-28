@@ -329,7 +329,45 @@ impl<'ctx> super::Codegen<'ctx> {
                     // worked via the `String` spelling). `deep_copy_one_aggregate_
                     // field` copies it correctly (it keys on `is_string_type_expr`,
                     // which matches both spellings).
-                    "String" | "str" | "Vec" | "VecDeque" => true,
+                    "String" | "str" => true,
+                    // B-2026-07-28-3 — a `Vec`/`VecDeque` field is copyable, but
+                    // only after the SELF-REFERENCE check below. This arm used to
+                    // return `true` unconditionally, which stopped the walk at the
+                    // `Vec` and so never re-tested the element type against
+                    // `stack`. The emitter does NOT stop there: since
+                    // B-2026-07-04-9(a), `deep_copy_one_aggregate_field` descends
+                    // into a `Vec[struct]`'s elements via
+                    // `deep_copy_vec_aggregate_elements_in_place`, which inlines a
+                    // per-element `deep_copy_struct_heap_fields_in_place`. For a
+                    // directly or mutually self-referential type — `struct
+                    // GraphNode { mut edges: Vec[GraphNode] }`, i.e. every
+                    // adjacency-list graph — analysis said "copyable", the param
+                    // became callee-owned, and the emitter then recursed
+                    // struct → Vec-element → struct forever, overflowing the
+                    // compiler's stack. The element copy is UNROLLED at emission,
+                    // so its depth would have to equal the runtime data depth;
+                    // no finite emission exists. Consulting `stack` here makes the
+                    // analysis walk exactly as deep as the emitter, so the
+                    // existing cycle guard in
+                    // `aggregate_param_copy_supported_struct` trips and the param
+                    // falls back to caller-retains — the same conservative
+                    // treatment every other non-copyable field shape already gets.
+                    "Vec" | "VecDeque" => {
+                        let Some(elem) = crate::codegen::helpers::vec_inner_type_expr(fte) else {
+                            return true;
+                        };
+                        let TypeKind::Path(ep) = &elem.kind else {
+                            return true;
+                        };
+                        let ehead = ep.segments.first().map(String::as_str).unwrap_or("");
+                        // Only a user struct is descended into by the emitter's
+                        // `ElemCopy::Struct` plan; anything else keeps the old
+                        // unconditional `true` so currently-working programs emit
+                        // byte-identical IR.
+                        !(self.struct_types.contains_key(ehead)
+                            && !self.shared_types.contains_key(ehead)
+                            && stack.iter().any(|s| s == ehead))
+                    }
                     "Slice" => true,
                     // Heap the outer-buffer copy can't duplicate → bail.
                     "Map" | "HashMap" | "Set" | "HashSet" | "SortedSet" | "SortedMap"

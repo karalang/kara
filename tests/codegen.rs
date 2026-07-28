@@ -75804,6 +75804,74 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-07-28-3 — a plain (non-`shared`) struct that reaches ITSELF
+    /// through a `Vec` field used to overflow the compiler's stack.
+    ///
+    /// `aggregate_param_copy_supported_struct` guards against cyclic types
+    /// with a `stack` of struct names, but `field_copy_supported`'s `Vec`
+    /// arm returned `true` without inspecting the element type, so the walk
+    /// stopped at the `Vec` and the guard never saw `Node` a second time.
+    /// The EMITTER does descend there (B-2026-07-04-9(a)'s per-element deep
+    /// copy), so the by-value param was made callee-owned and codegen then
+    /// recursed struct → Vec-element → struct with no base case. Since the
+    /// element copy is unrolled at emission, no finite emission exists for a
+    /// self-referential type — the analysis has to decline it instead.
+    ///
+    /// This is `examples/tangle/src/cross_graph.kara`'s shape (an adjacency
+    /// list — `struct GraphNode { mut edges: Vec[GraphNode] }`), reduced. A
+    /// regression aborts the process on stack overflow rather than failing
+    /// an assertion, so merely reaching the end of this test is the check;
+    /// the output comparison additionally pins that declining the copy still
+    /// produces a correct program.
+    #[test]
+    fn test_e2e_self_referential_struct_through_vec_does_not_overflow_codegen() {
+        let src = r#"
+struct Node {
+    val: i64,
+    mut kids: Vec[Node],
+}
+
+impl Node {
+    fn adopt(mut ref self, child: Node) {
+        self.kids.push(child);
+    }
+}
+
+fn total(n: Node) -> i64 {
+    let mut sum = n.val;
+    for k in n.kids {
+        sum = sum + total(k);
+    }
+    sum
+}
+
+fn main() {
+    let mut root = Node { val: 1, kids: Vec.new() };
+    let leaf = Node { val: 2, kids: Vec.new() };
+    root.adopt(leaf);
+    let t = total(root);
+    println(f"total: {t}");
+}
+"#;
+        // IR emission alone is the crash surface — assert it terminates.
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "repro must parse: {:?}",
+            parsed.errors
+        );
+        let ir = compile_to_ir(&parsed.program, None, None)
+            .expect("self-referential struct must reach codegen without overflowing");
+        assert!(
+            ir.contains("define"),
+            "expected real IR for the self-referential program"
+        );
+
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "total: 3\n");
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
