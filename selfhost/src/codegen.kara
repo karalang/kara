@@ -461,6 +461,50 @@ impl Emitter {
                 Struct(sd) => {
                     self.st_names.push(sd.name);
                 }
+                _ => {}
+            }
+        }
+        // B-2026-07-28-14: a synthetic `Option$<Struct>` enum per DECLARED
+        // struct, registered here — after the struct names and BEFORE the user
+        // enum names, so `en_names` and the parallel `en_off` / `en_cnt` /
+        // `en_agg_*` runs stay index-aligned (Pass A appends the user enums'
+        // entries in item order after these).
+        //
+        // `Option[<plain struct>]` previously collapsed to `Option$i`, whose
+        // payload slot is an i64, so constructing `Some(<struct>)` emitted
+        // `insertvalue { i64, i64 } .., i64 <struct>, 1` and LLVM rejected it.
+        // Unlike `Option[<shared enum>]` (B-2026-07-28-5) there is no niche to
+        // reuse — a plain struct has no null representation — so it needs a
+        // real enum, with the struct in an aggregate slot.
+        //
+        // Registered for EVERY struct rather than only for the instantiations
+        // the program uses. Finding the used ones would mean pre-scanning every
+        // type annotation in the program INCLUDING inside fn bodies (`let x:
+        // Option[G]`), and an unregistered instantiation would be a refusal at
+        // emit time. One two-variant entry per struct is cheap, and it makes
+        // the lookup a name search instead of a discovery pass. Costs nothing
+        // in the emitted IR: an enum nothing references is never rendered.
+        let mut osi = 0;
+        while osi < self.st_names.len() {
+            self.en_names.push("Option$" + self.st_names[osi]);
+            self.en_shared.push(false);
+            self.en_off.push(self.en_var_names.len());
+            self.en_var_names.push("None".to_string());
+            self.en_var_pl.push(0 - 1);
+            self.en_var_pl2.push(0 - 1);
+            self.en_var_names.push("Some".to_string());
+            self.en_var_pl.push(10 + osi);
+            self.en_var_pl2.push(0 - 1);
+            self.en_cnt.push(2);
+            // One aggregate slot (slot 3) holding the struct — the layout the
+            // N-slot machinery already emits, materializes and frees.
+            self.en_agg_off.push(self.en_agg.len());
+            self.en_agg.push(10 + osi);
+            self.en_agg_cnt.push(1);
+            osi = osi + 1;
+        }
+        for it in items {
+            match it {
                 Enum(ed) => {
                     self.en_names.push(ed.name);
                     // `en_shared` must be filled here too: `ty_text` consults it
@@ -679,6 +723,15 @@ impl Emitter {
         0 - 1
     }
 
+    // B-2026-07-28-14: the synthetic `Option$<Struct>` enum index for struct
+    // `si`, registered for every declared struct in `collect_sigs`. Searched by
+    // name rather than computed from a base offset, so it cannot silently
+    // mis-index if the synthetic prologue ever grows another entry. O(enums) on
+    // a cold path — it runs once per `Option[<struct>]` mention, not per value.
+    fn opt_struct_enum(ref self, si: i64) -> i64 {
+        self.en_index("Option$" + self.st_names[si])
+    }
+
     // Map a DECLARED type to a value kind (Slice 10; struct-aware Slice 12):
     // String → 2, bool → 1, a registered struct → 10+index.
     //
@@ -732,6 +785,17 @@ impl Emitter {
                         if gk2 >= 1000 and gk2 < 2000 {
                             if self.en_is_shared(gk2 - 1000) {
                                 return gk2;
+                            }
+                        }
+                        // B-2026-07-28-14: `Option[<plain struct>]` gets its own
+                        // synthetic enum, whose `Some` payload occupies an
+                        // aggregate slot. Falling through to 1000 stored the
+                        // struct in an i64 slot and LLVM rejected the
+                        // construction.
+                        if gk2 >= 10 and gk2 < 1000 {
+                            let osei = self.opt_struct_enum(gk2 - 10);
+                            if osei >= 0 {
+                                return 1000 + osei;
                             }
                         }
                     }
@@ -6818,6 +6882,52 @@ impl Emitter {
                     if pk3 >= 1000 and pk3 < 2000 {
                         if self.en_is_shared(pk3 - 1000) {
                             return Val { op: pv2, kind: pk3, heap: ph2 };
+                        }
+                    }
+                    // B-2026-07-28-14: `Some(<plain struct>)` builds that
+                    // struct's own synthetic `Option$<Struct>` enum, with the
+                    // payload in its aggregate slot. Selecting by the payload's
+                    // KIND here is what keeps this in step with `kind_of_ty`,
+                    // which selects the same enum from the annotation.
+                    if pk3 >= 10 and pk3 < 1000 {
+                        let osei2 = self.opt_struct_enum(pk3 - 10);
+                        if osei2 >= 0 {
+                            let oety = self.ty_text(1000 + osei2);
+                            let b0 = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + b0.clone()
+                                + " = insertvalue "
+                                + oety.clone()
+                                + " zeroinitializer, i64 1, 0\n";
+                            // A BORROWED heap-bearing struct must be deep-copied
+                            // in: the Option now owns it and its scope-exit free
+                            // will release it, so sharing the source's buffers
+                            // would double-free.
+                            let mut ov = pv2;
+                            if not ph2 and self.st_has_heap(pk3 - 10) {
+                                ov = self.emit_materialize_extra(ov.clone(), pk3);
+                            }
+                            let b1 = self.fresh();
+                            self.body = self.body
+                                + "  "
+                                + b1.clone()
+                                + " = insertvalue "
+                                + oety
+                                + " "
+                                + b0
+                                + ", "
+                                + self.ty_text(pk3)
+                                + " "
+                                + ov
+                                + ", "
+                                + self.en_agg_slot(osei2, pk3).to_string()
+                                + "\n";
+                            return Val {
+                                op: b1,
+                                kind: 1000 + osei2,
+                                heap: self.st_has_heap(pk3 - 10),
+                            };
                         }
                     }
                     if pk3 == 2 {

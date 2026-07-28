@@ -830,6 +830,34 @@ const CORPUS: &[&str] = &[
     //        diagnostic. Pinned here because output parity alone cannot see it;
     //        the oracle's valgrind leg is what fails.
     "enum Tok {\n    Num(i64),\n    Named(i64, String),\n    Blank,\n}\nstruct Node {\n    tok: Tok,\n    k: i64,\n}\nshared enum E {\n    V(Node),\n}\nfn show(e: ref E) -> String {\n    match e {\n        V(n) => {\n            match n.tok {\n                Num(v) => \"num\".to_string(),\n                Named(v, s) => s,\n                Blank => \"blank\".to_string(),\n            }\n        }\n    }\n}\nfn main() {\n    let a = E.V(Node { tok: Tok.Named(1, \"hello\".to_string()), k: 1 });\n    println(show(a));\n    let b = E.V(Node { tok: Tok.Num(9), k: 2 });\n    println(show(b));\n    let c = E.V(Node { tok: Tok.Blank, k: 3 });\n    println(show(c));\n}\n",
+    // ── B-2026-07-28-14: `Option[<plain struct>]`, the third member of the
+    //    `Option[T]` family.
+    //
+    //    `kind_of_ty` used to collapse every `Option[T]` that was neither a
+    //    String nor a `shared enum` to `Option$i`, whose payload slot is an
+    //    i64. Constructing `Some(<struct>)` therefore emitted an `insertvalue`
+    //    of a struct value into an integer field and LLVM rejected it — the
+    //    program below fails at parse on the parent commit with "'%t27' defined
+    //    with type '{ i64 }' but expected 'i64'".
+    //
+    //    Unlike `Option[<shared enum>]` there is no niche to reuse: a plain
+    //    struct has no null representation. So each declared struct gets a
+    //    synthetic `Option$<Struct>` enum whose `Some` payload lives in an
+    //    aggregate slot — which only became expressible when the two-slot cap
+    //    came off (same entry's sibling fix). `None` needs nothing new:
+    //    `zeroinitializer` is tag 0 in this layout as in the others.
+    //
+    //    Covers a POD payload and a heap (String-bearing) one, both arms of
+    //    each, construction inline and through a fn return, a plain-struct
+    //    FIELD of that type read and consumed, and the same field inside a
+    //    shared node — the `ast.kara` shape (`Option[GenericParamsNode]`, x7).
+    //
+    //    SCOPE NOTE, deliberate: no arm reads an `Option[<HEAP struct>]` out of
+    //    a struct field and passes it to an owning parameter. That shape
+    //    DOUBLE-FREES IN THE SEED (B-2026-07-28-16), so the oracle could not
+    //    compare against it — the omission is a seed bug, not a gap in this
+    //    port's coverage, and it should be added here once that is fixed.
+    "struct G {\n    n: i64,\n}\nstruct H {\n    label: String,\n    k: i64,\n}\nstruct Node {\n    gp: Option[G],\n    k: i64,\n}\nshared enum E {\n    V(Node),\n}\nfn gsum(g: Option[G]) -> i64 {\n    match g {\n        None => 0,\n        Some(x) => x.n,\n    }\n}\nfn hname(h: Option[H]) -> String {\n    match h {\n        None => \"none\".to_string(),\n        Some(x) => x.label,\n    }\n}\nfn mk(n: i64) -> Option[G] {\n    if n > 0 {\n        return Some(G { n: n });\n    }\n    None\n}\nfn main() {\n    println(gsum(Some(G { n: 5 })).to_string());\n    println(gsum(None).to_string());\n    println(hname(Some(H { label: \"hi\".to_string(), k: 1 })));\n    println(hname(None));\n    println(gsum(mk(9)).to_string());\n    println(gsum(mk(0)).to_string());\n    let nd = Node { gp: Some(G { n: 3 }), k: 7 };\n    println(gsum(nd.gp).to_string());\n    let nd2 = Node { gp: None, k: 8 };\n    println(gsum(nd2.gp).to_string());\n    let a = E.V(Node { gp: Some(G { n: 11 }), k: 1 });\n    match a {\n        V(x) => {\n            println(x.k.to_string());\n            println(gsum(x.gp).to_string());\n        }\n    }\n    let b = E.V(Node { gp: None, k: 2 });\n    match b {\n        V(x) => {\n            println(gsum(x.gp).to_string());\n        }\n    }\n    let hv = Some(H { label: \"own\".to_string(), k: 4 });\n    match hv {\n        None => println(\"none\"),\n        Some(x) => println(x.label),\n    }\n}\n",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
