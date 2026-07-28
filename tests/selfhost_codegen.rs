@@ -744,6 +744,26 @@ const CORPUS: &[&str] = &[
     "struct Lit {\n    v: i64,\n}\nstruct Cal {\n    name: String,\n    args: Vec[E],\n}\nshared enum E {\n    N(Lit),\n    C(Cal),\n}\nfn total(e: E) -> i64 {\n    match e {\n        N(l) => l.v,\n        C(c) => {\n            let mut s = 0;\n            for a in c.args {\n                s = s + total(a);\n            }\n            s\n        }\n    }\n}\nfn main() {\n    let mut xs: Vec[E] = Vec.new();\n    xs.push(E.N(Lit { v: 1 }));\n    xs.push(E.N(Lit { v: 2 }));\n    xs.push(E.N(Lit { v: 4 }));\n    let c = E.C(Cal { name: \"f\", args: xs });\n    println(total(c).to_string());\n}",
     "struct Row {\n    tag: String,\n    ns: Vec[i64],\n}\nshared enum Box2 {\n    Empty,\n    Full(Row),\n}\nfn sum(b: ref Box2) -> i64 {\n    match b {\n        Empty => 0,\n        Full(r) => {\n            let mut s = 0;\n            for n in r.ns {\n                s = s + n;\n            }\n            s\n        }\n    }\n}\nfn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(5);\n    v.push(6);\n    let b = Box2.Full(Row { tag: \"r\", ns: v });\n    println(sum(b).to_string());\n    let e = Box2.Empty;\n    println(sum(e).to_string());\n}",
     "struct Lit {\n    v: i64,\n}\nstruct Cal {\n    name: String,\n    args: Vec[E],\n}\nshared enum E {\n    N(Lit),\n    C(Cal),\n}\nfn main() {\n    let a = E.N(Lit { v: 9 });\n    match a {\n        N(l) => println(l.v.to_string()),\n        C(c) => println(c.name),\n    }\n}",
+    // ── B-2026-07-28-5: an `Option[<shared enum>]` FIELD in a payload struct
+    //    (`ast.BreakExpr.value: Option[Expr]` is the blocking shape).
+    //
+    //    `kind_of_ty` used to collapse every non-String `Option[T]` to
+    //    `Option[i64]` (kind 1000), so the RC handle was stored as a raw i64 in
+    //    a two-word tagged aggregate, judged POD, and never released. It also
+    //    emitted `insertvalue { i64, { i64, i64 } } .., { i64, i64 } 0, 1`,
+    //    which LLVM rejects outright.
+    //
+    //    `Option[<shared enum>]` now reuses the INNER enum's own kind, because
+    //    the niche representation makes them bit-identical: a nullable handle,
+    //    null standing for `None`. Everything downstream was already correct
+    //    for that — `ty_text` renders `ptr`, `en_stride` sizes 8, it classifies
+    //    as heap-owning, and `@sh_release_<ei>` opens with an `icmp eq ptr %p,
+    //    null` guard, so a `None` releases nothing without a special case.
+    //
+    //    This pins the construct-and-drop half. A `match` over such a field is
+    //    NOT lowered yet (it needs a null test rather than a tag load) and the
+    //    emitter refuses loudly on one — see the entry.
+    "struct S {\n    k: i64,\n    nxt: Option[E],\n}\nshared enum E {\n    V(S),\n}\nfn main() {\n    let a = E.V(S { k: 1, nxt: None });\n    println(\"y\");\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
