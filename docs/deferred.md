@@ -3521,3 +3521,191 @@ Kāra's comptime story makes a *typed-SQL* community driver dramatically better 
 **Why non-breaking:** Not a restriction on existing code. v1 ships no `std.sql` module; community drivers (`std.json`-style Postgres library, comptime-typed SQL builder, etc.) operate as ordinary packages. Future v1.x or v2 reconsideration is possible if a community driver emerges as a near-universal default and ecosystem signal supports stdlib promotion — but the bar is high: a clear convergence, not a single popular library.
 
 **Cross-reference:** `design.md § v1 Positioning > What backend-first does *not* mean`; `brainstorming/archive/v64_backend_first_v1_concurrency.md` Problem 9 ⊘8 (Database driver question — community territory in every modern language, with stated and defended choice); `roadmap.md § Phase 8 > Backend Platform` (the `Pool[T]` connection-pool primitive that drivers build on).
+
+---
+
+### Compiler-Decision Explorer (hosted)
+
+A public, no-install web surface where a visitor pastes Kāra and sees what the compiler *decided* — the `karac query` output for effects, ownership, concurrency, and cost-summary — rather than the emitted assembly. Compiler Explorer's shape aimed at semantic decisions instead of codegen. The pitch it serves is the one the README leads with ("don't take the concurrency on faith — ask the compiler what it did"), made clickable.
+
+**Distinct from Cartographer,** which shipped 2026-06-14 (`examples/cartographer/`) as a *dogfooding demo*: whole-program `karac query effects`/`concurrency` plus a live WASM studio (D3 + Monaco, compiler-in-browser). Cartographer proves the capability on a curated program. This entry is the productized surface — arbitrary pasted code, durable hosting, shareable permalinks, and the full query set rather than the effect graph alone. The engineering delta is deployment and input-hardening, not analysis.
+
+**What it rests on:**
+- `karac query` (Phase 5, shipped) — the whole surface being displayed; `effects`, `ownership`, `concurrency`, `cost-summary`, `monomorphization`, `attributes`.
+- Phase 10 WASM codegen + `playground/` (`playground/web`) — the compiler-in-browser path, so pastes never leave the client.
+- `examples/cartographer/`'s WASM studio — the working precedent for Monaco-plus-compiler-in-browser; the viewer work is largely reusable.
+
+**Why post-v1, not a compiler ship:**
+1. It is hosting and operations, not compilation — a durable public endpoint with abuse handling is a different commitment from shipping a binary.
+2. Pointing the public at it before 1.0 advertises whatever is half-finished that week; the value is highest against a stable language.
+3. Untrusted paste input needs a hardened story (resource caps, pathological-program timeouts) that no local `karac` invocation currently needs.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Kāra 1.0 shipped.
+- [ ] `karac query` surface frozen enough that permalinks stay meaningful across releases.
+- [ ] Compile-in-browser resource caps decided (timeout, memory ceiling, program-size limit).
+- [ ] Reuse-vs-rewrite call made on Cartographer's studio front-end.
+
+**Cross-reference:** `dogfooding.md § Cartographer` (the shipped demo this productizes); `roadmap.md § Phase 5` (the query API); `Rust ↔ Kāra Web Playground` (this section — a sibling browser surface with the same hosting prerequisites; if both are built, they should share infrastructure).
+
+---
+
+### Blast-Radius / Test-Selection Service
+
+A CI-facing tool that answers "what can this diff break, and which tests must re-run" by consuming `karac query affected-by` across a changeset instead of re-running a whole suite. The audience is twofold: monorepo CI (where the payoff is compute) and coding agents (where the payoff is that an agent editing a function currently has no principled way to scope its verification).
+
+**What it rests on:**
+- `karac query affected-by` (Phase 5, shipped) — transitive callers / callees / tests for a function or line range. This is the entire analysis; the product is the harness around it.
+- `karac catalog` — the per-function/type JSONL signature index, for resolving a diff's touched spans to symbols cheaply.
+- `--output=jsonl` streaming build events — so a selective run can report progress incrementally.
+
+**Why post-v1, not a compiler ship:**
+1. `affected-by` is already the shipped compiler feature; what is missing is CI integration, caching across runs, and a diff→symbol resolver — none of which belong in `karac`.
+2. Test selection is only trustworthy with a stable test-discovery story; it should not be built while `karac test` conventions are still moving.
+3. The value case needs a codebase large enough for selection to beat whole-suite runs. No Kāra codebase is there yet except the self-hosted compiler itself, which is the natural first customer and does not exist in final form until Phase 12 lands.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Phase 12 self-hosting shipped — the first codebase big enough to validate the payoff.
+- [ ] `karac test` discovery + reporting conventions stable.
+- [ ] `affected-by` precision measured against a known-good whole-suite baseline (a selection tool that misses a real dependency is worse than useless).
+- [ ] Decision on scope: Kāra-only, or a multi-language shell where Kāra is one provider.
+
+**Cross-reference:** `roadmap.md § Phase 5` (`affected-by`, `catalog`); `roadmap.md § Phase 12` (the first candidate corpus).
+
+---
+
+### Agent-Facing Package Index
+
+A registry surface that serves compact, typed signature indexes for published packages so an agent can resolve an API without fetching and reading sources. `karac catalog` already emits exactly the right record shape — one JSONL signature record per function and type — for a package's own tree; this entry is that idea extended across a registry, so "what does this package expose" is one cheap fetch rather than a repository crawl.
+
+**What it rests on:**
+- `karac catalog` (Phase 5, shipped) — the record format and the emitter.
+- `docs/registry-proxy-protocol.md` + `registry-proxy/` — the wire protocol and its reference implementation. The reference proxy is explicitly *not* a production mirror (no upstream mirroring, caching, auth, signatures, or HA), so a real index is additive work on top of a defined protocol, not a protocol design project.
+- A package manager with enough published packages for an index to be worth serving.
+
+**Why post-v1, not a compiler ship:**
+1. An index over an empty ecosystem indexes nothing. This is gated on package-registry adoption, not on compiler capability.
+2. Serving it is hosting + operations (availability, staleness, auth for private indexes), which is outside what `karac` should own.
+3. The catalog record format should absorb real agent usage before being frozen as a served API — freezing it early repeats the `database/sql` mistake described elsewhere in this section.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Package manager + production registry shipped and carrying real packages.
+- [ ] `karac catalog` record format stable enough to serve as a public API contract.
+- [ ] Private/authenticated index story decided (this is where any revenue would come from, and it changes the auth design).
+- [ ] Supply-chain signing decided — see § Stdlib and Ecosystem Security Conventions, which already commits to Sigstore-or-equivalent and SBOM emission.
+
+**Cross-reference:** `docs/registry-proxy-protocol.md`; `Stdlib and Ecosystem Security Conventions` (this section — signing/SBOM intent that an index must honor); `roadmap.md § Phase 5` (`catalog`).
+
+---
+
+### Deterministic Parallel Runtime as a Standalone Library
+
+The auto-concurrency runtime — work-stealing scheduler, task groups, the join model — packaged as a library consumable from Rust (and via C ABI from elsewhere), carrying the property that makes it distinctive: the determinism contract. Same source, same compiler, same target yields the same parallelization, and any two operations the analysis cannot prove independent keep source order. The audience is people who will not adopt a new language but do want reproducible parallelism.
+
+**Honest scope limit.** The determinism contract is a property of the *compiler's* analysis, not of the runtime substrate alone. Extracted without the effect checker, the library ships a scheduler, not the guarantee — the caller becomes responsible for declaring independence, which is precisely the burden the language removes. This entry is therefore a genuinely reduced product, and that reduction must be stated plainly wherever it is published, or it misrepresents what Kāra does.
+
+**What it rests on:**
+- Phase 6 auto-concurrency runtime (6.1 + 6.2 complete; 6.3 core shipped) — the substrate.
+- `runtime/` already builds as a `staticlib` for AOT linking, so a consumable artifact is close to what exists; the work is API design, not extraction.
+- The exported C ABI surface from the additive-interop spike (complete 2026-07-08/10) — the producer direction is already spec'd, built, and ASAN/LSan-verified.
+
+**Why post-v1, not a compiler ship:**
+1. It competes with `rayon`/`tokio` on their turf while shipping strictly less than Kāra does — worth doing only if it functions as a funnel back to the language, which is a marketing judgment to make after 1.0, not before.
+2. A second public API surface is a second compatibility commitment; taking that on while the language's own surface is pre-1.0 doubles the freeze cost.
+3. The interesting claim (determinism) is only fully true inside the language, per the scope limit above.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Kāra 1.0 shipped — no second API commitment before the first is frozen.
+- [ ] Determinism contract's exact boundary written down for an out-of-language caller (what the library guarantees vs. what the compiler guarantees).
+- [ ] Decision that a funnel-back-to-Kāra story exists; without one this is effort spent competing with `rayon` for no strategic return.
+
+**Cross-reference:** `roadmap.md § Phase 6`; `design.md` determinism contract; `docs/spikes/additive-interop-adoption.md` (the producer-direction C ABI this would ship through).
+
+---
+
+### Machine-Fix-Rate Benchmark and Public Leaderboard
+
+A published measurement of how *repairable* a toolchain is by an LLM that has never seen its diagnostics: write a task blind, run the toolchain's own fix path, check the result against an oracle, and report the rate. `examples/mend/harness/mend_batch.py` already does this for Kāra. This entry is the generalization — the same protocol run across other languages' toolchains, published as a comparison.
+
+**The honesty rule is the hard part, and it is the moat.** The rate is a statistic *only* over fresh, blind authorship. Authoring by anyone who already knows the language will not make the known mistakes and therefore cannot produce a rate — it produces dogfooding. Any public leaderboard inherits this constraint, and most naive attempts at such a benchmark will violate it and publish biased numbers. Publishing the protocol is arguably more valuable than publishing Kāra's own score.
+
+**What it rests on:**
+- `examples/mend/harness/mend_batch.py` (live) — the working harness.
+- `examples/mend/TASK_FORMAT.md` — the task+oracle format, including the outcome taxonomy that makes the result readable (`fixed-by-karac` + oracle **pass** is the wedge result; `fixed-by-karac` + oracle **FAIL** is the category worth hunting).
+- A per-language adapter layer that does not exist: each compared toolchain needs its own "apply the machine-applicable fixes" invocation, and most have no equivalent of `karac fix`.
+
+**Why post-v1, not a compiler ship:**
+1. Measuring competitors publicly is a positioning act with a credibility cost if the methodology is weak. It should follow 1.0, when the number being defended is stable.
+2. Live mode needs an authenticated `claude` CLI (it 401s headless), so the measurement is a periodic developer-environment run, not a CI gate. A public leaderboard needs a reproducible, non-interactive execution story that does not exist today.
+3. Cross-language fairness is a research problem: languages differ in what counts as a machine-applicable fix, and an unfair comparison is worse than none.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Kāra 1.0 shipped.
+- [ ] Non-interactive, reproducible harness execution (no authenticated-CLI dependency).
+- [ ] Cross-language fairness protocol written and defensible — especially "what counts as a machine-applicable fix" per toolchain.
+- [ ] Blind-authorship guarantee mechanized, not conventional (the honesty rule cannot rely on participants policing themselves).
+
+**Cross-reference:** `examples/mend/TASK_FORMAT.md`; `dogfooding.md § Mend` (the shipped demo this generalizes); `CLAUDE.md § Developing Kāra code` (the honesty rule in its authoritative form).
+
+---
+
+### Compiled-Speed Notebook Product
+
+A hosted notebook environment on the `karac` Jupyter kernel, positioned on the property roadmap § Core Strategy already claims: **execution-model parity**. A notebook cell exhibits the same effect, ownership, and performance behavior as a `karac build` artifact, because it is the same LLJIT path — unlike `evcxr`-style recompile-per-cell or JShell's JVM startup tax. The target user is doing numerics or data preprocessing at systems speed and currently pays a Python-to-compiled-language rewrite to ship it.
+
+**What it rests on:**
+- `kernel/` (Rust kernel, ZMQ transport) + `kernel/python/karac_kernel` — the kernel exists.
+- LLJIT as the single execution backend (`karac run`/`repl`/`test` default to it; see `docs/spikes/lljit-productionization.md`) — parity is the whole pitch, and it is a property of that decision.
+- Phase 11 stdlib long-tail — notebook users expect numeric and data-frame breadth that the Phase 8 floor does not provide.
+
+**Why post-v1, not a compiler ship:**
+1. The kernel is the compiler's concern; hosting, auth, persistence, and per-user sandboxing are not.
+2. Notebook users arrive expecting a numeric/plotting ecosystem. Shipping the environment before Phase 11 sets up a bad first impression against a language that is otherwise strong here.
+3. The honest framing — "the REPL has built-in compile latency by design," ~100 ms for trivial cells — needs to be stated up front, and lands much better next to a stdlib that makes the tradeoff worth it.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Phase 11 stdlib long-tail shipped (numeric + data breadth).
+- [ ] Per-cell latency measured and published honestly, including the trivial-cell floor.
+- [ ] Multi-tenant sandboxing story decided (a JIT executing arbitrary user code per tenant is the whole security surface).
+- [ ] Plotting/visualization answer chosen — own it, or bridge to an existing stack.
+
+**Cross-reference:** `roadmap.md § Core Strategy` item 6 (interactive-as-differentiator, and the honest-latency framing); `docs/spikes/lljit-productionization.md`; `roadmap.md § Phase 11`.
+
+---
+
+### Oracle Synthesis from Contracts
+
+Automatic generation of Mend-task correctness oracles from declared contracts and refinement types, so a task's oracle stops being hand-written. Today every entry in `examples/mend/TASK_FORMAT.md` ships a human-supplied oracle answering "how to check the RESULT is correct," and that hand-authoring is what caps corpus size. Since a contract *is* an executable correctness statement, a task whose functions carry contracts already contains its own oracle; this entry is the machinery to extract and run it.
+
+**Why this is the highest-leverage entry in this section.** The taxonomy in `TASK_FORMAT.md` names `fixed-by-karac` + oracle **FAIL** — the fix compiled but changed behavior — as the category worth hunting, and that category is only observable where an oracle exists. Automating oracles therefore does not merely enlarge the corpus; it widens the only lens that catches behavior-changing fixes, which is the failure mode a compile-only gate is structurally blind to.
+
+**What it rests on:**
+- Phase 9 gradual verification (enforcement effectively done) — contracts and refinement types are the source material.
+- The Weave dogfooding project (shipped, CSV cut) — the working proof that refinement types + contracts + effects compose on a real program.
+- `examples/mend/TASK_FORMAT.md` — the task+oracle format and outcome taxonomy that consumes the generated oracle.
+- Property-test generation, which does *not* exist: deriving inputs that exercise a contract is a separate capability from checking one.
+
+**Why post-v1, not a compiler ship:**
+1. Contract-to-oracle is only as good as contract coverage in the corpus. Blind-authored tasks carry few contracts by construction, which is a chicken-and-egg problem needing real data to resolve.
+2. Input generation is a research-shaped subproblem (property-based testing, shrinking); scoping it before contracts have real usage would design against guesses.
+3. Nothing about it gates v1 — the corpus works today with hand-written oracles, just at lower volume.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Contract/refinement usage in real Kāra code substantial enough to synthesize from.
+- [ ] Input-generation approach chosen (property-based generation vs. bounded exhaustive vs. symbolic).
+- [ ] Measured baseline: what fraction of current hand-written oracles a synthesizer would reproduce.
+- [ ] Decision on where it runs — a `karac` subcommand vs. harness-side tooling in `examples/mend/harness/`.
+
+**Cross-reference:** `examples/mend/TASK_FORMAT.md § Oracles`; `roadmap.md § Phase 9`; `dogfooding.md § Weave` (refinement + contracts, shipped); `CLAUDE.md § Developing Kāra code` (the Mend loop this closes a gap in).
+
+---
+
+### Declined — Adjacent Products Not Built on the Language
+
+Recorded so they are not re-proposed. Three product ideas were evaluated alongside the seven entries above (2026-07-28) and **declined for this repository** on a single consistent test: a P3 entry must be able to answer *"what it rests on in the language,"* and these cannot. They are not rejected as ideas — they are recognized as work that is not this project's, and deliberately left untracked rather than filed somewhere with no owner and no review gate.
+
+- **Effect inference for existing Python / TypeScript codebases.** Declined because its value proposition is explicitly "get the benefit *without* adopting Kāra" — it is a hedge against the language rather than something built on it, so no rests-on line exists. The legitimate version of the underlying need — incremental adoption without a rewrite — is already answered and shipped as `docs/spikes/additive-interop-adoption.md` (Kāra as a component you add; consume *and* produce directions complete and ASAN/LSan-verified).
+- **Structured defect-class telemetry as a product.** Declined because nothing about it requires Kāra. The internal version already exists and is tracked: `docs/bug-ledger.jsonl` with its controlled failure-mode vocabulary, plus `scripts/bug-curve.py`.
+- **Hosted pre-merge verification sandbox.** Declined for the same reason — generic CI infrastructure. The internal version is tracked in `docs/spikes/ci-test-coverage.md` (the tier map, including the authoritative Linux LSan gate and its arm64 sibling).
+
+**Cross-reference:** § P3 preamble (the "built on top of the language" admission test these fail).
