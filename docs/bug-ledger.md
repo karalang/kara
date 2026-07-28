@@ -823,7 +823,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **697 surfaced 
 | B-2026-07-27-5 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): value-position `if` and `match` used a HARDCODED `alloca i64` result slot, so a STRING / struct / enu… | 999cd9c |
 | B-2026-07-27-7 | codegen | medium | `for ch in <str>.chars()` over a COMPILE-TIME-CONSTANT string runs ~21.7x the instructions of the identical Rust source, because the ASCII/multibyte… | de5da39 |
 | B-2026-07-27-8 | codegen | high | `continue` inside `for ch in <s>.chars()` is an INFINITE LOOP in compiled code on every backend (JIT and AOT, -O0 and -O2), because the general chars… | 6f1c706 |
-| B-2026-07-27-9 | ownership | medium | A non-`mut` `let` binding can be REASSIGNED and MUTATED IN PLACE with no diagnostic — `let s: String = "abc"; s = "xyz";` and `let s: String = "abc";… | 2f187b2f |
+| B-2026-07-27-9 | ownership | medium | A non-`mut` `let` binding can be REASSIGNED and MUTATED IN PLACE with no diagnostic — `let s: String = "abc"; s = "xyz";` and `let s: String = "abc";… | 6a855bdc |
 | B-2026-07-27-10 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a DESTRUCTURING `let S { a, b } = s;` bound NOTHING — the Let handler matched only a plain BindingPat… | 7bd2de1 |
 | B-2026-07-27-11 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `.clone()` is UNIMPLEMENTED and silently lowers to the i64 default `0` — `let b = a.clone()` on a Str… | d7707de |
 | B-2026-07-27-13 | cli | medium | `karac explain` REJECTED the diagnostic code the compiler itself emits: every structured diagnostic carries `"code": "E0200"`, but `karac explain E02… | e211e3d |
