@@ -782,6 +782,21 @@ const CORPUS: &[&str] = &[
     //        and `Some` arms are taken, and the `None` arm is reached through a
     //        null handle — the case a tag load would have segfaulted on.
     "struct S { k: i64, nxt: Option[E] }\nshared enum E { V(S) }\nfn sum(e: ref E) -> i64 {\n    match e {\n        V(s) => {\n            match s.nxt {\n                None => s.k,\n                Some(inner) => s.k + sum(inner),\n            }\n        }\n    }\n}\nfn depth(e: ref E) -> i64 {\n    match e {\n        V(s) => {\n            match s.nxt {\n                None => 0,\n                Some(inner) => 1 + depth(inner),\n            }\n        }\n    }\n}\nfn main() {\n    let a = E.V(S { k: 1, nxt: None });\n    let b = E.V(S { k: 10, nxt: Some(a) });\n    let c = E.V(S { k: 100, nxt: Some(b) });\n    println(sum(c).to_string());\n    println(sum(c).to_string());\n    println(depth(c).to_string());\n}\n",
+    // ── B-2026-07-27-6: an `Option[String]` FIELD in a shared-enum payload
+    //    struct — a heap-bearing BY-VALUE enum, which is a different problem
+    //    from the `Option[<shared enum>]` above. That one is a HANDLE (one
+    //    word, released by `@sh_release_<ei>`); this one is an AGGREGATE
+    //    `{ tag, i64, { ptr, i64 } }` whose String buffer is live exactly when
+    //    the tag says so, and calling `@sh_release_<ei>` on it would be both
+    //    the wrong function and the wrong argument type.
+    //
+    //    `sh_byval_enum_release_text` emits one compare-and-branch per
+    //    String-payload variant. Both arms are exercised below: `Some` frees
+    //    the buffer, `None` frees nothing — and getting the second wrong is a
+    //    free of an uninitialised slot rather than a leak.
+    //
+    //    `ast.kara` has 17 `Option[String]` fields (e.g. `LoopExpr.label`).
+    "struct S { lbl: Option[String], k: i64 }\nshared enum E { V(S) }\nfn main() {\n    let a = E.V(S { lbl: Some(\"hi\"), k: 1 });\n    match a { V(s) => println(s.k.to_string()) }\n    let b = E.V(S { lbl: None, k: 2 });\n    match b { V(s) => println(s.k.to_string()) }\n}\n",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

@@ -979,17 +979,124 @@ impl Emitter {
             }
             if fk >= 1000 and fk < 2000 {
                 // A by-value enum field is fine when it owns no heap (a POD tag
-                // enum such as `BinOp`); a heap-bearing by-value enum would need
-                // the tag-conditional free this slice does not emit here.
+                // enum such as `BinOp`), and — B-2026-07-27-6 — when its heap
+                // is a String payload `sh_byval_enum_release_text` can free
+                // tag-conditionally (`LoopExpr.label: Option[String]`). An
+                // aggregate-slot enum is still refused; see `sh_byval_enum_ok`.
                 if self.en_is_shared(fk - 1000) == false {
                     if self.en_has_heap(fk - 1000) {
-                        return false;
+                        if self.sh_byval_enum_ok(fk - 1000) == false {
+                            return false;
+                        }
                     }
                 }
             }
             fi = fi + 1;
         }
         true
+    }
+
+    // B-2026-07-27-6: can the BY-VALUE enum `ei` be released from inside a
+    // shared node by `sh_byval_enum_release_text`? True when every variant's
+    // payload is either nothing or a String — the only heap a by-value enum
+    // carries in the non-extras layout `{ tag, i64, { ptr, i64 } }`. A scalar
+    // payload owns nothing, so `Option[i64]` qualifies trivially (and is
+    // already skipped as POD by `en_has_heap`).
+    //
+    // An enum with AGGREGATE slots (`en_extra >= 0`) is still refused: those
+    // slots hold structs / Vecs whose own release needs the recursive walk, and
+    // widening this to cover them is a separate slice. The shape ast.kara needs
+    // — `LoopExpr.label: Option[String]` — is in the non-extras layout.
+    fn sh_byval_enum_ok(ref self, ei: i64) -> bool {
+        if self.en_extra[ei] >= 0 {
+            return false;
+        }
+        let off = self.en_off[ei];
+        let cnt = self.en_cnt[ei];
+        let mut vi = 0;
+        while vi < cnt {
+            let plk = self.en_var_pl[off + vi];
+            // -1 = no payload; 0/1/5 = scalar (owns nothing); 2 = String.
+            if plk >= 0 and plk != 0 and plk != 1 and plk != 5 and plk != 2 {
+                return false;
+            }
+            vi = vi + 1;
+        }
+        true
+    }
+
+    // B-2026-07-27-6: free what a BY-VALUE enum field owns, tag-conditionally.
+    // The layout is `{ tag, i64 payload, { ptr, i64 } String payload }`, so the
+    // only heap is the String buffer in slot 2, live exactly when the tag names
+    // a String-payload variant. Emits one compare-and-branch per such variant,
+    // which is why this needs `mut ref self` — the labels come off the shared
+    // `nlbl` counter, the same discipline `sh_vec_release_text` uses (`pfx`
+    // carries the leading `%` its registers need, and a label is bare at its
+    // definition and `%`-prefixed only at a `br`).
+    fn sh_byval_enum_release_text(mut ref self, ei: i64, val: String, pfx: String) -> String {
+        let off = self.en_off[ei];
+        let cnt = self.en_cnt[ei];
+        let ety = self.ty_text(1000 + ei);
+        let mut out = "".to_string();
+        let mut vi = 0;
+        while vi < cnt {
+            if self.en_var_pl[off + vi] == 2 {
+                let lid = self.nlbl;
+                self.nlbl = self.nlbl + 1;
+                let lf = "sbe" + lid.to_string();
+                let ld = "sbed" + lid.to_string();
+                let t = pfx.clone() + "t" + vi.to_string();
+                let c = pfx.clone() + "c" + vi.to_string();
+                let s = pfx.clone() + "s" + vi.to_string();
+                let b = pfx.clone() + "b" + vi.to_string();
+                out = out
+                    + "  "
+                    + t.clone()
+                    + " = extractvalue "
+                    + ety.clone()
+                    + " "
+                    + val.clone()
+                    + ", 0\n"
+                    + "  "
+                    + c.clone()
+                    + " = icmp eq i64 "
+                    + t
+                    + ", "
+                    + vi.to_string()
+                    + "\n"
+                    + "  br i1 "
+                    + c
+                    + ", label %"
+                    + lf.clone()
+                    + ", label %"
+                    + ld.clone()
+                    + "\n"
+                    + lf
+                    + ":\n"
+                    + "  "
+                    + s.clone()
+                    + " = extractvalue "
+                    + ety.clone()
+                    + " "
+                    + val.clone()
+                    + ", 2\n"
+                    + "  "
+                    + b.clone()
+                    + " = extractvalue { ptr, i64 } "
+                    + s
+                    + ", 0\n"
+                    + "  call void @free(ptr "
+                    + b
+                    + ")\n"
+                    + "  br label %"
+                    + ld.clone()
+                    + "\n"
+                    + ld
+                    + ":\n";
+            }
+            vi = vi + 1;
+        }
+        out
     }
 
     // Slice 67: can a Vec of kind `k` be released from inside a shared node by
@@ -1208,13 +1315,21 @@ impl Emitter {
                         + "  call void @free(ptr "
                         + r.clone()
                         + "b)\n";
-                } else if fk >= 1000 and fk < 2000 {
+                } else if fk >= 1000 and fk < 2000 and self.en_is_shared(fk - 1000) {
                     out = out
                         + "  call void @sh_release_"
                         + (fk - 1000).to_string()
                         + "(ptr "
                         + r.clone()
                         + ")\n";
+                } else if fk >= 1000 and fk < 2000 {
+                    // B-2026-07-27-6: a heap-bearing BY-VALUE enum field. It is
+                    // an aggregate, not a handle — `@sh_release_<ei>` would be
+                    // both the wrong function and the wrong argument type — so
+                    // its String payload is freed tag-conditionally instead.
+                    // `sh_struct_ok` has already refused any shape this cannot
+                    // free, so reaching here means the walk is complete.
+                    out = out + self.sh_byval_enum_release_text(fk - 1000, r.clone(), r.clone() + "e");
                 } else if fk == 3 or fk == 4 or fk >= 2000 {
                     out = out + self.sh_vec_release_text(fk, r.clone(), r.clone() + "v");
                 } else {
