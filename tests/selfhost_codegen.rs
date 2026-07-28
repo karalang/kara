@@ -670,6 +670,44 @@ const CORPUS: &[&str] = &[
     "shared enum Expr {\n    Int(IntLit),\n    Add(AddExpr),\n}\n\nstruct IntLit { value: i64 }\nstruct AddExpr { lhs: Expr, rhs: Expr }\n\nfn eval(e: Expr) -> i64 {\n    match e {\n        Int(l) => l.value,\n        Add(a) => eval(a.lhs) + eval(a.rhs),\n    }\n}\n\nfn main() {\n    let one = Expr.Int(IntLit { value: 1 });\n    let two = Expr.Int(IntLit { value: 2 });\n    let sum = Expr.Add(AddExpr { lhs: one, rhs: two });\n    println(eval(sum).to_string());\n}",
     "struct Leaf { v: i64 }\nstruct Node2 { l: Tree, r: Tree }\n\nshared enum Tree {\n    L(Leaf),\n    N(Node2),\n}\n\nfn sum(t: Tree) -> i64 {\n    match t {\n        L(x) => x.v,\n        N(n) => sum(n.l) + sum(n.r),\n    }\n}\n\nfn build(d: i64) -> Tree {\n    if d == 0 {\n        return Tree.L(Leaf { v: 1 });\n    }\n    Tree.N(Node2 { l: build(d - 1), r: build(d - 1) })\n}\n\nfn main() {\n    let mut i = 0;\n    let mut total = 0;\n    while i < 200 {\n        let t = build(6);\n        total = total + sum(t);\n        i = i + 1;\n    }\n    println(total.to_string());\n}",
     "struct Leaf { v: i64 }\nshared enum Expr {\n    L(Leaf),\n    W(Expr),\n}\nfn depth(e: Expr) -> i64 {\n    match e {\n        L(x) => 0,\n        W(b) => 1 + depth(b),\n    }\n}\nfn main() {\n    let a = Expr.L(Leaf { v: 1 });\n    let w = Expr.W(a);\n    println(depth(w).to_string());\n}",
+    // ── Slice 66: branch-join ownership (B-2026-07-27-15) ──
+    //
+    // A `match`/value-`if` is emitted in ONE pass, so the join used to adopt a
+    // single branch's ownership flag for all of them — the LAST arm's for
+    // `match`, the THEN branch's for `if`. Every entry below has branches that
+    // DISAGREE (one yields a borrowed buffer, another an owned one), which is
+    // the only shape that exposes it; matching arms were always fine, which is
+    // why the corpus missed this for 65 slices.
+    //
+    // Both directions were wrong, so each shape appears twice:
+    //   · claim ownership of a borrowed branch → the scrutinee's release frees
+    //     it under the caller (use-after-free, then a double free) — entries
+    //     1-3, which ABORT pre-fix;
+    //   · disclaim an owned branch → the consumer copies it and the original
+    //     is never freed (16-byte leak) — entries 4-5.
+    //
+    // CAVEAT on what this suite proves: the oracle diffs stdout, so it catches
+    // the abort but NOT the leak. Entries 4-5 pass either way here; they were
+    // verified separately under `leaks --atExit` (macOS has no LeakSanitizer)
+    // and are kept because they pin the shape against regression.
+    //
+    // (1) The shared-node case: a `String` payload bound by an arm and returned
+    //     out of the fn, while the OTHER arm concatenates. Pre-fix this aborted
+    //     in `sh_release_*` — the node's release freed the buffer the caller
+    //     had just been handed.
+    "shared enum Expr { Name(String), Bin(Expr) }\nfn render(e: Expr) -> String {\n    match e { Name(s) => s, Bin(b) => \"(\" + render(b) + \")\" }\n}\nfn main() {\n    let a = Expr.Name(\"a\");\n    let s = Expr.Bin(a);\n    println(render(s));\n}",
+    // (2) The same defect with NO `shared` anywhere — a by-value enum whose
+    //     borrowed-payload arm comes FIRST and whose owned arm comes LAST.
+    "enum Val { S(String), N(i64) }\nfn render(e: Val) -> String {\n    match e { S(s) => s, N(k) => \"(\" + \"n\" + \")\" }\n}\nfn main() {\n    let a = Val.S(\"abc\");\n    println(render(a));\n}",
+    // (3) Value-`if`: the THEN branch is owned, so the join claimed ownership of
+    //     the ELSE branch's borrowed field too.
+    "struct Holder { name: String }\nfn pick(h: Holder, f: bool) -> String {\n    if f { \"(\" + \"x\" + \")\" } else { h.name }\n}\nfn main() {\n    let hh = Holder { name: \"abc\" };\n    println(pick(hh, false));\n}",
+    // (4) Leak direction, value-`if`: the THEN branch is borrowed, so the join
+    //     disclaimed the ELSE branch's freshly allocated buffer.
+    "struct Holder { name: String }\nfn pick(h: Holder, f: bool) -> String {\n    if f { h.name } else { \"(\" + \"x\" + \")\" }\n}\nfn main() {\n    let hh = Holder { name: \"abc\" };\n    println(pick(hh, false));\n}",
+    // (5) Leak direction, `match`: the LAST arm is borrowed, so the join
+    //     disclaimed the FIRST arm's freshly allocated buffer.
+    "enum Val { N(i64), S(String) }\nfn render(e: Val) -> String {\n    match e { N(k) => \"(\" + \"n\" + \")\", S(s) => s }\n}\nfn main() {\n    let a = Val.N(1);\n    println(render(a));\n}",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";

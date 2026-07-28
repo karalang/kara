@@ -3605,6 +3605,51 @@ impl Emitter {
         Val { op: a1, kind: 2, heap: true }
     }
 
+    // Normalize ONE branch value to OWNED before it reaches a join slot
+    // (B-2026-07-27-15). Branches are emitted in a SINGLE pass, so the join
+    // cannot know what the other branches will yield — it simply adopted one
+    // branch's `heap` flag for all of them (`match` took the LAST arm's,
+    // value-`if` took the THEN branch's). When the branches disagreed, both
+    // orders were wrong. Claiming ownership of a borrowed branch value hands
+    // the consumer a buffer the scrutinee still owns, which its release (or
+    // the fn epilogue) then frees underneath it — a use-after-free, and a
+    // double free once the consumer frees it too. Disclaiming an owned branch
+    // value makes the consumer copy it and leaves the original unreachable —
+    // a leak. Materializing every heap-bearing branch removes the disagreement
+    // at the source: `heap` is then true for all of them, in any order.
+    //
+    // The copy is not new work in the common case — the consumer of a
+    // borrowed result was already materializing it one step later. What
+    // changes is that the copy now happens BEFORE the scrutinee's release
+    // instead of after.
+    fn arm_own(mut ref self, op: String, k: i64, h: bool) -> Val {
+        if h {
+            return Val { op: op, kind: k, heap: true };
+        }
+        if k == 2 {
+            return self.emit_materialize(op);
+        }
+        if k == 3 or k == 4 or k >= 2000 {
+            return self.emit_materialize_vec(op, k);
+        }
+        if k >= 10 and k < 1000 {
+            if self.st_has_heap(k - 10) {
+                return self.emit_materialize_struct(op, k - 10);
+            }
+            return Val { op: op, kind: k, heap: false };
+        }
+        if k >= 1000 and k < 2000 {
+            // `en_has_heap` is true for every `shared` enum (Slice 65), so a
+            // handle routes to `emit_materialize_enum`, which RETAINS rather
+            // than deep-copying.
+            if self.en_has_heap(k - 1000) {
+                return self.emit_materialize_enum(op, k - 1000);
+            }
+            return Val { op: op, kind: k, heap: false };
+        }
+        Val { op: op, kind: k, heap: false }
+    }
+
     // Lower a `match` over an ENUM scrutinee (Slice 14). Arms chain
     // compare-and-branch on the extracted tag; a TupleVariantPat binds its one
     // i64 payload; a BindingPat whose name IS a variant of the scrutinee's
@@ -3710,7 +3755,10 @@ impl Emitter {
                     }
                     if want_value {
                         let bv = self.emit_value(body);
-                        let Val { op: bop0, kind: bk, heap: bh } = bv;
+                        let Val { op: bop1, kind: bk, heap: bh1 } = bv;
+                        // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                        let ownv = self.arm_own(bop1, bk, bh1);
+                        let Val { op: bop0, kind: bkx, heap: bh } = ownv;
                         // B-2026-07-27-3: a BOOL-valued match arm yields i1;
                         // the result slot is an i64 lane, so widen on store and
                         // remember to narrow at the join (same convention as the
@@ -3777,7 +3825,10 @@ impl Emitter {
                         }
                         if want_value {
                             let bv = self.emit_value(body);
-                            let Val { op: bop0, kind: bk, heap: bh } = bv;
+                            let Val { op: bop1, kind: bk, heap: bh1 } = bv;
+                            // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                            let ownv = self.arm_own(bop1, bk, bh1);
+                            let Val { op: bop0, kind: bkx, heap: bh } = ownv;
                             // B-2026-07-27-3: bool arm -> widen to the i64 lane.
                             if bk == 1 {
                                 rbool = true;
@@ -4269,7 +4320,10 @@ impl Emitter {
                 }
                 if want_value {
                     let bv = self.emit_value(body);
-                    let Val { op: bop0, kind: bk, heap: bh } = bv;
+                    let Val { op: bop1, kind: bk, heap: bh1 } = bv;
+                    // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                    let ownv = self.arm_own(bop1, bk, bh1);
+                    let Val { op: bop0, kind: bkx, heap: bh } = ownv;
                     // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
                     if bk == 1 {
                         rbool = true;
@@ -4337,7 +4391,10 @@ impl Emitter {
                 }
                 if want_value {
                     let bv = self.emit_value(body);
-                    let Val { op: bop0, kind: bk, heap: bh } = bv;
+                    let Val { op: bop1, kind: bk, heap: bh1 } = bv;
+                    // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                    let ownv = self.arm_own(bop1, bk, bh1);
+                    let Val { op: bop0, kind: bkx, heap: bh } = ownv;
                     // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
                     if bk == 1 {
                         rbool = true;
@@ -6666,7 +6723,15 @@ impl Emitter {
                     + "\n";
                 self.body = self.body + lthen + ":\n";
                 let tv = self.emit_block_value(then_block);
-                let Val { op: top0, kind: tk, heap: th } = tv;
+                let Val { op: top1, kind: tk, heap: th1 } = tv;
+                // B-2026-07-27-15: bring the branch value to OWNED before the
+                // join — see `arm_own`. Without this the join adopted the THEN
+                // branch's flag for BOTH branches, so `if c { a.to_string() }
+                // else { b.name }` returned the else branch's borrowed buffer
+                // labelled as owned, and the caller freed a buffer `b` still
+                // owns.
+                let tov = self.arm_own(top1, tk, th1);
+                let Val { op: top0, kind: tkx, heap: th } = tov;
                 // B-2026-07-27-3: a BOOL-valued if yields i1 branch values;
                 // widen to the i64 lane on store and narrow back at the join so
                 // the value re-enters bool contexts (`if`/`and`/`not`/`-> bool`).
@@ -6688,7 +6753,9 @@ impl Emitter {
                 match else_branch {
                     Some(eb) => {
                         let ev = self.emit_value(eb);
-                        let Val { op: eop0, kind: ek, heap: eh } = ev;
+                        let Val { op: eop1, kind: ek, heap: eh1 } = ev;
+                        let eov = self.arm_own(eop1, ek, eh1);
+                        let Val { op: eop0, kind: ekx, heap: eh } = eov;
                         let eop = self.to_i64_lane(eop0, ek);
                         self.body = self.body
                             + "  store "
@@ -6739,8 +6806,10 @@ impl Emitter {
                 // (Slice 61 — previously hardcoded to 0, which is why a
                 // String/struct-valued if lost its type at the join and any
                 // downstream field access resolved against the wrong layout).
-                // The ownership flag rides along too: a heap-producing branch
-                // (e.g. two `.to_string()` arms) yields an owned result.
+                // The ownership flag rides along too, and is now the SAME for
+                // both branches: `arm_own` above materialized whichever of them
+                // was borrowed, so a heap-bearing result is owned no matter
+                // which branch produced it (B-2026-07-27-15).
                 if tk == 1 {
                     let rb = self.fresh();
                     self.body =
