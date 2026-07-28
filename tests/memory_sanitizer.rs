@@ -10960,6 +10960,92 @@ fn main() {
         );
     }
 
+    /// B-2026-07-28-16 — the CALL-ARGUMENT sibling of the leg below.
+    /// `consume(nd.opt)` hands an owned struct's `Option`/`Result` field to a
+    /// parameter that owns it, so the callee's cleanup frees the payload and
+    /// the owning struct's drop must skip it.
+    ///
+    /// The suppressor wired at the call site matched an `Identifier` only, so a
+    /// `FieldAccess` argument fell through and both sides freed. Interp was
+    /// correct throughout, which is why output parity never caught it — only a
+    /// memory tool does.
+    ///
+    /// Three payload classes, because they take different drop paths and only
+    /// the first two were recognized as a move: an inline `{ptr,len,cap}`
+    /// String, a Vec, and a STRUCT that owns heap (boxed payload,
+    /// `BoxedEnumDrop`-guarded). Each is exercised BOTH consumed-by-call and
+    /// left alone — the None/unconsumed arms are the leak direction, where an
+    /// over-eager source zero would strand the payload instead of double-freeing
+    /// it. Loops so any per-iteration imbalance accumulates.
+    #[test]
+    fn asan_owned_struct_optres_field_call_arg_move_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct Inner { label: String, k: i64 }
+struct Hs { opt: Option[String], n: i64 }
+struct Hv { opt: Option[Vec[i64]], n: i64 }
+struct Ht { opt: Option[Inner], n: i64 }
+struct Hr { res: Result[String, i64], n: i64 }
+fn take_str(o: Option[String]) -> i64 {
+    match o {
+        Some(s) => s.len(),
+        None => 0,
+    }
+}
+fn take_vec(o: Option[Vec[i64]]) -> i64 {
+    match o {
+        Some(v) => v.len() as i64,
+        None => 0,
+    }
+}
+fn take_struct(o: Option[Inner]) -> i64 {
+    match o {
+        Some(x) => x.label.len() + x.k,
+        None => 0,
+    }
+}
+fn take_res(r: Result[String, i64]) -> i64 {
+    match r {
+        Ok(s) => s.len(),
+        Err(e) => e,
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        // Consumed by an owning call — the double-free direction.
+        let a = Hs { opt: Some("payload".to_string()), n: 1 };
+        acc = acc + take_str(a.opt);
+        let mut w: Vec[i64] = Vec.new();
+        w.push(1);
+        w.push(2);
+        let b = Hv { opt: Some(w), n: 2 };
+        acc = acc + take_vec(b.opt);
+        let c = Ht { opt: Some(Inner { label: "deep".to_string(), k: 3 }), n: 3 };
+        acc = acc + take_struct(c.opt);
+        let d = Hr { res: Ok("res".to_string()), n: 4 };
+        acc = acc + take_res(d.res);
+        // NOT consumed — the struct drop must still free these (leak direction).
+        let e = Hs { opt: Some("kept".to_string()), n: 5 };
+        acc = acc + e.n;
+        let f = Ht { opt: Some(Inner { label: "kept2".to_string(), k: 6 }), n: 6 };
+        acc = acc + f.n;
+        // None payloads: nothing to free on either side.
+        let g = Hs { opt: None, n: 7 };
+        acc = acc + take_str(g.opt);
+        let h = Ht { opt: None, n: 8 };
+        acc = acc + take_struct(h.opt);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["1200"],
+            "owned_struct_optres_field_call_arg_move",
+        );
+    }
+
     #[test]
     fn asan_owned_struct_optres_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-16 memory leg. Double-free half: a payload bound out

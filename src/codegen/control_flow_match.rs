@@ -2065,6 +2065,38 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         value: &Expr,
     ) -> Option<(bool, TypeExpr, PointerValue<'ctx>)> {
+        self.place_optres_field_move_info_ex(value, false)
+    }
+
+    /// B-2026-07-28-16 — the WHOLE-MOVE variant of
+    /// [`Self::place_optres_field_move_info`], for a site that hands the entire
+    /// `Option`/`Result` field to a new owner (a by-value call argument). It
+    /// admits a wider payload class, and the distinction is load-bearing.
+    ///
+    /// The narrow class exists because the PATTERN leg only zeroes the source
+    /// when the arm's BINDING takes over the payload's free, which holds for an
+    /// inline `{ptr,len,cap}` payload and not for a struct/enum one — zeroing
+    /// there turns the owner's single free into a leak (measured: `match nd.hp
+    /// { Some(x) => println(x.label) }` leaked the 4-byte payload when this
+    /// class was widened in place).
+    ///
+    /// A whole-value move has no such question: the callee receives tag and
+    /// payload together and its own cleanup frees them, so the source must be
+    /// neutralized for exactly the shapes the owning struct's drop would
+    /// otherwise free — which is what `emit_struct_drop_synthesis`'s
+    /// `OptionInline` classifier decides.
+    pub(super) fn place_optres_field_whole_move_info(
+        &mut self,
+        value: &Expr,
+    ) -> Option<(bool, TypeExpr, PointerValue<'ctx>)> {
+        self.place_optres_field_move_info_ex(value, true)
+    }
+
+    fn place_optres_field_move_info_ex(
+        &mut self,
+        value: &Expr,
+        whole_move: bool,
+    ) -> Option<(bool, TypeExpr, PointerValue<'ctx>)> {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return None;
         };
@@ -2084,11 +2116,35 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let is_result = match p.segments.last().map(|s| s.as_str()) {
             Some("Option") => {
-                if self.option_inline_payload_elem(&field_te).is_none()
-                    || self
-                        .option_inner_shared_type_for_type_expr(&field_te)
-                        .is_some()
+                if self
+                    .option_inner_shared_type_for_type_expr(&field_te)
+                    .is_some()
                 {
+                    return None;
+                }
+                // A whole move mirrors `emit_struct_drop_synthesis`'s
+                // OptionInline admission test exactly, because the two are a
+                // pair: the source zero must fire precisely when the struct
+                // drop would free the field, or the move becomes a double-free
+                // (too narrow) or a leak (too wide). That classifier admits an
+                // inline `{ptr,len,cap}` String/Vec payload AND —
+                // B-2026-07-04-7 — a non-shared struct/enum payload, boxed or
+                // inline. Zeroing the tag neutralizes both: the inline free
+                // runs through a tag-guarded `karac_drop_Option_<H>`, and the
+                // boxed `BoxedEnumDrop` guards on `tag == Some` too.
+                //
+                // A partial move keeps the narrow inline-only class — see
+                // `place_optres_field_whole_move_info` for why they differ.
+                let admitted = if whole_move {
+                    Self::option_payload_te(&field_te).is_some_and(|pt| {
+                        self.is_string_type_expr(&pt)
+                            || self.extract_vec_elem_type(&pt).is_some()
+                            || self.option_payload_struct_or_enum_drop_ok(&pt)
+                    })
+                } else {
+                    self.option_inline_payload_elem(&field_te).is_some()
+                };
+                if !admitted {
                     return None;
                 }
                 false
@@ -2244,6 +2300,33 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let result_ty = layout.llvm_type;
             self.zero_result_payload_area(result_ty, src_ptr, "respl.assignmove");
+        } else {
+            self.zero_option_field_tag_at(src_ptr);
+        }
+    }
+
+    /// B-2026-07-28-16 (call-argument leg) — `consume(nd.optresfield)` where
+    /// the callee's parameter OWNS the value. Zero the source so the owning
+    /// struct's scope-exit drop skips the payload the callee now frees.
+    ///
+    /// The sibling `suppress_inline_option_result_binding_move` covers the same
+    /// move from a plain binding, and only that one was wired at the call site
+    /// — it matches an `Identifier` and returns immediately for a `FieldAccess`,
+    /// so `f(nd.hp)` moved the payload with nothing neutralizing the source
+    /// while `let o = nd.hp; f(o)` was fine. Uses the WHOLE-move payload class
+    /// (see `place_optres_field_whole_move_info`), which is wider than the
+    /// pattern leg's.
+    pub(super) fn suppress_place_optres_field_whole_move_source(&mut self, value: &Expr) {
+        let Some((is_result, _field_te, src_ptr)) = self.place_optres_field_whole_move_info(value)
+        else {
+            return;
+        };
+        if is_result {
+            let Some(layout) = self.enum_layouts.get("Result") else {
+                return;
+            };
+            let result_ty = layout.llvm_type;
+            self.zero_result_payload_area(result_ty, src_ptr, "respl.argmove");
         } else {
             self.zero_option_field_tag_at(src_ptr);
         }

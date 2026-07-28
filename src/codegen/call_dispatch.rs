@@ -1711,6 +1711,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller's RESULT binding owns it, so the source must stay live).
             if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
                 self.suppress_inline_option_result_binding_move(&a.value);
+                // B-2026-07-28-16 — the same move, but from a FIELD rather than
+                // a binding: `consume(nd.hp)` where `nd` is an owned struct with
+                // an `Option`/`Result` field. The suppressor above is
+                // Identifier-only, so a `FieldAccess` argument fell straight
+                // through: the callee's param consumption freed the payload and
+                // the owning struct's scope-exit drop freed it again.
+                //
+                // B-2026-07-21-16 built exactly this source-zeroing for the
+                // pattern / `let` / assign move sites and this one was missed,
+                // which is why `match nd.hp { … }` was already correct while
+                // `f(nd.hp)` was not. Same helper, same gates — it bails on
+                // borrowed roots and on payload shapes whose drop it cannot
+                // neutralize.
+                self.suppress_place_optres_field_whole_move_source(&a.value);
             }
         }
         // Restore the pending-let hint cleared above for the arg loop.

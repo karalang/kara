@@ -59613,6 +59613,81 @@ fn main() {
         assert_eq!(output, "1\naa\naa\n9\nc:cc\n4\n5\nr:dd\n7\n8\n");
     }
 
+    /// B-2026-07-28-16 — the call-argument sibling of the test below, on the
+    /// OUTPUT side. `consume(nd.opt)` moves an owned struct's `Option`/`Result`
+    /// field into a parameter that owns it.
+    ///
+    /// The move-suppression wired at the call site matched an `Identifier`
+    /// only, so a `FieldAccess` argument was never treated as a move: the
+    /// callee freed the payload and the owning struct's drop freed it again.
+    /// Under AOT that aborts; the interpreter was correct throughout, which is
+    /// why the differential oracle never saw it. The memory verdict lives in
+    /// `asan_owned_struct_optres_field_call_arg_move_no_leak_no_double_free` —
+    /// what this pins is the SEMANTICS the source zero implies: consuming the
+    /// field is a MOVE, so a later read sees `None`, matching the established
+    /// behaviour for every other field class (B-2026-07-21-16).
+    #[test]
+    fn test_e2e_owned_struct_optres_field_call_arg_move() {
+        let src = r#"
+struct Inner { label: String, k: i64 }
+struct Hs { opt: Option[String], n: i64 }
+struct Ht { opt: Option[Inner], n: i64 }
+struct Hr { res: Result[String, i64], n: i64 }
+fn take_str(o: Option[String]) -> String {
+    match o {
+        Some(s) => s,
+        None => "none".to_string(),
+    }
+}
+fn take_struct(o: Option[Inner]) -> String {
+    match o {
+        Some(x) => x.label,
+        None => "none".to_string(),
+    }
+}
+fn take_res(r: Result[String, i64]) -> String {
+    match r {
+        Ok(s) => s,
+        Err(e) => e.to_string(),
+    }
+}
+fn main() {
+    let a = Hs { opt: Some("payload".to_string()), n: 1 };
+    println(take_str(a.opt));
+
+    let b = Ht { opt: Some(Inner { label: "deep".to_string(), k: 2 }), n: 2 };
+    println(take_struct(b.opt));
+
+    let r = Hr { res: Ok("okstr".to_string()), n: 3 };
+    println(take_res(r.res));
+
+    let c = Hs { opt: None, n: 4 };
+    println(take_str(c.opt));
+
+    let d = Ht { opt: Some(Inner { label: "kept".to_string(), k: 5 }), n: 5 };
+    println(d.n.to_string());
+    match d.opt {
+        Some(x) => println(x.label),
+        None => println("none"),
+    }
+}
+"#;
+        let out = run_program(src).expect("optres field call-arg move program should run");
+        let got: Vec<&str> = out.lines().collect();
+        assert_eq!(got[0], "payload", "String payload did not reach the callee");
+        assert_eq!(got[1], "deep", "struct payload did not reach the callee");
+        assert_eq!(got[2], "okstr", "Result payload did not reach the callee");
+        assert_eq!(got[3], "none", "a None field must stay None");
+        assert_eq!(
+            got[4], "5",
+            "an unconsumed field must leave its struct intact"
+        );
+        assert_eq!(
+            got[5], "kept",
+            "an unconsumed payload must still be readable"
+        );
+    }
+
     #[test]
     fn test_e2e_owned_struct_optres_field_consume_and_move() {
         // B-2026-07-21-16: consuming (or even print-only-binding) match /
