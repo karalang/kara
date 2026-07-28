@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 181 | 1 |
+| miscompile | 182 | 2 |
 | leak | 98 | 0 |
 | codegen-gap | 81 | 2 |
 | double-free | 81 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 512 | 4 |
+| codegen | 513 | 5 |
 | typecheck | 87 | 0 |
 | interp | 71 | 0 |
 | ownership | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **701 surfaced · 4 open · 691 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **702 surfaced · 5 open · 691 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **701 surfaced 
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
 | B-2026-07-28-4 | 2026-07-28 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README documents, and nothing in CI runs them. | — |
 | B-2026-07-28-5 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): `Option[<shared enum>]` has no kind of its own — `kind_of_ty` special-cases only `Option[String]` and collapses every other `Option[T]` to `Option[i64]`, so an `Option[Expr]` field stores the RC handle as a raw i64 payload, is judged POD, and is never released. Emits invalid IR today; would be a silent leak once that IR is fixed. Blocks ast.kara together with B-2026-07-27-6. | — |
+| B-2026-07-28-6 | 2026-07-28 | codegen | high | Assigning through a `shared struct` field of a plain struct (`h.cell.value = v`) writes into the FIELD SLOT instead of through the RC handle, so the mutation is invisible to every other holder of that cell. Binding the field out first (`let a = h.cell; a.value = v;`) is correct, which localizes it to the nested field-path ASSIGN lowering. This is the root cause of undo_redo's wrong answer in B-2026-07-28-4. | — |
 
 ### Fixed (691)
 
