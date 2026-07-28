@@ -1805,6 +1805,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `shared_types` (`niche_field_inner_heap_type` looks the outer type up
     /// there), and a plain struct is never in that map, so its `Option[shared]`
     /// field always uses the full four-word `Option` layout.
+    // The full store site: destination (object / var_name / field / idx /
+    // struct_ty / base_ptr) plus the RHS and its freshness. Splitting it
+    // would only move the same operands behind a struct.
+    #[allow(clippy::too_many_arguments)]
     fn try_plain_struct_option_shared_field_store(
         &mut self,
         object: &Expr,
