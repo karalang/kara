@@ -14070,6 +14070,87 @@ fn test_match_readonly_enum_payload_not_corrupted() {
     assert_eq!(output, "1\n1\n");
 }
 
+// ── Arrow IPC constructors verify the binding annotation (B-2026-07-28-10) ────
+// `Column.from_arrow_ipc` / `Tensor.from_arrow_ipc` take an opaque byte stream,
+// so nothing in the argument says what the result's element type or shape is.
+// Codegen recovers both from the `let` annotation and has the runtime reject a
+// stream that does not convert; the interpreter built straight from whatever the
+// stream decoded, so an ill-typed program printed a plausible answer under
+// `karac run` while `karac build` trapped. `pending_let_ty` threads the
+// annotation into the RHS so both backends now reject the same programs.
+
+#[test]
+fn test_column_from_arrow_ipc_rejects_element_type_mismatch() {
+    // A Utf8 stream bound at `Column[i64]`. Codegen traps; the interpreter used
+    // to hand back a Column of Strings and print 2.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let s: Column[String] = Column.from_vec([\"a\", \"b\"]);\n\
+             let bad: Column[i64] = Column.from_arrow_ipc(s.to_arrow_ipc());\n\
+             println(bad.len());\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("do not convert to the declared element type")),
+        "expected an element-type rejection, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_column_from_arrow_ipc_accepts_matching_element_types() {
+    // The guard must not over-fire: a well-typed round-trip is unchanged on
+    // every checkable element class (numeric, String, float).
+    assert_eq!(
+        run("fn main() {\n\
+                 let a: Column[i64] = Column.from_vec([1, 2, 3]);\n\
+                 let ra: Column[i64] = Column.from_arrow_ipc(a.to_arrow_ipc());\n\
+                 println(ra.len());\n\
+                 let b: Column[String] = Column.from_vec([\"a\", \"b\"]);\n\
+                 let rb: Column[String] = Column.from_arrow_ipc(b.to_arrow_ipc());\n\
+                 println(rb.len());\n\
+                 let c: Column[f64] = Column.from_vec([1.5, 2.5]);\n\
+                 let rc: Column[f64] = Column.from_arrow_ipc(c.to_arrow_ipc());\n\
+                 println(rc.len());\n\
+             }"),
+        "3\n2\n2\n"
+    );
+}
+
+#[test]
+fn test_tensor_from_arrow_ipc_rejects_shape_mismatch() {
+    // A [2,3] stream bound at `Tensor[i64, [3, 2]]`. Same channel, shape face.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let a: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+             let bad: Tensor[i64, [3, 2]] = Tensor.from_arrow_ipc(a.to_arrow_ipc());\n\
+             println(bad.rank());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("does not match the declared shape")),
+        "expected a shape rejection, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_tensor_from_arrow_ipc_accepts_matching_shape() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let a: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);\n\
+                 let ok: Tensor[i64, [2, 3]] = Tensor.from_arrow_ipc(a.to_arrow_ipc());\n\
+                 println(ok.rank());\n\
+                 println(ok.shape());\n\
+             }"),
+        "2\n[2, 3]\n"
+    );
+}
+
 // ── Match-arm assignment to the scrutinee (B-2026-07-28-7) ────────────────────
 // The write-through above reconstructed the scrutinee from its arm bindings and
 // stored it back UNCONDITIONALLY, which silently REVERTED an assignment the arm

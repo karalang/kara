@@ -795,6 +795,12 @@ impl<'a> super::Interpreter<'a> {
                 self.pending_tensor_fill = ty
                     .as_ref()
                     .and_then(super::method_call_tensor::tensor_elem_fill);
+                // B-2026-07-28-10: the same channel, carrying the whole
+                // annotation, for constructors whose element type is not
+                // recoverable from their argument (`Column.from_arrow_ipc`
+                // takes an opaque byte stream).
+                let saved_let_ty = self.pending_let_ty.take();
+                self.pending_let_ty = ty.clone();
                 // REPL value-snapshot replay: when the binding pattern is
                 // a single `Binding(..)` and the binder pattern's span is
                 // in `let_value_overrides`, skip RHS evaluation entirely
@@ -816,6 +822,7 @@ impl<'a> super::Interpreter<'a> {
                         let v = self.eval_expr_inner(value);
                         if let Some(cf) = self.pending_cf.take() {
                             self.pending_tensor_fill = saved_tensor_fill;
+                            self.pending_let_ty = saved_let_ty;
                             return Err(cf);
                         }
                         v
@@ -824,11 +831,13 @@ impl<'a> super::Interpreter<'a> {
                     let v = self.eval_expr_inner(value);
                     if let Some(cf) = self.pending_cf.take() {
                         self.pending_tensor_fill = saved_tensor_fill;
+                        self.pending_let_ty = saved_let_ty;
                         return Err(cf);
                     }
                     v
                 };
                 self.pending_tensor_fill = saved_tensor_fill;
+                self.pending_let_ty = saved_let_ty;
                 // Capture for snapshot if this name is being watched.
                 // We must clone before `bind_pattern` consumes `val`.
                 if let crate::ast::PatternKind::Binding(name) = &pattern.kind {

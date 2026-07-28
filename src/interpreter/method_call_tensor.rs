@@ -82,6 +82,34 @@ pub(super) fn tensor_elem_fill(ty: &TypeExpr) -> Option<TensorElemFill> {
     classify_elem_name(elem_path.segments.last()?.as_str())
 }
 
+/// B-2026-07-28-10: the fully-static dims of a `Tensor[T, [d0, d1, …]]`
+/// annotation. `None` unless EVERY dim is an integer literal — a `?` dynamic
+/// dim, a shape param, or a `...S` splice means the annotation does not pin the
+/// shape, so there is nothing to check against.
+pub(super) fn tensor_static_dims(ty: &TypeExpr) -> Option<Vec<i64>> {
+    let TypeKind::Path(path) = &ty.kind else {
+        return None;
+    };
+    if path.segments.last().map(String::as_str) != Some("Tensor") {
+        return None;
+    }
+    let shape = match path.generic_args.as_ref()?.get(1)? {
+        crate::ast::GenericArg::Shape(s) => s,
+        _ => return None,
+    };
+    let mut out = Vec::with_capacity(shape.dims.len());
+    for d in &shape.dims {
+        let crate::ast::ShapeDim::Const(e) = d else {
+            return None;
+        };
+        let crate::ast::ExprKind::Integer(value, _) = &e.kind else {
+            return None;
+        };
+        out.push(*value);
+    }
+    Some(out)
+}
+
 /// Row-major (C-order) flat offset for `idx` into `dims`. Errors carry
 /// the user-facing message for `record_runtime_error`.
 pub(super) fn tensor_offset(dims: &[i64], idx: &[i64]) -> Result<usize, String> {

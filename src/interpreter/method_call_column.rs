@@ -105,6 +105,107 @@ pub(super) fn value_to_bytes(v: &Value) -> Option<Vec<u8>> {
 }
 
 impl<'a> super::Interpreter<'a> {
+    /// B-2026-07-28-10: does `data` disagree with the pending `let`'s declared
+    /// `Column[T]` element type? `Some(message)` when it does.
+    ///
+    /// Mirrors the runtime's `write_slot` conversion rule exactly, so both
+    /// backends accept and reject the same streams: a numeric `T` takes any
+    /// numeric value (int and float interconvert), while `String` and `bool`
+    /// take only themselves. Rendering a number as text, or a string as 0,
+    /// would turn a type error into corrupt data — which is why the compiled
+    /// side refuses, and why the interpreter now does too.
+    ///
+    /// Returns `None` when there is no annotation, when it is not a `Column[T]`,
+    /// or when `T` is not one of the checkable element types — the check only
+    /// fires where it can be certain, since the alternative is rejecting a
+    /// program the compiled backend accepts.
+    pub(super) fn column_ann_mismatch(
+        &self,
+        data: &[Value],
+        valid: &[bool],
+        ctor: &str,
+    ) -> Option<String> {
+        let te = self.pending_let_ty.as_ref()?;
+        let crate::ast::TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(String::as_str) != Some("Column") {
+            return None;
+        }
+        let elem = p.generic_args.as_ref()?.first().and_then(|a| match a {
+            crate::ast::GenericArg::Type(t) => Some(t),
+            _ => None,
+        })?;
+        let crate::ast::TypeKind::Path(ep) = &elem.kind else {
+            return None;
+        };
+        let ename = ep.segments.last()?.as_str();
+        let numeric = matches!(
+            ename,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "usize"
+                | "isize"
+                | "f32"
+                | "f64"
+        );
+        let (want, ok): (&str, fn(&Value) -> bool) = if numeric {
+            ("a number", |v| matches!(v, Value::Int(_) | Value::Float(_)))
+        } else if ename == "String" || ename == "str" {
+            ("a string", |v| matches!(v, Value::String(_)))
+        } else if ename == "bool" {
+            ("a bool", |v| matches!(v, Value::Bool(_)))
+        } else {
+            return None;
+        };
+        // NULL slots carry a placeholder value and are never converted — the
+        // runtime's `write_slot` runs only for `Some(slot)`, so a null in a
+        // `Column[i64]` is not a type error. Checking them rejected every
+        // round-trip with a `push_null` (four existing tests went red).
+        let bad = data
+            .iter()
+            .zip(valid.iter().chain(std::iter::repeat(&true)))
+            .find(|(v, keep)| **keep && !ok(v))
+            .map(|(v, _)| v)?;
+        let got = match bad {
+            Value::Int(_) => "a number",
+            Value::Float(_) => "a number",
+            Value::String(_) => "a string",
+            Value::Bool(_) => "a bool",
+            _ => "an unsupported value",
+        };
+        Some(format!(
+            "Column.{ctor}: the decoded values do not convert to the declared \
+             element type 'Column[{ename}]' — expected {want}, found {got}. \
+             String and bool convert only to themselves; rendering a number as \
+             text (or a string as 0) would turn a type error into corrupt data."
+        ))
+    }
+
+    /// B-2026-07-28-10, tensor face: do the stream's dims disagree with the
+    /// pending `let`'s `Tensor[T, [d0, d1, …]]` annotation? `Some(message)`
+    /// when they do. Only fires for a fully-static annotated shape — a `?` dim,
+    /// a shape param, or a splice pins nothing, and rejecting there would refuse
+    /// a program the compiled backend accepts.
+    pub(super) fn tensor_ann_shape_mismatch(&self, dims: &[i64]) -> Option<String> {
+        let want = super::method_call_tensor::tensor_static_dims(self.pending_let_ty.as_ref()?)?;
+        if want == dims {
+            return None;
+        }
+        let fmt = |d: &[i64]| d.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+        Some(format!(
+            "Tensor.from_arrow_ipc: the stream's shape [{}] does not match the \
+             declared shape [{}]",
+            fmt(dims),
+            fmt(&want)
+        ))
+    }
+
     /// Column constructors dispatched from `eval_call.rs`. Returns `None`
     /// for an unrecognized path / malformed args (caller falls through).
     pub(super) fn eval_column_new(
@@ -183,10 +284,23 @@ impl<'a> super::Interpreter<'a> {
                     ));
                 };
                 match super::arrow_ipc::column_from_ipc(&bytes) {
-                    Ok((data, valid)) => Some(Value::Column {
-                        data: Arc::new(RwLock::new(data)),
-                        valid: Arc::new(RwLock::new(valid)),
-                    }),
+                    Ok((data, valid)) => {
+                        // B-2026-07-28-10: verify the decoded values against
+                        // the binding's declared element type. Nothing in an
+                        // opaque byte stream says what `T` is, so codegen
+                        // recovers it from the annotation and has the runtime
+                        // reject a non-converting stream; without the same
+                        // check here a `Column[i64]` bound from a Utf8 stream
+                        // silently held Strings under `karac run`.
+                        if let Some(err) = self.column_ann_mismatch(&data, &valid, "from_arrow_ipc")
+                        {
+                            return Some(self.record_runtime_error(err, span));
+                        }
+                        Some(Value::Column {
+                            data: Arc::new(RwLock::new(data)),
+                            valid: Arc::new(RwLock::new(valid)),
+                        })
+                    }
                     Err(e) => Some(self.record_runtime_error(e, span)),
                 }
             }

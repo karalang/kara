@@ -215,6 +215,22 @@ pub struct Interpreter<'a> {
     /// consumes it; `None` falls back to the historical `f64` fill. See
     /// `src/interpreter/method_call_tensor.rs`.
     pub(crate) pending_tensor_fill: Option<method_call_tensor::TensorElemFill>,
+    /// B-2026-07-28-10 — the current `let`'s declared type, threaded into the
+    /// RHS so a constructor that cannot infer its own element type from the
+    /// argument can VERIFY against the annotation.
+    ///
+    /// `Column.from_arrow_ipc(bytes)` takes an opaque byte stream, so nothing
+    /// in the argument says what `T` is; codegen recovers it from the
+    /// annotation, hands the runtime `(elem_size, kind)` and rejects a stream
+    /// whose values do not convert. The interpreter had no equivalent, so
+    /// `let bad: Column[i64] = Column.from_arrow_ipc(<Utf8 stream>)` silently
+    /// produced a Column of Strings under `karac run` while `karac build`
+    /// trapped — a run-vs-build divergence on an already-ill-typed program.
+    ///
+    /// Same save/restore discipline as `pending_tensor_fill` (which is the
+    /// same idea for `Tensor.zeros`'s fill type) so nested `let`s in a
+    /// block-expr RHS nest correctly.
+    pub(crate) pending_let_ty: Option<TypeExpr>,
     /// B-2026-07-14-20 — live-capture mode for iterator-adaptor closures.
     /// When set, a BARE closure expression wraps ALL its free captures in
     /// `Value::SharedCell` aliases (not just the mutated ones), so the
@@ -620,6 +636,7 @@ impl<'a> Interpreter<'a> {
             cancel_flag: None,
             drop_trace: Vec::new(),
             pending_tensor_fill: None,
+            pending_let_ty: None,
             source_text: String::new(),
             dbg_output_mode: DbgOutputMode::Terminal,
             current_task_id: None,

@@ -923,10 +923,22 @@ impl<'a> super::Interpreter<'a> {
                         }
                     };
                     return match super::arrow_ipc::tensor_from_ipc(&bytes) {
-                        Ok((dims, data)) => Value::Tensor {
-                            dims: std::sync::Arc::new(dims),
-                            data: std::sync::Arc::new(std::sync::RwLock::new(data)),
-                        },
+                        Ok((dims, data)) => {
+                            // B-2026-07-28-10, tensor face: the stream carries
+                            // its own dims, and nothing in the argument says
+                            // what the binding declared. Codegen reconciles the
+                            // two and traps on a mismatch; without the same
+                            // check here `let bad: Tensor[i64, [3, 2]] =
+                            // Tensor.from_arrow_ipc(<a [2,3] stream>)` silently
+                            // produced a [2,3] tensor under `karac run`.
+                            if let Some(err) = self.tensor_ann_shape_mismatch(&dims) {
+                                return self.record_runtime_error(err, span);
+                            }
+                            Value::Tensor {
+                                dims: std::sync::Arc::new(dims),
+                                data: std::sync::Arc::new(std::sync::RwLock::new(data)),
+                            }
+                        }
                         Err(msg) => self.record_runtime_error(msg, span),
                     };
                 }
