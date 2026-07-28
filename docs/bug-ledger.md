@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 183 | 1 |
+| miscompile | 183 | 0 |
 | leak | 98 | 0 |
 | codegen-gap | 81 | 2 |
 | double-free | 81 | 0 |
@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 29 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
-| use-after-free | 9 | 0 |
+| use-after-free | 10 | 0 |
 | other | 4 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 514 | 4 |
+| codegen | 515 | 3 |
 | typecheck | 87 | 0 |
 | interp | 72 | 0 |
 | ownership | 28 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **704 surfaced · 4 open · 694 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **705 surfaced · 3 open · 696 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | The #127/#126 kata deficit is CANDIDATE GENERATION, not `Map[String, _]` — retitled because this entry's original framing has now been refuted by measurement three separate ways and the old title kept sending readers to the map. What remains under this ID is the unattributed residual after the two `.chars()` loops are accounted for: 1.17x on arm64, and on x86 the whole-program I-ref ratio is now 1.235x (was 1.45x). The map's own microbenchmark gap (~1.94x on lookup) is real but demonstrably NOT what drives either kata. | — |
 | B-2026-07-27-6 | 2026-07-27 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): `shared enum` / `shared struct` are NOT IMPLEMENTED — the emitter has no concept of `shared` and lays every enum out BY VALUE, inlining aggregate payloads into a fixed two-slot layout (en_extra/en_extra2). A shared enum with more than two distinct aggregate payload types therefore cannot be represented. This blocks ast.kara, whose `pub shared enum Expr` has ~30 variants with distinct payload struct types. | — |
-| B-2026-07-28-4 | 2026-07-28 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README documents, and nothing in CI runs them. | — |
 | B-2026-07-28-5 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): `Option[<shared enum>]` has no kind of its own — `kind_of_ty` special-cases only `Option[String]` and collapses every other `Option[T]` to `Option[i64]`, so an `Option[Expr]` field stores the RC handle as a raw i64 payload, is judged POD, and is never released. Emits invalid IR today; would be a silent leak once that IR is fixed. Blocks ast.kara together with B-2026-07-27-6. | — |
 
-### Fixed (694)
+### Fixed (696)
 
-<details><summary>694 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>696 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -832,9 +831,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **704 surfaced 
 | B-2026-07-28-1 | other | medium | stale (not missing) runtime archive soft-skipped every E2E link failure — ~960 codegen assertions silently voided, suite reported green | 1d4ddd9 |
 | B-2026-07-28-2 | codegen | medium | `for ch in <runtime-string>.chars()` cannot take the branch-free stride-1 loop, because that lowering requires a compile-time all-ASCII proof (B-2026… | d73e5fb |
 | B-2026-07-28-3 | codegen | high | A plain (non-`shared`) struct that reaches ITSELF through a `Vec` field OVERFLOWS THE COMPILER'S STACK during codegen — every adjacency-list graph (`… | cb38efe |
+| B-2026-07-28-4 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README do… | e2dfc58 |
 | B-2026-07-28-6 | codegen | high | Assigning through a `shared struct` field of a plain struct (`h.cell.value = v`) writes into the FIELD SLOT instead of through the RC handle, so the… | 85fc58c |
 | B-2026-07-28-7 | interp | high | INTERPRETER: an assignment to the scrutinee inside a match arm is SILENTLY REVERTED — `match cur { Some(n) => { cur = n.next } }` leaves `cur` at its… | 7e1729f |
 | B-2026-07-28-8 | codegen | high | CODEGEN: storing into a PLAIN (value-type) struct's `Option[shared T]` field drops the old value BEFORE retaining the new one, so an aliasing RHS (`h… | fa8ae31 |
+| B-2026-07-28-9 | codegen | high | CODEGEN: a whole-struct MOVE does not null a `shared struct` / `shared enum` HANDLE field, so the moved-out source's drop rc-dec's a second time for… | e2dfc58 |
 
 </details>
 
