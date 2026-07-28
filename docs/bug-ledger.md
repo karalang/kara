@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 42 | 0 |
-| perf | 30 | 1 |
+| perf | 30 | 0 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 519 | 3 |
+| codegen | 519 | 2 |
 | typecheck | 87 | 0 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
 | other | 19 | 0 |
 | autopar | 19 | 0 |
-| runtime | 15 | 1 |
+| runtime | 15 | 0 |
 | cli | 15 | 0 |
 | resolver | 11 | 0 |
 | parser | 6 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **711 surfaced · 3 open · 702 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **711 surfaced · 2 open · 703 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-26-2 | 2026-07-26 | codegen+runtime | medium | #127 kata: instruction counts are now at PARITY with Rust (kara 1.782G vs rust 1.790G) yet kara is still 1.27x slower in wall time — the residual is entirely IPC, and it is ATTRIBUTED: `karac_eq_String` causes 70.6% of kara's L1-D read misses (6.0M of 8.5M, more than Rust's WHOLE program at 3.6M) because the map's status byte carries no hash fragment, so every occupied slot probed dereferences a cold key. Fix is a hashbrown-style 7-bit tag, but it is a COORDINATED runtime+codegen change, not one file. | — |
 | B-2026-07-28-14 | 2026-07-28 | codegen | medium | SELFHOST EMITTER (codegen.kara): `Option[<plain struct>]` has no representation — `kind_of_ty` collapses it to `Option$i`, whose payload slot is an i64, so constructing `Some(<struct>)` emits `insertvalue { i64, i64 } %t6, i64 %t5, 1` with `%t5` a struct. Fails at LLVM parse. The third member of the `Option[T]` family after B-2026-07-28-5 (shared enum) and the `Option[String]` leg of B-2026-07-27-6. | — |
 | B-2026-07-28-15 | 2026-07-28 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct lowers to a bare integer and the emitter produces well-formed IR for a program the seed REFUSES. This, not any payload shape, is what gates module-level self-hosting. | — |
 
-### Fixed (702)
+### Fixed (703)
 
-<details><summary>702 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>703 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -814,6 +813,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **711 surfaced 
 | B-2026-07-25-4 | codegen | medium | `for k in m.keys()` (and `.values()`/`.entries()`) STILL eagerly materializes an owned `Vec` per evaluation when either map half is a HEAP type (`Map… | 15dcfac |
 | B-2026-07-25-5 | codegen | medium | Indexed-receiver method call on a MAP element (`m[k].push(x)`) type-checks and runs correctly under the tree-walk interpreter but is REJECTED by code… | 4416d33 |
 | B-2026-07-26-1 | codegen | medium | Overflow check on a BOUNDED loop-accumulator (`cnt = cnt + 1` guarded by an if, inside a counted loop) is not elided, and because a checked add can t… | 762865a |
+| B-2026-07-26-2 | codegen+runtime | medium | Map/Set probes called `eq_fn` on EVERY occupied bucket they walked past, because the status byte carried no hash information — one cold key dereferen… | 58412d9 |
 | B-2026-07-27-1 | codegen | high | SEED codegen double-free: `return <struct>.<vecfield>[i];` — returning a heap (String) element of a STRUCT-FIELD Vec directly as a `return` STATEMENT… | 42d8e96 |
 | B-2026-07-27-2 | codegen | medium | Struct-FIELD `Map[_, Vec[String]]` leaks the inner Vec's element buffers at drop | 44b606e |
 | B-2026-07-27-3 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a BOOL-valued `if` or `match` in VALUE position emitted INVALID IR | 6740872 |
