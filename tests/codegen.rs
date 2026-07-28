@@ -4908,6 +4908,102 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// B-2026-07-28-6: assigning through a `shared struct` FIELD of a plain
+    /// struct must write through the RC handle, so the mutation is visible to
+    /// every other holder of that cell.
+    ///
+    /// It wrote into the field SLOT instead. The mechanism was a guard, not the
+    /// GEP: `compile_field_store`'s nested branch resolved the parent's layout
+    /// via `struct_types`, where a `shared struct` is never registered (it lives
+    /// in `shared_types`), so the branch fell through to the function's no-op
+    /// tail and the store was dropped with no diagnostic. The emitted IR loaded
+    /// the handle and then simply did not write, after which the optimizer
+    /// const-folded the later read to the pre-write value.
+    ///
+    /// The asymmetry is what identifies it, and is asserted here: READS through
+    /// the field were always correct, so a test that only checked reads passes
+    /// either way. This is the `shared struct` + `mut` field pattern the
+    /// `examples/tangle/undo_redo.kara` dogfood exists to prove — it printed
+    /// `30 / 30 / 30 / 30` against a documented `30 / 20 / 10 / 20`.
+    #[test]
+    fn test_e2e_shared_struct_field_assign_writes_through_handle() {
+        // Write through the holder is visible at the source (the defect), and
+        // the reverse direction (which always worked) still holds.
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Cell { mut value: i64 }
+struct Holder { cell: Cell }
+fn main() {
+    let c = Cell { value: 10 };
+    let mut h = Holder { cell: c };
+    h.cell.value = 99;
+    println(f"{c.value}");
+    c.value = 7;
+    println(f"{h.cell.value}");
+}
+"#
+            ),
+            Some("99\n7\n".to_string())
+        );
+
+        // Index-rooted parent (`v[0].cell.value = …`): the same branch, reached
+        // with an `Index` object instead of a `FieldAccess` one — the container
+        // shape `undo_redo`'s history stack puts these cells in.
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Cell { mut value: i64 }
+struct Holder { cell: Cell }
+fn main() {
+    let c = Cell { value: 10 };
+    let mut v: Vec[Holder] = Vec.new();
+    v.push(Holder { cell: c });
+    v[0].cell.value = 99;
+    println(f"{c.value}");
+}
+"#
+            ),
+            Some("99\n".to_string())
+        );
+
+        // Depth >= 3: the handle load has to happen inside the place walk, not
+        // just at the one call site, or `a.b.c.value` regresses.
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Cell { mut value: i64 }
+struct Inner { cell: Cell }
+struct Outer { inner: Inner }
+fn main() {
+    let c = Cell { value: 1 };
+    let mut o = Outer { inner: Inner { cell: c } };
+    o.inner.cell.value = 42;
+    println(f"{c.value}");
+}
+"#
+            ),
+            Some("42\n".to_string())
+        );
+
+        // A plain (non-shared) nested struct field must keep its in-place
+        // semantics — the fallback arm of the same branch.
+        assert_eq!(
+            run_program(
+                r#"
+struct Leaf { mut n: i64 }
+struct Mid { leaf: Leaf }
+fn main() {
+    let mut m = Mid { leaf: Leaf { n: 1 } };
+    m.leaf.n = 5;
+    println(f"{m.leaf.n}");
+}
+"#
+            ),
+            Some("5\n".to_string())
+        );
+    }
+
     #[test]
     fn test_e2e_volatile_read_write_roundtrip() {
         // MMIO intrinsics `volatile_write` / `volatile_read`

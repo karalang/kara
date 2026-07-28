@@ -1494,23 +1494,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.nested_store_place_ptr(object),
                 self.place_chain_type_name(object),
             ) {
-                if let (Some(&st), Some(names)) = (
-                    self.struct_types.get(obj_ty.as_str()),
-                    self.struct_field_names.get(obj_ty.as_str()),
-                ) {
+                // B-2026-07-28-6: resolve the parent's GEP layout from
+                // `shared_types` FIRST, falling back to `struct_types`. A
+                // `shared struct` is registered ONLY in `shared_types`, so
+                // gating the whole branch on `struct_types` (as it was) meant a
+                // shared parent — `h.cell.value = v`, where `nested_store_place_ptr`
+                // has just handed back the dereferenced heap node — failed the
+                // guard and fell through to the no-op tail. The store was
+                // SILENTLY DROPPED: the emitted IR loaded the handle and then
+                // simply did not write, so the mutation vanished with no
+                // diagnostic and the optimizer went on to const-fold the later
+                // read. That is the same "fell through to the no-op tail" defect
+                // the two branches above call out, for the one receiver shape
+                // neither of them covers.
+                //
+                // A shared node's field offsets are also not the value struct's
+                // (a headed layout carries a leading refcount word, two when the
+                // type is weak-targeted), so the shared arm routes through
+                // `shared_gep_layout` — the same funnel the indexed-shared
+                // branch uses, keeping the header shift in one place.
+                let layout = match self
+                    .shared_types
+                    .get(obj_ty.as_str())
+                    .filter(|i| !i.is_enum)
+                    .map(|i| i.heap_type)
+                {
+                    Some(heap_type) => Some(self.shared_gep_layout(&obj_ty, heap_type)),
+                    None => self.struct_types.get(obj_ty.as_str()).map(|&st| (st, 0)),
+                };
+                if let (Some((gep_ty, base)), Some(names)) =
+                    (layout, self.struct_field_names.get(obj_ty.as_str()))
+                {
                     if let Some(idx) = names.iter().position(|n| n == field) {
                         let field_ptr = self
                             .builder
                             .build_struct_gep(
-                                st,
+                                gep_ty,
                                 base_ptr,
-                                idx as u32,
+                                idx as u32 + base,
                                 &format!("nested_{}_ptr", field),
                             )
                             .unwrap();
                         // Field-store width coercion — see
                         // `coerce_to_struct_field_ty`.
-                        let new_val = self.coerce_to_struct_field_ty(st, idx as u32, new_val);
+                        let new_val =
+                            self.coerce_to_struct_field_ty(gep_ty, idx as u32 + base, new_val);
                         self.builder.build_store(field_ptr, new_val).unwrap();
                         return Ok(());
                     }
@@ -1825,10 +1853,48 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(obj_ty.as_str())?
                     .iter()
                     .position(|n| n == field)? as u32;
-                self.builder
+                let slot = self
+                    .builder
                     .build_struct_gep(st, base_ptr, idx, "nested.store.chain.p")
-                    .ok()
+                    .ok()?;
+                // B-2026-07-28-6: a `shared struct` FIELD holds an RC HANDLE, so
+                // the place it denotes is the heap node — one load away — not the
+                // slot. Returning the slot made the caller GEP the shared struct's
+                // fields as if they were inline in the PARENT, so
+                // `h.cell.value = 99` wrote into `Holder`'s own storage and every
+                // other holder of that cell kept the old value. The read path
+                // already dereferences here, which is why reads through the field
+                // were correct and only writes were lost.
+                //
+                // Doing it inside the walk (rather than at the one call site) is
+                // what makes depth >= 3 work: `a.b.c.value` where `b` is shared
+                // recurses through this arm and needs the same load one level in.
+                if self.shared_field_type_name(&obj_ty, idx as usize).is_some() {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    return self
+                        .builder
+                        .build_load(ptr_ty, slot, "nested.store.shared.h")
+                        .ok()
+                        .map(|v| v.into_pointer_value());
+                }
+                Some(slot)
             }
+            _ => None,
+        }
+    }
+
+    /// Name of field `idx` of struct `type_name` when that field's declared type
+    /// is a non-enum `shared struct` — i.e. when the field slot holds an RC
+    /// handle rather than an inline aggregate (B-2026-07-28-6). `None` for every
+    /// other field shape, so callers fall through to their in-place path.
+    fn shared_field_type_name(&self, type_name: &str, idx: usize) -> Option<String> {
+        let te = self.struct_field_type_exprs.get(type_name)?.get(idx)?;
+        let TypeKind::Path(path) = &te.kind else {
+            return None;
+        };
+        let seg = path.segments.last()?;
+        match self.shared_types.get(seg.as_str()) {
+            Some(info) if !info.is_enum => Some(seg.clone()),
             _ => None,
         }
     }
