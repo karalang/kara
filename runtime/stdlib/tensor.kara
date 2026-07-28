@@ -95,6 +95,33 @@ impl[T, ...S] Tensor[T, S] {
         0
     }
 
+    // --- Arrow IPC interchange (phase-11 Arrow IPC). ---
+    // Serialize to the Apache Arrow **IPC stream** format as the canonical
+    // `arrow.fixed_shape_tensor` extension type: a single-row
+    // `FixedSizeList[numel]` over the row-major flattened values, with the
+    // shape carried in the field's extension metadata. pyarrow reads this back
+    // as a real tensor (`pa.fixed_shape_tensor`); a reader that ignores
+    // extension metadata still sees the flat FixedSizeList storage. Element
+    // types `i64` (Int64) and `f64` (Float64). Pure in-memory (no FileSystem
+    // effect). Round-trips through `from_arrow_ipc`. Interpreter reference impl
+    // in `src/interpreter/arrow_ipc.rs`; codegen + the runtime
+    // `libkarac_runtime_arrow.a` archive are a later slice — `karac run` routes
+    // an arrow program to the interpreter until then.
+    #[compiler_builtin]
+    fn to_arrow_ipc(ref self) -> Vec[u8] {
+        Vec.new()
+    }
+
+    // Parse an Arrow IPC stream (`Vec[u8]`) into a tensor — the round-trip peer
+    // of `to_arrow_ipc`. The shape comes from the field's extension metadata; a
+    // stream carrying no shape (a plain FixedSizeList, or a producer that
+    // dropped the metadata) reads as a 1-D tensor over the flattened values, so
+    // the data still round-trips even when the shape doesn't.
+    #[compiler_builtin]
+    fn from_arrow_ipc(bytes: Vec[u8]) -> Tensor[T, S] {
+        Tensor { handle_id: 0 }
+    }
+
     // Axis iteration — `t.iter_axis(n)` yields the `dims[n]` sub-tensors
     // obtained by fixing the index along axis `n` (the axis is dropped:
     // a `[2, 3, 4]` tensor's `iter_axis(1)` yields 3 tensors of shape

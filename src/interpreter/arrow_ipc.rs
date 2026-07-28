@@ -1,14 +1,20 @@
-//! Arrow IPC interchange for `Column[T]` and `DataFrame` — the interpreter's
-//! reference implementation (phase-11 Arrow IPC).
+//! Arrow IPC interchange for `Column[T]`, `DataFrame`, and `Tensor` — the
+//! interpreter's reference implementation (phase-11 Arrow IPC).
 //!
-//! `col.to_arrow_ipc()` / `df.to_arrow_ipc()` serialize to the Apache Arrow
-//! **IPC stream** format (a single `RecordBatch`); `Column.from_arrow_ipc` /
-//! `DataFrame.from_arrow_ipc` parse it back. A `Column` becomes a one-field
-//! batch (field `col`); a `DataFrame` becomes an N-field batch, one field per
-//! named column — the canonical Arrow tabular mapping, interoperable with any
-//! Arrow reader (pyarrow `ipc.open_stream`, DuckDB, polars). Backed by the
-//! `arrow-array` / `arrow-schema` / `arrow-ipc` crates so the wire format is
-//! spec-compliant rather than hand-rolled (Arrow IPC metadata is
+//! `to_arrow_ipc()` serializes to the Apache Arrow **IPC stream** format (a
+//! single `RecordBatch`); the matching `from_arrow_ipc` parses it back. Each
+//! value type gets its canonical Arrow mapping, interoperable with any Arrow
+//! reader (pyarrow `ipc.open_stream`, DuckDB, polars):
+//!
+//! - **`Column`** → a one-field batch (field `col`).
+//! - **`DataFrame`** → an N-field batch, one field per named column, in schema
+//!   order — the canonical tabular mapping.
+//! - **`Tensor`** → a single-row `FixedSizeList[numel]` typed as the canonical
+//!   `arrow.fixed_shape_tensor` extension, with the shape in the field's
+//!   extension metadata (what pyarrow exposes as `pa.fixed_shape_tensor`).
+//!
+//! Backed by the `arrow-array` / `arrow-schema` / `arrow-ipc` crates so the
+//! wire format is spec-compliant rather than hand-rolled (Arrow IPC metadata is
 //! flatbuffers-encoded).
 //!
 //! Element-type coverage — the four kinds the interpreter's `Value` can
@@ -36,8 +42,8 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeStringArray,
-    RecordBatch, RecordBatchOptions, StringArray,
+    Array, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
+    LargeStringArray, RecordBatch, RecordBatchOptions, StringArray,
 };
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
@@ -150,6 +156,103 @@ fn write_ipc(fields: Vec<Field>, arrays: Vec<Arc<dyn Array>>) -> Result<Vec<u8>,
 pub(super) fn column_to_ipc(data: &[Value], valid: &[bool]) -> Result<Vec<u8>, String> {
     let (dt, arr) = col_to_arrow(data, valid);
     write_ipc(vec![Field::new("col", dt, true)], vec![arr])
+}
+
+/// Arrow's canonical extension-type metadata keys (Arrow columnar spec §
+/// "Extension types"). A reader that doesn't know the extension still sees the
+/// underlying `FixedSizeList` storage, so the stream stays universally
+/// readable.
+const EXT_NAME_KEY: &str = "ARROW:extension:name";
+const EXT_META_KEY: &str = "ARROW:extension:metadata";
+/// The canonical N-d tensor extension — what pyarrow exposes as
+/// `pa.fixed_shape_tensor(value_type, shape)`.
+const FIXED_SHAPE_TENSOR: &str = "arrow.fixed_shape_tensor";
+
+/// Serialize a `Tensor`'s `(dims, row-major data)` to a one-field Arrow IPC
+/// stream typed as the canonical `arrow.fixed_shape_tensor` extension: a
+/// single-row `FixedSizeList[numel]` holding the flattened values, with the
+/// shape carried in the field's extension metadata (`{"shape":[d0,d1,…]}`).
+/// pyarrow reads this back as a real tensor (`pa.fixed_shape_tensor`); a reader
+/// that ignores extension metadata still sees the flat FixedSizeList storage.
+///
+/// A tensor has no null slots (no validity bitmap in `Value::Tensor`), so every
+/// element is valid — the element-type inference is otherwise shared with
+/// `Column` via `col_to_arrow`.
+pub(super) fn tensor_to_ipc(dims: &[i64], data: &[Value]) -> Result<Vec<u8>, String> {
+    let numel: i64 = dims.iter().product::<i64>().max(0);
+    if numel != data.len() as i64 {
+        return Err(format!(
+            "arrow: Tensor shape {dims:?} implies {numel} elements but the buffer holds {}",
+            data.len()
+        ));
+    }
+    let list_size = i32::try_from(numel)
+        .map_err(|_| format!("arrow: Tensor with {numel} elements exceeds Arrow's list size"))?;
+
+    let all_valid = vec![true; data.len()];
+    let (item_dt, values) = col_to_arrow(data, &all_valid);
+    // Items are non-nullable — a tensor slot always holds a value.
+    let item_field = Arc::new(Field::new("item", item_dt, false));
+    let list = FixedSizeListArray::try_new(Arc::clone(&item_field), list_size, values, None)
+        .map_err(|e| format!("arrow: {e}"))?;
+
+    let shape = serde_json::json!({ "shape": dims });
+    let metadata = std::collections::HashMap::from([
+        (EXT_NAME_KEY.to_string(), FIXED_SHAPE_TENSOR.to_string()),
+        (EXT_META_KEY.to_string(), shape.to_string()),
+    ]);
+    let field = Field::new(
+        "tensor",
+        DataType::FixedSizeList(item_field, list_size),
+        false,
+    )
+    .with_metadata(metadata);
+
+    write_ipc(vec![field], vec![Arc::new(list)])
+}
+
+/// Parse an `arrow.fixed_shape_tensor` IPC stream back into `(dims, data)`.
+/// The shape comes from the field's extension metadata; a stream whose field
+/// carries no shape (a plain `FixedSizeList`, or a foreign producer that
+/// dropped the metadata) is read as a 1-D tensor over the flattened values, so
+/// the data still round-trips even when the shape doesn't.
+pub(super) fn tensor_from_ipc(bytes: &[u8]) -> Result<(Vec<i64>, Vec<Value>), String> {
+    let batch = match read_first_batch(bytes)? {
+        Some(b) if b.num_columns() > 0 => b,
+        _ => return Ok((vec![0], Vec::new())),
+    };
+    let field = batch.schema().field(0).clone();
+    let col = batch.column(0);
+
+    // Unwrap the FixedSizeList storage to the flat value array. A stream that
+    // is a plain (non-list) array is read as 1-D over its own values.
+    let values: Arc<dyn Array> = match col.as_any().downcast_ref::<FixedSizeListArray>() {
+        Some(list) => {
+            if list.is_empty() {
+                return Ok((vec![0], Vec::new()));
+            }
+            // One tensor per row; this surface serializes exactly one.
+            list.value(0)
+        }
+        None => Arc::clone(col),
+    };
+    let (data, _valid) = arrow_to_col(values.as_ref())?;
+
+    // Shape from `{"shape":[…]}` in the extension metadata; fall back to 1-D.
+    let dims = field
+        .metadata()
+        .get(EXT_META_KEY)
+        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+        .and_then(|v| {
+            v.get("shape")?
+                .as_array()?
+                .iter()
+                .map(|d| d.as_i64())
+                .collect::<Option<Vec<i64>>>()
+        })
+        .filter(|d| !d.is_empty() && d.iter().product::<i64>() == data.len() as i64)
+        .unwrap_or_else(|| vec![data.len() as i64]);
+    Ok((dims, data))
 }
 
 /// Serialize a `DataFrame`'s `(name, Column)` list to an N-field Arrow IPC
@@ -398,5 +501,64 @@ mod tests {
         // A zero-column frame still produces a valid stream and reads back empty.
         let bytes = dataframe_to_ipc(&[]).unwrap();
         assert!(dataframe_from_ipc(&bytes).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tensor_writes_the_fixed_shape_tensor_extension() {
+        // The stream must be typed as the canonical extension (so pyarrow reads
+        // it as a real tensor), with the shape in the extension metadata and
+        // FixedSizeList[numel] storage underneath.
+        let dims = vec![2i64, 3];
+        let data: Vec<Value> = (1..=6).map(Value::Int).collect();
+        let bytes = tensor_to_ipc(&dims, &data).unwrap();
+
+        let batch = read_first_batch(&bytes).unwrap().unwrap();
+        let field = batch.schema().field(0).clone();
+        assert_eq!(
+            field.metadata().get(EXT_NAME_KEY).map(String::as_str),
+            Some(FIXED_SHAPE_TENSOR)
+        );
+        assert_eq!(
+            field.metadata().get(EXT_META_KEY).map(String::as_str),
+            Some(r#"{"shape":[2,3]}"#)
+        );
+        assert!(matches!(
+            field.data_type(),
+            DataType::FixedSizeList(_, 6) // 2 * 3 flattened values
+        ));
+        // One row: the whole tensor.
+        assert_eq!(batch.num_rows(), 1);
+    }
+
+    #[test]
+    fn tensor_round_trips_shape_and_values() {
+        let dims = vec![2i64, 3];
+        let data: Vec<Value> = (1..=6).map(Value::Int).collect();
+        let bytes = tensor_to_ipc(&dims, &data).unwrap();
+        let (out_dims, out_data) = tensor_from_ipc(&bytes).unwrap();
+        assert_eq!(out_dims, dims);
+        assert_eq!(out_data.len(), 6);
+        assert!(matches!(out_data[0], Value::Int(1)));
+        assert!(matches!(out_data[5], Value::Int(6)));
+    }
+
+    #[test]
+    fn tensor_without_shape_metadata_reads_as_1d() {
+        // A foreign stream that is a plain (non-extension, non-list) array has
+        // no shape to recover — it must still load, as a 1-D tensor over the
+        // flattened values, rather than erroring.
+        let arr = Arc::new(Int64Array::from(vec![7i64, 8, 9])) as Arc<dyn Array>;
+        let (dims, data) = tensor_from_ipc(&ipc_stream(DataType::Int64, arr)).unwrap();
+        assert_eq!(dims, vec![3]);
+        assert_eq!(data.len(), 3);
+        assert!(matches!(data[0], Value::Int(7)));
+    }
+
+    #[test]
+    fn tensor_shape_buffer_mismatch_errors() {
+        // A shape whose product disagrees with the buffer length is a clean
+        // Err, never a silently truncated/padded tensor.
+        let err = tensor_to_ipc(&[2, 3], &[Value::Int(1), Value::Int(2)]).unwrap_err();
+        assert!(err.contains("implies 6 elements"), "got: {err}");
     }
 }

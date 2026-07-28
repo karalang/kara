@@ -357,6 +357,19 @@ impl<'a> super::Interpreter<'a> {
                 dims.iter().map(|&d| Value::Int(d)).collect(),
             )))),
             "rank" => Some(Value::Int(dims.len() as i64)),
+            // Serialize to an Arrow IPC stream (`Vec[u8]`) as the canonical
+            // `arrow.fixed_shape_tensor` extension — a single-row
+            // FixedSizeList over the flattened values with the shape in the
+            // field's extension metadata (pyarrow reads it as a real tensor).
+            // Pure in-memory; round-trips through `Tensor.from_arrow_ipc`.
+            // See `src/interpreter/arrow_ipc.rs`.
+            "to_arrow_ipc" => {
+                let data_guard = data.read().unwrap();
+                match super::arrow_ipc::tensor_to_ipc(dims, &data_guard) {
+                    Ok(bytes) => Some(super::method_call_column::bytes_to_value(bytes)),
+                    Err(e) => Some(self.record_runtime_error(e, span)),
+                }
+            }
             "iter_axis" => Some(self.eval_tensor_iter_axis(dims, data, args, span)),
             "reshape" => Some(self.eval_tensor_reshape(dims, data, args, span)),
             "permute" => Some(self.eval_tensor_permute(dims, data, args, span)),

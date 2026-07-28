@@ -446,6 +446,20 @@ impl<'ctx> super::Codegen<'ctx> {
             match method {
                 "zeros" | "ones" | "full" => return self.compile_tensor_new(method, args),
                 "from" => return self.compile_tensor_from(args),
+                // Arrow IPC interchange is interpreter-only (same posture as
+                // `Column.from_arrow_ipc` / `DataFrame.from_arrow_ipc` below).
+                // Without this arm the ASSOC call falls through to the silent
+                // `Ok(const 0)` tail and MISCOMPILES a Tensor to the integer 0
+                // — the B-2026-07-18-20 run-vs-build divergence class.
+                "from_arrow_ipc" => {
+                    return Err(format!(
+                        "codegen: `Tensor.{method}(...)` is interpreter-only (AOT codegen + \
+                         the `libkarac_runtime_arrow.a` archive are a later slice); run with \
+                         `karac run` (which routes Arrow IPC programs to the tree-walk \
+                         interpreter) or `karac run --interp`. Emitting it under `karac build` \
+                         would silently return 0."
+                    ));
+                }
                 _ => {}
             }
         }

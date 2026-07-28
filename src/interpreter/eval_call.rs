@@ -896,6 +896,40 @@ impl<'a> super::Interpreter<'a> {
                 "Tensor.from" => {
                     return self.eval_tensor_from(args, span);
                 }
+                // Phase-11 Arrow IPC — parse an `arrow.fixed_shape_tensor`
+                // stream (the inverse of `t.to_arrow_ipc()`): shape from the
+                // field's extension metadata, values from the FixedSizeList
+                // storage. A stream carrying no shape metadata reads as 1-D
+                // over the flattened values. See `src/interpreter/arrow_ipc.rs`.
+                "Tensor.from_arrow_ipc" => {
+                    let bytes = match args.first() {
+                        Some(arg) => {
+                            let v = self.eval_expr_inner(&arg.value);
+                            match super::method_call_column::value_to_bytes(&v) {
+                                Some(b) => b,
+                                None => {
+                                    return self.record_runtime_error(
+                                        "Tensor.from_arrow_ipc expects a Vec[u8] byte buffer",
+                                        span,
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            return self.record_runtime_error(
+                                "Tensor.from_arrow_ipc expects a Vec[u8] byte buffer",
+                                span,
+                            );
+                        }
+                    };
+                    return match super::arrow_ipc::tensor_from_ipc(&bytes) {
+                        Ok((dims, data)) => Value::Tensor {
+                            dims: std::sync::Arc::new(dims),
+                            data: std::sync::Arc::new(std::sync::RwLock::new(data)),
+                        },
+                        Err(msg) => self.record_runtime_error(msg, span),
+                    };
+                }
                 // Phase-11 Column constructors (interpreter MVP) — see
                 // runtime/stdlib/column.kara.
                 "Column.new"

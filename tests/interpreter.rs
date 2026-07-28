@@ -3947,6 +3947,45 @@ fn test_dataframe_arrow_ipc_roundtrip_string_nulls() {
     assert_eq!(out, "3\n1\ntrue\nann\ncat\n");
 }
 
+// A `Tensor` serializes as the canonical `arrow.fixed_shape_tensor` extension
+// (single-row FixedSizeList + shape metadata) and round-trips its SHAPE as
+// well as its values — the shape rides the field's extension metadata.
+#[test]
+fn test_tensor_arrow_ipc_roundtrip_shape_and_values() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+             let bytes = t.to_arrow_ipc();\n\
+             println(bytes.len() > 8);\n\
+             let u: Tensor[i64, [2, 3]] = Tensor.from_arrow_ipc(bytes);\n\
+             println(u.rank());\n\
+             let s = u.shape();\n\
+             println(s[0]);\n\
+             println(s[1]);\n\
+             println(u.sum());\n\
+         }",
+    );
+    // non-empty stream; rank 2; shape [2, 3]; sum 1+..+6 = 21.
+    assert_eq!(out, "true\n2\n2\n3\n21\n");
+}
+
+#[test]
+fn test_tensor_arrow_ipc_roundtrip_f64() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let t = Tensor.from([[1.5, 2.5], [3.0, 4.0]]);\n\
+             let bytes = t.to_arrow_ipc();\n\
+             let u: Tensor[f64, [2, 2]] = Tensor.from_arrow_ipc(bytes);\n\
+             println(u.rank());\n\
+             let s = u.shape();\n\
+             println(s[0]);\n\
+             println(s[1]);\n\
+             println(u.sum());\n\
+         }",
+    );
+    assert_eq!(out, "2\n2\n2\n11\n");
+}
+
 #[test]
 fn test_column_narrow_element_binop_in_range_ok() {
     // Non-overflowing narrow element ops keep working after the peel.

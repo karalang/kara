@@ -540,6 +540,8 @@ mod codegen_tests {
             "fn main() { let mut d = DataFrame.new(); \
              d.insert(\"x\", Column.from_vec([1, 2])); \
              let b = d.to_arrow_ipc(); println(b.len()); }",
+            "fn main() { let t = Tensor.from([[1, 2], [3, 4]]); \
+             let b = t.to_arrow_ipc(); println(b.len()); }",
         ] {
             let err = ir_result(to_ipc).expect_err("to_arrow_ipc must be rejected by codegen");
             assert!(err.contains("Arrow IPC interchange"), "got: {err}");
@@ -556,6 +558,11 @@ mod codegen_tests {
                 "fn main() { let bytes: Vec[u8] = Vec.new(); \
                  let d = DataFrame.from_arrow_ipc(bytes); println(d.height()); }",
                 "DataFrame.from_arrow_ipc",
+            ),
+            (
+                "fn main() { let bytes: Vec[u8] = Vec.new(); \
+                 let t: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(bytes); println(t.rank()); }",
+                "Tensor.from_arrow_ipc",
             ),
         ] {
             let err = ir_result(from_ipc).expect_err("from_arrow_ipc must be rejected by codegen");
