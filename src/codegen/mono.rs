@@ -2053,7 +2053,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // suppression zeros it. A no-op for a non-owned-vecstr tail (the copy
             // self-gates on `owned_vecstr_params` membership + a recorded elem type).
             if let (Some(final_expr), Some(v)) = (func.body.final_expr.as_deref(), result) {
-                result = Some(self.maybe_defensive_copy_param_arg(final_expr, v));
+                result = Some(self.maybe_defensive_copy_return_value(final_expr, v));
             }
             // LazyFrame codegen twin — retain-on-return (rule 2), the mono
             // twin of the `compile_function` hook: a generic fn DECLARED to

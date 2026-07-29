@@ -787,7 +787,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // binds-and-frees what we hand back — so hand back a
                     // deep copy, not the alias. No-op for every other
                     // return shape. See `emit_vecstr_defensive_copy`.
-                    let v = self.maybe_defensive_copy_param_arg(e, v);
+                    let v = self.maybe_defensive_copy_return_value(e, v);
                     // Move-aware move-out suppression, applied post-compile (and
                     // post-defensive-copy) so the already-loaded `v` retains the
                     // source binding's real `cap` — the caller now owns and frees

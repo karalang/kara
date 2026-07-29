@@ -76942,23 +76942,113 @@ fn main() {
 
 #[cfg(feature = "llvm")]
 mod ref_return_receiver_single_call {
-    /// Emit `main`'s IR for a program and count the `call`s to `name`.
-    fn calls_to(src: &str, name: &str) -> usize {
+    /// Emit a program's IR. The ownership pass is wired in because the
+    /// return-position defensive copy these tests are about is only emitted
+    /// with it — `compile_to_ir(_, None, _)` silently skips it.
+    fn module_ir(src: &str) -> String {
         let mut parsed = karac::parse(src);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
-        let ir = karac::codegen::compile_to_ir(&parsed.program, None, None).expect("codegen");
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen")
+    }
+
+    fn count_calls(ir: &str, name: &str) -> usize {
+        ir.lines()
+            .filter(|l| l.contains(&format!("@{name}(")) && l.contains(" call "))
+            .count()
+    }
+
+    /// Count the `call`s to `name` in `main`'s body only.
+    fn calls_to(src: &str, name: &str) -> usize {
+        let ir = module_ir(src);
         let main = ir
             .split("define i32 @main")
             .nth(1)
             .unwrap_or(&ir)
             .split("\n}")
             .next()
-            .unwrap_or("");
-        main.lines()
-            .filter(|l| l.contains(&format!("@{name}(")))
-            .count()
+            .unwrap_or("")
+            .to_string();
+        count_calls(&main, name)
+    }
+
+    /// Count the `call`s to `name` anywhere in the module.
+    fn calls_to_anywhere(src: &str, name: &str) -> usize {
+        count_calls(&module_ir(src), name)
+    }
+
+    #[test]
+    fn ref_returning_field_accessor_emits_no_dead_clone() {
+        // B-2026-07-29-21: `fn label(ref self) -> ref String { self.name }`
+        // ran the borrowed-receiver field-return defensive copy at its tail,
+        // then threw the result away and returned the borrow pointer:
+        //
+        //     call void @karac_clone_String(ptr %retfld.clone.src, ptr %..dst)
+        //     %retfld.cloned = load { ptr, i64, i64 }, ptr %..dst   ; unused
+        //     ret ptr %ret_borrow_name
+        //
+        // One malloc'd copy per call that nothing owns and nothing frees —
+        // a 1000-iteration loop leaked 1000 blocks. The `ref Vec[T]` sibling
+        // emitted the same dead clone; LLVM DCEs its pure-IR malloc helper,
+        // so only the String leg (which tail-calls the opaque runtime
+        // `karac_string_clone`) showed up under valgrind. Both are asserted
+        // here so the Vec leg cannot regress into a leak if that helper ever
+        // grows an opaque call.
+        assert_eq!(
+            calls_to_anywhere(
+                "struct H { name: String }\n\
+                 impl H { fn label(ref self) -> ref String { self.name } }\n\
+                 fn main() {\n\
+                     let h = H { name: \"kara\".to_string() };\n\
+                     let a = h.label();\n\
+                     println(a.len().to_string());\n\
+                 }",
+                "karac_clone_String",
+            ),
+            0,
+            "a `-> ref String` accessor must not clone the field it borrows"
+        );
+        assert_eq!(
+            calls_to_anywhere(
+                "struct H { items: Vec[i64] }\n\
+                 impl H { fn view(ref self) -> ref Vec[i64] { self.items } }\n\
+                 fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(1);\n\
+                     let h = H { items: v };\n\
+                     let a = h.view();\n\
+                     println(a.len().to_string());\n\
+                 }",
+                "karac_clone_Vec_i64",
+            ),
+            0,
+            "a `-> ref Vec[T]` accessor must not clone the field it borrows"
+        );
+        // The gate is on RETURN position only. An ARGUMENT-position read of
+        // the same borrowed field inside the same `-> ref String` function
+        // still needs its copy — without it the push'd element and the
+        // receiver free one buffer. Asserted as a live clone call.
+        assert!(
+            calls_to_anywhere(
+                "struct H { name: String }\n\
+                 impl H {\n\
+                     fn label(ref self) -> ref String {\n\
+                         let mut v: Vec[String] = Vec.new();\n\
+                         v.push(self.name);\n\
+                         println(v.len().to_string());\n\
+                         self.name\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     let h = H { name: \"kara\".to_string() };\n\
+                     println(h.label().len().to_string());\n\
+                 }",
+                "karac_clone_String",
+            ) > 0,
+            "an argument-position borrowed-field read must still be copied"
+        );
     }
 
     #[test]

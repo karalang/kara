@@ -3416,6 +3416,43 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// [`Self::maybe_defensive_copy_param_arg`] at a RETURN position, with
+    /// the borrow-returning function excluded.
+    ///
+    /// A `-> ref T` function never hands its caller an owned value: the tail
+    /// value is discarded and `compile_ref_return_ptr` returns the ADDRESS of
+    /// the borrow's source instead ("the already-compiled `val` is a pure,
+    /// dead load for the admitted shapes" — `compile_function`). So every
+    /// defensive copy at such a tail is dead work, and for the
+    /// borrowed-receiver field-return shape below it is a LEAK: `fn label(ref
+    /// self) -> ref String { self.name }` emitted
+    ///
+    ///     call void @karac_clone_String(ptr %retfld.clone.src, ptr %..dst)
+    ///     %retfld.cloned = load { ptr, i64, i64 }, ptr %..dst   ; unused
+    ///     ret ptr %ret_borrow_name
+    ///
+    /// — one malloc'd copy per call that nothing owns and nothing frees, so a
+    /// 1000-iteration loop leaked 1000 blocks (B-2026-07-29-21). The `ref
+    /// Vec[T]` sibling emitted the same dead clone, but its helper is pure
+    /// LLVM IR over `malloc`, which LLVM DCEs; the String helper tail-calls
+    /// the opaque runtime `karac_string_clone`, which it cannot.
+    ///
+    /// The gate lives HERE and not inside `maybe_defensive_copy_param_arg`
+    /// because that helper also runs at ~25 ARGUMENT positions, where a
+    /// borrowed field read genuinely does need its copy — `v.push(h.name)`
+    /// inside a `-> ref String` function must still clone, or the push'd
+    /// element and the receiver both free one buffer.
+    pub(super) fn maybe_defensive_copy_return_value(
+        &mut self,
+        ret_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if self.current_fn_returns_ref {
+            return val;
+        }
+        self.maybe_defensive_copy_param_arg(ret_expr, val)
+    }
+
     pub(super) fn maybe_defensive_copy_param_arg(
         &mut self,
         arg_expr: &Expr,

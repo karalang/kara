@@ -2103,7 +2103,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // buffer (the alias double-freed: k22n repro, 2026-06-06).
             // Mirrors the explicit-`return` arm in `compile_expr`.
             if let (Some(final_expr), Some(v)) = (func.body.final_expr.as_deref(), result) {
-                result = Some(self.maybe_defensive_copy_param_arg(final_expr, v));
+                result = Some(self.maybe_defensive_copy_return_value(final_expr, v));
             }
             // Contract `ensures` checks at the tail return (design.md
             // § Contracts), with `result` bound to the tail value — before
