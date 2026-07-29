@@ -545,6 +545,10 @@ pub type ColumnTypedExprsTable = std::collections::HashMap<(usize, usize), Colum
 /// comparisons (phase-7 line 302).
 pub type UnsignedVectorExprsTable = std::collections::HashSet<(usize, usize)>;
 
+/// Spans of `Vector[T, N]` instance-method calls. See
+/// [`Program::vector_method_call_spans`].
+pub type VectorMethodCallSpansTable = std::collections::HashSet<(usize, usize)>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: for every expression whose Kāra type is a `Named`
 /// struct (`Type::Named { name, .. }`), maps `(span.offset, span.length)`
@@ -782,6 +786,23 @@ pub struct Program {
     /// compare predicate (`ult`/`ugt`) — the LLVM lane type is signless, so
     /// the value alone can't tell signed from unsigned.
     pub unsigned_vector_exprs: UnsignedVectorExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.vector_method_receivers`:
+    /// the span of every `Vector[T, N]` INSTANCE-METHOD call. Presence-only —
+    /// the receiver's `(element, lanes)` is not needed here, just the fact that
+    /// a vector method call lives at this span.
+    ///
+    /// Exists because `method_callee_types` cannot be trusted for this dispatch
+    /// in a CHAIN. The parser sets `MethodCall.span == receiver.span`, so in
+    /// `v.reduce_sum().to_string()` both calls share one key and the outer
+    /// insert clobbers the inner `Vector.reduce_sum` — after which codegen's
+    /// method-segment guard correctly rejects the `f32.to_string` key for the
+    /// inner call and the vector dispatch falls through entirely
+    /// (B-2026-07-29-7). This table is immune: only the vector call writes it,
+    /// so a hit at the span plus a method name in the Vector instance set is an
+    /// unambiguous signal. Same rationale and shape as `unsigned_vector_exprs`,
+    /// which folds in the sibling `vector_method_receivers` fix for the *type*
+    /// half of the same collision.
+    pub vector_method_call_spans: VectorMethodCallSpansTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
     /// every expression whose Kāra type is a `Named` struct, maps
     /// `(offset, length)` to the canonical struct name. Lets codegen

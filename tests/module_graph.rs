@@ -717,6 +717,27 @@ fn imported_trait_bound_resolves_methods_on_type_param() {
              impl[S: Doer] Holder[S] { fn run(ref self) -> i64 { self.d.do_it() } }\n\
              fn main() { let h = Holder { d: Impl {} }; println(f\"{h.run()}\"); }\n",
         ),
+        // B-2026-07-29-10, promoted from its own known-broken test: the same
+        // two shapes under an ALIASED import. `T: D` where `D` is a local
+        // alias for `Doer` used to fail at bound SATISFACTION — the impl
+        // table is keyed by the trait's own name, so `impl Doer for Impl`
+        // never matched a bound spelled `D`. `is_known_trait` did not know
+        // the alias either, so the inline bound was additionally rejected as
+        // an unknown trait. Both now canonicalize through `type_origins`,
+        // the same route B-2026-07-29-9 took for method lookup.
+        (
+            "free fn, aliased trait",
+            "import doer.{Doer as D, Impl};\n\
+             fn go[T: D](t: ref T) -> i64 { t.do_it() }\n\
+             fn main() { let i = Impl {}; println(f\"{go(i)}\"); }\n",
+        ),
+        (
+            "generic struct impl block, aliased trait",
+            "import doer.{Doer as D, Impl};\n\
+             struct Holder[S: D] { d: S }\n\
+             impl[S: D] Holder[S] { fn run(ref self) -> i64 { self.d.do_it() } }\n\
+             fn main() { let h = Holder { d: Impl {} }; println(f\"{h.run()}\"); }\n",
+        ),
     ] {
         let d = ScratchDir::new("imported-trait-bound");
         d.write(
@@ -737,43 +758,6 @@ fn imported_trait_bound_resolves_methods_on_type_param() {
             errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
         );
     }
-}
-
-/// Residue of B-2026-07-29-9 (tracked as B-2026-07-29-10), pinned rather than dropped: an ALIASED imported
-/// trait (`import doer.Doer as D` + `T: D`) still fails, now at bound
-/// SATISFACTION rather than method lookup — the impl-matching path compares
-/// against the local alias `D`, so `impl Doer for Impl` is not recognised.
-/// Distinct from the fixed bug (method lookup, which canonicalizes through
-/// `type_origins`) and pre-existing: before that fix this shape died earlier
-/// with `E0200`. Asserted to STILL fail so that fixing alias canonicalization
-/// trips this test and forces it to be promoted to the passing case above.
-#[test]
-fn aliased_imported_trait_bound_is_known_broken() {
-    let d = ScratchDir::new("aliased-trait-bound");
-    d.write(
-        "src/doer.kara",
-        "pub trait Doer { fn do_it(ref self) -> i64; }\n\
-         pub struct Impl {}\n\
-         impl Doer for Impl { fn do_it(ref self) -> i64 { 42 } }\n",
-    );
-    d.write(
-        "src/main.kara",
-        "import doer.{Doer as D, Impl};\n\
-         fn go[T: D](t: ref T) -> i64 { t.do_it() }\n\
-         fn main() { let i = Impl {}; println(f\"{go(i)}\"); }\n",
-    );
-
-    let w = walked(d.root());
-    let built = build_program_tree(&w).expect("build tree");
-    let errors = typecheck_module_errors(&built.tree, built.tree.root);
-    let messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-    assert!(
-        messages.iter().any(|m| m.contains("is not satisfied")),
-        "expected the known alias residue (unsatisfied bound); if this now \
-         passes, alias canonicalization was fixed — fold this shape back into \
-         `imported_trait_bound_resolves_methods_on_type_param` and close the \
-         B-2026-07-29-10 residue. Got: {messages:?}",
-    );
 }
 
 #[test]

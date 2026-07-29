@@ -1584,7 +1584,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // `<N x T>` VectorValue; reductions fold via extractelement + scalar
         // binop (LLVM re-vectorizes where profitable). dispatch_key is
         // `"Vector.<method>"` from `method_callee_type_name`.
-        if let Some(ref key) = dispatch_key {
+        // B-2026-07-29-7: `dispatch_key` alone is not enough in a CHAIN. The
+        // parser sets `MethodCall.span == receiver.span`, so in
+        // `v.reduce_sum().to_string()` the outer link's `f32.to_string` insert
+        // clobbers the inner `Vector.reduce_sum` at the shared key — and the
+        // method-segment guard above then (correctly) refuses to let
+        // `to_string` drive the inner call, leaving it with NO key. The vector
+        // dispatch fell through and the call died in the catch-all with "no
+        // handler for method 'reduce_sum'". Only the unwrap-family is exempted
+        // from that clobber upstream, and widening that exemption per outer
+        // method name is whack-a-mole.
+        //
+        // `vector_method_call_spans` is immune to the collision: only the
+        // VECTOR call writes it (`to_string` on the f32 result records
+        // nothing), so a hit at this span means a vector instance-method call
+        // lives here. Requiring the method name to also be in the set below
+        // keeps it exact — an outer link with a name from that set would have
+        // its own vector-typed receiver anyway.
+        let vector_span_hit = self
+            .vector_method_call_spans
+            .contains(&(object.span.offset, object.span.length));
+        let vector_key = dispatch_key
+            .clone()
+            .or_else(|| vector_span_hit.then(|| format!("Vector.{method}")));
+        if let Some(ref key) = vector_key {
             if matches!(
                 key.as_str(),
                 "Vector.dot"
@@ -6252,6 +6275,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // plain `ptr` (no struct shape to detect), so it keys off the
         // typechecker's `temp_recv_mapset_types`; no-ops (`Ok(None)`) when absent.
         if let Some(result) = self.try_compile_freshtemp_mapset_read_method(object, method, args)? {
+            return Ok(result);
+        }
+
+        // A method whose RECEIVER is a borrow-returning user accessor
+        // (`h.view().is_empty()` where `view() -> ref Vec[i64]`). Materialize
+        // the borrow into a synthetic local and re-dispatch — B-2026-07-29-12.
+        if let Some(result) = self.try_compile_ref_return_receiver_method(object, method, args)? {
             return Ok(result);
         }
 
@@ -13085,6 +13115,159 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a tracked variant SIGABRT'd at scope exit; the untracked one is leak- and
     /// double-free-clean under `leaks` + ASAN). IR parity with the one-line
     /// `let s = <recv>; s.split(",")` workaround.
+    /// A method call whose RECEIVER is a borrow-returning user accessor:
+    /// `h.view().is_empty()` where `fn view(ref self) -> ref Vec[i64]`.
+    ///
+    /// The receiver classifier is identifier-keyed (it looks the receiver up by
+    /// name in `vec_elem_types` / `var_type_names`), so a call-result receiver
+    /// had no name to look up and the call died in the dispatcher's catch-all
+    /// with "no handler for method '…' on non-identifier receiver"
+    /// (B-2026-07-29-12). Binding the receiver first — `let v = h.view();
+    /// v.is_empty()` — always worked, which is the whole shape of the bug: the
+    /// `let` arm in `stmts.rs` already knows how to register a borrow-return as
+    /// a usable local. This does the same registration against a SYNTHETIC name
+    /// and re-enters dispatch, so the two spellings lower identically.
+    ///
+    /// The borrow is bound, not copied: a `-> ref T` method returns the
+    /// pointee's address, so the synthetic slot holds that pointer and every
+    /// read goes through it. Nothing is drop-tracked — `vec_elem_types` and
+    /// friends are type registries, not drop lists, and the owner still frees
+    /// the storage. `ref T` is an immutable borrow, so the typechecker has
+    /// already rejected any mutating method here.
+    ///
+    /// Returns `Ok(None)` for any receiver that is not a borrow-returning user
+    /// call, so this is a pure addition ahead of the existing fall-throughs.
+    fn try_compile_ref_return_receiver_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Prefer the span-keyed record (it is what the `let` arm uses), then
+        // fall back to the declaration-derived one by method name. The fallback
+        // is what actually fires for a chain: `h.view().is_empty()` puts both
+        // calls at one span and the outer `bool` result evicts the inner
+        // `ref Vec[i64]` from the span table.
+        let inner_te = match self.ref_return_inner_for_call_pub(object) {
+            Some(te) => te,
+            None => {
+                let ExprKind::MethodCall {
+                    method: recv_method,
+                    ..
+                } = &object.kind
+                else {
+                    return Ok(None);
+                };
+                match self.user_ref_method_inner.get(recv_method) {
+                    Some(te) => te.clone(),
+                    None => return Ok(None),
+                }
+            }
+        };
+        // A `ref String` inner is REFUSED rather than materialized, because
+        // neither available lowering is correct:
+        //
+        //   * materializing it the way the Vec leg does below yields the right
+        //     answer but emits one `karac_string_clone` per call that nothing
+        //     frees (measured: +1 leaked block per chained call against the
+        //     same program with the receiver bound first, which leaks none).
+        //     The anonymous borrow temp has no owner to hang that free on.
+        //   * falling through to `try_compile_nonident_collection_method`
+        //     (what happened before this arm existed) reads the returned
+        //     BORROW POINTER as if it were the `{ptr,len,cap}` String value —
+        //     `h.label().len()` printed 1634885995 instead of 4, and
+        //     `.starts_with(..)` tripped "String buffer was not valid UTF-8".
+        //     That is a silent miscompile.
+        //
+        // Refusing converts the silent wrong answer into an actionable message
+        // and points at the spelling that has always been correct. The Vec leg
+        // is unaffected — it is exercised over 300 chained calls under valgrind
+        // with zero leaks.
+        if self.is_string_type_expr(&inner_te) {
+            return Err(format!(
+                "codegen: `.{method}(...)` on a borrow-returning accessor's String result is \
+                 not yet lowered — bind it first (`let s = <recv>.<accessor>(); s.{method}(...)`), \
+                 which is correct today. Lowering it in place either leaks the materialized \
+                 copy or misreads the borrow pointer as a String value (B-2026-07-29-12)."
+            ));
+        }
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "ref-return receiver materialization outside fn".to_string())?;
+
+        // Emit the accessor with the bind-directly gate bypassed — this IS the
+        // sanctioned binding site, just an anonymous one.
+        let prev = self.compiling_ref_return_let_rhs;
+        self.compiling_ref_return_let_rhs = true;
+        let ptr_res = self.compile_expr(object);
+        self.compiling_ref_return_let_rhs = prev;
+        let ptr_val = ptr_res?;
+
+        let synth = format!("__refrecv_tmp_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let alloca = self.create_entry_alloca(fn_val, &synth, ptr_ty.into());
+        self.builder.build_store(alloca, ptr_val).unwrap();
+        self.variables.insert(
+            synth.clone(),
+            super::VarSlot {
+                ptr: alloca,
+                ty: ptr_ty.into(),
+            },
+        );
+
+        // Same registration ladder as the `let` arm's borrow-return binding
+        // (`compile_let`, `ref_return_inner_for_call`), in the same order: a
+        // `ref Tensor` rides the by-value ref ABI and binds as a borrowed
+        // tensor var; everything else binds as a deref-on-use ref-local plus
+        // the Vec/String element registry that value-receiver dispatch needs.
+        let mut is_tensor = false;
+        if let Some(info) = self.tensor_var_info_from_type_expr(&inner_te) {
+            self.tensor_var_infos.insert(synth.clone(), info);
+            is_tensor = true;
+        } else {
+            let inner_llvm = self.llvm_type_for_type_expr(&inner_te);
+            self.ref_params.insert(synth.clone(), inner_llvm);
+            if let TypeKind::Path(p) = &inner_te.kind {
+                if let Some(seg) = p.segments.first() {
+                    self.var_type_names.insert(synth.clone(), seg.clone());
+                }
+            }
+            if let Some(elem_ty) = self.extract_vec_elem_type(&inner_te) {
+                self.vec_elem_types.insert(synth.clone(), elem_ty);
+                if let Some(inner) = super::helpers::vec_inner_type_expr(&inner_te) {
+                    self.var_elem_type_exprs.insert(synth.clone(), inner);
+                }
+            } else if self.is_string_type_expr(&inner_te) {
+                self.vec_elem_types
+                    .insert(synth.clone(), self.context.i8_type().into());
+                self.string_vars.insert(synth.clone());
+            }
+        }
+
+        let synth_recv = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span.clone(),
+        };
+        // Synthetic caller: pass `call_span` for the paren span too, per
+        // `compile_method_call`'s contract (`method_call_key` then falls back
+        // to the receiver span, preserving prior behavior).
+        let result =
+            self.compile_method_call(&synth_recv, method, args, &object.span, &object.span);
+
+        // Dispatch-only registrations; the name is unique per call site.
+        self.variables.remove(&synth);
+        self.var_type_names.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.string_vars.remove(&synth);
+        self.ref_params.remove(&synth);
+        if is_tensor {
+            self.tensor_var_infos.remove(&synth);
+        }
+        result.map(Some)
+    }
+
     fn try_compile_nonident_collection_method(
         &mut self,
         object: &Expr,

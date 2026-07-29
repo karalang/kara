@@ -2716,6 +2716,11 @@ pub(super) struct Codegen<'ctx> {
     /// ref-returning methods (`Map.or_insert`, `Vec.get`, …) are never in
     /// a user impl block and so keep their dedicated codegen. B-2026-06-07-5.
     pub(crate) user_ref_method_names: std::collections::HashSet<String>,
+    /// Inner `T` of each entry in [`Self::user_ref_method_names`], by method
+    /// name. Declaration-derived, so unlike the span-keyed
+    /// `ref_return_inner_types` it survives the parser's chained-call span
+    /// aliasing — see the population site (B-2026-07-29-12).
+    pub(crate) user_ref_method_inner: std::collections::HashMap<String, TypeExpr>,
     /// Compiler-driven inline hints (phase-11 Codegen Optimization). Maps a
     /// concrete user function's name to a heuristic `inlinehint` / `noinline`
     /// decision, computed once by `crate::inline_hints::compute` before the
@@ -2833,6 +2838,13 @@ pub(super) struct Codegen<'ctx> {
     /// to pick the unsigned compare predicate (`ult`/`ugt`) over the signed
     /// default. Shared infra for the slice-3 mask comparisons.
     pub(crate) unsigned_vector_exprs: HashSet<(usize, usize)>,
+    /// Spans of `Vector[T, N]` INSTANCE-METHOD calls, from
+    /// `Program.vector_method_call_spans`. The vector dispatch in
+    /// `compile_method_call` consults this when the span-keyed
+    /// `method_callee_types` entry has been clobbered by an outer chain link
+    /// (`v.reduce_sum().to_string()` — B-2026-07-29-7). Presence-only; the
+    /// method name still has to be in the Vector instance set.
+    pub(crate) vector_method_call_spans: HashSet<(usize, usize)>,
     /// Sibling to `string_typed_exprs`: for every expression whose Kāra
     /// type is a `Named` struct, the canonical struct name. Populated
     /// from `Program.expr_struct_type_names`. Lets codegen recover the
@@ -7462,6 +7474,7 @@ impl<'ctx> Codegen<'ctx> {
             display_tuple_types: HashMap::new(),
             display_vec_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
+            user_ref_method_inner: std::collections::HashMap::new(),
             heuristic_inline_hints: std::collections::HashMap::new(),
             string_typed_exprs: HashSet::new(),
             borrow_vec_typed_exprs: HashSet::new(),
@@ -7478,6 +7491,7 @@ impl<'ctx> Codegen<'ctx> {
             dataframe_var_infos: std::collections::HashSet::new(),
             mono_handle_param_infos: HashMap::new(),
             unsigned_vector_exprs: HashSet::new(),
+            vector_method_call_spans: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
             owned_temp_drops: HashMap::new(),
@@ -8565,6 +8579,7 @@ impl<'ctx> Codegen<'ctx> {
         // Sibling: spans of unsigned-element vector expressions, so the SIMD
         // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
         self.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();
+        self.vector_method_call_spans = program.vector_method_call_spans.clone();
         // Sibling to `string_typed_exprs` for `Type::Named` struct
         // expressions. Maps span → struct name. `emit_sort_by_key_inline_thunk`
         // consults this to dispatch struct-typed keys (e.g.
@@ -8628,11 +8643,22 @@ impl<'ctx> Codegen<'ctx> {
             if let Item::ImplBlock(imp) = item {
                 for impl_item in &imp.items {
                     if let ImplItem::Method(m) = impl_item {
-                        if matches!(
-                            m.return_type.as_ref().map(|t| &t.kind),
-                            Some(TypeKind::Ref(_) | TypeKind::MutRef(_))
-                        ) {
+                        if let Some(TypeKind::Ref(inner) | TypeKind::MutRef(inner)) =
+                            m.return_type.as_ref().map(|t| &t.kind)
+                        {
                             self.user_ref_method_names.insert(m.name.clone());
+                            // B-2026-07-29-12: the borrow's INNER type, by
+                            // method name. The span-keyed
+                            // `ref_return_inner_types` cannot serve a CHAINED
+                            // receiver (`h.view().is_empty()`): the parser
+                            // gives both calls one span, and the outer call's
+                            // `bool` result overwrites the inner call's
+                            // `ref Vec[i64]` in `expr_types`, which is what
+                            // that table is derived from. The declaration is
+                            // immune — it is read off the impl item here, not
+                            // off an inferred expression type.
+                            self.user_ref_method_inner
+                                .insert(m.name.clone(), (**inner).clone());
                         }
                     }
                 }
@@ -9675,6 +9701,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
         let mut t_borrow_vec_typed_exprs = tp.borrow_vec_typed_exprs.clone();
         let mut t_unsigned_vector_exprs = tp.unsigned_vector_exprs.clone();
+        let mut t_vector_method_call_spans = tp.vector_method_call_spans.clone();
         let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
         let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
         let mut t_owned_temp_drops = tp.owned_temp_drops.clone();
@@ -9711,6 +9738,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.unsigned_vector_exprs,
                     &mut t_unsigned_vector_exprs,
+                );
+                std::mem::swap(
+                    &mut self.vector_method_call_spans,
+                    &mut t_vector_method_call_spans,
                 );
                 std::mem::swap(
                     &mut self.expr_struct_type_names,

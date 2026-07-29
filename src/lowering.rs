@@ -502,6 +502,17 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             .filter(|(_, (elem, _))| matches!(elem, Type::UInt(_)))
             .map(|(k, _)| (k.0, k.1)),
     );
+    // Presence-only sibling of the above, over the SAME source table: the span
+    // of every Vector instance-method call, regardless of element signedness.
+    // Codegen's vector dispatch needs it because the span-keyed
+    // `method_callee_types` entry is clobbered by an outer chain link
+    // (`v.reduce_sum().to_string()`), which left the inner call with no
+    // dispatch key at all — B-2026-07-29-7.
+    program.vector_method_call_spans = tc
+        .vector_method_receivers
+        .keys()
+        .map(|k| (k.0, k.1))
+        .collect();
     // Sibling to `string_typed_exprs`: for each expression whose Kāra
     // type is a `Named` struct, record the canonical struct name. Codegen
     // uses this in `emit_sort_by_key_inline_thunk` to dispatch struct-typed

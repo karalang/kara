@@ -1783,6 +1783,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.fn_ref_return_inner.contains_key(n)))
     }
 
+    /// Public shim for [`Self::ref_return_inner_for_call`], for the
+    /// call-result-receiver dispatch in `method_call.rs` (B-2026-07-29-12).
+    pub(super) fn ref_return_inner_for_call_pub(&self, value: &Expr) -> Option<TypeExpr> {
+        self.ref_return_inner_for_call(value)
+    }
+
     fn ref_return_inner_for_call(&self, value: &Expr) -> Option<TypeExpr> {
         match &value.kind {
             ExprKind::Call { callee, .. } => {

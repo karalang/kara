@@ -27576,6 +27576,105 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vector_reduction_as_chain_receiver() {
+        // B-2026-07-29-7: a `Vector[T, N]` reduction used as the RECEIVER of
+        // another call. The parser sets `MethodCall.span == receiver.span`, so
+        // `v.reduce_sum().to_string()` puts both links at one
+        // `method_callee_types` key; the outer `f32.to_string` insert clobbered
+        // the inner `Vector.reduce_sum`, and codegen's method-segment guard
+        // then (correctly) refused to let `to_string` drive the inner call —
+        // leaving it with no dispatch key at all. The vector dispatch fell
+        // through and the build died with "no handler for method 'reduce_sum'".
+        //
+        // `v.reduce_sum()` on its own was always fine, which is why the whole
+        // Vector surface looked healthy: every existing test prints the
+        // reduction directly. One `.to_string()` was enough to break it.
+        //
+        // Covers every reduction plus a chained unary (`sqrt`) and a lane
+        // permute (`reverse`) as inner links, over float and integer lanes,
+        // and a reduction inside an arithmetic expression.
+        let output = run_program(
+            "fn main() {\n\
+                 let a = Vector[f64, 4](1.0, 2.0, 3.0, 4.0);\n\
+                 let b = Vector[f64, 4](2.0, 2.0, 2.0, 2.0);\n\
+                 println(a.reduce_sum().to_string());\n\
+                 println(a.reduce_product().to_string());\n\
+                 println(a.reduce_min().to_string());\n\
+                 println(a.reduce_max().to_string());\n\
+                 println(a.dot(b).to_string());\n\
+                 println(a.reverse().reduce_max().to_string());\n\
+                 let c = Vector[i64, 4](1, 2, 3, 4);\n\
+                 println(c.reduce_and().to_string());\n\
+                 println(c.reduce_or().to_string());\n\
+                 println(c.reduce_xor().to_string());\n\
+                 println((a.reduce_sum() + b.reduce_sum()).to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "10\n24\n1\n4\n20\n4\n0\n7\n4\n18\n");
+    }
+
+    #[test]
+    fn test_e2e_vector_call_initialized_binding_and_arith() {
+        // B-2026-07-29-7 sibling shapes, from the entry's own repro: a
+        // `Vector`-typed binding whose initializer is a CALL, and
+        // `acc = acc + x * y` accumulation. Both were reported as broken and
+        // both in fact work — the entry's repro only failed because it printed
+        // through `.to_string()`, which is the chain bug above. Pinned here so
+        // that stays true, and so the entry's exact program has a test.
+        let output = run_program(
+            "fn zero8() -> Vector[f32, 8] {\n\
+                 Vector[f32, 8](0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32)\n\
+             }\n\
+             fn main() {\n\
+                 let z: Vector[f32, 8] = zero8();\n\
+                 println(z.reduce_sum().to_string());\n\
+                 let mut acc: Vector[f32, 8] = zero8();\n\
+                 let x = Vector[f32, 8](1.0f32, 2.0f32, 1.0f32, 2.0f32, 1.0f32, 2.0f32, 1.0f32, 2.0f32);\n\
+                 acc = acc + x * x;\n\
+                 println(acc.reduce_sum().to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "0\n20\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_method_on_ref_returning_call_receiver() {
+        // B-2026-07-29-12: a Vec method whose RECEIVER is a borrow-returning
+        // user accessor — `h.view().is_empty()` where `view() -> ref Vec[i64]`.
+        // The receiver classifier is identifier-keyed, so a call-result
+        // receiver had no name to look up and the build died with "no handler
+        // for method 'is_empty' on non-identifier receiver". Binding first
+        // (`let v = h.view(); v.is_empty()`) always worked, so the two
+        // spellings disagreed — the interpreter ran both.
+        //
+        // The `.to_string()` variant is included because it did NOT fail
+        // loudly: it built and printed an EMPTY line instead of `true`, a
+        // silent wrong answer that the loud f-string form masked.
+        let output = run_program(
+            "struct H { items: Vec[i64] }\n\
+             impl H {\n\
+                 fn view(ref self) -> ref Vec[i64] { self.items }\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(3);\n\
+                 v.push(9);\n\
+                 let h = H { items: v };\n\
+                 println(h.view().is_empty().to_string());\n\
+                 println(f\"{h.view().is_empty()}\");\n\
+                 println(h.view().len().to_string());\n\
+                 println(h.view().contains(9).to_string());\n\
+                 let e = H { items: Vec.new() };\n\
+                 println(e.view().is_empty().to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "false\nfalse\n2\ntrue\ntrue\n");
+    }
+
+    #[test]
     fn test_e2e_user_drop_nll_timing_and_order() {
         // B-2026-07-21-1: user `impl Drop` bodies fire at each binding's
         // LIVE-RANGE END (NLL), in LIFO order for drops due at the same

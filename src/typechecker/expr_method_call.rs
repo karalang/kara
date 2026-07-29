@@ -147,7 +147,10 @@ impl<'a> super::TypeChecker<'a> {
     /// `trait_name` is the LOCALLY bound name; `type_origins` maps it to the
     /// canonical `(module path, item name)`, so an aliased import
     /// (`import m.Doer as D`) resolves through `D` to `Doer`.
-    fn find_imported_trait_def<'p>(&'p self, trait_name: &str) -> Option<&'p crate::ast::TraitDef> {
+    pub(super) fn find_imported_trait_def<'p>(
+        &'p self,
+        trait_name: &str,
+    ) -> Option<&'p crate::ast::TraitDef> {
         let tree = self.tree?;
         let (origin_path, canonical_name, _vis) = self.type_origins.get(trait_name)?;
         let &origin_id = tree.graph.by_path.get::<[String]>(origin_path.as_slice())?;

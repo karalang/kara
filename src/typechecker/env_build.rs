@@ -346,6 +346,21 @@ impl<'a> super::TypeChecker<'a> {
                 let origin_module = tree.module(origin_id);
                 if let Some(vis) = find_item_visibility(origin_module, &origin_name) {
                     let bound = ii.alias.clone().unwrap_or_else(|| ii.name.clone());
+                    // B-2026-07-29-10: an ALIASED trait import needs its
+                    // canonical name reachable from the impl-table matcher,
+                    // which has no access to `type_origins`. Record it on the
+                    // env so `type_satisfies_trait` can retry under the name
+                    // the impls are actually keyed by.
+                    if bound != origin_name
+                        && origin_module
+                            .items
+                            .iter()
+                            .any(|it| matches!(it, Item::TraitDef(t) if t.name == origin_name))
+                    {
+                        self.env
+                            .trait_alias_canonical
+                            .insert(bound.clone(), origin_name.clone());
+                    }
                     self.type_origins
                         .insert(bound, (origin_path.clone(), origin_name.clone(), vis));
                 }

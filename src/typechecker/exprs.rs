@@ -2148,6 +2148,12 @@ impl<'a> super::TypeChecker<'a> {
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
             return false;
         };
+        // An aliased imported trait (`import doer.{Doer as D}` + `T: D`) is
+        // canonicalized inside `type_satisfies_trait` — see
+        // `Env::trait_alias_canonical` (B-2026-07-29-10). Doing it there rather
+        // than here is what also covers the impl-block bound gate, which
+        // reaches the impl table through `Env::first_unsatisfied_bound` and
+        // never passes through this function.
         self.env
             .type_satisfies_trait(&ty_name, &ty_args, trait_name)
     }

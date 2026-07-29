@@ -360,6 +360,19 @@ pub struct TypeEnv {
     /// stub. Bound substitution lands in P1 (see `docs/deferred.md` §
     /// Trait Aliases — Expansion).
     pub trait_aliases: HashSet<String>,
+    /// Locally-bound trait name -> the trait's own (canonical) name, for
+    /// ALIASED imports (`import doer.{Doer as D}` records `D -> Doer`).
+    /// Empty for every other import form.
+    ///
+    /// The impl table is keyed by the trait's own name — `impl Doer for Impl`
+    /// registers `Doer` — so a bound written with the alias (`fn go[T: D]`,
+    /// `impl[S: D] Holder[S]`) matched nothing and a correct program was
+    /// rejected with "`Impl` does not implement `D`" (B-2026-07-29-10).
+    /// [`Self::type_satisfies_trait`] retries through this map, which puts the
+    /// canonicalization at the single point BOTH satisfaction paths funnel
+    /// through — the where-clause discharge in `exprs.rs` and the impl-block
+    /// bound gate in `env.rs::first_unsatisfied_bound`.
+    pub trait_alias_canonical: HashMap<String, String>,
     /// Names of declared marker traits (`marker trait NAME;`). Marker
     /// traits register in `traits` alongside ordinary traits so bound
     /// resolution and impl coherence work uniformly; this side-set
@@ -442,6 +455,7 @@ impl TypeEnv {
             refinement_predicates: HashMap::new(),
             traits: HashMap::new(),
             trait_aliases: HashSet::new(),
+            trait_alias_canonical: HashMap::new(),
             marker_traits: HashSet::new(),
             impls: Vec::new(),
             impls_by_trait: HashMap::new(),
@@ -841,6 +855,15 @@ impl TypeEnv {
         for start in directly_impld_traits {
             if self.supertrait_closure_contains(start, trait_name) {
                 return true;
+            }
+        }
+        // B-2026-07-29-10: `trait_name` may be a local ALIAS for an imported
+        // trait. Retry once under the canonical name — see
+        // [`Self::trait_alias_canonical`]. One hop only: an alias always maps
+        // straight to the trait's own name, so this cannot loop.
+        if let Some(canonical) = self.trait_alias_canonical.get(trait_name) {
+            if canonical != trait_name {
+                return self.type_satisfies_trait(ty_name, ty_args, canonical);
             }
         }
         false

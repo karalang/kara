@@ -38,7 +38,7 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(trait_name, "Numeric" | "GpuSafe") {
             return true;
         }
-        self.env.traits.contains_key(trait_name)
+        if self.env.traits.contains_key(trait_name)
             || self.env.trait_aliases.contains(trait_name)
             || DERIVE_ONLY_BUILTINS.contains(&trait_name)
             || self.program.items.iter().any(|item| match item {
@@ -46,6 +46,21 @@ impl<'a> super::TypeChecker<'a> {
                 Item::TraitAlias(t) => t.name == trait_name,
                 _ => false,
             })
+        {
+            return true;
+        }
+        // B-2026-07-29-10: an ALIASED imported trait (`import doer.{Doer as D}`)
+        // is bound locally as `D`, and none of the checks above know that name
+        // — a plain `import doer.Doer` registers `Doer` in `env.traits`, but the
+        // alias does not. `fn go[T: D]` therefore reported "unknown trait 'D'"
+        // for a correct program.
+        //
+        // Reach the defining module through `type_origins`, the same route
+        // B-2026-07-29-9 used for method lookup. Checking the origin module's
+        // items directly (rather than re-running the name checks under the
+        // canonical name) is what makes this work for a trait that lives only
+        // in the module tree and was never registered in `env.traits`.
+        self.find_imported_trait_def(trait_name).is_some()
     }
 
     /// True iff `trait_name` was declared as `trait NAME = bound1 + ...;`
