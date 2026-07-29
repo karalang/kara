@@ -360,11 +360,56 @@ impl<'a> super::TypeChecker<'a> {
                 let Some(&origin_id) = tree.graph.by_path.get::<[String]>(&origin_path) else {
                     continue;
                 };
+                // The import may BE an alias...
+                let mut seeds: Vec<String> = Vec::new();
                 for oitem in &tree.module(origin_id).items {
-                    if let Item::TypeAlias(t) = oitem {
-                        if t.name == origin_name {
+                    match oitem {
+                        Item::TypeAlias(t) if t.name == origin_name => {
                             found.push((bound.clone(), t.clone(), origin_path.clone()));
-                            break;
+                        }
+                        // ...or an aggregate whose fields / variant payloads
+                        // NAME one. `examples/db_pipeline`'s planner.kara
+                        // imports `Query`, never `Row`, and meets `Row` only
+                        // through `Query.Insert { row: Row }` — that path needs
+                        // the same early registration, or the alias arrives
+                        // late and iterating it reports `tuple pattern used but
+                        // type is 'Row'`.
+                        Item::StructDef(sd) if sd.name == origin_name => {
+                            seeds = struct_referenced_names(sd);
+                        }
+                        Item::EnumDef(ed) if ed.name == origin_name => {
+                            seeds = enum_referenced_names(ed);
+                        }
+                        _ => {}
+                    }
+                }
+                // Alias-only transitive sweep over those names. Bounded by
+                // `seen`, so a cyclic aggregate cannot spin.
+                let mut work: std::collections::VecDeque<String> = seeds.into();
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                while let Some(dep) = work.pop_front() {
+                    if !seen.insert(dep.clone()) || local_names.contains(&dep) {
+                        continue;
+                    }
+                    for oitem in &tree.module(origin_id).items {
+                        match oitem {
+                            Item::TypeAlias(t) if t.name == dep => {
+                                found.push((dep.clone(), t.clone(), origin_path.clone()));
+                                for n in type_alias_referenced_names(t) {
+                                    work.push_back(n);
+                                }
+                            }
+                            Item::StructDef(sd) if sd.name == dep => {
+                                for n in struct_referenced_names(sd) {
+                                    work.push_back(n);
+                                }
+                            }
+                            Item::EnumDef(ed) if ed.name == dep => {
+                                for n in enum_referenced_names(ed) {
+                                    work.push_back(n);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -704,11 +749,19 @@ impl<'a> super::TypeChecker<'a> {
             let found: Option<crate::ast::Item> = dep_mod.items.iter().find_map(|it| match it {
                 Item::StructDef(s) if s.name == dep_name => Some(it.clone()),
                 Item::EnumDef(e) if e.name == dep_name => Some(it.clone()),
+                // A dependency can be a type ALIAS rather than an aggregate —
+                // `Query.Insert { row: Row }` where `Row = Map[String, Value]`
+                // lives in the same module. Without this the alias reached
+                // planner.kara only as an opaque nominal, so iterating it
+                // reported `tuple pattern used but type is 'Row'`
+                // (B-2026-07-29-25).
+                Item::TypeAlias(t) if t.name == dep_name => Some(it.clone()),
                 _ => None,
             });
             let next: Vec<String> = match &found {
                 Some(Item::StructDef(s)) => struct_referenced_names(s),
                 Some(Item::EnumDef(e)) => enum_referenced_names(e),
+                Some(Item::TypeAlias(t)) => type_alias_referenced_names(t),
                 _ => Vec::new(),
             };
             match found {
@@ -719,6 +772,10 @@ impl<'a> super::TypeChecker<'a> {
                 Some(Item::EnumDef(mut e)) => {
                     e.name = tname;
                     self.env_add_enum(&e);
+                }
+                Some(Item::TypeAlias(mut t)) => {
+                    t.name = tname;
+                    self.env_add_type_alias(&t);
                 }
                 _ => continue,
             }

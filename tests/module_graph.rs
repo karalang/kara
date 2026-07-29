@@ -2220,3 +2220,48 @@ fn local_type_alias_shadows_an_imported_one() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+/// An alias reached TRANSITIVELY — through an imported aggregate's field or
+/// variant payload, never imported by name — must expand too.
+///
+/// `examples/db_pipeline`'s planner.kara imports `Query` and never `Row`; it
+/// meets `Row` only via `Query.Insert { row: Row }`. `register_transitive_type_deps`
+/// registered StructDef and EnumDef dependencies but not TypeAlias ones, so the
+/// alias arrived opaque and iterating it reported `tuple pattern used but type
+/// is 'Row'` (B-2026-07-29-25).
+#[test]
+fn transitively_reached_type_alias_is_expanded() {
+    let d = ScratchDir::new("transitive-type-alias");
+    d.write(
+        "src/types.kara",
+        "pub type Row = Map[String, i64];\n\
+         pub enum Cmd { Insert { table: String, row: Row } }\n\
+         pub struct Batch { pub rows: Vec[Row] }\n",
+    );
+    // Imports `Cmd` and `Batch` — never `Row`.
+    d.write(
+        "src/main.kara",
+        "import types.{Cmd, Batch};\n\
+         fn count(c: Cmd) -> i64 {\n\
+             match c {\n\
+                 Insert { table: _, row } => {\n\
+                     let mut n = 0;\n\
+                     for (k, v) in row { n = n + v; }\n\
+                     n\n\
+                 },\n\
+             }\n\
+         }\n\
+         fn batch_len(b: ref Batch) -> i64 { b.rows.len() }\n\
+         fn main() { println(\"ok\"); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = built.tree.root;
+    let errors = typecheck_module_errors(&built.tree, root);
+    assert!(
+        errors.is_empty(),
+        "a transitively-reached alias should expand, got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+    );
+}
