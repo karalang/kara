@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 63 | 0 |
 | false-positive | 50 | 0 |
 | run-vs-build | 44 | 0 |
-| perf | 33 | 1 |
+| perf | 33 | 0 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 19 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 536 | 1 |
+| codegen | 536 | 0 |
 | typecheck | 92 | 0 |
 | interp | 75 | 0 |
 | ownership | 29 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **737 surfaced · 1 open · 729 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **737 surfaced · 0 open · 730 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-29-24 | 2026-07-29 | codegen | low | The BOUND spelling `let rows = t.iter_axis(0); for row in rows` does not fuse — only the direct `for row in t.iter_axis(0)` does — so ordinary user code written the first way still materializes every sub-tensor as a copy. | — |
+_None — the ledger is fully drained._
 
-### Fixed (729)
+### Fixed (730)
 
-<details><summary>729 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>730 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -857,6 +855,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **737 surfaced 
 | B-2026-07-29-11 | other | medium | docs/design.md — the AUTHORITATIVE spec — showed the abandoned Rust-style `Display` in three code blocks, including a full `fn fmt(ref self, f: mut r… | 3e21d84 |
 | B-2026-07-29-12 | codegen | medium | CODEGEN DIAGNOSTIC: direct use of a `-> ref T` method result is a KNOWN deferral with a precise error ('borrow-returning method call `.m(...)` must b… | fa94dc4 |
 | B-2026-07-29-13 | codegen | low | PERF: `Tensor.iter_axis(n)` materialized every sub-tensor as a COPY | d2076a6,64ab0ee |
+| B-2026-07-29-24 | codegen | low | The BOUND spelling `let rows = t.iter_axis(0); for row in rows` does not fuse — only the direct `for row in t.iter_axis(0)` does — so ordinary user c… | 2abfcdc |
 | B-2026-07-29-14 | typecheck+codegen | medium | AOT `karac build` flattens the module tree and DROPS the import declarations, which erases every ALIAS binding with them — `import m.{T as A}` leaves… | e9ba3cc |
 | B-2026-07-29-22 | typecheck | medium | An importing module's per-module env carries NO impl entries from the module it imports from, so a trait bound on an imported type is rejected whenev… | 1027a61 |
 | B-2026-07-29-23 | typecheck+codegen | low | An aliased FUNCTION import (`import m.{mk as build}`) still fails the flattened AOT build with `resolve: undefined name` | 1027a61 |
