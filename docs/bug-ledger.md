@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 186 | 0 |
-| leak | 99 | 1 |
+| leak | 99 | 0 |
 | codegen-gap | 86 | 1 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 532 | 4 |
+| codegen | 532 | 3 |
 | typecheck | 90 | 1 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **728 surfaced · 4 open · 717 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **728 surfaced · 3 open · 718 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-29-6 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): a value-position `match` over a HEAP-PAYLOAD enum leaks the payload the arm binds. `let w = match pick(i) { Word(s) => s, ... }` never frees the String, even though the binding is consumed. | — |
 | B-2026-07-29-13 | 2026-07-29 | codegen | high | PERF: `Tensor.iter_axis(n)` materializes every sub-tensor as a COPY, so one pass over a 30 MB `[10000, 768]` corpus costs ~10 ms of page faults per call — 91% of the cost of the batched embedding kernels, and ~6x the cost of reading the same bytes. | — |
 | B-2026-07-29-14 | 2026-07-29 | typecheck+codegen | medium | AOT `karac build` re-typechecks a TREE-LESS flattened program, so NO import-alias information survives: `import m.{T as A}` fails there for traits AND structs even after the per-module typecheck accepts it. | — |
 | B-2026-07-29-15 | 2026-07-29 | codegen | medium | A String method on a borrow-returning call result (`h.label().len()` where `label() -> ref String`) has no leak-free lowering: materializing it leaks a clone per call, and the pre-existing fall-through MISREADS the borrow pointer as a String value. Now refused loudly; the Vec sibling is fixed. | — |
 
-### Fixed (717)
+### Fixed (718)
 
-<details><summary>717 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>718 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -853,6 +852,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **728 surfaced 
 | B-2026-07-29-3 | resolver | high | A `_test.kara` companion that imports the module it tests is reported as a circular module dependency (`E0223`, bogus `thing → thing`), so the idioma… | 93d14ee |
 | B-2026-07-29-4 | codegen | medium | SELFHOST EMITTER (codegen.kara): `panic` / `todo` / `unreachable` were lowered as USER FUNCTION CALLS | 5e7224b |
 | B-2026-07-29-5 | codegen | high | SELFHOST EMITTER (codegen.kara): an UN-ANNOTATED `let v = Vec.new()` defaults to Vec[i64], so pushing a String stores a 16-byte `{ptr,i64}` into an 8… | 5e7224b |
+| B-2026-07-29-6 | codegen | medium | SELFHOST EMITTER (codegen.kara): a value-position `match` over a HEAP-PAYLOAD enum leaks the payload the arm binds | 72f7a0e |
 | B-2026-07-29-7 | codegen | high | CODEGEN: `Vector[T, N]` bindings and arithmetic do not survive the STDLIB compilation unit — identical code compiles and runs correctly in a user mod… | fa94dc4 |
 | B-2026-07-29-9 | typecheck | high | A trait bound whose trait is IMPORTED resolves no methods: `S: Doer` on an imported `Doer` reports no "unknown trait", yet every call through the bou… | 155f7b3 |
 | B-2026-07-29-10 | typecheck | medium | An ALIASED imported trait bound is rejected at bound satisfaction: `import doer.Doer as D` + `fn go[T: D](...)` reports "trait bound `T: D` is not sa… | fa94dc4 |
