@@ -97,14 +97,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 86 | 1 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
-| false-positive | 46 | 1 |
-| run-vs-build | 43 | 0 |
+| false-positive | 48 | 3 |
+| run-vs-build | 44 | 1 |
 | perf | 32 | 1 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
 | use-after-free | 11 | 0 |
-| other | 5 | 0 |
+| other | 6 | 1 |
 
 ### By surface
 
@@ -112,27 +112,31 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 532 | 3 |
 | typecheck | 90 | 1 |
-| interp | 73 | 0 |
-| ownership | 28 | 0 |
-| other | 20 | 0 |
+| interp | 74 | 1 |
+| ownership | 29 | 1 |
+| other | 21 | 1 |
 | autopar | 19 | 0 |
 | runtime | 15 | 0 |
 | cli | 15 | 0 |
-| resolver | 12 | 0 |
+| resolver | 13 | 1 |
 | parser | 6 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **728 surfaced · 3 open · 718 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **732 surfaced · 7 open · 718 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-13 | 2026-07-29 | codegen | high | PERF: `Tensor.iter_axis(n)` materializes every sub-tensor as a COPY, so one pass over a 30 MB `[10000, 768]` corpus costs ~10 ms of page faults per call — 91% of the cost of the batched embedding kernels, and ~6x the cost of reading the same bytes. | — |
 | B-2026-07-29-14 | 2026-07-29 | typecheck+codegen | medium | AOT `karac build` re-typechecks a TREE-LESS flattened program, so NO import-alias information survives: `import m.{T as A}` fails there for traits AND structs even after the per-module typecheck accepts it. | — |
 | B-2026-07-29-15 | 2026-07-29 | codegen | medium | A String method on a borrow-returning call result (`h.label().len()` where `label() -> ref String`) has no leak-free lowering: materializing it leaks a clone per call, and the pre-existing fall-through MISREADS the borrow pointer as a String value. Now refused loudly; the Vec sibling is fixed. | — |
+| B-2026-07-29-16 | 2026-07-29 | ownership | high | OWNERSHIP FALSE POSITIVE in the single-file `karac check` path: a `mut` binding initialized from a FREE FUNCTION and then passed to an IMPORTED `ref` parameter is reported as moved, though the parameter only borrows. The package-level path accepts the identical program and it RUNS correctly. | — |
+| B-2026-07-29-17 | 2026-07-29 | resolver | medium | RESOLVER HOLE: `effect resource R: SomeTrait;` accepts a trait name that is not defined ANYWHERE — no error, all checks pass. The undefined-name check that covers ordinary type positions does not reach an effect resource's trait bound. | — |
+| B-2026-07-29-18 | 2026-07-29 | interp | medium | `env.args()` under `karac run` returns KARAC's OWN argv, not the program's arguments: a program run as `karac run --interp prog.kara` sees ['target/debug/karac', 'run', '--interp', 'prog.kara']. design.md's own CLI example reads `args[1]` as the first USER argument. | — |
+| B-2026-07-29-19 | 2026-07-29 | other | medium | docs/design.md — the AUTHORITATIVE spec — writes `ref` AT CALL SITES in 9 code blocks, a form the parser rejects outright ('`ref` is not written at call sites'). Same rot class as B-2026-07-29-11 (the abandoned Rust-style Display), in the same document. | — |
 
 ### Fixed (718)
 
