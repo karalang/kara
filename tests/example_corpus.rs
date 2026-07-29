@@ -89,9 +89,9 @@ const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[
         //
         // What remains is NOT example rot: 8 of the 12 errors are one compiler
         // bug, filed off the back of this de-rot.
-        "12 errors, no longer example rot: 8 are B-2026-07-29-25 (an IMPORTED \
-         type alias is not expanded — `Row = Map[String, Value]` is declared in \
-         query.kara and stays nominal in executor/main/planner), 1 is \
+        "6 errors, none of them example rot. B-2026-07-29-25 (imported type alias not \
+         expanded) is FIXED, which cleared the whole `Row` class — 8 errors. What \
+         is left: 1 is \
          B-2026-07-29-27 (`#[derive(Clone)]` synthesizes no callable `.clone()`, \
          executor.kara:118), and 3 are `Map.get` requiring an owned key so a \
          `ref String` cannot be looked up without cloning (db.kara:73/80/95).",
