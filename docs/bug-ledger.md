@@ -816,9 +816,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **740 surfaced 
 | B-2026-07-26-2 | codegen+runtime | medium | Map/Set probes called `eq_fn` on EVERY occupied bucket they walked past, because the status byte carried no hash information — one cold key dereferen… | 58412d9 |
 | B-2026-07-27-1 | codegen | high | SEED codegen double-free: `return <struct>.<vecfield>[i];` — returning a heap (String) element of a STRUCT-FIELD Vec directly as a `return` STATEMENT… | 42d8e96 |
 | B-2026-07-27-2 | codegen | medium | Struct-FIELD `Map[_, Vec[String]]` leaks the inner Vec's element buffers at drop | 44b606e |
-| B-2026-07-27-3 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a BOOL-valued `if` or `match` in VALUE position emitted INVALID IR | 6740872 |
+| B-2026-07-27-3 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a BOOL-valued `if` or `match` in VALUE position emitted INVALID IR | 14a65d4 |
 | B-2026-07-27-4 | codegen+cli | medium | No working per-function / per-line PROFILING attribution for an AOT kara binary | f569aac |
-| B-2026-07-27-5 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): value-position `if` and `match` used a HARDCODED `alloca i64` result slot, so a STRING / struct / enu… | 999cd9c |
+| B-2026-07-27-5 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): value-position `if` and `match` used a HARDCODED `alloca i64` result slot, so a STRING / struct / enu… | 304e86c |
 | B-2026-07-27-6 | codegen | high | SELFHOST EMITTER (codegen.kara, Phase-12 port): a heap-bearing payload inside a `shared enum` could not always be released | dd14643 |
 | B-2026-07-27-7 | codegen | medium | `for ch in <str>.chars()` over a COMPILE-TIME-CONSTANT string runs ~21.7x the instructions of the identical Rust source, because the ASCII/multibyte… | de5da39 |
 | B-2026-07-27-8 | codegen | high | `continue` inside `for ch in <s>.chars()` is an INFINITE LOOP in compiled code on every backend (JIT and AOT, -O0 and -O2), because the general chars… | 6f1c706 |
@@ -832,12 +832,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **740 surfaced 
 | B-2026-07-28-1 | other | medium | stale (not missing) runtime archive soft-skipped every E2E link failure — ~960 codegen assertions silently voided, suite reported green | 1d4ddd9 |
 | B-2026-07-28-2 | codegen | medium | `for ch in <runtime-string>.chars()` cannot take the branch-free stride-1 loop, because that lowering requires a compile-time all-ASCII proof (B-2026… | d73e5fb |
 | B-2026-07-28-3 | codegen | high | A plain (non-`shared`) struct that reaches ITSELF through a `Vec` field OVERFLOWS THE COMPILER'S STACK during codegen — every adjacency-list graph (`… | cb38efe |
-| B-2026-07-28-4 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README do… | e2dfc58 |
+| B-2026-07-28-4 | codegen | high | THREE of the five `examples/tangle` programs - the flagship ownership-soundness dogfood corpus - do not match the expected output their own README do… | edde4a7 |
 | B-2026-07-28-5 | codegen | high | SELFHOST EMITTER (codegen.kara): `Option[<shared enum>]` has no kind of its own — `kind_of_ty` special-cases only `Option[String]` and collapses ever… | 4afbc56 |
 | B-2026-07-28-6 | codegen | high | Assigning through a `shared struct` field of a plain struct (`h.cell.value = v`) writes into the FIELD SLOT instead of through the RC handle, so the… | 85fc58c |
 | B-2026-07-28-7 | interp | high | INTERPRETER: an assignment to the scrutinee inside a match arm is SILENTLY REVERTED — `match cur { Some(n) => { cur = n.next } }` leaves `cur` at its… | 7e1729f |
 | B-2026-07-28-8 | codegen | high | CODEGEN: storing into a PLAIN (value-type) struct's `Option[shared T]` field drops the old value BEFORE retaining the new one, so an aliasing RHS (`h… | fa8ae31 |
-| B-2026-07-28-9 | codegen | high | CODEGEN: a whole-struct MOVE does not null a `shared struct` / `shared enum` HANDLE field, so the moved-out source's drop rc-dec's a second time for… | e2dfc58 |
+| B-2026-07-28-9 | codegen | high | CODEGEN: a whole-struct MOVE does not null a `shared struct` / `shared enum` HANDLE field, so the moved-out source's drop rc-dec's a second time for… | fab2ba3 |
 | B-2026-07-28-10 | interp | medium | INTERP: `Column.from_arrow_ipc` (and the Column constructors generally) ignore the binding's declared element type, so `let c: Column[i64] = Column.f… | b72fab5 |
 | B-2026-07-28-11 | codegen | high | CODEGEN: `Vec[<struct carrying a shared handle>].clone()` does not retain the cloned elements' handles, so the clone's drop and the original's drop b… | a4711ca |
 | B-2026-07-28-12 | codegen | medium | CODEGEN: `println(<Vec expression>)` renders EMPTY (or a stray tab) when the operand is not an identifier — `println(vec![9i64, 8i64])`, `println(t.s… | — |
@@ -863,13 +863,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **740 surfaced 
 | B-2026-07-29-22 | typecheck | medium | An importing module's per-module env carries NO impl entries from the module it imports from, so a trait bound on an imported type is rejected whenev… | 1027a61 |
 | B-2026-07-29-23 | typecheck+codegen | low | An aliased FUNCTION import (`import m.{mk as build}`) still fails the flattened AOT build with `resolve: undefined name` | 1027a61 |
 | B-2026-07-29-15 | codegen | medium | A method on a borrow-returning call result (`h.label().len()` where `label() -> ref String`) had no leak-free lowering, because the materialize-the-b… | aa7dc81 |
-| B-2026-07-29-16 | ownership | high | OWNERSHIP FALSE POSITIVE in the single-file `karac check` path: a `mut` binding initialized from a FREE FUNCTION and then passed to an IMPORTED `ref`… | c0d01c0 |
+| B-2026-07-29-16 | ownership | high | OWNERSHIP FALSE POSITIVE in the single-file `karac check` path: a `mut` binding initialized from a FREE FUNCTION and then passed to an IMPORTED `ref`… | 3f325b4 |
 | B-2026-07-29-17 | resolver | medium | RESOLVER HOLE: `effect resource R: SomeTrait;` accepts a trait name that is not defined ANYWHERE — no error, all checks pass | 9ddb52e |
 | B-2026-07-29-18 | interp | medium | `env.args()` reported the HOSTING PROCESS's argv rather than the program's, differently on each executor: `karac run --interp prog.kara` gave [karac,… | 8db4602 |
 | B-2026-07-29-19 | other | medium | docs/design.md — the AUTHORITATIVE spec — writes `ref` AT CALL SITES in 9 code blocks, a form the parser rejects outright ('`ref` is not written at c… | d8fd573 |
 | B-2026-07-29-20 | codegen+interp | high | REPL cross-cell value snapshot was taken at each binding's INITIALIZER, so EVERY in-cell mutation was lost crossing to the next cell — on both lanes… | 8172bae |
 | B-2026-07-29-21 | codegen | high | Every call to a `-> ref String` accessor leaks one `karac_string_clone` block under AOT | b74a9a7 |
-| B-2026-07-29-25 | typecheck | high | An IMPORTED type alias is not expanded to its underlying type: `import types.Row;` where `pub type Row = Map[String, i64]` leaves `Row` nominal, so `… | 0a23cf8 |
+| B-2026-07-29-25 | typecheck | high | An IMPORTED type alias is not expanded to its underlying type: `import types.Row;` where `pub type Row = Map[String, i64]` leaves `Row` nominal, so `… | 0a23cf8+6de8b3b |
 
 </details>
 
