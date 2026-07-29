@@ -10960,24 +10960,6 @@ fn main() {
         );
     }
 
-    /// B-2026-07-28-16 — the CALL-ARGUMENT sibling of the leg below.
-    /// `consume(nd.opt)` hands an owned struct's `Option`/`Result` field to a
-    /// parameter that owns it, so the callee's cleanup frees the payload and
-    /// the owning struct's drop must skip it.
-    ///
-    /// The suppressor wired at the call site matched an `Identifier` only, so a
-    /// `FieldAccess` argument fell through and both sides freed. Interp was
-    /// correct throughout, which is why output parity never caught it — only a
-    /// memory tool does.
-    ///
-    /// Three payload classes, because they take different drop paths and only
-    /// the first two were recognized as a move: an inline `{ptr,len,cap}`
-    /// String, a Vec, and a STRUCT that owns heap (boxed payload,
-    /// `BoxedEnumDrop`-guarded). Each is exercised BOTH consumed-by-call and
-    /// left alone — the None/unconsumed arms are the leak direction, where an
-    /// over-eager source zero would strand the payload instead of double-freeing
-    /// it. Loops so any per-iteration imbalance accumulates.
-
     /// B-2026-07-28-17 — the SHARED-ROOT sibling of the test below, and the
     /// opposite treatment.
     ///
@@ -11040,6 +11022,23 @@ fn main() {
         );
     }
 
+    /// B-2026-07-28-16 — the CALL-ARGUMENT sibling of the leg above.
+    /// `consume(nd.opt)` hands an owned struct's `Option`/`Result` field to a
+    /// parameter that owns it, so the callee's cleanup frees the payload and
+    /// the owning struct's drop must skip it.
+    ///
+    /// The suppressor wired at the call site matched an `Identifier` only, so a
+    /// `FieldAccess` argument fell through and both sides freed. Interp was
+    /// correct throughout, which is why output parity never caught it — only a
+    /// memory tool does.
+    ///
+    /// Three payload classes, because they take different drop paths and only
+    /// the first two were recognized as a move: an inline `{ptr,len,cap}`
+    /// String, a Vec, and a STRUCT that owns heap (boxed payload,
+    /// `BoxedEnumDrop`-guarded). Each is exercised BOTH consumed-by-call and
+    /// left alone — the None/unconsumed arms are the leak direction, where an
+    /// over-eager source zero would strand the payload instead of double-freeing
+    /// it. Loops so any per-iteration imbalance accumulates.
     #[test]
     fn asan_owned_struct_optres_field_call_arg_move_no_leak_no_double_free() {
         assert_clean_asan_run(

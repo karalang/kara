@@ -19481,8 +19481,21 @@ fn main() {
         // path (the runtime's atexit handler runs at test-binary exit,
         // not per-test) — stderr-dependent assertions need a different
         // approach and are currently the known failure bucket.
+        // Arrow IPC programs cannot run on the JIT lane: `to_arrow_ipc` /
+        // `from_arrow_ipc` lower to `karac_arrow_*` calls resolved only from
+        // the opt-in `libkarac_runtime_arrow.a`, but the `karac_jit_runner`
+        // links the runtime WITHOUT the `arrow` feature (`Symbols not found:
+        // [ karac_arrow_column_to_ipc ]`). `karac run` handles this by routing
+        // arrow programs to the interpreter (cli.rs `program_uses_arrow_ipc`);
+        // the test harness has no interpreter oracle here, so it routes them to
+        // the AOT path instead, where they run against the real arrow archive
+        // when present and otherwise soft-skip on its controlled "build
+        // libkarac_runtime_arrow.a" link error — identical behavior to the AOT
+        // leg. A cheap source scan (matching cli.rs) keeps the gate simple.
         #[cfg(feature = "llvm")]
-        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
+        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1")
+            && !(src.contains(".to_arrow_ipc(") || src.contains("from_arrow_ipc("))
+        {
             return jit_dispatch(&parsed.program, filename);
         }
 
