@@ -7957,12 +7957,23 @@ fn run_multi_file_codegen(
             continue;
         }
         let module_idx = span_table.register_module(m.file.clone());
+        // Dropping the `import` declarations erases every ALIAS binding with
+        // them — `import doer.{Impl as Widget};` leaves `Widget` naming
+        // nothing in the flat unit, so the flat resolve/typecheck reject a
+        // program the tree-aware per-module passes accepted
+        // (B-2026-07-29-14). Canonicalize this module's references to the
+        // imported items' real names first. A module with no aliased import
+        // gets an empty substitution and is copied byte-identically.
+        let local_names = crate::import_alias::declared_names(&m.items);
+        let alias_subst = crate::import_alias::alias_subst_for_module(&m.imports, &local_names);
         for item in &m.items {
             if matches!(item, Item::Import(_)) {
                 continue;
             }
-            span_table.record_item(module_idx, item);
-            super_items.push(item.clone());
+            let mut item = item.clone();
+            crate::import_alias::rewrite_item(&mut item, &alias_subst);
+            span_table.record_item(module_idx, &item);
+            super_items.push(item);
         }
     }
 

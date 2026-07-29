@@ -512,7 +512,10 @@ fn substitute_trait_params_in_function(
 /// Map-keyed twin of `codegen::helpers::rewrite_self_in_type_expr`: replace a
 /// bare single-segment type-param reference with its concrete `TypeExpr`,
 /// recursing through every compound type form and generic-argument position.
-fn subst_type_expr(te: &TypeExpr, subst: &std::collections::HashMap<String, TypeExpr>) -> TypeExpr {
+pub(crate) fn subst_type_expr(
+    te: &TypeExpr,
+    subst: &std::collections::HashMap<String, TypeExpr>,
+) -> TypeExpr {
     let kind = match &te.kind {
         TypeKind::Path(p) => {
             if p.segments.len() == 1 && p.generic_args.is_none() {
@@ -575,7 +578,10 @@ fn subst_type_expr(te: &TypeExpr, subst: &std::collections::HashMap<String, Type
 
 /// Substitute trait params inside a `TraitBound`'s generic-args (the bound's
 /// path/name is a trait name, never a type param, so it is left alone).
-fn subst_trait_bound(b: &mut TraitBound, subst: &std::collections::HashMap<String, TypeExpr>) {
+pub(crate) fn subst_trait_bound(
+    b: &mut TraitBound,
+    subst: &std::collections::HashMap<String, TypeExpr>,
+) {
     if let Some(args) = b.generic_args.as_mut() {
         for a in args.iter_mut() {
             if let GenericArg::Type(t) = a {
@@ -601,7 +607,7 @@ fn where_constraint_subject_is_substituted(
 
 /// Substitute trait params inside the `where` constraints kept after the
 /// subject-dropped filter (those keyed on the method's own generic params).
-fn subst_where_constraint(
+pub(crate) fn subst_where_constraint(
     c: &mut WhereConstraint,
     subst: &std::collections::HashMap<String, TypeExpr>,
 ) {
@@ -634,7 +640,7 @@ fn subst_where_constraint(
 /// (its generic-args are still substituted by the caller). `qualified_only`
 /// skips bare single-segment value paths (an ordinary identifier is never a
 /// type param) — set false for type-constructor positions (struct literals).
-fn subst_leading_type_name(
+pub(crate) fn subst_leading_type_name(
     segments: &mut [String],
     subst: &std::collections::HashMap<String, TypeExpr>,
     qualified_only: bool,
@@ -656,7 +662,7 @@ fn subst_leading_type_name(
     }
 }
 
-fn subst_block(block: &mut Block, subst: &std::collections::HashMap<String, TypeExpr>) {
+pub(crate) fn subst_block(block: &mut Block, subst: &std::collections::HashMap<String, TypeExpr>) {
     for stmt in &mut block.stmts {
         subst_stmt(stmt, subst);
     }
@@ -716,7 +722,7 @@ fn subst_stmt(stmt: &mut Stmt, subst: &std::collections::HashMap<String, TypeExp
 /// `walk_expr`'s variant coverage; the type-bearing arms (`Path`, `Cast`,
 /// `OffsetOf`, `MethodCall` turbofish, `Closure` param annotations,
 /// `StructLiteral` path) additionally rewrite their type positions.
-fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<String, TypeExpr>) {
+pub(crate) fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<String, TypeExpr>) {
     match &mut expr.kind {
         ExprKind::Integer(..)
         | ExprKind::Float(..)

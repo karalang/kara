@@ -373,6 +373,17 @@ pub struct TypeEnv {
     /// through — the where-clause discharge in `exprs.rs` and the impl-block
     /// bound gate in `env.rs::first_unsatisfied_bound`.
     pub trait_alias_canonical: HashMap<String, String>,
+    /// Locally-bound TYPE name -> the type's own (canonical) name, for
+    /// ALIASED imports (`import doer.{Impl as Widget}` records
+    /// `Widget -> Impl`). The type-side twin of
+    /// [`Self::trait_alias_canonical`], and needed for the same reason: the
+    /// impl table is keyed by the type's own name, so `impl Doer for Impl`
+    /// registers `Impl` and a bound checked against `Widget` matched nothing.
+    ///
+    /// Only the BOTH-aliased shape needed it — with the type spelled
+    /// canonically the trait retry alone sufficed, which is why
+    /// B-2026-07-29-10 closed with just half the pair (B-2026-07-29-14).
+    pub type_alias_canonical: HashMap<String, String>,
     /// Names of declared marker traits (`marker trait NAME;`). Marker
     /// traits register in `traits` alongside ordinary traits so bound
     /// resolution and impl coherence work uniformly; this side-set
@@ -456,6 +467,7 @@ impl TypeEnv {
             traits: HashMap::new(),
             trait_aliases: HashSet::new(),
             trait_alias_canonical: HashMap::new(),
+            type_alias_canonical: HashMap::new(),
             marker_traits: HashSet::new(),
             impls: Vec::new(),
             impls_by_trait: HashMap::new(),
@@ -864,6 +876,16 @@ impl TypeEnv {
         if let Some(canonical) = self.trait_alias_canonical.get(trait_name) {
             if canonical != trait_name {
                 return self.type_satisfies_trait(ty_name, ty_args, canonical);
+            }
+        }
+        // B-2026-07-29-14: and the TYPE may be an alias too
+        // (`import doer.{Impl as Widget, Doer as D}` + `run[T: D](Widget)`).
+        // The impl table is keyed by the type's own name, so the retry above
+        // is only half the pair. Same one-hop bound: an alias maps straight
+        // to the type's own name.
+        if let Some(canonical) = self.type_alias_canonical.get(ty_name) {
+            if canonical != ty_name {
+                return self.type_satisfies_trait(canonical, ty_args, trait_name);
             }
         }
         false

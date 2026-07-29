@@ -52,6 +52,7 @@ pub mod formatter;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod git_fetch;
 pub mod gpu_wgsl;
+pub mod import_alias;
 pub mod inline_hints;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod install_spec;

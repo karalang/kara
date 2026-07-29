@@ -22566,3 +22566,61 @@ fn test_run_jit_env_args_matches_interp() {
         "JIT and interpreter must report identical argv"
     );
 }
+
+#[test]
+fn test_build_project_accepts_aliased_type_and_trait_imports() {
+    // B-2026-07-29-14: `run_multi_file_codegen` concatenates every module's
+    // items and DROPS the `import` declarations. That erases every ALIAS
+    // binding with them — `import doer.{Impl as Widget};` leaves `Widget`
+    // naming nothing in the flat unit — so the flat passes rejected programs
+    // the tree-aware per-module passes had already accepted, in three
+    // different places:
+    //
+    //   aliased STRUCT  -> resolve:   undefined name 'Widget'
+    //   aliased TRAIT   -> typecheck: unknown trait 'D' in inline bound
+    //
+    // Each alias is canonicalized to the imported item's real name before
+    // its module's items are appended (`src/import_alias.rs`).
+    let tmp = scratch_project("import-alias");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/doer.kara"),
+        "pub trait Doer {\n\
+             fn go(ref self) -> i64;\n\
+         }\n\
+         pub struct Impl { pub n: i64 }\n\
+         impl Doer for Impl {\n\
+             fn go(ref self) -> i64 { self.n }\n\
+         }\n",
+    );
+    // Aliased struct and aliased trait, each exercised on its own. The
+    // BOTH-aliased-at-once shape (`Widget` checked against `D`) fails
+    // further upstream, in the per-module impl table, and is tracked
+    // separately — so `Impl` is imported unaliased for the bound leg.
+    write(
+        &tmp.join("src/main.kara"),
+        "import doer.{Impl, Impl as Widget, Doer as D};\n\
+         fn run[T: D](t: ref T) -> i64 { t.go() }\n\
+         fn main() {\n\
+             let w = Widget { n: 7 };\n\
+             println(w.n);\n\
+             let u = Impl { n: 5 };\n\
+             println(run(u));\n\
+         }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("undefined name 'Widget'"),
+        "the aliased STRUCT import must survive flattening: {stderr}"
+    );
+    assert!(
+        !stderr.contains("unknown trait 'D'"),
+        "the aliased TRAIT import must survive flattening: {stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "project build failed: stderr={stderr}"
+    );
+}

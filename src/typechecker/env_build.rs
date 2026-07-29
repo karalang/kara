@@ -361,6 +361,24 @@ impl<'a> super::TypeChecker<'a> {
                             .trait_alias_canonical
                             .insert(bound.clone(), origin_name.clone());
                     }
+                    // B-2026-07-29-14: the type-side twin. An aliased STRUCT /
+                    // ENUM / UNION import needs the same canonicalization, for
+                    // the same reason — the impl table is keyed by the type's
+                    // own name. Only the both-aliased shape (`Impl as Widget`
+                    // AND `Doer as D`) exercised it, which is why -10 shipped
+                    // with just the trait half.
+                    if bound != origin_name
+                        && origin_module.items.iter().any(|it| match it {
+                            Item::StructDef(sd) => sd.name == origin_name,
+                            Item::EnumDef(ed) => ed.name == origin_name,
+                            Item::UnionDef(ud) => ud.name == origin_name,
+                            _ => false,
+                        })
+                    {
+                        self.env
+                            .type_alias_canonical
+                            .insert(bound.clone(), origin_name.clone());
+                    }
                     self.type_origins
                         .insert(bound, (origin_path.clone(), origin_name.clone(), vis));
                 }
