@@ -5208,6 +5208,31 @@ impl Emitter {
         }
         self.body = self.body + "  br label %" + lend.clone() + "\n";
         self.body = self.body + lend + ":\n";
+        // SCRUTINEE TEMP FREE (B-2026-07-29-6). A match whose scrutinee is a
+        // FRESH OWNED temp — `match pick(i) { … }`, a call result rather than a
+        // binding — owns that value, and nothing else ever frees it: the arms
+        // take a VIEW of the payload and copy out whatever they keep
+        // (`arm_own` materializes the arm value; a borrowed String pushed into
+        // a Vec materializes too), so the temp itself was simply abandoned.
+        // One payload allocation leaked per evaluation, which in a loop is
+        // unbounded.
+        //
+        // Freeing at the JOIN is what makes it safe: every arm has already
+        // branched here, so each has finished copying, and the result slot
+        // holds an owned value rather than a view. `emit_free_enum_val` is
+        // tag-gated, so a variant with no payload frees nothing.
+        //
+        // `heap` is the whole gate on the SOURCE side: a scrutinee that is a
+        // local/field read arrives with `heap == false` (a borrow) and must NOT
+        // be freed here — the owner still has it. A `shared enum` is excluded
+        // outright: it is an RC handle, whose discipline is retain/release, not
+        // free.
+        if sh and sk >= 1000 and sk < 2000 {
+            let sei = sk - 1000;
+            if not self.en_shared[sei] and self.en_has_heap(sei) {
+                self.emit_free_enum_val(sop.clone(), sei);
+            }
+        }
         if want_value {
             let r = self.fresh();
             self.body = self.body

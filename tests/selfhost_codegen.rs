@@ -879,12 +879,11 @@ const CORPUS: &[&str] = &[
     // arm's `store { ptr, i64 }` in an `alloca i64`. The int-literal path, the
     // enum path, `break` and `continue` are each exercised.
     //
-    // SCOPE NOTE: the enum case uses a PAYLOAD-FREE enum on purpose. The
-    // heap-payload form (`Word(String) => s`) LEAKS its payload under this
-    // emitter — pre-existing and unrelated to the break arm (the same program
-    // with `Stop => "".to_string()` in place of `Stop => break` leaks
-    // identically, on the emitter as it stood before this commit). Tracked as
-    // its own ledger entry; add the heap form here once it is fixed.
+    // The enum case originally used a PAYLOAD-FREE enum, because the
+    // heap-payload form leaked its payload under this emitter for a reason
+    // unrelated to the break arm. That was B-2026-07-29-6, now fixed, so the
+    // heap form is promoted in as its own entry below — the shape parser.kara
+    // actually uses (`DocComment(t) => t`).
     "fn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    while i < 5 {\n        let s = match i {\n            0 => \"zero\".to_string(),\n            1 => \"one\".to_string(),\n            _ => break,\n        };\n        out = out + s + \";\";\n        i = i + 1;\n    }\n    println(out);\n    println(i.to_string());\n}\n",
     "enum Tag {\n    Word,\n    Stop,\n}\nfn pick(n: i64) -> Tag {\n    if n < 2 {\n        return Tag.Word;\n    }\n    Tag.Stop\n}\nfn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    loop {\n        if i >= 4 {\n            break;\n        }\n        let w = match pick(i) {\n            Word => \"w\".to_string(),\n            Stop => break,\n        };\n        out = out + w;\n        i = i + 1;\n    }\n    println(out);\n    println(i.to_string());\n}\n",
     "fn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    while i < 5 {\n        i = i + 1;\n        let s = match i % 2 {\n            0 => \"e\".to_string(),\n            _ => continue,\n        };\n        out = out + s;\n    }\n    println(out);\n}\n",
@@ -902,6 +901,25 @@ const CORPUS: &[&str] = &[
     // Level-2 `panic at <file>:<line>:<col> in <fn>: <msg>`, so panic-MESSAGE
     // parity is a deferred surface and no corpus program may actually panic.
     "fn pick(n: i64) -> i64 with panics {\n    if n < 0 {\n        panic(\"negative input\");\n    }\n    n * 2\n}\nfn main() with panics {\n    println(pick(3).to_string());\n    println(pick(0).to_string());\n}\n",
+    // B-2026-07-29-6 — the SCRUTINEE TEMP of a match over a heap-payload enum.
+    // `match pick(i) { Word(s) => s, ... }` where `pick` RETURNS the enum: the
+    // arms take a view of the payload and copy out what they keep, so the
+    // returned temp itself was abandoned — one payload allocation leaked per
+    // evaluation, unbounded in a loop. Output was correct on both backends, so
+    // only the valgrind audit below ever saw it.
+    //
+    // Four shapes, because the fix keys on the scrutinee being a FRESH OWNED
+    // temp and must not touch a borrow: (1) the value-position match that was
+    // filed, (2) the same with a `break` arm — the shape parser.kara actually
+    // uses, promoted here from the payload-free stand-in the B-2026-07-29-2
+    // entry had to use, (3) a BORROW scrutinee (a local binding), which must
+    // still NOT be freed by the match or the owner double-frees, and (4) a
+    // statement-position match in a loop whose body moves the payload into a
+    // Vec — 200 iterations, where a per-evaluation double-free would abort.
+    "enum Tok {\n    Word(String),\n    Stop,\n}\nfn pick(n: i64) -> Tok {\n    if n < 2 {\n        return Tok.Word(\"w\".to_string());\n    }\n    Tok.Stop\n}\nfn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    while i < 2 {\n        let w = match pick(i) {\n            Word(s) => s,\n            Stop => \"\".to_string(),\n        };\n        out = out + w;\n        i = i + 1;\n    }\n    println(out);\n    println(i.to_string());\n}\n",
+    "enum Tok {\n    Word(String),\n    Stop,\n}\nfn pick(n: i64) -> Tok {\n    if n < 2 {\n        return Tok.Word(\"w\".to_string());\n    }\n    Tok.Stop\n}\nfn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    loop {\n        if i >= 4 {\n            break;\n        }\n        let w = match pick(i) {\n            Word(s) => s,\n            Stop => break,\n        };\n        out = out + w;\n        i = i + 1;\n    }\n    println(out);\n    println(i.to_string());\n}\n",
+    "enum Tok {\n    Word(String),\n    Stop,\n}\nfn main() {\n    let t = Tok.Word(\"hello\".to_string());\n    let w = match t {\n        Word(s) => s,\n        Stop => \"none\".to_string(),\n    };\n    println(w);\n}\n",
+    "enum Tok {\n    Word(String),\n    Stop,\n}\nfn pick(n: i64) -> Tok {\n    if n % 2 == 0 {\n        return Tok.Word(\"even\".to_string());\n    }\n    Tok.Stop\n}\nfn main() {\n    let mut n = 0;\n    let mut i = 0;\n    while i < 200 {\n        let w = match pick(i) {\n            Word(s) => s,\n            Stop => \"odd\".to_string(),\n        };\n        n = n + w.len();\n        i = i + 1;\n    }\n    println(n.to_string());\n}\n",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
