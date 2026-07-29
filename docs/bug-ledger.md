@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
-| false-positive | 50 | 2 |
+| false-positive | 50 | 0 |
 | run-vs-build | 44 | 0 |
 | perf | 32 | 1 |
 | crash | 30 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 535 | 2 |
-| typecheck | 92 | 2 |
+| codegen | 535 | 1 |
+| typecheck | 92 | 0 |
 | interp | 75 | 0 |
 | ownership | 29 | 0 |
 | other | 21 | 0 |
@@ -124,19 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **736 surfaced · 3 open · 726 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **736 surfaced · 1 open · 728 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-13 | 2026-07-29 | codegen | high | PERF: `Tensor.iter_axis(n)` materializes every sub-tensor as a COPY, so one pass over a 30 MB `[10000, 768]` corpus costs ~10 ms of page faults per call — 91% of the cost of the batched embedding kernels, and ~6x the cost of reading the same bytes. | — |
-| B-2026-07-29-22 | 2026-07-29 | typecheck | medium | An importing module's per-module env carries NO impl entries from the module it imports from, so a trait bound on an imported type is rejected whenever the impl-table lookup is actually reached (`import m.{Impl as W, Doer as D}` + `run[T: D](w: W)` -> E0200). | — |
-| B-2026-07-29-23 | 2026-07-29 | typecheck+codegen | low | An aliased FUNCTION import (`import m.{mk as build}`) still fails the flattened AOT build with `resolve: undefined name`. The B-2026-07-29-14 alias rewrite covers TYPE positions only. | — |
 
-### Fixed (726)
+### Fixed (728)
 
-<details><summary>726 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>728 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -859,6 +857,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **736 surfaced 
 | B-2026-07-29-11 | other | medium | docs/design.md — the AUTHORITATIVE spec — showed the abandoned Rust-style `Display` in three code blocks, including a full `fn fmt(ref self, f: mut r… | 3e21d84 |
 | B-2026-07-29-12 | codegen | medium | CODEGEN DIAGNOSTIC: direct use of a `-> ref T` method result is a KNOWN deferral with a precise error ('borrow-returning method call `.m(...)` must b… | fa94dc4 |
 | B-2026-07-29-14 | typecheck+codegen | medium | AOT `karac build` flattens the module tree and DROPS the import declarations, which erases every ALIAS binding with them — `import m.{T as A}` leaves… | e9ba3cc |
+| B-2026-07-29-22 | typecheck | medium | An importing module's per-module env carries NO impl entries from the module it imports from, so a trait bound on an imported type is rejected whenev… | 1027a61 |
+| B-2026-07-29-23 | typecheck+codegen | low | An aliased FUNCTION import (`import m.{mk as build}`) still fails the flattened AOT build with `resolve: undefined name` | 1027a61 |
 | B-2026-07-29-15 | codegen | medium | A method on a borrow-returning call result (`h.label().len()` where `label() -> ref String`) had no leak-free lowering, because the materialize-the-b… | aa7dc81 |
 | B-2026-07-29-16 | ownership | high | OWNERSHIP FALSE POSITIVE in the single-file `karac check` path: a `mut` binding initialized from a FREE FUNCTION and then passed to an IMPORTED `ref`… | c0d01c0 |
 | B-2026-07-29-17 | resolver | medium | RESOLVER HOLE: `effect resource R: SomeTrait;` accepts a trait name that is not defined ANYWHERE — no error, all checks pass | 9ddb52e |
