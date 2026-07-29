@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 86 | 1 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
-| false-positive | 48 | 2 |
+| false-positive | 48 | 1 |
 | run-vs-build | 44 | 2 |
 | perf | 32 | 1 |
 | crash | 30 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 533 | 4 |
 | typecheck | 90 | 1 |
 | interp | 75 | 2 |
-| ownership | 29 | 1 |
+| ownership | 29 | 0 |
 | other | 21 | 1 |
 | autopar | 19 | 0 |
 | runtime | 15 | 0 |
@@ -124,23 +124,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **733 surfaced · 7 open · 719 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **733 surfaced · 6 open · 720 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-13 | 2026-07-29 | codegen | high | PERF: `Tensor.iter_axis(n)` materializes every sub-tensor as a COPY, so one pass over a 30 MB `[10000, 768]` corpus costs ~10 ms of page faults per call — 91% of the cost of the batched embedding kernels, and ~6x the cost of reading the same bytes. | — |
 | B-2026-07-29-14 | 2026-07-29 | typecheck+codegen | medium | AOT `karac build` re-typechecks a TREE-LESS flattened program, so NO import-alias information survives: `import m.{T as A}` fails there for traits AND structs even after the per-module typecheck accepts it. | — |
 | B-2026-07-29-15 | 2026-07-29 | codegen | medium | A String method on a borrow-returning call result (`h.label().len()` where `label() -> ref String`) has no leak-free lowering: materializing it leaks a clone per call, and the pre-existing fall-through MISREADS the borrow pointer as a String value. Now refused loudly; the Vec sibling is fixed. | — |
-| B-2026-07-29-16 | 2026-07-29 | ownership | high | OWNERSHIP FALSE POSITIVE in the single-file `karac check` path: a `mut` binding initialized from a FREE FUNCTION and then passed to an IMPORTED `ref` parameter is reported as moved, though the parameter only borrows. The package-level path accepts the identical program and it RUNS correctly. | — |
 | B-2026-07-29-18 | 2026-07-29 | interp | medium | `env.args()` under `karac run` returns KARAC's OWN argv, not the program's arguments: a program run as `karac run --interp prog.kara` sees ['target/debug/karac', 'run', '--interp', 'prog.kara']. design.md's own CLI example reads `args[1]` as the first USER argument. | — |
 | B-2026-07-29-19 | 2026-07-29 | other | medium | docs/design.md — the AUTHORITATIVE spec — writes `ref` AT CALL SITES in 9 code blocks, a form the parser rejects outright ('`ref` is not written at call sites'). Same rot class as B-2026-07-29-11 (the abandoned Rust-style Display), in the same document. | — |
 | B-2026-07-29-20 | 2026-07-29 | codegen+interp | high | REPL cross-cell value snapshot loses an in-cell container mutation: `let mut v = Vec.new(); v.push(7)` in cell 1 reads back empty in cell 2. Whole container tier (B.5.3a/b/c) broken on the JIT lane; Map+Set broken on the interpreter too, though all three are marked shipped `[x]` in phase-7-codegen.md. | — |
 
-### Fixed (719)
+### Fixed (720)
 
-<details><summary>719 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>720 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -862,6 +861,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **733 surfaced 
 | B-2026-07-29-10 | typecheck | medium | An ALIASED imported trait bound is rejected at bound satisfaction: `import doer.Doer as D` + `fn go[T: D](...)` reports "trait bound `T: D` is not sa… | fa94dc4 |
 | B-2026-07-29-11 | other | medium | docs/design.md — the AUTHORITATIVE spec — showed the abandoned Rust-style `Display` in three code blocks, including a full `fn fmt(ref self, f: mut r… | 3e21d84 |
 | B-2026-07-29-12 | codegen | medium | CODEGEN DIAGNOSTIC: direct use of a `-> ref T` method result is a KNOWN deferral with a precise error ('borrow-returning method call `.m(...)` must b… | fa94dc4 |
+| B-2026-07-29-16 | ownership | high | OWNERSHIP FALSE POSITIVE in the single-file `karac check` path: a `mut` binding initialized from a FREE FUNCTION and then passed to an IMPORTED `ref`… | c0d01c0 |
 | B-2026-07-29-17 | resolver | medium | RESOLVER HOLE: `effect resource R: SomeTrait;` accepts a trait name that is not defined ANYWHERE — no error, all checks pass | 9ddb52e |
 
 </details>
