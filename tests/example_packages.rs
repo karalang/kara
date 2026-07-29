@@ -1,5 +1,5 @@
 //! Oracle for the multi-module packages under `examples/` that ship their own
-//! Kāra `test "..."` suites (B-2026-07-29-3, -4, -7).
+//! Kāra `test "..."` suites (B-2026-07-29-3, -9, -12).
 //!
 //! # Why this exists
 //!
@@ -37,8 +37,11 @@
 //! `elevator_project` passes all 14 cases under the interpreter and fails all
 //! 14 under codegen — `e.pending().is_empty()` in `elevator_test.kara` puts a
 //! `Vec` method on a call-result receiver, which `compile_method_call` has no
-//! arm for (B-2026-07-29-12). Rather than drop the package, rewrite the example
-//! to dodge the gap, or gate the whole file on the interpreter, that leg is
+//! arm for. That is B-2026-07-29-12: the underlying restriction is the
+//! returned-borrow deferral named by B-2026-06-07-5, but this spelling reaches
+//! a generic fall-through that misreports it as a missing dispatcher arm.
+//! Rather than drop the package, rewrite the example to dodge the gap, or gate
+//! the whole file on the interpreter, that leg is
 //! `Expect::KnownBroken`: fixing the codegen gap turns this test RED and forces
 //! the pin to be promoted, instead of the fix landing with the gate still
 //! ignoring it.
@@ -79,8 +82,9 @@ const PACKAGES: &[Package] = &[
         expected_tests: 14,
         interp: Expect::AllPass,
         codegen: Expect::KnownBroken,
-        note: "B-2026-07-29-12: `e.pending().is_empty()` — a Vec method on a \
-               call-result receiver — has no arm in `compile_method_call`",
+        note: "B-2026-07-29-12: `e.pending().is_empty()` — direct use of a \
+               `-> ref T` result, the B-2026-06-07-5 deferral, misreported by the \
+               generic dispatcher fall-through",
     },
     Package {
         dir: "game_of_life",

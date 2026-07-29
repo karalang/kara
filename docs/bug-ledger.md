@@ -98,11 +98,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 48 | 3 |
-| run-vs-build | 44 | 1 |
+| run-vs-build | 43 | 1 |
 | perf | 32 | 1 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
-| diagnostics | 18 | 0 |
+| diagnostics | 19 | 0 |
 | use-after-free | 11 | 0 |
 | other | 6 | 1 |
 
@@ -861,7 +861,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **732 surfaced 
 | B-2026-07-29-9 | typecheck | high | A trait bound whose trait is IMPORTED resolves no methods: `S: Doer` on an imported `Doer` reports no "unknown trait", yet every call through the bou… | 155f7b3 |
 | B-2026-07-29-10 | typecheck | medium | An ALIASED imported trait bound is rejected at bound satisfaction: `import doer.Doer as D` + `fn go[T: D](...)` reports "trait bound `T: D` is not sa… | fa94dc4 |
 | B-2026-07-29-11 | other | medium | docs/design.md — the AUTHORITATIVE spec — showed the abandoned Rust-style `Display` in three code blocks, including a full `fn fmt(ref self, f: mut r… | 3e21d84 |
-| B-2026-07-29-12 | codegen | medium | CODEGEN: a `Vec` method called directly on a CALL-RESULT receiver — `h.view().is_empty()` where `view()` returns `ref Vec[i64]` — falls through `comp… | fa94dc4 |
+| B-2026-07-29-12 | codegen | medium | CODEGEN DIAGNOSTIC: direct use of a `-> ref T` method result is a KNOWN deferral with a precise error ('borrow-returning method call `.m(...)` must b… | fa94dc4 |
 
 </details>
 

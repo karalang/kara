@@ -219,6 +219,9 @@ fn check_file(rel: &Path) -> (bool, String) {
 
 /// Package-level `karac build`. Without `--features llvm` this type-checks the
 /// whole module graph and stops before codegen, which is all this gate needs.
+/// Used only by `entry_packages_type_check`, which is `llvm`-gated for exactly
+/// that reason — so under `llvm` this helper is genuinely dead.
+#[cfg_attr(feature = "llvm", allow(dead_code))]
 fn build_package(name: &str) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .arg("build")
@@ -233,6 +236,19 @@ fn build_package(name: &str) -> (bool, String) {
     (out.status.success(), combined)
 }
 
+/// Deliberately NOT run under `llvm`. `karac build` stops after type-checking
+/// only when the compiler has no codegen backend; with `--features llvm` the
+/// same command runs codegen and links, so it answers a different question and
+/// this gate would start reporting codegen gaps as example rot. That is not
+/// hypothetical: `elevator_project` type-checks clean but fails codegen on the
+/// returned-borrow limitation cited by B-2026-06-07-5, and it would show up
+/// here as "no longer type-checks", which is false and points at the wrong
+/// thing.
+///
+/// Codegen coverage of these packages is `tests/example_packages.rs`'s job —
+/// it runs each package's own suite on both backends and pins the codegen leg
+/// per package. This gate stays what it says it is: a type-check gate.
+#[cfg(not(feature = "llvm"))]
 #[test]
 fn entry_packages_type_check() {
     let broken: BTreeSet<&str> = KNOWN_BROKEN_PACKAGES.iter().map(|(n, _)| *n).collect();
