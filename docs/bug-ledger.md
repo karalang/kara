@@ -94,12 +94,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 186 | 0 |
 | leak | 99 | 1 |
-| codegen-gap | 84 | 0 |
+| codegen-gap | 85 | 1 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 43 | 0 |
 | run-vs-build | 42 | 0 |
-| perf | 30 | 0 |
+| perf | 31 | 1 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 526 | 1 |
+| codegen | 528 | 3 |
 | typecheck | 87 | 0 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
@@ -124,13 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **719 surfaced · 1 open · 712 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **721 surfaced · 3 open · 712 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-6 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): a value-position `match` over a HEAP-PAYLOAD enum leaks the payload the arm binds. `let w = match pick(i) { Word(s) => s, ... }` never frees the String, even though the binding is consumed. | — |
+| B-2026-07-29-7 | 2026-07-29 | codegen | high | CODEGEN: `Vector[T, N]` bindings and arithmetic do not survive the STDLIB compilation unit — identical code compiles and runs correctly in a user module but fails in `runtime/stdlib/*.kara`, first as a `let` allocated `i64` (ICE in `compile_vector_method`) and, once that is inlined away, as `Binary op Add: left operand has non-comparable type VectorType`. Blocks hand-vectorizing any stdlib kernel in Kāra. | — |
+| B-2026-07-29-8 | 2026-07-29 | codegen | high | PERF: a `ref Tensor` argument to a STDLIB function is copied per call — an identical function body costs 0.705 s from `std.embeddings` vs 0.465 s in a user module over 50 calls on a 30 MB corpus, with sys time 0.456 s vs 0.008 s (57×). A `ref` parameter should borrow. | — |
 
 ### Fixed (712)
 

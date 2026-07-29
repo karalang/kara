@@ -1462,6 +1462,22 @@ All functions require `T: Float`. The `clip` family operates analogously to scal
 
 **Sequencing.** The kernel list is a **ceiling**; final scope is narrowed kernel-by-kernel by a §6.4-style auto-vec measurement once Phase 7's LLVM backend can compile a representative kernel (e.g., `cosine_similarity_batched` on `Tensor[f32, [10_000, 768]]`). Rows where LLVM auto-vec already hits ~80% of hand-written SIMD drop out of the hand-vec list and into a "trust auto-vec, benchmark number documented" footnote at implementation time. Rows where auto-vec hits ~20% stay in.
 
+**Measurement (2026-07-29, x86-64 AVX2, `karac build` O2).** The sequencing measurement above has now been run, on exactly the representative kernel it names — `cosine_similarity_batched` over `Tensor[f32, [10_000, 768]]`, 50 iterations, median of 3. Three results, two of them counter to the entry's assumption:
+
+| form | time | packed instrs |
+|---|---|---|
+| shipping stdlib: fused `zip_with(…).sum()` over `iter_axis` rows | ~924 ms | 27 `vaddps` / 12 `vmulps` |
+| indexed scalar loop, no row copy | ~374 ms | **0** |
+| indexed + `Vector[f32, 8]` | ~207 ms | yes |
+
+1. **BLAS-2/3 batched rows STAY hand-written**, but not for the reason assumed. LLVM emits *zero* packed instructions for the natural imperative reduction — float `+` is not associative and nothing licenses reassociation — so auto-vec scores 0%, not 80%. However the larger effect is not SIMD at all: `iter_axis(0)` returns a Vec of row **copies**, so dropping the per-call corpus copy is worth ~2.5× on its own, and 8-lane arithmetic adds ~1.8× on top.
+
+2. **BLAS-1 single-vector rows DROP OUT** — this is the entry's "trust auto-vec, benchmark number documented" case, and the margin is decisive in the opposite direction: the existing fused `zip_with(…).sum()` path beats a hand-written 8-lane loop by ~3× (68 ms vs 199 ms over 500 000 `cosine_similarity` calls at D = 768), emitting 39 packed instructions to the hand form's 14. It unrolls wider and pays no per-element index. Hand-writing `cosine_similarity` / `l2_norm` / `l2_normalize` would be a **pessimization**; they are removed from the list.
+
+3. **The bulk-load primitive is not needed.** design.md's `chunks_simd` is unimplemented, but the eight indexed reads of a `Vector[f32, 8](t[c], …, t[c+7])` construction fold to a single `vmovups` in the emitted object, so hand-written kernels are expressible today. `chunks_simd` is an ergonomics item, not a blocker.
+
+**Implementation is BLOCKED (2026-07-29).** The rewrite was attempted and reverted rather than shipped half-working: `Vector[T, N]` bindings and arithmetic do not survive the **stdlib** compilation unit (**B-2026-07-29-7**, high) — identical code compiles and runs correctly in a user module but fails in `runtime/stdlib/*.kara`. Every kernel in this commitment lives there, so the whole spine waits on that fix. A second finding is larger still for these kernels and independent of SIMD: a `ref Tensor` argument to a stdlib function is **copied per call** (**B-2026-07-29-8**, high) — an identical body costs 0.705 s from `std.embeddings` vs 0.465 s in a user module, sys 0.456 s vs 0.008 s. For the batched embedding kernels that copy dominates both the arithmetic and the `iter_axis` row-copy, so it should be fixed before any of these rows are re-benchmarked.
+
 **Why non-breaking:** Implementation strategy — no API change. The same scalar-equivalent semantics are observable; only the perf curve changes.
 
 **Cross-reference:** `brainstorming/archive/v67_simd_strategy.md § 3` (kernel scope + alternatives); `brainstorming/archive/v67_simd_strategy.md § 3.1.1` (BLAS-3 cosine path); `brainstorming/archive/v66_general_purpose_with_data_bonus.md` (the v66 graduation that put the numerical stdlib on the v1 plate); `design.md § Portable SIMD — Vector[T, N]` (the type the kernels build on); `design.md § Multiversioning` (`cpu-baseline` + `#[multiversion]` for AVX-512 / SVE2 variant kernels); `deferred.md § Tensor Element-Wise Math and Clamp` (the entry whose perf contract this binds).
