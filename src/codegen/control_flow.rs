@@ -1672,6 +1672,15 @@ impl<'ctx> super::Codegen<'ctx> {
         condition: &Expr,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Kernighan popcount idiom (popcount_idiom.rs): `while x != 0 { x = x &
+        // (x - 1); c = c + 1 }` becomes one `llvm.ctpop` plus the two traps the
+        // source requires. Attempted BEFORE any basic block is created so the
+        // decline path leaves no empty blocks behind. Kāra's overflow checks are
+        // what stop LLVM recognizing this itself, so it has to be done here.
+        if self.try_emit_kernighan_popcount(condition, body)? {
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
         let fn_val = self.current_fn.unwrap();
         let cond_bb = self.context.append_basic_block(fn_val, "while.cond");
         let body_bb = self.context.append_basic_block(fn_val, "while.body");

@@ -63,6 +63,7 @@ mod kernel;
 mod lazyframe;
 #[cfg(feature = "llvm")]
 mod lljit;
+mod popcount_idiom;
 #[cfg(feature = "llvm")]
 pub use lljit::{LLJITEngine, ResourceTracker};
 mod arena;
