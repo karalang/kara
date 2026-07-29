@@ -32,6 +32,23 @@
 //! type-param substitution, and exhaustive over `ExprKind` / `StmtKind` /
 //! `TypeKind`) and adds the three slots an alias needs that a type param
 //! does not: trait-bound NAMES, `impl Trait for` names, and pattern paths.
+//!
+//! # Why `dead_code` is allowed without the `llvm` feature
+//!
+//! Everything here except [`walk_expr_children`] exists to serve
+//! `run_multi_file_codegen`, which is `#[cfg(feature = "llvm")]` — there is no
+//! flattened multi-file unit to canonicalize when the compiler has no codegen
+//! backend, so all 19 rewrite/collect entry points are genuinely unreachable in
+//! that cfg. `walk_expr_children` is the exception: `lowering.rs` calls it
+//! unconditionally to avoid keeping a third copy of the `ExprKind` recursion,
+//! so the module itself cannot be feature-gated.
+//!
+//! This matters because CI's lint gate is `cargo clippy --all -- -D warnings`
+//! with no `--features llvm` (see CLAUDE.md § Commands), so the non-llvm cfg is
+//! the one that must stay clean — a bare `--features llvm` clippy run passes
+//! here and hides the problem.
+
+#![cfg_attr(not(feature = "llvm"), allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
 
