@@ -754,6 +754,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
             _ => {
+                // `for row in t.iter_axis(n)` — FUSED. The materializing arm
+                // below builds every sub-tensor up front as a copy (30 MB for
+                // a `[10000, 768]` corpus); the loop only ever needs one at a
+                // time, so this emits the same gather into a single reused row
+                // buffer. Self-gating: returns None unless the receiver is a
+                // statically-ranked tensor var of rank >= 2 AND every use of
+                // the loop variable in the body is on the read-only whitelist,
+                // in which case the materializing path runs unchanged
+                // (B-2026-07-29-13).
+                if let ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                } = &iterable.kind
+                {
+                    if method == "iter_axis" {
+                        if let Some(result) = self.compile_for_tensor_iter_axis_fused(
+                            label, pattern, object, args, body,
+                        )? {
+                            return Ok(result);
+                        }
+                    }
+                }
                 // Value-producing iterable whose type is a Vec — e.g.
                 // `for sub in t.iter_axis(0)` (a `Vec[Tensor]` temporary).
                 // Materialize it into a synth local and iterate. Returns

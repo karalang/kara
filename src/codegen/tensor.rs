@@ -51,6 +51,254 @@ use crate::token::Span;
 use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther, SortKey};
 use super::state::{TensorVarInfo, VarSlot};
 
+/// The literal axis of `iter_axis(<n>)`, when it is one. Used only to keep
+/// the row view's STATIC dims; a runtime axis falls back to header loads,
+/// which the fused loop writes, so correctness never depends on this.
+fn tensor_axis_literal(e: &Expr) -> Option<usize> {
+    match &e.kind {
+        ExprKind::Integer(n, ..) => usize::try_from(*n).ok(),
+        _ => None,
+    }
+}
+
+/// May `row` be bound to a REUSED buffer for the duration of `body`?
+///
+/// True only when every occurrence of the name is a use the fused loop can
+/// prove does not outlive its iteration, and the body cannot leave the loop
+/// by a path that skips the buffer's free.
+///
+/// Whitelist, deliberately: an unlisted method, or any other syntactic
+/// position (assignment, `push`, a `let` that rebinds it elsewhere, a
+/// struct-literal field, a return value), answers false and the caller
+/// materializes as before. The cost of a false negative is the old
+/// behaviour; the cost of a false positive would be a use-after-overwrite,
+/// so the asymmetry is the point.
+fn fuse_body_is_safe(body: &crate::ast::Block, row: &str) -> bool {
+    let mut ok = true;
+    scan_block(body, row, &mut ok);
+    ok
+}
+
+fn scan_block(b: &crate::ast::Block, row: &str, ok: &mut bool) {
+    use crate::ast::StmtKind;
+    for stmt in &b.stmts {
+        if !*ok {
+            return;
+        }
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => scan_expr(value, row, ok),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                scan_expr(value, row, ok);
+                scan_block(else_block, row, ok);
+            }
+            StmtKind::Expr(e) => scan_expr(e, row, ok),
+            StmtKind::Assign { target, value, .. }
+            | StmtKind::CompoundAssign { target, value, .. } => {
+                scan_expr(target, row, ok);
+                scan_expr(value, row, ok);
+            }
+            StmtKind::MultiAssign {
+                targets, values, ..
+            } => {
+                for e in targets.iter().chain(values.iter()) {
+                    scan_expr(e, row, ok);
+                }
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => scan_block(body, row, ok),
+            StmtKind::LetUninit { .. } => {}
+        }
+    }
+    if let Some(e) = b.final_expr.as_ref() {
+        scan_expr(e, row, ok);
+    }
+}
+
+fn scan_expr(e: &Expr, row: &str, ok: &mut bool) {
+    use crate::ast::ParsedInterpolationPart;
+    if !*ok {
+        return;
+    }
+    match &e.kind {
+        // A bare mention anywhere the walk did not already sanction is an
+        // unknown use — refuse.
+        ExprKind::Identifier(n) if n == row => *ok = false,
+        // `return` would leave the loop without freeing the row buffer.
+        ExprKind::Return(_) => *ok = false,
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            // Receiver position: sanctioned for a read-only method, and the
+            // recursion is skipped so the bare-identifier arm does not fire.
+            let recv_is_row = matches!(&object.kind, ExprKind::Identifier(n) if n == row);
+            if recv_is_row {
+                if !super::Codegen::FUSE_RECV_OK.contains(&method.as_str()) {
+                    *ok = false;
+                    return;
+                }
+            } else {
+                scan_expr(object, row, ok);
+            }
+            for a in args {
+                let arg_is_row = matches!(&a.value.kind, ExprKind::Identifier(n) if n == row);
+                if arg_is_row {
+                    if !super::Codegen::FUSE_ARG_OK.contains(&method.as_str()) {
+                        *ok = false;
+                        return;
+                    }
+                } else {
+                    scan_expr(&a.value, row, ok);
+                }
+            }
+        }
+        // `row[i]` — a read through the view, fine.
+        ExprKind::Index { object, index } => {
+            if !matches!(&object.kind, ExprKind::Identifier(n) if n == row) {
+                scan_expr(object, row, ok);
+            }
+            scan_expr(index, row, ok);
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            scan_expr(left, row, ok);
+            scan_expr(right, row, ok);
+        }
+        ExprKind::Unary { operand: x, .. }
+        | ExprKind::Question(x)
+        | ExprKind::Cast { expr: x, .. }
+        | ExprKind::FieldAccess { object: x, .. }
+        | ExprKind::TupleIndex { object: x, .. } => scan_expr(x, row, ok),
+        ExprKind::Call { callee, args } => {
+            scan_expr(callee, row, ok);
+            for a in args {
+                scan_expr(&a.value, row, ok);
+            }
+        }
+        ExprKind::OptionalChain { object, args, .. } => {
+            scan_expr(object, row, ok);
+            if let Some(args) = args {
+                for a in args {
+                    scan_expr(&a.value, row, ok);
+                }
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            scan_expr(condition, row, ok);
+            scan_block(then_block, row, ok);
+            if let Some(x) = else_branch {
+                scan_expr(x, row, ok);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            scan_expr(value, row, ok);
+            scan_block(then_block, row, ok);
+            if let Some(x) = else_branch {
+                scan_expr(x, row, ok);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            scan_expr(scrutinee, row, ok);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    scan_expr(g, row, ok);
+                }
+                scan_expr(&arm.body, row, ok);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            scan_expr(condition, row, ok);
+            scan_block(body, row, ok);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            scan_expr(value, row, ok);
+            scan_block(body, row, ok);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            scan_expr(iterable, row, ok);
+            scan_block(body, row, ok);
+        }
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Par(b)
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::LabeledBlock { body: b, .. } => scan_block(b, row, ok),
+        // A closure could outlive the iteration; refuse if it names the row
+        // at all. The kernels pass `|x, y| x * y`, which does not.
+        ExprKind::Closure { body, .. } => scan_expr(body, row, ok),
+        ExprKind::Break { value: Some(x), .. } => scan_expr(x, row, ok),
+        ExprKind::Tuple(items)
+        | ExprKind::ArrayLiteral(items)
+        | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                scan_expr(x, row, ok);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            scan_expr(value, row, ok);
+            scan_expr(count, row, ok);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                scan_expr(k, row, ok);
+                scan_expr(v, row, ok);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                scan_expr(&f.value, row, ok);
+            }
+            if let Some(x) = spread {
+                scan_expr(x, row, ok);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(x) = start {
+                scan_expr(x, row, ok);
+            }
+            if let Some(x) = end {
+                scan_expr(x, row, ok);
+            }
+        }
+        ExprKind::Lock { mutex, body, .. } => {
+            scan_expr(mutex, row, ok);
+            scan_block(body, row, ok);
+        }
+        ExprKind::Providers { bindings, body } => {
+            for bnd in bindings {
+                scan_expr(&bnd.value, row, ok);
+            }
+            scan_block(body, row, ok);
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let ParsedInterpolationPart::Expr(x, _) = part {
+                    scan_expr(x, row, ok);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// True iff `te` names an unsigned integer primitive — drives the
 /// `is_unsigned` flag for per-element div/rem in the element-wise loop.
 pub(super) fn type_expr_is_unsigned_int(te: &TypeExpr) -> bool {
@@ -1927,6 +2175,337 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_memcpy(res_data, 8, src_data, 8, bytes)
             .map_err(|e| format!("squeeze data copy failed: {:?}", e))?;
         Ok(res.into())
+    }
+
+    /// Names a row-view binding may be USED as in a fused-loop body: the
+    /// receiver of a read-only tensor method. Whitelist, not blacklist —
+    /// anything unlisted refuses the fusion and falls back to the
+    /// materializing path, so a method added later cannot silently start
+    /// consuming a buffer the loop reuses.
+    const FUSE_RECV_OK: &'static [&'static str] = &[
+        "sum", "product", "mean", "min", "max", "len", "rank", "shape", "norm", "argmax", "argmin",
+        "zip_with", "dot", "get", "count",
+    ];
+
+    /// Methods whose non-receiver tensor ARGUMENT is borrowed, so passing the
+    /// row view there does not hand off ownership. `zip_with` is the one the
+    /// shipping kernels need (B-2026-07-20-6 recognises its `other` as a
+    /// borrow even as a chain receiver).
+    const FUSE_ARG_OK: &'static [&'static str] = &["zip_with", "dot"];
+
+    /// `for row in t.iter_axis(n) { … }` — the fused form.
+    ///
+    /// `compile_tensor_iter_axis` materializes ALL `dims[n]` sub-tensors up
+    /// front, as copies. For a `[10000, 768]` corpus that is 30 MB written per
+    /// call. B-2026-07-29-13's arena tuning removed the page-fault half of
+    /// that cost; this removes the rest of the avoidable half — the loop needs
+    /// one row at a time, so one row buffer suffices and the writes land in
+    /// the same few KB every iteration instead of marching through 30 MB.
+    ///
+    /// The emitted shape is `compile_tensor_iter_axis`'s bucket loop with two
+    /// changes: the sub-tensor allocation and its header write are HOISTED out
+    /// (the sub-dims do not depend on the bucket index), and instead of
+    /// storing the pointer into a result `Vec` the body runs with the loop
+    /// variable bound to it. The gather is byte-identical.
+    ///
+    /// Returns `Ok(None)` — caller falls back to materializing — unless every
+    /// condition holds:
+    ///   * the receiver is a statically-ranked tensor VARIABLE of rank ≥ 2
+    ///     (rank 1 yields `Vec[T]`, a different result shape entirely);
+    ///   * the loop pattern is a single binding;
+    ///   * every use of that binding in the body is whitelisted above;
+    ///   * the body contains no `return` (which would skip the buffer's free).
+    ///
+    /// `break` / `continue` are fine: both land on blocks that precede the
+    /// free.
+    ///
+    /// The row view is registered in `tensor_var_infos` but deliberately NOT
+    /// passed to `track_tensor_var` — the loop owns the buffer and frees it
+    /// once at exit; a per-iteration drop would free it out from under the
+    /// next gather.
+    pub(super) fn compile_for_tensor_iter_axis_fused(
+        &mut self,
+        label: Option<&str>,
+        pattern: &crate::ast::Pattern,
+        object: &Expr,
+        args: &[CallArg],
+        body: &crate::ast::Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        use super::state::{LoopFrame, VarSlot};
+
+        if args.len() != 1 {
+            return Ok(None);
+        }
+        let PatternKind::Binding(row_name) = &pattern.kind else {
+            return Ok(None);
+        };
+        let ExprKind::Identifier(recv) = &object.kind else {
+            return Ok(None);
+        };
+        let Some(info) = self.tensor_var_infos.get(recv.as_str()).cloned() else {
+            return Ok(None);
+        };
+        let rank = info.dims.len();
+        if rank < 2 {
+            return Ok(None);
+        }
+        if !fuse_body_is_safe(body, row_name) {
+            return Ok(None);
+        }
+
+        let elem = info.elem;
+        let elem_size = self.tensor_elem_size(elem)?;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let t_ptr = self.tensor_ptr_for_var(recv)?;
+
+        let axis = self.compile_expr(&args[0].value)?.into_int_value();
+        let rank_const = i64_t.const_int(rank as u64, false);
+        let oob = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, axis, rank_const, "t.fia.oob")
+            .unwrap();
+        let ok = self.builder.build_not(oob, "t.fia.ok").unwrap();
+        self.emit_tensor_guard(ok, "iter_axis axis out of bounds")?;
+
+        let rdims: Vec<IntValue<'ctx>> =
+            (0..rank).map(|i| self.tensor_load_dim(t_ptr, i)).collect();
+        let src_data = self.tensor_data_ptr(t_ptr, rank, "t.fia.src");
+
+        // outer / n_buckets / inner — identical to the materializing path.
+        let mut outer = i64_t.const_int(1, false);
+        let mut inner = i64_t.const_int(1, false);
+        let mut n_buckets = i64_t.const_int(1, false);
+        for (i, &d) in rdims.iter().enumerate() {
+            let ci = i64_t.const_int(i as u64, false);
+            let lt = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, ci, axis, "t.fia.lt")
+                .unwrap();
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, ci, axis, "t.fia.eq")
+                .unwrap();
+            let gt = self
+                .builder
+                .build_int_compare(IntPredicate::UGT, ci, axis, "t.fia.gt")
+                .unwrap();
+            let outer_m = self.builder.build_int_mul(outer, d, "t.fia.outm").unwrap();
+            outer = self
+                .builder
+                .build_select(lt, outer_m, outer, "t.fia.out")
+                .unwrap()
+                .into_int_value();
+            n_buckets = self
+                .builder
+                .build_select(eq, d, n_buckets, "t.fia.nb")
+                .unwrap()
+                .into_int_value();
+            let inner_m = self.builder.build_int_mul(inner, d, "t.fia.innm").unwrap();
+            inner = self
+                .builder
+                .build_select(gt, inner_m, inner, "t.fia.inn")
+                .unwrap()
+                .into_int_value();
+        }
+        let sub_rank = rank - 1;
+        let sub_dims: Vec<IntValue<'ctx>> = (0..sub_rank)
+            .map(|k| {
+                let ck = i64_t.const_int(k as u64, false);
+                let lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, ck, axis, "t.fia.sdlt")
+                    .unwrap();
+                self.builder
+                    .build_select(lt, rdims[k], rdims[k + 1], "t.fia.sd")
+                    .unwrap()
+                    .into_int_value()
+            })
+            .collect();
+
+        // ONE row buffer for the whole loop, header written once — the whole
+        // point of the fusion. Both are loop-invariant in the materializing
+        // path too; it just could not hoist them, because each sub-tensor had
+        // to outlive the bucket that produced it.
+        let inner_bytes = self
+            .builder
+            .build_int_mul(inner, i64_t.const_int(elem_size, false), "t.fia.ib")
+            .unwrap();
+        let bucket_len = self
+            .builder
+            .build_int_mul(outer, inner, "t.fia.bl")
+            .unwrap();
+        let bucket_data_bytes = self
+            .builder
+            .build_int_mul(bucket_len, i64_t.const_int(elem_size, false), "t.fia.bdb")
+            .unwrap();
+        let sub_header_bytes = i64_t.const_int(8 * (1 + sub_rank as u64), false);
+        let sub_total = self
+            .builder
+            .build_int_add(sub_header_bytes, bucket_data_bytes, "t.fia.subt")
+            .unwrap();
+        let sub_t = self
+            .builder
+            .build_call(self.malloc_fn, &[sub_total.into()], "t.fia.row")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_store(sub_t, i64_t.const_int(sub_rank as u64, false))
+            .unwrap();
+        for (k, dv) in sub_dims.iter().enumerate() {
+            let slot = self.tensor_header_slot(sub_t, 1 + k as u64, &format!("t.fia.sd{}.p", k));
+            self.builder.build_store(slot, *dv).unwrap();
+        }
+        let sub_data = self.tensor_data_ptr(sub_t, sub_rank, "t.fia.rowd");
+
+        // Bucket loop.
+        let bv = self.create_entry_alloca(fn_val, "t.fia.b", i64_t.into());
+        self.builder.build_store(bv, i64_t.const_zero()).unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "t.fia.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "t.fia.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "t.fia.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "t.fia.exit");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+        self.loop_stack.push(LoopFrame {
+            label: label.map(str::to_string),
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+            cleanup_depth: self.scope_cleanup_actions.len(),
+        });
+
+        self.builder.position_at_end(cond_bb);
+        let b = self
+            .builder
+            .build_load(i64_t, bv, "t.fia.bv")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, b, n_buckets, "t.fia.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let b = self
+            .builder
+            .build_load(i64_t, bv, "t.fia.bv2")
+            .unwrap()
+            .into_int_value();
+        // Gather bucket `b` into the shared row buffer — byte-identical to the
+        // materializing path's inner loop.
+        let ov = self.create_entry_alloca(fn_val, "t.fia.o", i64_t.into());
+        self.builder.build_store(ov, i64_t.const_zero()).unwrap();
+        let oh = self.context.append_basic_block(fn_val, "t.fia.oh");
+        let ob = self.context.append_basic_block(fn_val, "t.fia.ob");
+        let oe = self.context.append_basic_block(fn_val, "t.fia.oe");
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oh);
+        let o = self
+            .builder
+            .build_load(i64_t, ov, "t.fia.ov")
+            .unwrap()
+            .into_int_value();
+        let ocont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, o, outer, "t.fia.ocont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(ocont, ob, oe)
+            .unwrap();
+        self.builder.position_at_end(ob);
+        let on = self
+            .builder
+            .build_int_mul(o, n_buckets, "t.fia.on")
+            .unwrap();
+        let onb = self.builder.build_int_add(on, b, "t.fia.onb").unwrap();
+        let src_off = self
+            .builder
+            .build_int_mul(onb, inner, "t.fia.soff")
+            .unwrap();
+        let dst_off = self.builder.build_int_mul(o, inner, "t.fia.doff").unwrap();
+        let src_p = unsafe {
+            self.builder
+                .build_gep(elem, src_data, &[src_off], "t.fia.sp")
+                .unwrap()
+        };
+        let dst_p = unsafe {
+            self.builder
+                .build_gep(elem, sub_data, &[dst_off], "t.fia.dp")
+                .unwrap()
+        };
+        self.builder
+            .build_memcpy(dst_p, 8, src_p, 8, inner_bytes)
+            .map_err(|e| format!("fused iter_axis bucket copy failed: {:?}", e))?;
+        let no = self
+            .builder
+            .build_int_add(o, i64_t.const_int(1, false), "t.fia.no")
+            .unwrap();
+        self.builder.build_store(ov, no).unwrap();
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oe);
+
+        // Bind the row view and run the body. The slot is re-stored every
+        // iteration so a body that shadows the name still starts clean.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let row_slot = self.create_entry_alloca(fn_val, row_name, ptr_ty.into());
+        self.builder.build_store(row_slot, sub_t).unwrap();
+        self.variables.insert(
+            row_name.clone(),
+            VarSlot {
+                ptr: row_slot,
+                ty: ptr_ty.into(),
+            },
+        );
+        let sub_static: Vec<Option<i64>> = match tensor_axis_literal(&args[0].value) {
+            Some(a) if a < rank => (0..sub_rank)
+                .map(|k| {
+                    if k < a {
+                        info.dims[k]
+                    } else {
+                        info.dims[k + 1]
+                    }
+                })
+                .collect(),
+            // Runtime axis: every sub-dim reads the header, which we wrote.
+            _ => vec![None; sub_rank],
+        };
+        self.tensor_var_infos.insert(
+            row_name.clone(),
+            TensorVarInfo {
+                elem,
+                elem_unsigned: info.elem_unsigned,
+                dims: sub_static,
+            },
+        );
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
+
+        self.builder.position_at_end(incr_bb);
+        let b = self
+            .builder
+            .build_load(i64_t, bv, "t.fia.bv3")
+            .unwrap()
+            .into_int_value();
+        let nb = self
+            .builder
+            .build_int_add(b, i64_t.const_int(1, false), "t.fia.nbk")
+            .unwrap();
+        self.builder.build_store(bv, nb).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        // The loop owned the buffer; free it once. `break` lands here too.
+        self.builder
+            .build_call(self.free_fn, &[sub_t.into()], "")
+            .unwrap();
+        self.tensor_var_infos.remove(row_name.as_str());
+        self.variables.remove(row_name.as_str());
+        Ok(Some(i64_t.const_int(0, false).into()))
     }
 
     /// `t.iter_axis(n)` — axis iteration. Yields the `dims[n]`

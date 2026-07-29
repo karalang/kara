@@ -72286,6 +72286,66 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_iter_axis_fused_loop_matches_the_materializing_path() {
+        // B-2026-07-29-13. Seven shapes through the fused `for row in
+        // t.iter_axis(n)` lowering, each byte-checked against the interpreter
+        // separately: read-only body, a strided axis-1 gather, `break`,
+        // `continue`, a row that ESCAPES into a Vec (must fall back to the
+        // materializing path and still be correct), the `zip_with(row, …)`
+        // argument position the shipping kernels use, and nested fused loops
+        // sharing one receiver.
+        //
+        // The reused row buffer makes the escape case load-bearing: if the
+        // guard ever let it fuse, the pushed values would all read back as the
+        // last row.
+        let output = run_program(
+            "fn main() {\n\
+                 let mut t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);\n\
+                 let mut i = 0;\n\
+                 while i < 4 {\n\
+                     let mut j = 0;\n\
+                     while j < 3 { t[i, j] = (i * 3 + j) as f32; j = j + 1; }\n\
+                     i = i + 1;\n\
+                 }\n\
+                 let mut a: f32 = 0.0;\n\
+                 for row in t.iter_axis(0) { a = a + row.sum(); }\n\
+                 println(a.to_string());\n\
+                 let mut b: f32 = 0.0;\n\
+                 for col in t.iter_axis(1) { b = b + col.sum(); }\n\
+                 println(b.to_string());\n\
+                 let mut c: f32 = 0.0;\n\
+                 for row in t.iter_axis(0) {\n\
+                     c = c + row.sum();\n\
+                     if c > 10.0 { break; }\n\
+                 }\n\
+                 println(c.to_string());\n\
+                 let mut d: f32 = 0.0;\n\
+                 let mut k = 0;\n\
+                 for row in t.iter_axis(0) {\n\
+                     k = k + 1;\n\
+                     if k == 2 { continue; }\n\
+                     d = d + row.sum();\n\
+                 }\n\
+                 println(d.to_string());\n\
+                 let mut keep: Vec[f32] = Vec.new();\n\
+                 for row in t.iter_axis(0) { keep.push(row.sum()); }\n\
+                 println(keep.len().to_string());\n\
+                 let q: Tensor[f32, [3]] = Tensor.ones([3]);\n\
+                 let mut e: f32 = 0.0;\n\
+                 for row in t.iter_axis(0) { e = e + q.zip_with(row, |x, y| x * y).sum(); }\n\
+                 println(e.to_string());\n\
+                 let mut f: f32 = 0.0;\n\
+                 for r1 in t.iter_axis(0) {\n\
+                     for r2 in t.iter_axis(0) { f = f + r1.sum() + r2.sum(); }\n\
+                 }\n\
+                 println(f.to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "66\n66\n15\n54\n4\n66\n528\n");
+    }
+
+    #[test]
     fn test_e2e_tensor_ref_return() {
         // `ref Tensor` / `mut ref Tensor` returns use the BY-VALUE ABI
         // (phase-11 line 40): a tensor value is a single block pointer, so
@@ -76977,6 +77037,47 @@ mod ref_return_receiver_single_call {
     /// Count the `call`s to `name` anywhere in the module.
     fn calls_to_anywhere(src: &str, name: &str) -> usize {
         count_calls(&module_ir(src), name)
+    }
+
+    #[test]
+    fn tensor_iter_axis_for_loop_fuses_only_when_the_row_cannot_escape() {
+        // B-2026-07-29-13. `for row in t.iter_axis(n)` used to materialize
+        // every sub-tensor as a copy before the loop ran — 30 MB of fresh
+        // allocation for a `[10000, 768]` corpus, of which the loop needs one
+        // row at a time. The fused lowering gathers into ONE reused row
+        // buffer; `t.fia.cond` is its loop header, so its presence in the IR
+        // is the structural signal that fusion engaged.
+        //
+        // The guard is what makes reuse sound: a body that lets the row
+        // OUTLIVE its iteration must keep the materializing path, or the next
+        // gather overwrites a live value. Asserted in both directions here —
+        // a whitelisted read fuses, a `push` of the row does not.
+        let fusable = module_ir(
+            "fn main() {\n\
+                 let t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);\n\
+                 let mut a: f32 = 0.0;\n\
+                 for row in t.iter_axis(0) { a = a + row.sum(); }\n\
+                 println(a.to_string());\n\
+             }",
+        );
+        assert!(
+            fusable.contains("t.fia.cond"),
+            "a read-only row use must fuse; IR:\n{fusable}"
+        );
+
+        let escaping = module_ir(
+            "fn main() {\n\
+                 let t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);\n\
+                 let mut keep: Vec[Tensor[f32, [3]]] = Vec.new();\n\
+                 for row in t.iter_axis(0) { keep.push(row); }\n\
+                 println(keep.len().to_string());\n\
+             }",
+        );
+        assert!(
+            !escaping.contains("t.fia.cond"),
+            "a row pushed into a Vec outlives its iteration and must NOT fuse; \
+             IR:\n{escaping}"
+        );
     }
 
     #[test]
