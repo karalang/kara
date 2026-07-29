@@ -22569,18 +22569,22 @@ fn test_run_jit_env_args_matches_interp() {
 
 #[test]
 fn test_build_project_accepts_aliased_type_and_trait_imports() {
-    // B-2026-07-29-14: `run_multi_file_codegen` concatenates every module's
-    // items and DROPS the `import` declarations. That erases every ALIAS
-    // binding with them — `import doer.{Impl as Widget};` leaves `Widget`
-    // naming nothing in the flat unit — so the flat passes rejected programs
-    // the tree-aware per-module passes had already accepted, in three
-    // different places:
+    // B-2026-07-29-14 / -22 / -23. Three stacked defects made `import … as …`
+    // unusable in a multi-module package, each failing somewhere different:
     //
-    //   aliased STRUCT  -> resolve:   undefined name 'Widget'
-    //   aliased TRAIT   -> typecheck: unknown trait 'D' in inline bound
+    //   aliased STRUCT    resolve    undefined name 'Widget'
+    //   aliased TRAIT     typecheck  unknown trait 'D' in inline bound
+    //   BOTH aliased      E0200      `Widget` does not implement `D`
+    //   aliased FUNCTION  resolve    undefined name 'build'
     //
-    // Each alias is canonicalized to the imported item's real name before
-    // its module's items are appended (`src/import_alias.rs`).
+    // (1) `run_multi_file_codegen` drops the import declarations when it
+    // flattens, erasing every alias binding with them, so the flat passes
+    // rejected what the tree-aware per-module passes had accepted.
+    // `src/import_alias.rs` canonicalizes each module's references first.
+    // (2) The per-module env pulled an imported type's impls only for
+    // NON-aliased imports, leaving the impl table with no entry at all.
+    // (3) A function alias is a bare `Identifier` in value position, which
+    // the type-position rewrite skipped.
     let tmp = scratch_project("import-alias");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
@@ -22591,36 +22595,84 @@ fn test_build_project_accepts_aliased_type_and_trait_imports() {
          pub struct Impl { pub n: i64 }\n\
          impl Doer for Impl {\n\
              fn go(ref self) -> i64 { self.n }\n\
-         }\n",
+         }\n\
+         pub fn mk(v: i64) -> Impl { Impl { n: v } }\n",
     );
-    // Aliased struct and aliased trait, each exercised on its own. The
-    // BOTH-aliased-at-once shape (`Widget` checked against `D`) fails
-    // further upstream, in the per-module impl table, and is tracked
-    // separately — so `Impl` is imported unaliased for the bound leg.
     write(
         &tmp.join("src/main.kara"),
-        "import doer.{Impl, Impl as Widget, Doer as D};\n\
+        "import doer.{Impl as Widget, Doer as D, mk as build};\n\
          fn run[T: D](t: ref T) -> i64 { t.go() }\n\
+         fn call(w: ref Widget) -> i64 { w.go() }\n\
          fn main() {\n\
-             let w = Widget { n: 7 };\n\
-             println(w.n);\n\
-             let u = Impl { n: 5 };\n\
-             println(run(u));\n\
+             let a = Widget { n: 7 };\n\
+             println(run(a));\n\
+             let b = Widget { n: 5 };\n\
+             println(call(b));\n\
+             let c = build(9);\n\
+             println(c.n);\n\
          }\n",
     );
     let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("undefined name 'Widget'"),
-        "the aliased STRUCT import must survive flattening: {stderr}"
-    );
-    assert!(
-        !stderr.contains("unknown trait 'D'"),
-        "the aliased TRAIT import must survive flattening: {stderr}"
-    );
+    for needle in [
+        "undefined name 'Widget'",
+        "unknown trait 'D'",
+        "undefined name 'build'",
+        "E0200",
+    ] {
+        assert!(
+            !stderr.contains(needle),
+            "aliased import wrongly rejected ({needle}): {stderr}"
+        );
+    }
     assert!(
         out.status.success(),
         "project build failed: stderr={stderr}"
     );
+}
+
+#[test]
+fn test_build_project_alias_rewrite_yields_to_a_shadowing_local() {
+    // B-2026-07-29-23 guard. Rewriting a bare `Identifier` is only safe
+    // because an alias the module binds as a VALUE anywhere is dropped from
+    // the substitution entirely (`import_alias::bound_value_names`).
+    // Without that, `let build: i64 = 42;` would have its READS rewritten to
+    // the imported function's name — turning a loud rejection into a
+    // miscompile, which is the one outcome worse than the original bug.
+    let tmp = scratch_project("import-alias-shadow");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/doer.kara"),
+        "pub struct Impl { pub n: i64 }\n\
+         pub fn mk(v: i64) -> Impl { Impl { n: v } }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import doer.{mk as build};\n\
+         fn helper(build: i64) -> i64 { build + 1 }\n\
+         fn main() {\n\
+             let build: i64 = 42;\n\
+             println(build);\n\
+             println(helper(4));\n\
+         }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "shadowing project build failed: stderr={stderr}"
+    );
+    // Run it: the local `build` must still be the i64, not the imported fn.
+    let exe = tmp.join("demo");
+    if exe.exists() {
+        let run = std::process::Command::new(&exe).output().unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert_eq!(
+            stdout.split_whitespace().collect::<Vec<_>>(),
+            ["42", "5"],
+            "the shadowing local must win over the import alias; got {stdout:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
 }

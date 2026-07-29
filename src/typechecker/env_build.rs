@@ -322,11 +322,26 @@ impl<'a> super::TypeChecker<'a> {
         // type 'InMemoryUserDB'" — the import carried the STRUCT but not its
         // impl block — even though the merged super-program typechecks fine.
         // That made `karac build` (project mode) reject a program `karac run`
-        // (super-program) accepts (B-2026-07-08-20). Only collected for a
-        // non-aliased import (bound == origin name): an aliased type is
-        // re-bound under a new name while the impl's target / method signatures
-        // still name the origin, so registering it as-is would be inconsistent
-        // (left as a known limitation).
+        // (super-program) accepts (B-2026-07-08-20).
+        //
+        // ALIASED imports are collected too (B-2026-07-29-22). They were
+        // originally excluded on the reasoning that "an aliased type is
+        // re-bound under a new name while the impl's target still names the
+        // origin, so registering it as-is would be inconsistent". That holds
+        // for the STRUCT re-binding above, which rewrites `name` to the bound
+        // name — but it is backwards for the impl TABLE, which is keyed by the
+        // type's own name and consulted through `Env::type_alias_canonical`'s
+        // alias -> origin retry. Registering the impl UNCHANGED, under the
+        // origin name, is exactly what that retry expects. Skipping it left
+        // `env.impls` with no entry for the imported type at all, so
+        // `import m.{Impl as W, Doer as D}` + `run[T: D](w: W)` was rejected
+        // E0200 with both alias retries firing correctly against an empty
+        // table.
+        //
+        // A SECOND copy is registered under the alias so method dispatch on an
+        // alias-typed value (`w.go()`, where `w: Widget`) finds the methods —
+        // the struct itself is registered only under the bound name, so an
+        // origin-keyed impl alone leaves `Widget` method-less.
         let mut imported_impls: Vec<crate::ast::ImplBlock> = Vec::new();
         for item in &self.program.items {
             let Item::Import(imp) = item else { continue };
@@ -412,19 +427,33 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 // Pull the imported type's `impl` blocks from its defining
                 // module so its associated fns / methods dispatch under
-                // per-module typecheck (B-2026-07-08-20). Non-aliased imports
-                // only — see the `imported_impls` declaration.
-                if ii.alias.is_none() || ii.alias.as_deref() == Some(origin_name.as_str()) {
-                    for oitem in &origin_module.items {
-                        if let Item::ImplBlock(imp) = oitem {
-                            if let TypeKind::Path(p) = &imp.target_type.kind {
-                                if p.segments.last().map(|s| s.as_str())
-                                    == Some(origin_name.as_str())
-                                {
-                                    imported_impls.push(imp.clone());
-                                }
+                // per-module typecheck (B-2026-07-08-20) — see the
+                // `imported_impls` declaration for why aliased imports are
+                // included too (B-2026-07-29-22).
+                let bound_name = ii.alias.clone().unwrap_or_else(|| ii.name.clone());
+                for oitem in &origin_module.items {
+                    let Item::ImplBlock(imp) = oitem else {
+                        continue;
+                    };
+                    let TypeKind::Path(p) = &imp.target_type.kind else {
+                        continue;
+                    };
+                    if p.segments.last().map(|s| s.as_str()) != Some(origin_name.as_str()) {
+                        continue;
+                    }
+                    imported_impls.push(imp.clone());
+                    // Alias twin, re-targeted at the bound name, so method
+                    // dispatch on an alias-typed value resolves. Skipped when
+                    // the names coincide — that would register the same impl
+                    // twice and read as a coherence conflict.
+                    if bound_name != origin_name {
+                        let mut aliased = imp.clone();
+                        if let TypeKind::Path(ap) = &mut aliased.target_type.kind {
+                            if let Some(last) = ap.segments.last_mut() {
+                                *last = bound_name.clone();
                             }
                         }
+                        imported_impls.push(aliased);
                     }
                 }
             }

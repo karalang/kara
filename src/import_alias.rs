@@ -51,12 +51,13 @@ use crate::desugar::{
 pub(crate) fn alias_subst_for_module(
     imports: &[ImportDecl],
     local_names: &HashSet<String>,
+    bound_values: &HashSet<String>,
 ) -> HashMap<String, TypeExpr> {
     let mut subst = HashMap::new();
     for imp in imports {
         for item in &imp.items {
             let Some(alias) = &item.alias else { continue };
-            if alias == &item.name || local_names.contains(alias) {
+            if alias == &item.name || local_names.contains(alias) || bound_values.contains(alias) {
                 continue;
             }
             subst.insert(
@@ -73,6 +74,178 @@ pub(crate) fn alias_subst_for_module(
         }
     }
     subst
+}
+
+/// Every name `items` binds as a VALUE anywhere — parameters, `let`
+/// patterns, closure params, match / if-let / while-let / for patterns.
+///
+/// The second half of [`alias_subst_for_module`]'s shadow guard, and what
+/// makes rewriting a bare `Identifier` safe: if the module never binds the
+/// alias name as a value, an identifier spelling it cannot be a local.
+///
+/// Conservative on purpose — a binding ANYWHERE in the module disables that
+/// alias's rewrite for the whole module. Over-approximating costs nothing
+/// (the program was rejected outright before) and can never redirect a
+/// variable reference, which is the failure mode that matters.
+///
+/// Takes `&mut` only to reuse the mutable child walk; it mutates nothing.
+pub(crate) fn bound_value_names(items: &mut [Item]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for item in items {
+        match item {
+            Item::Function(f) => collect_fn_bindings(f, &mut out),
+            Item::ImplBlock(b) => {
+                for ii in &mut b.items {
+                    if let ImplItem::Method(m) = ii {
+                        collect_fn_bindings(m, &mut out);
+                    }
+                }
+            }
+            Item::TraitDef(t) => {
+                for ti in &mut t.items {
+                    if let TraitItem::Method(m) = ti {
+                        for p in &m.params {
+                            out.extend(p.pattern.binding_names());
+                        }
+                        if let Some(b) = m.body.as_mut() {
+                            collect_block_bindings(b, &mut out);
+                        }
+                    }
+                }
+            }
+            Item::TestCase(t) => collect_block_bindings(&mut t.body, &mut out),
+            Item::ConstDecl(c) => {
+                out.insert(c.name.clone());
+                collect_expr_bindings(&mut c.value, &mut out);
+            }
+            Item::ModuleBinding(m) => {
+                out.insert(m.name.clone());
+                collect_expr_bindings(&mut m.value, &mut out);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn collect_fn_bindings(f: &mut Function, out: &mut HashSet<String>) {
+    for p in &f.params {
+        out.extend(p.pattern.binding_names());
+    }
+    collect_block_bindings(&mut f.body, out);
+}
+
+fn collect_block_bindings(b: &mut Block, out: &mut HashSet<String>) {
+    for stmt in &mut b.stmts {
+        match &mut stmt.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                out.extend(pattern.binding_names());
+                collect_expr_bindings(value, out);
+            }
+            StmtKind::LetElse {
+                pattern,
+                value,
+                else_block,
+                ..
+            } => {
+                out.extend(pattern.binding_names());
+                collect_expr_bindings(value, out);
+                collect_block_bindings(else_block, out);
+            }
+            StmtKind::LetUninit { name, .. } => {
+                out.insert(name.clone());
+            }
+            StmtKind::Expr(e) => collect_expr_bindings(e, out),
+            StmtKind::Assign { target, value, .. }
+            | StmtKind::CompoundAssign { target, value, .. } => {
+                collect_expr_bindings(target, out);
+                collect_expr_bindings(value, out);
+            }
+            StmtKind::MultiAssign {
+                targets, values, ..
+            } => {
+                for e in targets.iter_mut().chain(values.iter_mut()) {
+                    collect_expr_bindings(e, out);
+                }
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_block_bindings(body, out)
+            }
+        }
+    }
+    if let Some(e) = b.final_expr.as_mut() {
+        collect_expr_bindings(e, out);
+    }
+}
+
+fn collect_expr_bindings(e: &mut Expr, out: &mut HashSet<String>) {
+    match &mut e.kind {
+        ExprKind::Match { scrutinee, arms } => {
+            collect_expr_bindings(scrutinee, out);
+            for arm in arms.iter_mut() {
+                out.extend(arm.pattern.binding_names());
+                if let Some(g) = arm.guard.as_mut() {
+                    collect_expr_bindings(g, out);
+                }
+                collect_expr_bindings(&mut arm.body, out);
+            }
+        }
+        ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } => {
+            out.extend(pattern.binding_names());
+            collect_expr_bindings(value, out);
+            collect_block_bindings(then_block, out);
+            if let Some(b) = else_branch.as_mut() {
+                collect_expr_bindings(b, out);
+            }
+        }
+        ExprKind::WhileLet {
+            pattern,
+            value,
+            body,
+            ..
+        } => {
+            out.extend(pattern.binding_names());
+            collect_expr_bindings(value, out);
+            collect_block_bindings(body, out);
+        }
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            out.extend(pattern.binding_names());
+            collect_expr_bindings(iterable, out);
+            collect_block_bindings(body, out);
+        }
+        ExprKind::Closure { params, body, .. } => {
+            for p in params.iter() {
+                out.extend(p.pattern.binding_names());
+            }
+            collect_expr_bindings(body, out);
+        }
+        // Both child callbacks need `out`; share it through a cell so the
+        // closures don't each claim unique access.
+        _ => {
+            let cell = std::cell::RefCell::new(&mut *out);
+            walk_expr_children(
+                e,
+                &mut |c| {
+                    let mut g = cell.borrow_mut();
+                    collect_expr_bindings(c, &mut g);
+                },
+                &mut |b| {
+                    let mut g = cell.borrow_mut();
+                    collect_block_bindings(b, &mut g);
+                },
+            );
+        }
+    }
 }
 
 /// Names declared by `items` — the shadowing guard for
@@ -346,6 +519,27 @@ fn rewrite_block_patterns(block: &mut Block, subst: &HashMap<String, TypeExpr>) 
 /// expression forms need naming here; everything else recurses through the
 /// generic child walk below.
 fn rewrite_expr_patterns(e: &mut Expr, subst: &HashMap<String, TypeExpr>) {
+    // A bare `Identifier` naming an aliased item — the shape a FUNCTION alias
+    // takes (`import m.{mk as build};` + `build(9)`), which `subst_expr`
+    // leaves alone because for its original trait-type-param use an
+    // identifier is always a value, never a type (B-2026-07-29-23).
+    //
+    // Safe unconditionally HERE because `alias_subst_for_module` has already
+    // dropped any alias that the module binds as a value anywhere — see
+    // `bound_value_names`. So an identifier matching a live alias cannot be a
+    // local variable, parameter, closure param, or pattern binding.
+    if let ExprKind::Identifier(n) = &mut e.kind {
+        if let Some(TypeExpr {
+            kind: TypeKind::Path(p),
+            ..
+        }) = subst.get(n.as_str())
+        {
+            if p.segments.len() == 1 && p.generic_args.is_none() {
+                *n = p.segments[0].clone();
+            }
+        }
+        return;
+    }
     match &mut e.kind {
         ExprKind::Match { scrutinee, arms } => {
             rewrite_expr_patterns(scrutinee, subst);
