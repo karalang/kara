@@ -5,10 +5,26 @@
 // This program fetches data from three independent sources,
 // processes it, and writes a summary. The programmer writes
 // sequential-looking code — the compiler parallelizes it.
+//
+// COMPILE-ONLY. This file type-checks and is the subject of the effect
+// analysis the README walks through; it does not RUN, because the three
+// resources below declare a `DatabaseProvider` that nothing implements and no
+// `with_provider` scope binds. Running it stops at "no provider bound for
+// resource 'UserDB'". `examples/db_pipeline` is the runnable counterpart —
+// same shape, with an `InMemoryDb` provider and a `with_provider` binding.
 
 effect resource UserDB: DatabaseProvider;
 effect resource OrderDB: DatabaseProvider;
 effect resource NotifDB: DatabaseProvider;
+
+// The error type the three fetches share. Defined locally because this file
+// is a single-file demo: `examples/db_pipeline` declares the same vocabulary
+// (`DbError` alongside its own `DatabaseProvider`) as a multi-module package.
+#[derive(Display)]
+enum DbError {
+    NotFound { table: String },
+    Backend { message: String },
+}
 
 struct Profile {
     name: String,
@@ -43,15 +59,15 @@ struct Dashboard {
 // DatabaseProvider trait. The concrete implementation is injected
 // at the call site via with_provider (see main below).
 
-fn fetch_profile(user_id: u64) -> Result[Profile, Error] {
+fn fetch_profile(user_id: u64) -> Result[Profile, DbError] {
     UserDB.query_one("SELECT name, email, tier FROM users WHERE id = ?", user_id)
 }
 
-fn fetch_orders(user_id: u64) -> Result[Vec[Order], Error] {
+fn fetch_orders(user_id: u64) -> Result[Vec[Order], DbError] {
     OrderDB.query("SELECT id, total, status FROM orders WHERE user_id = ?", user_id)
 }
 
-fn fetch_notifications(user_id: u64) -> Result[Vec[Notification], Error] {
+fn fetch_notifications(user_id: u64) -> Result[Vec[Notification], DbError] {
     NotifDB.query("SELECT message, unread FROM notifications WHERE user_id = ?", user_id)
 }
 
@@ -74,8 +90,16 @@ fn build_dashboard(profile: Profile, orders: Vec[Order], notifs: Vec[Notificatio
 
 // main is private too — effects inferred automatically.
 // The compiler infers: reads(Env), reads(UserDB), reads(OrderDB), reads(NotifDB), writes(Stdio)
-fn main() {
-    let user_id = env.args().get(1).unwrap_or("1").parse_u64()?;
+fn main() -> Result[(), DbError] {
+    let args = env.args();
+    let user_id = match u64.parse(args.get(1).unwrap_or("1")) {
+        Some(id) => id,
+        // Default rather than fail: the point of this demo is the effect
+        // analysis below, not argument parsing. (It also keeps the demo out of
+        // the way of B-2026-07-29-18 — under `karac run`, `env.args()` returns
+        // karac's own argv, so `args[1]` is the literal string "run".)
+        None => 1,
+    };
 
     // Three independent reads on different resources.
     // The compiler sees: reads(UserDB), reads(OrderDB), reads(NotifDB)
@@ -90,4 +114,5 @@ fn main() {
     println(dashboard.greeting);
     println(dashboard.order_summary);
     println(dashboard.alert);
+    Ok(())
 }

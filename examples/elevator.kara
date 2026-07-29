@@ -12,18 +12,18 @@ const MAX_FLOOR: i64 = 10;
 // Three-valued direction: Idle is the initial / quiescent state.
 // Falls into the Up sweep in next_stop so the first request biases upward.
 #[derive(Eq, Clone)]
-enum Direction {
+shared enum Direction {
     Up,
     Down,
     Idle,
 }
 
 impl Display for Direction {
-    fn fmt(ref self, f: mut ref Formatter) {
+    fn to_string(ref self) -> String {
         match self {
-            Up   => write(f, "↑"),
-            Down => write(f, "↓"),
-            Idle => write(f, "·"),
+            Up   => "↑".to_string(),
+            Down => "↓".to_string(),
+            Idle => "·".to_string(),
         }
     }
 }
