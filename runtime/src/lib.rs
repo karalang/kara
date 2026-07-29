@@ -8336,6 +8336,84 @@ static KARAC_SPAWN_SITES: SpawnSiteEntryStandIn = SpawnSiteEntryStandIn(KaracSpa
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
+// ── glibc allocator tuning (B-2026-07-29-13) ────────────────────────────
+//
+// A Kāra program that repeatedly builds and drops a large working set — the
+// driver case is `Tensor.iter_axis(n)`, which materializes every sub-tensor as
+// a fresh copy — pays for glibc returning the freed arena to the kernel and
+// then re-faulting it in on the next round. The cost is SYSTEM time and it is
+// proportional to the bytes touched, not to the allocation count:
+//
+//   30 MB corpus, 50 iter_axis passes, sub-tensor shape varied
+//     100 rows x 300 KB   real 1.09 s   sys 0.88 s
+//   10000 rows x   3 KB   real 1.03 s   sys 0.80 s
+//   100000 rows x  304 B  real 1.55 s   sys 0.82 s
+//
+// A thousand-fold change in malloc COUNT barely moves sys time, which is what
+// rules out per-malloc bookkeeping and points at page faults. Raising the trim
+// threshold above the working set keeps those pages mapped between rounds;
+// raising the mmap threshold keeps medium blocks (a 300 KB tensor row is over
+// glibc's 128 KB default) in the arena instead of mmap/munmap per allocation.
+// Both are needed — either alone leaves one of the two shapes slow.
+//
+//   iter (3 KB rows)   1.03 s / sys 0.80 s  ->  0.41 s / sys 0.03 s
+//   wide (300 KB rows) 1.02 s / sys 0.80 s  ->  0.31 s / sys 0.03 s
+//
+// Peak RSS is UNCHANGED (~62 MB either way, measured via VmHWM): the high-water
+// mark is set by what is live at once, not by whether freed pages are returned.
+// So this trades no measured memory for a 2.5-3x wall-clock win.
+//
+// Deliberately modest values rather than "never trim": 64 MiB covers the
+// working set of a realistic batch kernel, and 1 MiB is the smallest mmap
+// threshold that captured the full win in the sweep (256 KiB did not).
+//
+// glibc only. musl and macOS have no `mallopt` with these parameters; both are
+// cfg'd out and keep the platform default. `KARAC_MALLOC_TUNE=0` restores the
+// default for bisecting a suspected allocator interaction.
+//
+// This does NOT make `iter_axis` stop copying — the remaining ~3x against a
+// borrow-only traversal of the same bytes is the copy itself, which needs
+// either a tensor-view layout or loop fusion. See the ledger entry.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod malloc_tuning {
+    /// `M_TRIM_THRESHOLD` / `M_MMAP_THRESHOLD` from glibc's `<malloc.h>`.
+    const M_TRIM_THRESHOLD: i32 = -1;
+    const M_MMAP_THRESHOLD: i32 = -3;
+
+    const TRIM_BYTES: i32 = 64 * 1024 * 1024;
+    const MMAP_BYTES: i32 = 1024 * 1024;
+
+    extern "C" {
+        fn mallopt(param: i32, value: i32) -> i32;
+        fn getenv(name: *const u8) -> *const u8;
+    }
+
+    /// Runs from `.init_array`, before `main`, so the thresholds are in force
+    /// for the program's first allocation.
+    ///
+    /// Reads the escape hatch through `getenv` rather than `std::env` — this
+    /// runs during static initialization, ahead of any std env setup.
+    pub(super) extern "C" fn tune() {
+        // SAFETY: `getenv` with a NUL-terminated literal; the returned pointer
+        // is read for one byte only and not retained. `mallopt` is a plain
+        // integer-parameter call with no memory effects.
+        unsafe {
+            let off = getenv(c"KARAC_MALLOC_TUNE".as_ptr() as *const u8);
+            if !off.is_null() && *off == b'0' {
+                return;
+            }
+            mallopt(M_TRIM_THRESHOLD, TRIM_BYTES);
+            mallopt(M_MMAP_THRESHOLD, MMAP_BYTES);
+        }
+    }
+
+    /// `.init_array` entry. `#[used]` keeps it through LTO + `--gc-sections`
+    /// (init-array entries are GC roots).
+    #[used]
+    #[link_section = ".init_array"]
+    static TUNE_CTOR: extern "C" fn() = tune;
+}
+
 #[cfg(test)]
 mod tests {
     //! Runtime unit tests for the Debugger Contract slice 4 surface
