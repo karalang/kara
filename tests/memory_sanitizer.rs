@@ -10977,6 +10977,69 @@ fn main() {
     /// left alone — the None/unconsumed arms are the leak direction, where an
     /// over-eager source zero would strand the payload instead of double-freeing
     /// it. Loops so any per-iteration imbalance accumulates.
+
+    /// B-2026-07-28-17 — the SHARED-ROOT sibling of the test below, and the
+    /// opposite treatment.
+    ///
+    /// `match a { V(nd) => consume(nd.hp) }`: the struct holding the field is a
+    /// payload VIEW into an RC node. B-2026-07-28-16's fix neutralizes the
+    /// SOURCE, which is not available here — zeroing a field inside a shared
+    /// node would corrupt every other handle to it — so the callee gets a
+    /// defensive COPY and the node keeps its original.
+    ///
+    /// Kept as its own test, and deliberately STRAIGHT-LINE, because the shape
+    /// turned out to be fragile in two ways that a routine test would have
+    /// papered over — each verified by running the candidate against the
+    /// pre-fix compiler:
+    ///
+    ///   * The payload must actually ESCAPE the callee (the arm returns
+    ///     `x.label`). A consumer that merely reads it binds a borrow, frees
+    ///     nothing, and the program is clean with or without the fix.
+    ///   * Wrapping the same body in a `while` loop — the accumulate-so-
+    ///     imbalance-shows idiom the sibling test uses — SUPPRESSES it. The
+    ///     looped form passed pre-fix; the straight-line form aborts.
+    ///
+    /// So this asserts stdout rather than an accumulated total, and repeats the
+    /// shape with distinct bindings instead of iterating.
+    #[test]
+    fn asan_shared_payload_view_optres_field_call_arg_copy_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct H { label: String, k: i64 }
+struct Node { hp: Option[H], k: i64 }
+shared enum E { V(Node) }
+fn hname(h: Option[H]) -> String {
+    match h {
+        None => "none".to_string(),
+        Some(x) => x.label,
+    }
+}
+fn main() {
+    let a = E.V(Node { hp: Some(H { label: "deep".to_string(), k: 2 }), k: 7 });
+    match a {
+        V(nd) => {
+            println(hname(nd.hp));
+        }
+    }
+    let b = E.V(Node { hp: Some(H { label: "second".to_string(), k: 3 }), k: 8 });
+    match b {
+        V(nd) => {
+            println(hname(nd.hp));
+        }
+    }
+    let c = E.V(Node { hp: None, k: 9 });
+    match c {
+        V(nd) => {
+            println(hname(nd.hp));
+        }
+    }
+}
+"#,
+            &["deep", "second", "none"],
+            "shared_payload_view_optres_field_call_arg_copy",
+        );
+    }
+
     #[test]
     fn asan_owned_struct_optres_field_call_arg_move_no_leak_no_double_free() {
         assert_clean_asan_run(

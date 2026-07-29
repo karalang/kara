@@ -1563,6 +1563,14 @@ impl<'ctx> super::Codegen<'ctx> {
             if !borrow_skip {
                 self.share_option_shared_index_ref_for_arg(&a.value, val);
             }
+            // B-2026-07-28-17: an `Option[<heap>]` field of a shared-enum
+            // payload VIEW must be copied, not aliased — the node keeps its
+            // original and the callee frees its own. No-op for every other arg.
+            let val = if borrow_skip {
+                val
+            } else {
+                self.clone_shared_view_optres_field_arg(&a.value, val)
+            };
             compiled_args.push(BasicMetadataValueEnum::from(val));
             // B-2026-06-11-5: a block-construct call argument
             // (`take({ f"…" })`) had its tail acc suppressed by

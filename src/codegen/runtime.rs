@@ -3341,6 +3341,81 @@ impl<'ctx> super::Codegen<'ctx> {
     /// SOURCE (the caller's param buffer / the source Vec's element) retains the
     /// scope-exit free, so a retaining-consume site must own a private copy
     /// rather than alias it. See `emit_vecstr_defensive_copy`.
+    /// B-2026-07-28-17 — a heap-owning `Option` FIELD read out of a struct
+    /// that is a match-arm payload VIEW into a `shared enum` node, passed by
+    /// value to a parameter that owns it.
+    ///
+    /// The owned-root form of this move (B-2026-07-28-16) neutralizes the
+    /// SOURCE: it zeroes the Option tag so the owning struct's drop skips the
+    /// payload the callee now frees. That is not available here, because the
+    /// struct lives inside an RC node other handles can still read — writing to
+    /// it would corrupt them, which is exactly why `field_chain_place_ptr` bails
+    /// on a borrowed root. So the callee gets an independent COPY instead and
+    /// the node keeps its original, the same trade the `let`-site
+    /// clone-on-extract already makes for a Vec field of such a view.
+    ///
+    /// Returns `val` untouched for every other shape.
+    pub(super) fn clone_shared_view_optres_field_arg(
+        &mut self,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let ExprKind::FieldAccess { object, field } = &arg_expr.kind else {
+            return val;
+        };
+        let ExprKind::Identifier(recv) = &object.kind else {
+            return val;
+        };
+        if !self
+            .shared_enum_payload_view_vars
+            .contains_key(recv.as_str())
+        {
+            return val;
+        }
+        let Some(struct_name) = self.inferred_receiver_type(object) else {
+            return val;
+        };
+        let Some(field_te) = self
+            .struct_field_names
+            .get(&struct_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+            .and_then(|idx| {
+                self.struct_field_type_exprs
+                    .get(&struct_name)
+                    .and_then(|tes| tes.get(idx))
+            })
+            .cloned()
+        else {
+            return val;
+        };
+        // `emit_option_value_clone_fn` self-gates on the payload actually owning
+        // heap, so a POD payload keeps the shallow copy and costs nothing.
+        let Some(clone_fn) = self.emit_option_value_clone_fn(&field_te) else {
+            return val;
+        };
+        let opt_ty = val.get_type();
+        let (Ok(src), Ok(dst)) = (
+            self.builder.build_alloca(opt_ty, "argview.clone.src"),
+            self.builder.build_alloca(opt_ty, "argview.clone.dst"),
+        ) else {
+            return val;
+        };
+        if self.builder.build_store(src, val).is_err() {
+            return val;
+        }
+        if self
+            .builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .is_err()
+        {
+            return val;
+        }
+        match self.builder.build_load(opt_ty, dst, "argview.clone.v") {
+            Ok(v) => v,
+            Err(_) => val,
+        }
+    }
+
     pub(super) fn maybe_defensive_copy_param_arg(
         &mut self,
         arg_expr: &Expr,
