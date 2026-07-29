@@ -2095,3 +2095,128 @@ fn dep_test_companions_are_skipped() {
         );
     }
 }
+
+/// An IMPORTED type alias must be expanded to its underlying type, exactly as
+/// a locally-declared one is. `collect_import_origins`' candidate match covered
+/// StructDef / EnumDef / TraitDef / TraitAlias / MarkerTrait but not
+/// `Item::TypeAlias`, so an imported `pub type Row = Map[String, i64]` never
+/// reached `env.type_aliases` and stayed an opaque nominal: `let r: Row =
+/// Map.new();` failed with `expected 'Row', found 'Map<?T0, ?T1>'`
+/// (B-2026-07-29-25). The same alias declared locally always worked, which is
+/// what isolated it to cross-module plumbing.
+#[test]
+fn imported_type_alias_is_expanded() {
+    for (label, main_src) in [
+        (
+            "alias to Map, annotated let",
+            "import types.Row;\n\
+             fn main() { let mut r: Row = Map.new(); r.insert(\"a\".to_string(), 1); \
+             println(f\"{r.len()}\"); }\n",
+        ),
+        (
+            "alias to Vec, annotated let",
+            "import types.Nums;\n\
+             fn main() { let mut v: Nums = Vec.new(); v.push(1); println(f\"{v.len()}\"); }\n",
+        ),
+        (
+            "alias in a signature, and the base passed in",
+            "import types.Row;\n\
+             fn size(r: ref Row) -> i64 { r.len() }\n\
+             fn main() { let mut m: Map[String, i64] = Map.new(); println(f\"{size(m)}\"); }\n",
+        ),
+        (
+            "aliased import of an alias",
+            "import types.{Row as R};\n\
+             fn main() { let mut r: R = Map.new(); r.insert(\"a\".to_string(), 1); \
+             println(f\"{r.len()}\"); }\n",
+        ),
+    ] {
+        let d = ScratchDir::new("imported-type-alias");
+        d.write(
+            "src/types.kara",
+            "pub type Row = Map[String, i64];\npub type Nums = Vec[i64];\n",
+        );
+        d.write("src/main.kara", main_src);
+
+        let w = walked(d.root());
+        let built = build_program_tree(&w).expect("build tree");
+        let root = built.tree.root;
+        let errors = typecheck_module_errors(&built.tree, root);
+        assert!(
+            errors.is_empty(),
+            "{label}: imported type alias should expand, got: {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+        );
+    }
+}
+
+/// The imported alias must be registered BEFORE any local item is lowered.
+///
+/// Registering it late (where every other imported item is handled, at the end
+/// of `build_type_env`) is worse than not registering it at all: a signature
+/// lowered before the alias was known keeps a nominal `Row` while an expression
+/// lowered after it expands to `Map<String, i64>`, and the two refuse to unify.
+/// This shape — the alias used in a TRAIT signature and in an impl body in the
+/// same module that declares neither — is what caught it, reporting
+/// `expected 'Map<String, i64>', found 'Row'`.
+///
+/// NOTE on what this test does and does not prove. It passes both with the
+/// current fix AND with no fix at all: when nothing registers the alias, the
+/// signature and the body are both nominal `Row`, so they unify vacuously. It
+/// fails only in the INTERMEDIATE state. That makes it a guard against a
+/// partial fix — specifically against someone adding the registration to
+/// `collect_import_origins` alone and stopping there — not a demonstration that
+/// aliases expand. `imported_type_alias_is_expanded` is the test that proves
+/// the expansion, and it is the one that fails without the fix.
+#[test]
+fn imported_type_alias_unifies_between_signature_and_body() {
+    let d = ScratchDir::new("imported-alias-ordering");
+    d.write("src/types.kara", "pub type Row = Map[String, i64];\n");
+    d.write(
+        "src/store.kara",
+        "import types.Row;\n\
+         pub trait Store { fn all(ref self) -> Vec[Row]; }\n\
+         pub struct Mem { rows: Vec[Row] }\n\
+         impl Store for Mem { fn all(ref self) -> Vec[Row] { self.rows.clone() } }\n",
+    );
+    d.write(
+        "src/main.kara",
+        "import store.{Store, Mem};\nfn main() { let m = Mem { rows: Vec.new() }; \
+         println(f\"{m.all().len()}\"); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = built.tree.root;
+    let errors = typecheck_module_errors(&built.tree, root);
+    assert!(
+        errors.is_empty(),
+        "signature and body must agree on an imported alias, got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+    );
+}
+
+/// A LOCAL declaration shadows an imported alias of the same name — the
+/// `local_type_names` guard omitted `Item::TypeAlias`, harmlessly while imported
+/// aliases were never registered at all, but load-bearing now that they are.
+#[test]
+fn local_type_alias_shadows_an_imported_one() {
+    let d = ScratchDir::new("local-alias-shadows");
+    d.write("src/types.kara", "pub type Row = Map[String, i64];\n");
+    d.write(
+        "src/main.kara",
+        "import types.Row;\n\
+         type Row = Vec[i64];\n\
+         fn main() { let mut r: Row = Vec.new(); r.push(1); println(f\"{r.len()}\"); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = built.tree.root;
+    let errors = typecheck_module_errors(&built.tree, root);
+    assert!(
+        errors.is_empty(),
+        "the local `Row = Vec[i64]` must win over the imported `Map` alias, got: {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+    );
+}

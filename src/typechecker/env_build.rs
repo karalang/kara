@@ -54,6 +54,9 @@ impl<'a> super::TypeChecker<'a> {
         self.register_baked_stdlib();
         self.register_compiler_intrinsic_env();
 
+        // MUST precede every local item walk below — see the method's docs.
+        self.register_imported_type_aliases();
+
         let items: Vec<Item> = self.program.items.clone();
 
         // Stub pre-pass for self-referential shared types. Field-type
@@ -299,6 +302,88 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Register IMPORTED type aliases, before any local item is lowered.
+    ///
+    /// The ordering is load-bearing, and only for aliases.
+    /// [`Self::collect_import_origins`] — which registers every other kind of
+    /// imported item — runs at the END of `build_type_env`. That is harmless for
+    /// an imported struct, enum or trait: those stay NOMINAL, so a signature
+    /// lowered before the import was registered and an expression lowered after
+    /// it both produce the same `Type::Named`, and they unify.
+    ///
+    /// An alias must EXPAND, so registering it late yields two different
+    /// lowerings of one source name. Registering `type Row = Map[String, Value]`
+    /// only at the end left `examples/db_pipeline`'s trait signature
+    /// `Result[Vec[Row], DbError]` holding a nominal `Row` while the impl body's
+    /// value expanded to `Map<String, Value>` — 16 fresh errors of the form
+    /// `expected 'Map<String, Value>', found 'Row'`, strictly worse than the
+    /// opaque-alias failure being fixed. B-2026-07-29-25.
+    ///
+    /// Deliberately narrow: this duplicates a slice of `collect_import_origins`'
+    /// walk rather than hoisting that whole pass, because the rest of it has no
+    /// ordering requirement and moving it would change registration precedence
+    /// for every imported item kind. Re-registering the same alias later is a
+    /// no-op `HashMap` insert.
+    fn register_imported_type_aliases(&mut self) {
+        let Some(tree) = self.tree else {
+            return;
+        };
+        // A genuine local declaration wins over an import of the same name.
+        let local_names: std::collections::HashSet<String> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::StructDef(s) => Some(s.name.clone()),
+                Item::EnumDef(e) => Some(e.name.clone()),
+                Item::UnionDef(u) => Some(u.name.clone()),
+                Item::TraitDef(t) => Some(t.name.clone()),
+                Item::TypeAlias(t) => Some(t.name.clone()),
+                _ => None,
+            })
+            .collect();
+        // Collect first: the walk borrows `self.program`, and `env_add_*` needs
+        // `&mut self`.
+        let mut found: Vec<(String, TypeAliasDef, Vec<String>)> = Vec::new();
+        for item in &self.program.items {
+            let Item::Import(imp) = item else { continue };
+            for ii in &imp.items {
+                let bound = ii.alias.clone().unwrap_or_else(|| ii.name.clone());
+                if local_names.contains(&bound) {
+                    continue;
+                }
+                let Some((origin_path, origin_name)) =
+                    crate::module::canonical_origin(tree, &imp.path, &ii.name)
+                else {
+                    continue;
+                };
+                let Some(&origin_id) = tree.graph.by_path.get::<[String]>(&origin_path) else {
+                    continue;
+                };
+                for oitem in &tree.module(origin_id).items {
+                    if let Item::TypeAlias(t) = oitem {
+                        if t.name == origin_name {
+                            found.push((bound.clone(), t.clone(), origin_path.clone()));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        for (bound, t, origin_path) in found {
+            let mut local_def = t.clone();
+            local_def.name = bound;
+            self.env_add_type_alias(&local_def);
+            // The alias body names types from ITS module, not the consumer's.
+            self.register_transitive_type_deps(
+                tree,
+                type_alias_referenced_names(&t),
+                &origin_path,
+                &local_names,
+            );
+        }
+    }
+
     /// Walk `self.program.items` imports, look each target up in the
     /// `ProgramTree`, and stash the (origin path, origin visibility) pair
     /// under the locally-bound name. CR-24 slice 6 (slice 7 extension:
@@ -414,6 +499,13 @@ impl<'a> super::TypeChecker<'a> {
                         Item::TraitDef(t) => t.name == origin_name,
                         Item::TraitAlias(t) => t.name == origin_name,
                         Item::MarkerTrait(t) => t.name == origin_name,
+                        // B-2026-07-29-25: a TYPE alias was missing here, so an
+                        // imported `pub type Row = Map[String, Value];` never
+                        // reached `env.type_aliases` and stayed an opaque
+                        // nominal in the consumer — `let r: Row = Map.new();`
+                        // failed with `expected 'Row', found 'Map<?T0, ?T1>'`
+                        // while the identical alias declared locally worked.
+                        Item::TypeAlias(t) => t.name == origin_name,
                         _ => false,
                     };
                     if matches {
@@ -479,6 +571,10 @@ impl<'a> super::TypeChecker<'a> {
                 Item::TraitDef(t) => Some(t.name.clone()),
                 Item::TraitAlias(t) => Some(t.name.clone()),
                 Item::MarkerTrait(t) => Some(t.name.clone()),
+                // A local TYPE alias shadows an import too. Missing while
+                // imported aliases were never registered (B-2026-07-29-25), so
+                // there was nothing for it to shadow.
+                Item::TypeAlias(t) => Some(t.name.clone()),
                 _ => None,
             })
             .collect();
@@ -535,6 +631,17 @@ impl<'a> super::TypeChecker<'a> {
                     let mut local_def = t.clone();
                     local_def.name = bound_name;
                     self.env_add_marker_trait(&local_def);
+                }
+                Item::TypeAlias(t) => {
+                    let mut local_def = t.clone();
+                    local_def.name = bound_name;
+                    self.env_add_type_alias(&local_def);
+                    self.register_transitive_type_deps(
+                        tree,
+                        type_alias_referenced_names(t),
+                        &origin_path,
+                        &local_type_names,
+                    );
                 }
                 _ => {}
             }
@@ -3161,6 +3268,15 @@ fn struct_referenced_names(s: &StructDef) -> Vec<String> {
     for f in &s.fields {
         collect_type_names(&f.ty, &mut out);
     }
+    out
+}
+
+/// Type names referenced by a type alias's body — the alias twin of
+/// [`struct_referenced_names`]. Used to register an imported alias's
+/// transitive type dependencies from its DEFINING module (B-2026-07-29-25).
+fn type_alias_referenced_names(t: &TypeAliasDef) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_type_names(&t.ty, &mut out);
     out
 }
 
