@@ -80,9 +80,14 @@ const EXCLUDED_DIRS: &[&str] = &[
 const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[
     (
         "db_pipeline",
-        "src/executor.kara:38 writes `ref` at a call site, which the parser \
-         rejects (design.md Feature 4 Part 1½ — the mode is declared on the \
-         callee's signature). Same rot class as B-2026-07-29-3.",
+        // The call-site `ref` this pin originally named is FIXED
+        // (B-2026-07-29-19, along with the 17 design.md blocks the example was
+        // written against). Removing it let resolution run for the first time
+        // and surface what was latent behind the parse error, in files the fix
+        // never touched — so the pin is retargeted, not dropped.
+        "src/db.kara:51 — E0104 undefined type 'Value' (and E0100 undefined \
+         effect resource 'Db' at src/executor.kara:34); 18 errors total, all \
+         cross-module resolution of the provider surface.",
     ),
     (
         "weave",

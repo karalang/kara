@@ -50,7 +50,7 @@ fn main() {
             table:   "users",
             columns: Vec.new(),   // all columns
         })).unwrap();
-        print_rows(ref rows);
+        print_rows(rows);
 
         println("--- SELECT orders WHERE user_id = 1 ---");
         let rows = execute(plan(Query.SelectWhere {
@@ -59,6 +59,6 @@ fn main() {
             column:  "user_id",
             value:   Value.Int(1),
         })).unwrap();
-        print_rows(ref rows);
+        print_rows(rows);
     });
 }

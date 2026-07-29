@@ -35,24 +35,24 @@ pub fn execute(plan: QueryPlan) -> Result[Vec[Row], DbError]
 {
     match plan {
         FullScan { table, columns } => {
-            let rows = Db.query_table(ref table)?;
-            Ok(project(rows, ref columns))
+            let rows = Db.query_table(table)?;
+            Ok(project(rows, columns))
         },
 
         FilterScan { table, columns, column, value } => {
-            let rows = Db.query_table(ref table)?;
-            let filtered = filter_rows(rows, ref column, ref value);
-            Ok(project(filtered, ref columns))
+            let rows = Db.query_table(table)?;
+            let filtered = filter_rows(rows, column, value);
+            Ok(project(filtered, columns))
         },
 
         Insert { table, column_names, values } => {
             let row = zip_row(column_names, values);
-            Db.insert_row(ref table, row)?;
+            Db.insert_row(table, row)?;
             Ok(Vec.new())
         },
 
         Delete { table, column, value } => {
-            Db.delete_where(ref table, ref column, ref value)?;
+            Db.delete_where(table, column, value)?;
             Ok(Vec.new())
         },
     }

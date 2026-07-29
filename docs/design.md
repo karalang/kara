@@ -1394,7 +1394,7 @@ impl Parser {
     }
 
     pub fn tokens(ref self) -> ref Vec[Token] {
-        self.tokens.get_or_init(|| tokenize(ref self.source))
+        self.tokens.get_or_init(|| tokenize(self.source))
     }
 }
 ```
@@ -3434,7 +3434,7 @@ The `: PartialOrd + Eq` says **every type that implements `Ord` must also implem
    trait Ord: PartialOrd + Eq {
        fn cmp(ref self, other: ref Self) -> Ordering
        fn max(self, other: Self) -> Self {
-           if self.cmp(ref other) == Ordering.Less { other } else { self }
+           if self.cmp(other) == Ordering.Less { other } else { self }
        }
    }
    ```
@@ -4509,7 +4509,7 @@ fn first_word(s: ref String) -> StringSlice {
 
 ```
 let line = "alice,30,engineer";
-let s = first_word(ref line);     // StringSlice — borrows from line
+let s = first_word(line);     // StringSlice — borrows from line
 let owned: String = s.to_string();  // owned copy when you need to keep it
 ```
 
@@ -4773,7 +4773,7 @@ fn main() -> Result[(), IoError] {
         eprintln("usage: tool <path>");
         return Err(IoError.Other("missing argument".to_string()));
     }
-    let content = fs.read_to_string(ref args[1])?;
+    let content = fs.read_to_string(args[1])?;
     println(content);
     Ok(())
 }
@@ -5117,7 +5117,7 @@ for (key, value) in map { ... }             // already specified — same mechan
   // The parameter as a whole is `own` because body is moved out.
   // headers is accessed by ref from the already-owned Request — no separate borrow.
   fn handle(Request { headers, body }: Request) {
-      log(ref headers)    // read-only access to the owned value's field
+      log(headers)    // read-only access to the owned value's field
       process(body)       // moves body out — Request is now partially moved
       // headers is still accessible here (it was not moved)
       // body is NOT accessible here (already moved)
@@ -5354,10 +5354,10 @@ trait Hasher {
     fn finish(ref self) -> u64;
 
     // Convenience methods with default bodies that feed bytes through `write`:
-    fn write_u8(mut ref self, n: u8)    { self.write(ref [n]) }
-    fn write_u16(mut ref self, n: u16)  { self.write(ref n.to_ne_bytes()) }
-    fn write_u32(mut ref self, n: u32)  { self.write(ref n.to_ne_bytes()) }
-    fn write_u64(mut ref self, n: u64)  { self.write(ref n.to_ne_bytes()) }
+    fn write_u8(mut ref self, n: u8)    { self.write([n]) }
+    fn write_u16(mut ref self, n: u16)  { self.write(n.to_ne_bytes()) }
+    fn write_u32(mut ref self, n: u32)  { self.write(n.to_ne_bytes()) }
+    fn write_u64(mut ref self, n: u64)  { self.write(n.to_ne_bytes()) }
     // …and the signed / isize / usize variants
 }
 
@@ -6837,7 +6837,7 @@ fn count_logged[T](xs: Vec[T], log: ref Logger)
 }
 
 // Caller can drop `log` and keep iterating:
-let it = count_logged(xs, ref logger);
+let it = count_logged(xs, logger);
 drop(logger);                          // ✓ existential does not capture log's region
 let n = it.count();                    // ✓ iterator outlives logger
 ```
@@ -8608,7 +8608,7 @@ pub fn disconnect(c: Connection[Connected]) with writes(Network) { ... }
 
 // Compile error — type mismatch catches wrong-state access:
 let conn = Connection[Disconnected] { socket: Socket.new() };
-send(ref conn, data);  // ERROR: expected Connection[Connected], got Connection[Disconnected]
+send(conn, data);  // ERROR: expected Connection[Connected], got Connection[Disconnected]
 ```
 
 Ownership ensures state cannot be "forked" — once `connect()` consumes `Connection[Disconnected]`, the old handle is gone. This covers the common cases: protocol state machines, builder patterns, resource lifecycle (open/closed/disposed).
@@ -9560,8 +9560,8 @@ The Kāra model trades the auto-trait derivation mechanism for closed enumeratio
 // 1. Two spawned tasks sharing ref T — ALLOWED (multiple readers).
 fn process_in_parallel(data: Vec[i64]) -> (i64, i64) {
     par {
-        let a = sum_first_half(ref data);
-        let b = sum_second_half(ref data);
+        let a = sum_first_half(data);
+        let b = sum_second_half(data);
         (a, b)
     }
     // data still owned and accessible here
@@ -9571,7 +9571,7 @@ fn process_in_parallel(data: Vec[i64]) -> (i64, i64) {
 fn append_concurrently(mut log: Vec[String]) -> Vec[String] {
     par {
         let _ = compute_metric();
-        append_log(mut ref log);   // exclusive borrow into branch 2
+        append_log(mut log);   // exclusive borrow into branch 2
     }
     log.push("post-join");          // OK — borrow released at join barrier
     log
@@ -9580,8 +9580,8 @@ fn append_concurrently(mut log: Vec[String]) -> Vec[String] {
 // 3. mut ref T in one branch, ref T in another — REJECTED.
 fn invalid_aliasing(mut log: Vec[String]) {
     par {
-        append_log(mut ref log);    // exclusive borrow
-        read_log_count(ref log);    // shared borrow — conflict!
+        append_log(mut log);    // exclusive borrow
+        read_log_count(log);    // shared borrow — conflict!
     }
     // error[E_BORROW_CONFLICT]: cannot borrow 'log' as immutable in branch 2 because branch 1 borrows it mutably
 }
@@ -9598,7 +9598,7 @@ fn cache_concurrent(cache: Rc[Cache]) {
 shared struct Counter { mut count: i64 }
 fn observe_concurrent(counter: Counter) {
     par {
-        observe(ref counter);
+        observe(counter);
         // error[E_NOT_CROSS_TASK]: 'shared struct Counter' cannot cross task boundary
         //   help: replace with 'par struct Counter { mut count: Atomic[i64] }'
     }
