@@ -2681,3 +2681,74 @@ fn rc_magic_includes_consume_and_reuse_spans() {
         out.text,
     );
 }
+
+// ── Cross-cell snapshot: in-cell mutation (B-2026-07-29-20) ────────────────
+
+#[test]
+fn in_cell_mutation_survives_the_cell_boundary_on_the_interpreter_lane() {
+    // B-2026-07-29-20, interpreter half. The value snapshot was taken in
+    // `eval_stmt`'s `Let` arm, i.e. at each binding's INITIALIZER, so any
+    // mutation later in the same cell was lost crossing to the next one.
+    //
+    // Every row below read back its initial value before the fix, except
+    // `Vec`, which was right by accident: `Value::Array` is an
+    // `Arc<RwLock<…>>`, so the clone taken at the `let` aliased the same
+    // storage and observed later pushes. `Map(Vec<(Value, Value)>)` and
+    // `Set(Vec<Value>)` are by-value and froze — which is why the two
+    // container rows disagreed with each other on the same lane.
+    //
+    // Capture now happens at scope exit, which is uniform across all three
+    // representations. Kept on the pinned interpreter session; the JIT lane
+    // has its own coverage in `tests/repl_jit.rs`.
+    let cases: &[(&str, &str, &str)] = &[
+        ("i64 reassign", "let mut n: i64 = 0; n = 5;", "println(n);"),
+        (
+            "f64 reassign",
+            "let mut f: f64 = 0.0; f = 2.5;",
+            "println(f);",
+        ),
+        (
+            "bool reassign",
+            "let mut b: bool = false; b = true;",
+            "println(b);",
+        ),
+        (
+            "String push_str",
+            "let mut s: String = \"a\".to_string(); s.push_str(\"b\");",
+            "println(s);",
+        ),
+        (
+            "Vec push",
+            "let mut v: Vec[i64] = Vec.new(); v.push(7);",
+            "println(v[0]);",
+        ),
+        (
+            "Map insert",
+            "let mut m: Map[i64, i64] = Map.new(); m.insert(1, 2);",
+            "println(m.len() as i64);",
+        ),
+        (
+            "Set insert",
+            "let mut t: Set[i64] = Set.new(); t.insert(1);",
+            "println(t.len() as i64);",
+        ),
+        (
+            "loop accumulator",
+            "let mut acc: i64 = 0; for i in 0..5 { acc = acc + i; }",
+            "println(acc);",
+        ),
+    ];
+    let expected = ["5", "2.5", "true", "ab", "7", "1", "1", "10"];
+    for ((label, bind, read), want) in cases.iter().zip(expected) {
+        let mut s = pinned_session();
+        let r1 = s.evaluate_cell_captured(bind);
+        assert!(r1.errors.is_empty(), "{label}: bind cell: {:?}", r1.errors);
+        let r2 = s.evaluate_cell_captured(read);
+        assert!(r2.errors.is_empty(), "{label}: read cell: {:?}", r2.errors);
+        assert_eq!(
+            r2.stdout.trim(),
+            want,
+            "{label}: the in-cell mutation must cross the cell boundary"
+        );
+    }
+}

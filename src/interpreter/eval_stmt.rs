@@ -25,6 +25,44 @@ use super::value::Value;
 use super::Interpreter;
 
 impl<'a> super::Interpreter<'a> {
+    /// REPL cross-cell snapshot capture (B-2026-07-29-20). Record every
+    /// watched binding held by the scope that is about to pop.
+    ///
+    /// This used to fire from the `StmtKind::Let` arm, which froze each
+    /// binding at its INITIALIZER: `let mut n: i64 = 0; n = 5;` crossed to
+    /// the next cell as `0`, and `let mut m = Map.new(); m.insert(…)`
+    /// crossed empty. `Vec` was the one row that looked right, and only by
+    /// accident — `Value::Array` is an `Arc<RwLock<…>>`, so the clone taken
+    /// at the `let` aliased the same storage and saw later pushes.
+    ///
+    /// Capturing at scope exit is uniform across all three representations
+    /// and needs no per-type reasoning. It runs at every block's exit, not
+    /// just `main`'s: `Env::scopes` is a plain stack, so an inner block
+    /// shadowing a watched name would otherwise leave its value behind.
+    /// Inner scopes pop FIRST, so `main`'s body block — the one holding the
+    /// cell's top-level bindings — writes last and wins. Only names in the
+    /// popping scope itself are read, so a callee's frame can't overwrite a
+    /// caller's binding of the same name.
+    ///
+    /// No-op outside the REPL: `let_snapshot_watch` is empty everywhere
+    /// else, so this is one `is_empty()` per scope exit.
+    pub(crate) fn capture_watched_bindings(&mut self) {
+        if self.let_snapshot_watch.is_empty() {
+            return;
+        }
+        let Some(scope) = self.env.scopes.last() else {
+            return;
+        };
+        let found: Vec<(String, Value)> = scope
+            .iter()
+            .filter(|(n, _)| self.let_snapshot_watch.contains(n.as_str()))
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect();
+        for (name, val) in found {
+            self.captured_let_values.insert(name, val);
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     pub(crate) fn eval_block_inner(&mut self, block: &Block) -> EvalResult {
         self.env.push_scope();
@@ -74,6 +112,7 @@ impl<'a> super::Interpreter<'a> {
                 let cf = ControlFlow::Cancelled;
                 let path = ExitPath::classify(&cf);
                 self.run_cleanup(&cleanup, &errdefers, &path);
+                self.capture_watched_bindings();
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -90,6 +129,7 @@ impl<'a> super::Interpreter<'a> {
                 let cf = ControlFlow::TimedOut;
                 let path = ExitPath::classify(&cf);
                 self.run_cleanup(&cleanup, &errdefers, &path);
+                self.capture_watched_bindings();
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -115,6 +155,7 @@ impl<'a> super::Interpreter<'a> {
                 // flag at its next between-statement check.
                 self.signal_cancellation_if_error(&cf);
                 self.run_cleanup(&cleanup, &errdefers, &path);
+                self.capture_watched_bindings();
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -151,6 +192,7 @@ impl<'a> super::Interpreter<'a> {
                 let cf = ControlFlow::Cancelled;
                 let path = ExitPath::classify(&cf);
                 self.run_cleanup(&cleanup, &errdefers, &path);
+                self.capture_watched_bindings();
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -159,6 +201,7 @@ impl<'a> super::Interpreter<'a> {
                 let cf = ControlFlow::TimedOut;
                 let path = ExitPath::classify(&cf);
                 self.run_cleanup(&cleanup, &errdefers, &path);
+                self.capture_watched_bindings();
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -178,6 +221,7 @@ impl<'a> super::Interpreter<'a> {
                 let path = ExitPath::classify(&cf);
                 self.signal_cancellation_if_error(&cf);
                 self.run_cleanup(&cleanup, &errdefers, &path);
+                self.capture_watched_bindings();
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -187,6 +231,7 @@ impl<'a> super::Interpreter<'a> {
         };
         // Normal exit — drop+defer phase only.
         self.run_cleanup(&cleanup, &errdefers, &ExitPath::Normal);
+        self.capture_watched_bindings();
         self.env.pop_scope();
         Ok(result)
     }
@@ -838,13 +883,18 @@ impl<'a> super::Interpreter<'a> {
                 };
                 self.pending_tensor_fill = saved_tensor_fill;
                 self.pending_let_ty = saved_let_ty;
-                // Capture for snapshot if this name is being watched.
-                // We must clone before `bind_pattern` consumes `val`.
-                if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
-                    if self.let_snapshot_watch.contains(name) {
-                        self.captured_let_values.insert(name.clone(), val.clone());
-                    }
-                }
+                // NO snapshot capture here. It used to fire at this point,
+                // freezing each watched binding at its INITIALIZER, so any
+                // mutation later in the same REPL cell was lost crossing to
+                // the next one (B-2026-07-29-20): `let mut n: i64 = 0; n =
+                // 5;` read back 0, and `let mut m = Map.new(); m.insert(…)`
+                // read back empty. `Vec` was the one row that appeared to
+                // work, and only by accident — `Value::Array` is an
+                // `Arc<RwLock<…>>`, so the clone taken here aliases the same
+                // storage and observes later pushes. `Map(Vec<(Value,
+                // Value)>)` and `Set(Vec<Value>)` are by-value, so their
+                // clones froze. Capture now happens once at end of `main`
+                // (`call_function`), which is uniform across all three.
                 self.bind_pattern(pattern, val);
             }
             StmtKind::LetUninit { name, .. } => {

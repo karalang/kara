@@ -2196,6 +2196,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // drop+defer drain. Other tail shapes (`Ok(v)`, plain values,
             // void) stay on the normal-exit drain. Same syntactic
             // detector as the early-return arm in `compile_expr`.
+            // REPL cross-cell snapshot capture (B-2026-07-29-20). Emitted
+            // HERE — end of the synthesized cell's `main`, before scope
+            // cleanup frees anything — rather than at each `let`, so a
+            // binding mutated later in the same cell crosses to the next
+            // cell with its FINAL value. No-op for every non-REPL build
+            // (`snapshot_capture` is empty).
+            if func.name == "main" {
+                self.emit_pending_snapshot_captures();
+            }
             let tail_is_error_exit = func
                 .body
                 .final_expr

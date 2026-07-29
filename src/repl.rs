@@ -2275,13 +2275,7 @@ impl Session {
             }
         }
         for (idx, stmt) in main_fn.body.stmts.iter().enumerate() {
-            let StmtKind::Let {
-                is_mut,
-                pattern,
-                value,
-                ..
-            } = &stmt.kind
-            else {
+            let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
                 continue;
             };
             let PatternKind::Binding(name) = &pattern.kind else {
@@ -2306,54 +2300,26 @@ impl Session {
                 continue;
             };
             if let Some(kind) = snapshot_kind_for_type(ty) {
-                // Slice c-repl.B.5.2: skip `let mut s = …` for String
-                // bindings. Capture transfers buffer ownership from
-                // the let slot to the snapshot global by zeroing the
-                // slot's cap, which leaves the binding intact for
-                // reads but breaks same-cell `s.push_str(…)` — push
-                // would read cap=0, realloc into a fresh buffer, and
-                // the global ends up pointing at the original buffer
-                // while the slot points at the new one; cell N+1's
-                // replay then loads the old buffer (pre-push) and
-                // diverges from the interpreter's post-mutation
-                // snapshot. Pass-through gives correct (if slower)
-                // re-evaluation semantics. Primitive kinds keep the
-                // B.5.1 behavior — mut primitives don't have the
-                // same alias hazard.
-                // Slice c-repl.B.5.3 extends the mut filter to Vec.
-                // Same alias-hazard reasoning as the String case: a
-                // same-cell `xs.push(…)` after capture would read
-                // cap=0 (the suppression sentinel), realloc into a
-                // fresh buffer, leave the snapshot global pointing at
-                // the pre-push buffer, and cell N+1's replay would
-                // load the pre-push triple and diverge from the
-                // interpreter's post-mutation snapshot. Pass-through
-                // (no capture, no cap-zero) preserves correct (if
-                // slower) semantics. Primitive kinds keep the B.5.1
-                // unfiltered behavior — they have no alias hazard.
-                // Slice c-repl.B.5.3b extends the mut filter to Map.
-                // Same alias-hazard reasoning: a same-cell `m.insert(
-                // …)` after capture would load null from the slot
-                // (the suppression sentinel) and crash (or silently
-                // no-op via `karac_map_*`'s null guards). Pass-
-                // through (no capture, no null-slot) preserves
-                // correct re-evaluating semantics for mut Maps.
-                // Slice c-repl.B.5.3c extends the mut filter to Set.
-                // Set reuses the Map handle / `karac_map_*` runtime,
-                // so the same alias hazards apply — pass-through
-                // preserves correct re-evaluating semantics for mut
-                // Sets, symmetric to the Map and Vec/String cases.
-                if *is_mut
-                    && matches!(
-                        kind,
-                        crate::codegen::SnapshotPrimKind::String
-                            | crate::codegen::SnapshotPrimKind::Vec(_)
-                            | crate::codegen::SnapshotPrimKind::Map { .. }
-                            | crate::codegen::SnapshotPrimKind::Set(_)
-                    )
-                {
-                    continue;
-                }
+                // `let mut` String / Vec / Map / Set bindings used to be
+                // EXCLUDED here (slices c-repl.B.5.2 / B.5.3 / b / c). The
+                // reasoning was an alias hazard: capture transfers buffer
+                // ownership to the snapshot global by zeroing the slot's
+                // `cap`, so a same-cell `s.push_str(…)` after the capture
+                // would read cap=0, realloc into a fresh buffer, and leave
+                // the global pointing at the pre-push one.
+                //
+                // That hazard was a consequence of WHERE the capture was
+                // emitted — at the `let`, with the rest of the cell still
+                // to run. It now fires at END OF CELL
+                // (`emit_pending_snapshot_captures`), after every
+                // statement and before scope cleanup, so there is no live
+                // use left to invalidate and the captured value is the
+                // cell's final state.
+                //
+                // The exclusion was also the bug (B-2026-07-29-20): with no
+                // capture, cell N+1 re-evaluated the RHS, so `let mut v =
+                // Vec.new(); v.push(7)` read back EMPTY. Dropping it is
+                // what makes the container tier work at all.
                 capture.insert(name.clone(), kind);
             }
         }

@@ -3184,14 +3184,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         let name = var_name.clone();
                         self.compile_map_new_stmt(&name)?;
-                        // Slice c-repl.B.5.3b: the early-return path for
-                        // Map.new() bypasses the let-arm's snapshot
-                        // capture hook. Fire it here so REPL Map[K, V]
-                        // bindings get the cross-cell handle stash.
-                        // No-op outside REPL mode (snapshot_capture is
-                        // empty), no-op for non-primitive K/V (the
-                        // classifier skips them).
-                        self.try_emit_snapshot_capture(pattern);
+                        // (No snapshot capture here. Every REPL capture
+                        // is emitted once at END OF CELL from
+                        // `emit_pending_snapshot_captures`, so a mutation
+                        // later in the same cell is included —
+                        // B-2026-07-29-20. `compile_map_new_stmt` still
+                        // skips `track_map_var` for a captured name so
+                        // scope cleanup leaves the handle to the global.)
                         return Ok(());
                     }
                 }
@@ -3204,15 +3203,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         let name = var_name.clone();
                         self.compile_set_new_stmt(&name)?;
-                        // Slice c-repl.B.5.3c: same plumbing as the
-                        // Map.new() arm just above — Set.new() bypasses
-                        // the let-arm's snapshot capture hook at the
-                        // bottom of this match. Fire it here so REPL
-                        // `Set[T]` bindings get the cross-cell handle
-                        // stash. No-op outside REPL mode
-                        // (snapshot_capture is empty), no-op for
-                        // non-primitive T (the classifier skips them).
-                        self.try_emit_snapshot_capture(pattern);
+                        // (No snapshot capture here either — see the
+                        // Map.new() arm above. End-of-cell capture only.)
                         return Ok(());
                     }
                 }
@@ -5635,15 +5627,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // Slice c-repl.B.5.1: REPL value-snapshot capture site.
-                // After the binding's slot is alloca'd + populated, copy
-                // the bound value into the cell-spanning
-                // `__karac_repl_snapshot_<name>` global so subsequent
-                // cells can replay the value without re-evaluating the
-                // original RHS. No-op when the binding name is not in
-                // `snapshot_capture` (every non-REPL build, plus REPL
-                // cells whose binding doesn't qualify for snapshotting
-                // — non-primitive type, destructuring pattern, etc.).
-                self.try_emit_snapshot_capture(pattern);
+                // The cell-spanning `__karac_repl_snapshot_<name>` copy
+                // is NOT emitted here. It used to be, which froze every
+                // binding at its initializer and lost any same-cell
+                // mutation crossing to the next cell (B-2026-07-29-20).
+                // `compile_function`'s `main` tail calls
+                // `emit_pending_snapshot_captures` instead.
                 // Binary-search midpoint BCE: under a dominating strict
                 // `while lo < hi`, a `let mid = lo + (hi - lo) / 2` binding
                 // emits `assume(lo <= mid < hi)` so LLVM folds the
@@ -7871,17 +7860,47 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(true)
     }
 
-    /// Mirror of `try_compile_snapshot_replay` for the capture side.
-    /// Called from the bottom of the `StmtKind::Let` arm just after
-    /// `bind_pattern` has alloca'd + populated the binding's slot.
-    /// Loads the slot's value, converts it to the storage form, and
-    /// stores into `__karac_repl_snapshot_<name>`. No-op when the
-    /// binding is not in `snapshot_capture` (every non-REPL build
-    /// passes through here without effect because the map is empty).
-    fn try_emit_snapshot_capture(&mut self, pattern: &Pattern) {
-        let PatternKind::Binding(name) = &pattern.kind else {
+    /// Emit every pending REPL snapshot capture at the END OF THE CELL —
+    /// called from `compile_function`'s `main` tail, immediately before
+    /// scope cleanup runs.
+    ///
+    /// The capture used to fire from the `StmtKind::Let` arm, right after
+    /// `bind_pattern` populated the slot. That froze each binding at its
+    /// INITIALIZER, so any mutation later in the same cell was lost
+    /// crossing to the next one (B-2026-07-29-20): `let mut v = Vec.new();
+    /// v.push(7);` read back empty, and so did `let mut n: i64 = 0; n = 5;`.
+    /// It also forced the `is_mut` container exclusion in the REPL's
+    /// `compute_snapshot_sets_for_cell` — capturing a String/Vec transfers
+    /// buffer ownership to the global by zeroing the slot's `cap`, which at
+    /// the `let` site would make a later same-cell `push` realloc into a
+    /// fresh buffer and leave the global pointing at the pre-push one.
+    ///
+    /// End-of-cell has neither problem: nothing runs after it, so the
+    /// captured value IS the cell's final state and the ownership transfer
+    /// has no live use to invalidate. `self.variables` holds each name's
+    /// last binding at this point, which is also the binder
+    /// `compute_snapshot_sets_for_cell` keyed on.
+    ///
+    /// No-op outside REPL mode — `snapshot_capture` is empty for every
+    /// other build.
+    pub(super) fn emit_pending_snapshot_captures(&mut self) {
+        if self.snapshot_capture.is_empty() {
             return;
-        };
+        }
+        let mut names: Vec<String> = self.snapshot_capture.keys().cloned().collect();
+        // Deterministic emission order — `HashMap` iteration is not stable
+        // and these stores land in the emitted IR.
+        names.sort();
+        for name in names {
+            self.emit_snapshot_capture_for_name(&name);
+        }
+    }
+
+    /// Mirror of `try_compile_snapshot_replay` for the capture side.
+    /// Loads the binding's slot, converts it to the storage form, and
+    /// stores into `__karac_repl_snapshot_<name>`. No-op when the binding
+    /// is not in `snapshot_capture` or has no slot in this cell.
+    fn emit_snapshot_capture_for_name(&mut self, name: &str) {
         let Some(&kind) = self.snapshot_capture.get(name) else {
             return;
         };

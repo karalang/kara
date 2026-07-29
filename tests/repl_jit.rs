@@ -244,17 +244,16 @@ fn repl_jit_string_cross_cell_shadow_drops_runner() {
 }
 
 #[test]
-fn repl_jit_string_mut_let_falls_through_to_passthrough() {
-    // Slice c-repl.B.5.2 — `let mut s: String = …` must NOT take the
-    // snapshot path. The classifier filters out mut String bindings
-    // because capture's cap-zero suppression would leave a same-cell
-    // `s.push_str(…)` reading cap=0, reallocating into a fresh
-    // buffer, and dropping the global's reference — cell N+1's
-    // replay would then load the pre-push buffer and diverge from
-    // the interpreter's post-mutation snapshot semantic. Pass-
-    // through gives correct (re-evaluating, slower) behavior. We
-    // exercise the same-cell mutation to confirm push_str works
-    // cleanly without divergence.
+fn repl_jit_string_mut_let_carries_in_cell_mutation_across_cells() {
+    // `let mut` container bindings used to be EXCLUDED from the snapshot
+    // path (the slice-B.5.2/B.5.3 "mut filter"), on the reasoning that
+    // capture's cap-zero ownership transfer would break a same-cell
+    // mutation that ran after it. That was true only because capture fired
+    // at the `let`; it now fires at END OF CELL, after every statement, so
+    // the exclusion is gone (B-2026-07-29-20). Its real effect was the bug:
+    // with no capture, cell N+1 re-evaluated the RHS and the mutation
+    // vanished. Both halves are asserted here — the same-cell mutation
+    // still works, AND it survives the cell boundary.
     let mut s = Session::new();
     enable_jit(&mut s);
     let r = s.evaluate_cell_captured(
@@ -266,6 +265,18 @@ fn repl_jit_string_mut_let_falls_through_to_passthrough() {
         r.errors,
     );
     assert_eq!(r.stdout.trim(), "hi");
+    let r2 = s.evaluate_cell_captured("println(s);");
+    assert!(
+        r2.errors.is_empty(),
+        "cell 2 should run cleanly: {:?}",
+        r2.errors,
+    );
+    assert_eq!(
+        r2.stdout.trim(),
+        "hi",
+        "the same-cell push_str must survive the cell boundary (was \"\" \
+         when the RHS got re-evaluated)"
+    );
 }
 
 #[test]
@@ -405,17 +416,16 @@ fn repl_jit_vec_cross_cell_shadow_drops_runner() {
 }
 
 #[test]
-fn repl_jit_vec_mut_let_falls_through_to_passthrough() {
-    // Slice c-repl.B.5.3 — `let mut xs: Vec[i64] = …` must NOT take
-    // the snapshot path. Same alias-hazard reasoning as the String
-    // mut filter: capture's cap-zero suppression would leave a
-    // same-cell `xs.push(…)` reading cap=0, reallocating into a
-    // fresh buffer, and dropping the global's reference — cell N+1's
-    // replay would then load the pre-push triple and diverge from
-    // the interpreter's post-mutation snapshot semantic. Pass-
-    // through gives correct (re-evaluating, slower) behavior. We
-    // exercise the same-cell mutation to confirm push works cleanly
-    // without divergence.
+fn repl_jit_vec_mut_let_carries_in_cell_mutation_across_cells() {
+    // `let mut` container bindings used to be EXCLUDED from the snapshot
+    // path (the slice-B.5.2/B.5.3 "mut filter"), on the reasoning that
+    // capture's cap-zero ownership transfer would break a same-cell
+    // mutation that ran after it. That was true only because capture fired
+    // at the `let`; it now fires at END OF CELL, after every statement, so
+    // the exclusion is gone (B-2026-07-29-20). Its real effect was the bug:
+    // with no capture, cell N+1 re-evaluated the RHS and the mutation
+    // vanished. Both halves are asserted here — the same-cell mutation
+    // still works, AND it survives the cell boundary.
     let mut s = Session::new();
     enable_jit(&mut s);
     let r = s.evaluate_cell_captured(
@@ -427,10 +437,21 @@ fn repl_jit_vec_mut_let_falls_through_to_passthrough() {
         r.errors,
     );
     assert_eq!(r.stdout.trim(), "2");
+    let r2 = s.evaluate_cell_captured("println(xs.len() as i64); println(xs[0]);");
+    assert!(
+        r2.errors.is_empty(),
+        "cell 2 should run cleanly: {:?}",
+        r2.errors,
+    );
+    assert_eq!(
+        r2.stdout.trim(),
+        "2\n7",
+        "both same-cell pushes must survive the cell boundary (was 0 \
+         when the RHS got re-evaluated)"
+    );
 }
 
 #[test]
-#[ignore = "B-2026-07-29-20: B.5.3b Map snapshot does not carry an in-cell insert across cells"]
 fn repl_jit_map_let_rhs_is_not_re_evaluated() {
     // Slice c-repl.B.5.3b — Map snapshot port. Cell 1 binds a Map
     // via `Map.new()` and inserts an entry in the same cell. Cell 2
@@ -506,16 +527,16 @@ fn repl_jit_map_cross_cell_shadow_drops_runner() {
 }
 
 #[test]
-fn repl_jit_map_mut_let_falls_through_to_passthrough() {
-    // Slice c-repl.B.5.3b — `let mut m: Map[i64, i64] = …` must NOT
-    // take the snapshot path. The non-mut case already routes
-    // mutating calls through the live slot (`m.insert(...)` works
-    // post-capture because Map suppression skips `track_map_var`
-    // rather than nulling the slot), but the mut filter still kicks
-    // in for symmetry with the Vec/String mut treatment and protects
-    // against future capture-design changes that might add slot-side
-    // suppression. Exercise both insert and get in the same cell to
-    // confirm the pass-through path doesn't diverge.
+fn repl_jit_map_mut_let_carries_in_cell_mutation_across_cells() {
+    // `let mut` container bindings used to be EXCLUDED from the snapshot
+    // path (the slice-B.5.2/B.5.3 "mut filter"), on the reasoning that
+    // capture's cap-zero ownership transfer would break a same-cell
+    // mutation that ran after it. That was true only because capture fired
+    // at the `let`; it now fires at END OF CELL, after every statement, so
+    // the exclusion is gone (B-2026-07-29-20). Its real effect was the bug:
+    // with no capture, cell N+1 re-evaluated the RHS and the mutation
+    // vanished. Both halves are asserted here — the same-cell mutation
+    // still works, AND it survives the cell boundary.
     let mut s = Session::new();
     enable_jit(&mut s);
     let r = s.evaluate_cell_captured(
@@ -528,10 +549,22 @@ fn repl_jit_map_mut_let_falls_through_to_passthrough() {
         r.errors,
     );
     assert_eq!(r.stdout.trim(), "100");
+    let r2 =
+        s.evaluate_cell_captured("match m.get(1) { Some(v) => println(v), None => println(-1), }");
+    assert!(
+        r2.errors.is_empty(),
+        "cell 2 should run cleanly: {:?}",
+        r2.errors,
+    );
+    assert_eq!(
+        r2.stdout.trim(),
+        "100",
+        "the same-cell insert must survive the cell boundary (was -1 \
+         when the RHS got re-evaluated)"
+    );
 }
 
 #[test]
-#[ignore = "B-2026-07-29-20: B.5.3c Set snapshot does not carry an in-cell insert across cells"]
 fn repl_jit_set_let_rhs_is_not_re_evaluated() {
     // Slice c-repl.B.5.3c friction probe — Set[primitive] cross-cell
     // let snapshot. Mirrors B.5.3b's Map probe shape: cell 1 binds a
@@ -596,15 +629,16 @@ fn repl_jit_set_cross_cell_shadow_drops_runner() {
 }
 
 #[test]
-fn repl_jit_set_mut_let_falls_through_to_passthrough() {
-    // Slice c-repl.B.5.3c — `let mut s: Set[i64] = …` must NOT take the
-    // snapshot path. Same alias-hazard reasoning as the Map mut case:
-    // although the current Map/Set registration-site suppression keeps
-    // the slot's live handle (so same-cell mutations work post-capture),
-    // the mut filter still kicks in for symmetry and protects against
-    // future capture-design changes that might add slot-side
-    // suppression. Exercise both `insert` and `contains` in the same
-    // cell to confirm the pass-through path doesn't diverge.
+fn repl_jit_set_mut_let_carries_in_cell_mutation_across_cells() {
+    // `let mut` container bindings used to be EXCLUDED from the snapshot
+    // path (the slice-B.5.2/B.5.3 "mut filter"), on the reasoning that
+    // capture's cap-zero ownership transfer would break a same-cell
+    // mutation that ran after it. That was true only because capture fired
+    // at the `let`; it now fires at END OF CELL, after every statement, so
+    // the exclusion is gone (B-2026-07-29-20). Its real effect was the bug:
+    // with no capture, cell N+1 re-evaluated the RHS and the mutation
+    // vanished. Both halves are asserted here — the same-cell mutation
+    // still works, AND it survives the cell boundary.
     let mut s = Session::new();
     enable_jit(&mut s);
     let r = s.evaluate_cell_captured(
@@ -617,6 +651,18 @@ fn repl_jit_set_mut_let_falls_through_to_passthrough() {
         r.errors,
     );
     assert_eq!(r.stdout.trim(), "2");
+    let r2 = s.evaluate_cell_captured("if s.contains(2) { println(2); } else { println(-1); }");
+    assert!(
+        r2.errors.is_empty(),
+        "cell 2 should run cleanly: {:?}",
+        r2.errors,
+    );
+    assert_eq!(
+        r2.stdout.trim(),
+        "2",
+        "the same-cell inserts must survive the cell boundary (was -1 \
+         when the RHS got re-evaluated)"
+    );
 }
 
 #[test]
