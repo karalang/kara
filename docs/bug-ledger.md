@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 100 | 0 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
-| missing-feature | 63 | 0 |
+| missing-feature | 66 | 3 |
 | false-positive | 50 | 0 |
 | run-vs-build | 44 | 0 |
 | perf | 33 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 536 | 0 |
-| typecheck | 92 | 0 |
+| typecheck | 95 | 3 |
 | interp | 75 | 0 |
 | ownership | 29 | 0 |
 | other | 21 | 0 |
@@ -124,11 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **737 surfaced · 0 open · 730 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **740 surfaced · 3 open · 730 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (3)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-29-25 | 2026-07-29 | typecheck | high | An IMPORTED type alias is not expanded to its underlying type: `import types.Row;` where `pub type Row = Map[String, i64]` leaves `Row` nominal, so `let mut r: Row = Map.new();` fails with `expected 'Row', found 'Map<?T0, ?T1>'`. An alias declared in the SAME file works. | — |
+| B-2026-07-29-26 | 2026-07-29 | typecheck | medium | A GENERIC REFINEMENT alias is opaque to its base's operations: `type NonEmpty[T] = Vec[T] where self.len() > 0;` then `for r in rows` binds `r` to `NonEmpty`, so `r.price` fails with `no field 'price' on type 'NonEmpty'`. The same alias WITHOUT the `where` clause iterates correctly. | — |
+| B-2026-07-29-27 | 2026-07-29 | typecheck | high | `#[derive(Clone)]` synthesizes NO callable `.clone()` method: `s.clone()` on a derived struct or enum fails with `no method 'clone' on type 'S'`, while the very same derive DOES satisfy a `T: Clone` bound. Silently accepted, so the attribute reads as working. | — |
 
 ### Fixed (730)
 
