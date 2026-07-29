@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 184 | 0 |
 | leak | 98 | 0 |
-| double-free | 83 | 1 |
+| double-free | 83 | 0 |
 | codegen-gap | 82 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 521 | 1 |
+| codegen | 521 | 0 |
 | typecheck | 87 | 0 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **713 surfaced · 1 open · 706 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **713 surfaced · 0 open · 707 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-28-17 | 2026-07-28 | codegen | high | SEED CODEGEN: passing an `Option[<heap>]` field of a struct bound out of a `shared enum` payload to an owning parameter double-frees — `match a { V(nd) => consume(nd.hp) }`. The owned-root form of this was fixed as B-2026-07-28-16; this root is an RC node, which needs a defensive COPY rather than a source zero. | — |
+_None — the ledger is fully drained._
 
-### Fixed (706)
+### Fixed (707)
 
-<details><summary>706 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>707 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -844,6 +842,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **713 surfaced 
 | B-2026-07-28-14 | codegen | medium | SELFHOST EMITTER (codegen.kara): `Option[<plain struct>]` has no representation — `kind_of_ty` collapses it to `Option$i`, whose payload slot is an i… | 46acf5b |
 | B-2026-07-28-15 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct… | 04964fa |
 | B-2026-07-28-16 | codegen | high | SEED CODEGEN: an owned struct's `Option`/`Result` field passed BY VALUE to a parameter that owns it was not treated as a move — the callee freed the… | 6dc5854 |
+| B-2026-07-28-17 | codegen | high | SEED CODEGEN: passing an `Option[<heap>]` field of a struct bound out of a `shared enum` payload to an owning parameter double-frees — `match a { V(n… | 09ffe5a |
 
 </details>
 
