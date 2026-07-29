@@ -353,6 +353,10 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     out = out + "declare ptr @realloc(ptr, i64)\n";
     out = out + "declare i32 @memcmp(ptr, ptr, i64)\n";
     out = out + "declare i64 @karac_runtime_f64_to_str(double, ptr, i64)\n";
+    // `panic` / `todo` / `unreachable` lowering (B-2026-07-29-4). Declared
+    // unconditionally: an unreferenced `declare` costs nothing in the emitted
+    // module and keeps the preamble a single fixed block.
+    out = out + "declare void @exit(i32)\n";
     // Spawn-site metadata stubs (Slice 36): the runtime references these
     // externs from cgus that some runtime calls (e.g. f64_to_str) drag in at
     // link time; the seed's AOT plants them in every object. LEN=0 means the
@@ -2616,6 +2620,18 @@ impl Emitter {
                     }
                     _ => {}
                 }
+                if cname == "panic" or cname == "todo" or cname == "unreachable" {
+                    // B-2026-07-29-4: these three are BUILTINS, not user
+                    // functions. Without this branch they fell through to the
+                    // user-call path below, which — finding no signature —
+                    // typed every parameter `i64` and emitted
+                    // `call i64 @u_panic(i64 <{ptr,i64} String>)`. That is a
+                    // type error LLVM rejects, and it is what blocked
+                    // codegen.kara from emitting ITSELF: the only `panic` calls
+                    // in the self-host tree are this emitter's own refusals.
+                    self.emit_diverge(cname, args);
+                    return;
+                }
                 if cname == "println" {
                     // Every arg shape routes through `emit_value` and a
                     // kind-dispatch print (Slice 7): a literal keeps its fast
@@ -2833,6 +2849,10 @@ impl Emitter {
                     let mut sp = "".to_string();
                     let mut vk = 0 - 1;
                     let mut vok = false;
+                    // The local slot when the receiver IS a local, else -1
+                    // (B-2026-07-29-5 needs it to retype the slot, and `object`
+                    // is consumed by this match).
+                    let mut vslot = 0 - 1;
                     match object {
                         Ident(ie3) => {
                             let IdentExpr { name: on, span: osp } = ie3;
@@ -2841,6 +2861,7 @@ impl Emitter {
                                 sp = "%v" + slot.to_string();
                                 vk = self.locals_kind[slot];
                                 vok = true;
+                                vslot = slot;
                             }
                         }
                         Field(fpa) => {
@@ -2894,6 +2915,41 @@ impl Emitter {
                         }
                         _ => {}
                     }
+                    // The single push ARGUMENT, emitted ONCE here rather than
+                    // inside each element-kind branch (B-2026-07-29-5). Order
+                    // is unchanged — receiver resolution above already emitted
+                    // the field-receiver GEP, and the argument followed it in
+                    // every branch — but the kind is now known BEFORE the
+                    // branch chain picks a lane, which is what the element-kind
+                    // adoption below needs.
+                    let mut paop = "0".to_string();
+                    let mut pak = 0;
+                    let mut pah = false;
+                    for ma in margs {
+                        let CallArg { label, mut_marker, value, span: asp } = ma;
+                        let av = self.emit_value(value);
+                        let Val { op: aop0, kind: ak0, heap: ah0 } = av;
+                        paop = aop0;
+                        pak = ak0;
+                        pah = ah0;
+                    }
+                    // ELEMENT-KIND ADOPTION (B-2026-07-29-5). `Vec.new()` has
+                    // no element type of its own, so an un-annotated
+                    // `let v = Vec.new()` defaults to kind 3 (Vec[i64]); only
+                    // an annotation retyped it (Slice 16). A `push` of a STRING
+                    // onto such a local therefore stored a `{ ptr, i64 }` into
+                    // an 8-byte i64 lane — silently, producing IR LLVM rejects.
+                    // A String is never a legal Vec[i64] element, so the
+                    // mismatch is unambiguous: adopt kind 4 and take the
+                    // Vec[String] lane. Safe to retype after the alloca because
+                    // kinds 3 and 4 share the `{ ptr, i64, i64 }` slot type and
+                    // the `zeroinitializer`; only the per-element discipline
+                    // (stride, lane type, scope-exit free) differs, and every
+                    // one of those reads `locals_kind` at use time.
+                    if vok and vk == 3 and pak == 2 and vslot >= 0 {
+                        self.locals_kind[vslot] = 4;
+                        vk = 4;
+                    }
                     if vok and vk >= 2000 {
                         // `v.push(<elem>)` on a Vec[<struct>] (Slice 18) or
                         // Vec[<enum>] (Slice 32): the vec owns the element —
@@ -2914,26 +2970,16 @@ impl Emitter {
                             sty = self.ty_text(10 + esi0);
                             stride = self.st_stride(esi0);
                         }
-                        let mut ev = "zeroinitializer".to_string();
-                        for ma in margs {
-                            let CallArg { label, mut_marker, value, span: asp } = ma;
-                            let av = self.emit_value(value);
-                            let Val { op: aop, kind: ak, heap: ah } = av;
-                            if ak >= 10 and ak < 1000 and not ah and self.st_has_heap(ak - 10) {
-                                let mv = self.emit_materialize_struct(aop.clone(), ak - 10);
-                                let Val { op: mop, kind: mk, heap: mh } = mv;
-                                ev = mop;
-                            } else if ak >= 1000
-                                and ak < 2000
-                                and not ah
-                                and self.en_has_heap(ak - 1000)
-                            {
-                                let mv = self.emit_materialize_enum(aop.clone(), ak - 1000);
-                                let Val { op: mop, kind: mk, heap: mh } = mv;
-                                ev = mop;
-                            } else {
-                                ev = aop;
-                            }
+                        let mut ev = paop.clone();
+                        if pak >= 10 and pak < 1000 and not pah and self.st_has_heap(pak - 10) {
+                            let mv = self.emit_materialize_struct(paop.clone(), pak - 10);
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            ev = mop;
+                        }
+                        if pak >= 1000 and pak < 2000 and not pah and self.en_has_heap(pak - 1000) {
+                            let mv = self.emit_materialize_enum(paop.clone(), pak - 1000);
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            ev = mop;
                         }
                         let ag = self.fresh();
                         self.body = self.body
@@ -3031,18 +3077,11 @@ impl Emitter {
                         // `v.push(s)` on a Vec[String] (Slice 16): the vec OWNS
                         // its elements — a borrowed arg materializes in, a heap
                         // temp transfers. 16-byte {ptr,i64} elements.
-                        let mut ev = "zeroinitializer".to_string();
-                        for ma in margs {
-                            let CallArg { label, mut_marker, value, span: asp } = ma;
-                            let av = self.emit_value(value);
-                            let Val { op: aop, kind: ak, heap: ah } = av;
-                            if ak == 2 and not ah {
-                                let mv = self.emit_materialize(aop.clone());
-                                let Val { op: mop, kind: mk, heap: mh } = mv;
-                                ev = mop;
-                            } else {
-                                ev = aop;
-                            }
+                        let mut ev = paop.clone();
+                        if pak == 2 and not pah {
+                            let mv = self.emit_materialize(paop.clone());
+                            let Val { op: mop, kind: mk, heap: mh } = mv;
+                            ev = mop;
                         }
                         let ag = self.fresh();
                         self.body = self.body
@@ -3127,15 +3166,9 @@ impl Emitter {
                             + sp
                             + ", align 8\n";
                     } else if vok and vk == 3 {
-                        let mut ev = "0".to_string();
-                        for ma in margs {
-                            let CallArg { label, mut_marker, value, span: asp } = ma;
-                            let av = self.emit_value(value);
-                            let Val { op: aop, kind: ak, heap: ah } = av;
-                            // B-2026-07-23-24: a Vec[bool] shares this i64-lane
-                            // path; a bool arg (kind 1) zext's to the i64 lane.
-                            ev = self.to_i64_lane(aop, ak);
-                        }
+                        // B-2026-07-23-24: a Vec[bool] shares this i64-lane
+                        // path; a bool arg (kind 1) zext's to the i64 lane.
+                        let ev = self.to_i64_lane(paop.clone(), pak);
                         let ag = self.fresh();
                         self.body = self.body
                             + "  "
@@ -4003,6 +4036,61 @@ impl Emitter {
         self.emit_write("@.nl".to_string(), 1);
     }
 
+    // `panic(...)` / `todo(...)` / `unreachable(...)` (B-2026-07-29-4): print
+    // the message and `exit(1)`.
+    //
+    // Message selection mirrors the seed (`compile_diverge`): each builtin has
+    // a default, a STRING-LITERAL argument REPLACES it for `panic` and
+    // ANNOTATES it (`<default>: <msg>`) for the other two, and a non-literal
+    // argument degrades to the bare default — the seed folds the message at
+    // compile time too, so a runtime-valued one never reaches the output.
+    //
+    // The block is deliberately NOT terminated with `unreachable`: `exit` does
+    // not return, but leaving the block open lets the statements that follow a
+    // refusal (`kind_of_ty`'s trailing `0`, say) keep emitting into it, which
+    // is what every caller already assumes.
+    //
+    // PARITY NOTE: the seed's AOT path knows the source filename and prints the
+    // Level-2 form `panic at <file>:<line>:<col> in <fn>: <msg>`; this emitter
+    // has no filename, so it prints the seed's no-filename form `panic: <msg>`.
+    // Panic-message parity is a deferred surface (same note as the seed's
+    // literal-only propagation), so no differential-corpus entry panics.
+    fn emit_diverge(mut ref self, name: String, args: Vec[CallArg]) {
+        let mut msg = "explicit panic".to_string();
+        if name == "todo" {
+            msg = "not yet implemented".to_string();
+        }
+        if name == "unreachable" {
+            msg = "entered unreachable code".to_string();
+        }
+        let mut lit = "".to_string();
+        let mut has_lit = false;
+        for a in args {
+            let CallArg { label, mut_marker, value, span: asp } = a;
+            if not has_lit {
+                match value {
+                    Str(sl) => {
+                        let StrLit { value: sv, span: ssp } = sl;
+                        lit = sv;
+                        has_lit = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if has_lit {
+            if name == "panic" {
+                msg = lit;
+            } else {
+                msg = msg + ": " + lit;
+            }
+        }
+        let g = self.intern_str("panic: " + msg + "\n");
+        let StrG { name: gname, len } = g;
+        self.emit_write(gname, len);
+        self.body = self.body + "  call void @exit(i32 1)\n";
+    }
+
     // Concatenate two string VALUES (`{ ptr, i64 }` aggregates): allocate the
     // combined buffer, copy both halves, return the fresh aggregate (Slice 8).
     fn emit_concat(mut ref self, lop: String, rop: String) -> Val {
@@ -4184,6 +4272,56 @@ impl Emitter {
         0 - 1
     }
 
+    // A match ARM BODY in VALUE position (B-2026-07-29-2).
+    //
+    // `break` and `continue` TERMINATE their block and produce no value, so a
+    // value-match arm whose body is one of them must emit the BRANCH and then
+    // contribute nothing to the match's result slot. `emit_value` has no arm
+    // for either — they live only in `emit_expr` — so such an arm used to fall
+    // into its catch-all and do BOTH things wrong at once:
+    //
+    //   1. no branch was emitted, so `_ => break` did NOT leave the loop; the
+    //      arm fell through to the match join and the loop ran on, and
+    //   2. the catch-all's i64 zero RETYPED the result slot (the arms assign
+    //      `rsty`/`rkind` in order, last one wins), so the sibling arm's
+    //      already-emitted `store { ptr, i64 }` landed in an `alloca i64`.
+    //
+    // (2) is what `llvm-as` rejected on parser.kara — `Parser.collect_leading_
+    // doc_comments`'s `let line = match self.tokens[self.pos].token {
+    // DocComment(t) => t, _ => break }`. (1) is the quieter half: it would have
+    // been an infinite loop.
+    //
+    // The sentinel kind -99 says "this arm diverges": the caller skips the
+    // store AND leaves the result type alone. Any other body is emitted as an
+    // ordinary value, unchanged.
+    fn emit_arm_value(mut ref self, body: Expr) -> Val {
+        match body {
+            Break(bn) => {
+                let BreakExpr { label, value, span } = bn;
+                let n = self.loop_break.len();
+                if n > 0 {
+                    self.body = self.body + "  br label %" + self.loop_break[n - 1] + "\n";
+                    let did = self.nlbl;
+                    self.nlbl = self.nlbl + 1;
+                    self.body = self.body + "brkdead" + did.to_string() + ":\n";
+                }
+                Val { op: "0".to_string(), kind: 0 - 99, heap: false }
+            }
+            Continue(cn) => {
+                let ContinueExpr { label, span } = cn;
+                let n = self.loop_cont.len();
+                if n > 0 {
+                    self.body = self.body + "  br label %" + self.loop_cont[n - 1] + "\n";
+                    let did = self.nlbl;
+                    self.nlbl = self.nlbl + 1;
+                    self.body = self.body + "contdead" + did.to_string() + ":\n";
+                }
+                Val { op: "0".to_string(), kind: 0 - 99, heap: false }
+            }
+            other => self.emit_value(other),
+        }
+    }
+
     fn emit_match(mut ref self, m: MatchExpr, want_value: bool) -> Val {
         let MatchExpr { scrutinee, arms, span } = m;
         let sv = self.emit_value(scrutinee);
@@ -4279,32 +4417,38 @@ impl Emitter {
                         None => {}
                     }
                     if want_value {
-                        let bv = self.emit_value(body);
+                        let bv = self.emit_arm_value(body);
                         let Val { op: bop1, kind: bk, heap: bh1 } = bv;
-                        // B-2026-07-27-15: bring the arm value to OWNED before the join.
-                        let ownv = self.arm_own(bop1, bk, bh1);
-                        let Val { op: bop0, kind: bkx, heap: bh } = ownv;
-                        // B-2026-07-27-3: a BOOL-valued match arm yields i1;
-                        // the result slot is an i64 lane, so widen on store and
-                        // remember to narrow at the join (same convention as the
-                        // value-if and Vec[bool] paths).
-                        if bk == 1 {
-                            rbool = true;
+                        // B-2026-07-29-2: a DIVERGING arm (`break` / `continue`) has
+                        // already emitted its branch. It carries no value to the join,
+                        // and — the reason the bug was an IR error rather than just a
+                        // missed jump — it must NOT type the result slot.
+                        if bk != 0 - 99 {
+                            // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                            let ownv = self.arm_own(bop1, bk, bh1);
+                            let Val { op: bop0, kind: bkx, heap: bh } = ownv;
+                            // B-2026-07-27-3: a BOOL-valued match arm yields i1;
+                            // the result slot is an i64 lane, so widen on store and
+                            // remember to narrow at the join (same convention as the
+                            // value-if and Vec[bool] paths).
+                            if bk == 1 {
+                                rbool = true;
+                            }
+                            let bop = self.to_i64_lane(bop0, bk);
+                            if bk != 1 {
+                                rsty = self.ty_text(bk);
+                            }
+                            rkind = bk;
+                            rheap = bh;
+                            self.body = self.body
+                                + "  store "
+                                + rsty.clone()
+                                + " "
+                                + bop
+                                + ", ptr "
+                                + rslot.clone()
+                                + ", align 8\n";
                         }
-                        let bop = self.to_i64_lane(bop0, bk);
-                        if bk != 1 {
-                            rsty = self.ty_text(bk);
-                        }
-                        rkind = bk;
-                        rheap = bh;
-                        self.body = self.body
-                            + "  store "
-                            + rsty.clone()
-                            + " "
-                            + bop
-                            + ", ptr "
-                            + rslot.clone()
-                            + ", align 8\n";
                     } else {
                         self.emit_expr(body);
                     }
@@ -4349,29 +4493,35 @@ impl Emitter {
                             None => {}
                         }
                         if want_value {
-                            let bv = self.emit_value(body);
+                            let bv = self.emit_arm_value(body);
                             let Val { op: bop1, kind: bk, heap: bh1 } = bv;
-                            // B-2026-07-27-15: bring the arm value to OWNED before the join.
-                            let ownv = self.arm_own(bop1, bk, bh1);
-                            let Val { op: bop0, kind: bkx, heap: bh } = ownv;
-                            // B-2026-07-27-3: bool arm -> widen to the i64 lane.
-                            if bk == 1 {
-                                rbool = true;
+                            // B-2026-07-29-2: a DIVERGING arm (`break` / `continue`) has
+                            // already emitted its branch. It carries no value to the join,
+                            // and — the reason the bug was an IR error rather than just a
+                            // missed jump — it must NOT type the result slot.
+                            if bk != 0 - 99 {
+                                // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                                let ownv = self.arm_own(bop1, bk, bh1);
+                                let Val { op: bop0, kind: bkx, heap: bh } = ownv;
+                                // B-2026-07-27-3: bool arm -> widen to the i64 lane.
+                                if bk == 1 {
+                                    rbool = true;
+                                }
+                                let bop = self.to_i64_lane(bop0, bk);
+                                if bk != 1 {
+                                    rsty = self.ty_text(bk);
+                                }
+                                rkind = bk;
+                                rheap = bh;
+                                self.body = self.body
+                                    + "  store "
+                                    + rsty.clone()
+                                    + " "
+                                    + bop
+                                    + ", ptr "
+                                    + rslot.clone()
+                                    + ", align 8\n";
                             }
-                            let bop = self.to_i64_lane(bop0, bk);
-                            if bk != 1 {
-                                rsty = self.ty_text(bk);
-                            }
-                            rkind = bk;
-                            rheap = bh;
-                            self.body = self.body
-                                + "  store "
-                                + rsty.clone()
-                                + " "
-                                + bop
-                                + ", ptr "
-                                + rslot.clone()
-                                + ", align 8\n";
                         } else {
                             self.emit_expr(body);
                         }
@@ -4942,29 +5092,35 @@ impl Emitter {
                     None => {}
                 }
                 if want_value {
-                    let bv = self.emit_value(body);
+                    let bv = self.emit_arm_value(body);
                     let Val { op: bop1, kind: bk, heap: bh1 } = bv;
-                    // B-2026-07-27-15: bring the arm value to OWNED before the join.
-                    let ownv = self.arm_own(bop1, bk, bh1);
-                    let Val { op: bop0, kind: bkx, heap: bh } = ownv;
-                    // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
-                    if bk == 1 {
-                        rbool = true;
+                    // B-2026-07-29-2: a DIVERGING arm (`break` / `continue`) has
+                    // already emitted its branch. It carries no value to the join,
+                    // and — the reason the bug was an IR error rather than just a
+                    // missed jump — it must NOT type the result slot.
+                    if bk != 0 - 99 {
+                        // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                        let ownv = self.arm_own(bop1, bk, bh1);
+                        let Val { op: bop0, kind: bkx, heap: bh } = ownv;
+                        // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
+                        if bk == 1 {
+                            rbool = true;
+                        }
+                        let bop = self.to_i64_lane(bop0, bk);
+                        if bk != 1 {
+                            rsty = self.ty_text(bk);
+                        }
+                        rkind = bk;
+                        rheap = bh;
+                        self.body = self.body
+                            + "  store "
+                            + rsty.clone()
+                            + " "
+                            + bop
+                            + ", ptr "
+                            + rslot.clone()
+                            + ", align 8\n";
                     }
-                    let bop = self.to_i64_lane(bop0, bk);
-                    if bk != 1 {
-                        rsty = self.ty_text(bk);
-                    }
-                    rkind = bk;
-                    rheap = bh;
-                    self.body = self.body
-                        + "  store "
-                        + rsty.clone()
-                        + " "
-                        + bop
-                        + ", ptr "
-                        + rslot.clone()
-                        + ", align 8\n";
                 } else {
                     self.emit_expr(body);
                 }
@@ -5013,29 +5169,35 @@ impl Emitter {
                     None => {}
                 }
                 if want_value {
-                    let bv = self.emit_value(body);
+                    let bv = self.emit_arm_value(body);
                     let Val { op: bop1, kind: bk, heap: bh1 } = bv;
-                    // B-2026-07-27-15: bring the arm value to OWNED before the join.
-                    let ownv = self.arm_own(bop1, bk, bh1);
-                    let Val { op: bop0, kind: bkx, heap: bh } = ownv;
-                    // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
-                    if bk == 1 {
-                        rbool = true;
+                    // B-2026-07-29-2: a DIVERGING arm (`break` / `continue`) has
+                    // already emitted its branch. It carries no value to the join,
+                    // and — the reason the bug was an IR error rather than just a
+                    // missed jump — it must NOT type the result slot.
+                    if bk != 0 - 99 {
+                        // B-2026-07-27-15: bring the arm value to OWNED before the join.
+                        let ownv = self.arm_own(bop1, bk, bh1);
+                        let Val { op: bop0, kind: bkx, heap: bh } = ownv;
+                        // B-2026-07-27-3: bool arm -> widen to the i64 result lane.
+                        if bk == 1 {
+                            rbool = true;
+                        }
+                        let bop = self.to_i64_lane(bop0, bk);
+                        if bk != 1 {
+                            rsty = self.ty_text(bk);
+                        }
+                        rkind = bk;
+                        rheap = bh;
+                        self.body = self.body
+                            + "  store "
+                            + rsty.clone()
+                            + " "
+                            + bop
+                            + ", ptr "
+                            + rslot.clone()
+                            + ", align 8\n";
                     }
-                    let bop = self.to_i64_lane(bop0, bk);
-                    if bk != 1 {
-                        rsty = self.ty_text(bk);
-                    }
-                    rkind = bk;
-                    rheap = bh;
-                    self.body = self.body
-                        + "  store "
-                        + rsty.clone()
-                        + " "
-                        + bop
-                        + ", ptr "
-                        + rslot.clone()
-                        + ", align 8\n";
                 } else {
                     self.emit_expr(body);
                 }
@@ -6799,12 +6961,30 @@ impl Emitter {
                 }
                 let r = self.fresh();
                 if kind == 1 {
+                    // B-2026-07-29-1: compare at the OPERANDS' width, not
+                    // always i64. A bool lowers to `i1` (`ty_text(1)`), so
+                    // `b == false` emitted `icmp eq i64 %b, false` against an
+                    // i1 register and LLVM rejected the module. `not b` was
+                    // unaffected because the unary path never came through
+                    // here, which is why this survived so long.
+                    //
+                    // Only when BOTH sides are bool: a mixed pair is a type
+                    // error upstream, and widening one side here would paper
+                    // over it. A bool operand sitting in an i64 lane (a
+                    // `Vec[bool]` read, kind 3's storage) still arrives as
+                    // kind 0 and keeps the i64 compare it needs.
+                    let mut cty = "i64".to_string();
+                    if lk == 1 and rk == 1 {
+                        cty = "i1".to_string();
+                    }
                     self.body = self.body
                         + "  "
                         + r.clone()
                         + " = icmp "
                         + text
-                        + " i64 "
+                        + " "
+                        + cty
+                        + " "
                         + lop
                         + ", "
                         + rop

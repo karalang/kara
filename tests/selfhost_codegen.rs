@@ -858,6 +858,50 @@ const CORPUS: &[&str] = &[
     //    compare against it — the omission is a seed bug, not a gap in this
     //    port's coverage, and it should be added here once that is fixed.
     "struct G {\n    n: i64,\n}\nstruct H {\n    label: String,\n    k: i64,\n}\nstruct Node {\n    gp: Option[G],\n    k: i64,\n}\nshared enum E {\n    V(Node),\n}\nfn gsum(g: Option[G]) -> i64 {\n    match g {\n        None => 0,\n        Some(x) => x.n,\n    }\n}\nfn hname(h: Option[H]) -> String {\n    match h {\n        None => \"none\".to_string(),\n        Some(x) => x.label,\n    }\n}\nfn mk(n: i64) -> Option[G] {\n    if n > 0 {\n        return Some(G { n: n });\n    }\n    None\n}\nfn main() {\n    println(gsum(Some(G { n: 5 })).to_string());\n    println(gsum(None).to_string());\n    println(hname(Some(H { label: \"hi\".to_string(), k: 1 })));\n    println(hname(None));\n    println(gsum(mk(9)).to_string());\n    println(gsum(mk(0)).to_string());\n    let nd = Node { gp: Some(G { n: 3 }), k: 7 };\n    println(gsum(nd.gp).to_string());\n    let nd2 = Node { gp: None, k: 8 };\n    println(gsum(nd2.gp).to_string());\n    let a = E.V(Node { gp: Some(G { n: 11 }), k: 1 });\n    match a {\n        V(x) => {\n            println(x.k.to_string());\n            println(gsum(x.gp).to_string());\n        }\n    }\n    let b = E.V(Node { gp: None, k: 2 });\n    match b {\n        V(x) => {\n            println(gsum(x.gp).to_string());\n        }\n    }\n    let hv = Some(H { label: \"own\".to_string(), k: 4 });\n    match hv {\n        None => println(\"none\"),\n        Some(x) => println(x.label),\n    }\n}\n",
+    // ---- 2026-07-29 self-host emitter frontier: the four defects that stood
+    // between the emitter and emitting the compiler's OWN modules. Each was
+    // found by `scripts/selfhost-emit-module.sh`, which feeds a module plus its
+    // import closure through the emitter and runs `llvm-as` over the result;
+    // all nine self-host modules emit IR that parses as of this commit.
+    //
+    // B-2026-07-29-1 — `==` on BOOLS compared at i64. The comparison width was
+    // hardcoded `i64`, but a bool lowers to `i1`, so `b == false` emitted
+    // `icmp eq i64 %b, false` against an i1 register. `not b` was unaffected
+    // (the unary path never came through here), which is why it survived so
+    // long. Both operands must be bool to narrow — a bool sitting in an i64
+    // lane (a `Vec[bool]` read, kind 3's storage) still arrives as kind 0.
+    "fn f(b: bool) -> bool {\n    b == false\n}\nfn main() {\n    let t = true;\n    let g = false;\n    println((t == true).to_string());\n    println((t == false).to_string());\n    println((g == false).to_string());\n    println((t != g).to_string());\n    println(f(false).to_string());\n    if t == true {\n        println(\"yes\");\n    }\n}\n",
+    // B-2026-07-29-2 — a value-match arm whose body is `break` / `continue`.
+    // `emit_value` has no arm for either (they live only in `emit_expr`), so
+    // such an arm fell into its catch-all and did two things wrong at once: no
+    // branch was emitted (so `_ => break` never left the loop) and the
+    // catch-all's i64 zero RETYPED the match's result slot, landing a sibling
+    // arm's `store { ptr, i64 }` in an `alloca i64`. The int-literal path, the
+    // enum path, `break` and `continue` are each exercised.
+    //
+    // SCOPE NOTE: the enum case uses a PAYLOAD-FREE enum on purpose. The
+    // heap-payload form (`Word(String) => s`) LEAKS its payload under this
+    // emitter — pre-existing and unrelated to the break arm (the same program
+    // with `Stop => "".to_string()` in place of `Stop => break` leaks
+    // identically, on the emitter as it stood before this commit). Tracked as
+    // its own ledger entry; add the heap form here once it is fixed.
+    "fn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    while i < 5 {\n        let s = match i {\n            0 => \"zero\".to_string(),\n            1 => \"one\".to_string(),\n            _ => break,\n        };\n        out = out + s + \";\";\n        i = i + 1;\n    }\n    println(out);\n    println(i.to_string());\n}\n",
+    "enum Tag {\n    Word,\n    Stop,\n}\nfn pick(n: i64) -> Tag {\n    if n < 2 {\n        return Tag.Word;\n    }\n    Tag.Stop\n}\nfn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    loop {\n        if i >= 4 {\n            break;\n        }\n        let w = match pick(i) {\n            Word => \"w\".to_string(),\n            Stop => break,\n        };\n        out = out + w;\n        i = i + 1;\n    }\n    println(out);\n    println(i.to_string());\n}\n",
+    "fn main() {\n    let mut i = 0;\n    let mut out = \"\".to_string();\n    while i < 5 {\n        i = i + 1;\n        let s = match i % 2 {\n            0 => \"e\".to_string(),\n            _ => continue,\n        };\n        out = out + s;\n    }\n    println(out);\n}\n",
+    // B-2026-07-29-5 — element-kind adoption for an un-annotated `Vec.new()`.
+    // `Vec.new()` carries no element type, so the binding defaulted to
+    // Vec[i64]; only an annotation retyped it. Pushing a String therefore stored
+    // a `{ ptr, i64 }` into an 8-byte i64 lane. A String is never a legal
+    // Vec[i64] element, so the first such push now adopts kind 4.
+    "fn main() {\n    let mut names = Vec.new();\n    names.push(\"alpha\".to_string());\n    names.push(\"beta\".to_string());\n    println(names.len().to_string());\n    println(names[0]);\n    println(names[1]);\n}\n",
+    // B-2026-07-29-4 — `panic` / `todo` / `unreachable` are BUILTINS. They fell
+    // through to the user-call path, which — finding no signature — typed every
+    // parameter i64 and emitted `call i64 @u_panic(i64 <{ptr,i64} String>)`.
+    // The `panic` here is never taken: the emitter prints the seed's
+    // no-filename form (`panic: <msg>`) while the seed's AOT path prints the
+    // Level-2 `panic at <file>:<line>:<col> in <fn>: <msg>`, so panic-MESSAGE
+    // parity is a deferred surface and no corpus program may actually panic.
+    "fn pick(n: i64) -> i64 with panics {\n    if n < 0 {\n        panic(\"negative input\");\n    }\n    n * 2\n}\nfn main() with panics {\n    println(pick(3).to_string());\n    println(pick(0).to_string());\n}\n",
 ];
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
