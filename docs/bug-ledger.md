@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 84 | 2 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
-| false-positive | 42 | 0 |
+| false-positive | 43 | 0 |
 | run-vs-build | 42 | 0 |
 | perf | 30 | 0 |
 | crash | 30 | 0 |
@@ -118,13 +118,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 19 | 0 |
 | runtime | 15 | 0 |
 | cli | 15 | 0 |
-| resolver | 11 | 0 |
+| resolver | 12 | 0 |
 | parser | 6 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **715 surfaced · 2 open · 707 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **716 surfaced · 2 open · 708 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -133,9 +133,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **715 surfaced 
 | B-2026-07-29-1 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): `==` with a BOOL operand emits an i64 compare against an i1 value — `icmp eq i64 %t, false` — which LLVM rejects. `not b` is unaffected. This is the only thing between the port and emitting codegen.kara itself. | — |
 | B-2026-07-29-2 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): a match-expression RESULT slot is allocated `i64` in `Parser.collect_leading_doc_comments` while an arm yields a String, so the later read does `extractvalue { ptr, i64 }` on an i64 load. Localized to the function and slot; not yet reduced to a minimal repro. | — |
 
-### Fixed (707)
+### Fixed (708)
 
-<details><summary>707 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>708 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -846,6 +846,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **715 surfaced 
 | B-2026-07-28-15 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct… | 04964fa |
 | B-2026-07-28-16 | codegen | high | SEED CODEGEN: an owned struct's `Option`/`Result` field passed BY VALUE to a parameter that owns it was not treated as a move — the callee freed the… | 6dc5854 |
 | B-2026-07-28-17 | codegen | high | SEED CODEGEN: passing an `Option[<heap>]` field of a struct bound out of a `shared enum` payload to an owning parameter double-frees — `match a { V(n… | 09ffe5a |
+| B-2026-07-29-3 | resolver | high | A `_test.kara` companion that imports the module it tests is reported as a circular module dependency (`E0223`, bogus `thing → thing`), so the idioma… | 93d14ee |
 
 </details>
 
