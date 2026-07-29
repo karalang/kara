@@ -130,7 +130,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **736 surfaced 
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-29-13 | 2026-07-29 | codegen | high | PERF: `Tensor.iter_axis(n)` materializes every sub-tensor as a COPY, so one pass over a 30 MB `[10000, 768]` corpus costs ~10 ms of page faults per call — 91% of the cost of the batched embedding kernels, and ~6x the cost of reading the same bytes. | — |
+| B-2026-07-29-13 | 2026-07-29 | codegen | medium | PERF: `Tensor.iter_axis(n)` materializes every sub-tensor as a COPY. The PAGE-FAULT half is fixed (glibc arena tuning, ~2.5-3x); what remains open is the copy itself, ~3x against a borrow-only traversal of the same bytes. | — |
 
 ### Fixed (728)
 
