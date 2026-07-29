@@ -75,8 +75,10 @@ impl Scheduler for Fcfs {
         stops:     ref Vec[i64],
     ) -> Option[i64] {
         // GAP-10 (from v53): no iterator adaptors; must use index loop.
+        // `Vec.get` yields `Option[ref T]`, so the borrow is cloned out to
+        // satisfy the trait's owned `Option[i64]` return.
         match stops.get(0) {
-            Some(f) => Some(f),
+            Some(f) => Some(f.clone()),
             None    => None,
         }
     }

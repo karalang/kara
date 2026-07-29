@@ -28,7 +28,7 @@ fn main() {
     while generation < 20 {
         clear_screen();
         println(f"Generation {generation}");
-        render(ref grid);
+        render(grid);
         grid = grid.step();
         generation = generation + 1;
     }

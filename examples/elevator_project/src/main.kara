@@ -2,10 +2,10 @@
 // Runs the same request set under SCAN then FCFS to compare behaviour.
 
 import request.{Direction, Request};
-import scheduler.{Scan, Fcfs};
+import scheduler.{Scheduler, Scan, Fcfs};
 import elevator.Elevator;
 
-fn run_simulation[S: Scheduler](label: ref String, mut e: Elevator[S]) {
+fn run_simulation[S: Scheduler](label: ref String, e: mut ref Elevator[S]) {
     println(f"=== {label} ===");
     println(f"start floor={e.floor}  queued={e.pending()}");
     loop {
@@ -49,6 +49,6 @@ fn main() {
         fcfs_e.add_request(req);
     }
 
-    run_simulation(ref "SCAN", scan_e);
-    run_simulation(ref "FCFS", fcfs_e);
+    run_simulation("SCAN", mut scan_e);
+    run_simulation("FCFS", mut fcfs_e);
 }

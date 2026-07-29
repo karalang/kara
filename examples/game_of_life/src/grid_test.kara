@@ -1,7 +1,7 @@
 // grid_test.kara — Tests for the Game of Life rules and Grid step.
 
-import grid.Grid;
-import rules.{count_neighbors, next_state};
+import grid.{Grid, count_neighbors};
+import rules.next_state;
 
 // --- Rule unit tests ---
 

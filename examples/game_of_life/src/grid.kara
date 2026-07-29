@@ -1,12 +1,12 @@
-// grid.kara — Grid type, layout block, and the generation step.
+// grid.kara — Grid type, neighbour counting, and the generation step.
 //
 // GAP-H: Layout blocks with heap-allocated fields.
 //   The spec's layout block examples show plain scalar fields being grouped
 //   for SoA.  Grouping a `Vec[bool]` field (heap-allocated) is ambiguous:
 //   does the layout block control the Vec's internal buffer placement, the
 //   Vec header (ptr+len+cap), or is it silently ignored?  No spec text
-//   addresses this.  The block below is written as intended by the author;
-//   whether the compiler honours it is unclear.
+//   addresses this.  Moot for now — see the note above `impl Grid`: the
+//   block this file used to carry was not valid syntax in the first place.
 //
 // GAP-I: No par-for — intra-step parallelism requires awkward decomposition.
 //   `step` reads from `self` (old grid) and writes into a new `Grid`.
@@ -23,7 +23,31 @@
 //   in the stdlib table.  Without it, passing disjoint mutable regions to
 //   parallel tasks has no safe expression in the type system.
 
-import rules.{count_neighbors, next_state};
+import rules.next_state;
+
+// Count the live neighbours of cell (x, y).  Grid.get handles boundary.
+//
+// Lives here rather than in `rules.kara` because it takes a `ref Grid`:
+// hosting it there made `rules` import `grid` while `grid` imported `rules`
+// (`E0223 grid → rules → grid`). `rules` is now Grid-free and the edge runs
+// one way, grid → rules.
+pub fn count_neighbors(grid: ref Grid, x: i64, y: i64) -> i64 {
+    let mut n: i64 = 0;
+    let mut dy: i64 = -1;
+    while dy <= 1 {
+        let mut dx: i64 = -1;
+        while dx <= 1 {
+            if dx != 0 or dy != 0 {
+                if grid.get(x + dx, y + dy) {
+                    n = n + 1;
+                }
+            }
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+    n
+}
 
 pub struct Grid {
     pub width:  i64,
@@ -31,10 +55,14 @@ pub struct Grid {
     cells: Vec[bool],   // row-major: cell(x, y) = cells[y * width + x]
 }
 
-layout Grid {
-    group { width, height }   // metadata — kept together, likely in a cache line
-    group { cells }           // bulk data — separate region
-}
+// GAP-H (corrected 2026-07-29): a `layout` block binds to a BINDING SITE, not
+// to a type — design.md § Feature 1 spells it `layout entities: Vec[Entity] {
+// group ... }`, and "Layout binds to the binding site, not the type globally."
+// The block that stood here was `layout Grid { ... }`, which the parser
+// rejects: layout names are Value-class (snake_case), because the name is a
+// variable, not a type. There is no `Vec[Grid]` collection in this program to
+// attach a layout to, so the intent below — metadata fields in one cache line,
+// the bulk `cells` buffer in another — has no expression here today.
 
 impl Grid {
     pub fn new(width: i64, height: i64) -> Grid {
@@ -68,7 +96,7 @@ impl Grid {
         while y < self.height {
             let mut x: i64 = 0;
             while x < self.width {
-                let n = count_neighbors(ref self, x, y);
+                let n = count_neighbors(self, x, y);
                 next.set(x, y, next_state(self.get(x, y), n));
                 x = x + 1;
             }

@@ -32,6 +32,12 @@ pub fn render(grid: ref Grid) {
 }
 
 pub fn clear_screen() {
-    // GAP-L: raw ANSI escape — no stdlib abstraction.
-    print("\x1b[2J\x1b[H");
+    // GAP-L, sharpened 2026-07-29: the raw ANSI escape cannot even be
+    // WRITTEN today. Kāra's string literals support `\n`, `\t`, `\r`, `\\`
+    // and `\"` and nothing else — there is no `\x1b`, no `\u{1b}`, and no
+    // char-from-code-point — so `"\x1b[2J\x1b[H"` is a lex error, not merely
+    // an unportable idiom. Until a stdlib `terminal.clear()` (or a numeric
+    // escape) exists, separate frames with blank lines instead.
+    println("");
+    println("");
 }
