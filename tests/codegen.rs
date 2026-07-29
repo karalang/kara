@@ -27675,6 +27675,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_string_method_on_ref_returning_call_receiver() {
+        // B-2026-07-29-15, the String half of B-2026-07-29-12's shape:
+        // `h.label().len()` where `label() -> ref String`. This one did not
+        // bail loudly — it fell through to the non-identifier collection
+        // handler, which read the returned BORROW POINTER as if it were the
+        // `{ptr,len,cap}` String value, so `.len()` printed garbage
+        // (1634885995 for a 4-byte string) and `.starts_with(..)` tripped
+        // "String buffer was not valid UTF-8". Binding first always worked,
+        // so the two spellings disagreed.
+        let output = run_program(
+            "struct H { name: String }\n\
+             impl H {\n\
+                 fn label(ref self) -> ref String { self.name }\n\
+             }\n\
+             fn main() {\n\
+                 let h = H { name: \"kara\".to_string() };\n\
+                 println(h.label().len().to_string());\n\
+                 println(h.label().starts_with(\"ka\").to_string());\n\
+                 println(h.label().to_uppercase());\n\
+                 println(f\"{h.label().len()}\");\n\
+                 let e = H { name: \"\".to_string() };\n\
+                 println(e.label().is_empty().to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "4\ntrue\nKARA\n4\ntrue\n");
+    }
+
+    #[test]
     fn test_e2e_user_drop_nll_timing_and_order() {
         // B-2026-07-21-1: user `impl Drop` bodies fire at each binding's
         // LIVE-RANGE END (NLL), in LIFO order for drops due at the same
@@ -76907,6 +76936,73 @@ fn main() {
              Option element drop under the typechecker's lowercase `str` spelling \
              (karac_drop_Option_str); got:\n{}",
             ir
+        );
+    }
+}
+
+#[cfg(feature = "llvm")]
+mod ref_return_receiver_single_call {
+    /// Emit `main`'s IR for a program and count the `call`s to `name`.
+    fn calls_to(src: &str, name: &str) -> usize {
+        let mut parsed = karac::parse(src);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = karac::codegen::compile_to_ir(&parsed.program, None, None).expect("codegen");
+        let main = ir
+            .split("define i32 @main")
+            .nth(1)
+            .unwrap_or(&ir)
+            .split("\n}")
+            .next()
+            .unwrap_or("");
+        main.lines()
+            .filter(|l| l.contains(&format!("@{name}(")))
+            .count()
+    }
+
+    #[test]
+    fn ref_returning_accessor_receiver_is_called_exactly_once() {
+        // B-2026-07-29-15: `h.view().is_empty()` emitted the accessor TWICE —
+        //
+        //     %usermethod  = call ptr @H.view(ptr %h)   ; discarded
+        //     %usermethod1 = call ptr @H.view(ptr %h)
+        //     store ptr %usermethod1, ptr %__refrecv_tmp_0
+        //
+        // because the materialize-the-borrow helper sat *after* an arm that
+        // already compiled the receiver and fell through, so the helper's own
+        // `compile_expr(object)` produced a second call. Pure for these two
+        // accessors, but wrong for any accessor with an effect, and for one
+        // that allocates the discarded result is leaked outright. Hoisting the
+        // helper ahead of every receiver-compiling arm is the fix; this test
+        // pins the property that made the defect invisible.
+        assert_eq!(
+            calls_to(
+                "struct H { items: Vec[i64] }\n\
+                 impl H { fn view(ref self) -> ref Vec[i64] { self.items } }\n\
+                 fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(3);\n\
+                     let h = H { items: v };\n\
+                     println(h.view().len().to_string());\n\
+                 }",
+                "H.view",
+            ),
+            1,
+            "the Vec accessor must be emitted once per source call site"
+        );
+        assert_eq!(
+            calls_to(
+                "struct H { name: String }\n\
+                 impl H { fn label(ref self) -> ref String { self.name } }\n\
+                 fn main() {\n\
+                     let h = H { name: \"kara\".to_string() };\n\
+                     println(h.label().len().to_string());\n\
+                 }",
+                "H.label",
+            ),
+            1,
+            "the String accessor must be emitted once per source call site"
         );
     }
 }

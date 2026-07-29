@@ -1068,6 +1068,23 @@ impl<'ctx> super::Codegen<'ctx> {
             ));
         }
 
+        // A method whose RECEIVER is a borrow-returning user accessor
+        // (`h.view().is_empty()` where `view() -> ref Vec[i64]`). Materialize
+        // the borrow into a synthetic local and re-dispatch — B-2026-07-29-12.
+        //
+        // Placed HERE, ahead of every arm that compiles the receiver, and not
+        // further down: a later arm emits the receiver and then falls through,
+        // so this helper's own `compile_expr(object)` produced a SECOND call to
+        // the accessor with the first result discarded (`%usermethod = call ptr
+        // @H.view(...)` twice in the emitted IR — B-2026-07-29-15). Harmless
+        // for a pure borrow accessor, but wrong for one with side effects, and
+        // for an allocating accessor the discarded result is leaked. The helper
+        // self-gates to a borrow-returning user call, so running it first
+        // changes nothing else.
+        if let Some(result) = self.try_compile_ref_return_receiver_method(object, method, args)? {
+            return Ok(result);
+        }
+
         // Chained-call span collision guard. The parser sets
         // `MethodCall.span == receiver.span`, so in `recv.inner().outer()`
         // the inner and outer calls share one `method_callee_types` key, and
@@ -6275,13 +6292,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // plain `ptr` (no struct shape to detect), so it keys off the
         // typechecker's `temp_recv_mapset_types`; no-ops (`Ok(None)`) when absent.
         if let Some(result) = self.try_compile_freshtemp_mapset_read_method(object, method, args)? {
-            return Ok(result);
-        }
-
-        // A method whose RECEIVER is a borrow-returning user accessor
-        // (`h.view().is_empty()` where `view() -> ref Vec[i64]`). Materialize
-        // the borrow into a synthetic local and re-dispatch — B-2026-07-29-12.
-        if let Some(result) = self.try_compile_ref_return_receiver_method(object, method, args)? {
             return Ok(result);
         }
 
@@ -13164,33 +13174,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         };
-        // A `ref String` inner is REFUSED rather than materialized, because
-        // neither available lowering is correct:
-        //
-        //   * materializing it the way the Vec leg does below yields the right
-        //     answer but emits one `karac_string_clone` per call that nothing
-        //     frees (measured: +1 leaked block per chained call against the
-        //     same program with the receiver bound first, which leaks none).
-        //     The anonymous borrow temp has no owner to hang that free on.
-        //   * falling through to `try_compile_nonident_collection_method`
-        //     (what happened before this arm existed) reads the returned
-        //     BORROW POINTER as if it were the `{ptr,len,cap}` String value —
-        //     `h.label().len()` printed 1634885995 instead of 4, and
-        //     `.starts_with(..)` tripped "String buffer was not valid UTF-8".
-        //     That is a silent miscompile.
-        //
-        // Refusing converts the silent wrong answer into an actionable message
-        // and points at the spelling that has always been correct. The Vec leg
-        // is unaffected — it is exercised over 300 chained calls under valgrind
-        // with zero leaks.
-        if self.is_string_type_expr(&inner_te) {
-            return Err(format!(
-                "codegen: `.{method}(...)` on a borrow-returning accessor's String result is \
-                 not yet lowered — bind it first (`let s = <recv>.<accessor>(); s.{method}(...)`), \
-                 which is correct today. Lowering it in place either leaks the materialized \
-                 copy or misreads the borrow pointer as a String value (B-2026-07-29-12)."
-            ));
-        }
+        // The `ref String` inner goes through the same materialization as the
+        // Vec one. It was refused for a while on leak evidence — one extra
+        // leaked block per chained call against the bound-receiver spelling —
+        // but that measurement was reading the DOUBLE-CALL defect fixed in
+        // B-2026-07-29-15, not a property of the String leg: the helper used
+        // to sit after an arm that had already emitted the receiver, so the
+        // accessor ran twice and the first result was dropped on the floor.
+        // With the helper hoisted, the leak count is per-accessor-invocation
+        // and IDENTICAL between the two spellings (1 call → 1 block, 3 calls
+        // → 3 blocks, chained or bound). That residual is a pre-existing leak
+        // in `-> ref String` accessors themselves (B-2026-07-29-21), which
+        // refusing here would not avoid — the bound form leaks it too.
         let fn_val = self
             .current_fn
             .ok_or_else(|| "ref-return receiver materialization outside fn".to_string())?;
