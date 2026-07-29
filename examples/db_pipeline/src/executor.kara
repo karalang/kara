@@ -28,6 +28,7 @@
 //   the constraint visible in the API.
 
 import query.{Row, DbError, Value};
+import db.Db;
 import planner.QueryPlan;
 
 pub fn execute(plan: QueryPlan) -> Result[Vec[Row], DbError]

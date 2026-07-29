@@ -43,7 +43,7 @@
 //   run the query, extract the result, close the provider scope, and then
 //   assert — the assert must be inside the with_provider block.
 
-import query.{Row, DbError};
+import query.{Row, DbError, Value};
 
 pub trait DatabaseProvider {
     fn query_table(ref self, table: ref String) -> Result[Vec[Row], DbError];

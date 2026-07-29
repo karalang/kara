@@ -9,18 +9,19 @@
 //   enums produce a compile error or silently become shared.
 //   For this example we keep the AST flat (no nesting) to sidestep the issue.
 
-pub enum Value {
+#[derive(Clone)]
+pub shared enum Value {
     Int(i64),
     Text(String),
     Null,
 }
 
 impl Display for Value {
-    fn fmt(ref self, f: mut ref Formatter) {
+    fn to_string(ref self) -> String {
         match self {
-            Int(n)    => write(f, "{}", n),
-            Text(s)   => write(f, "\"{}\"", s),
-            Null      => write(f, "NULL"),
+            Int(n)    => f"{n}",
+            Text(s)   => f"\"{s}\"",
+            Null      => "NULL".to_string(),
         }
     }
 }
@@ -35,12 +36,12 @@ pub enum DbError {
 }
 
 impl Display for DbError {
-    fn fmt(ref self, f: mut ref Formatter) {
+    fn to_string(ref self) -> String {
         match self {
-            TableNotFound { name }            => write(f, "table not found: {}", name),
-            ColumnNotFound { name }           => write(f, "column not found: {}", name),
-            TypeMismatch { expected, got }    => write(f, "type mismatch: expected {}, got {}", expected, got),
-            ConstraintViolation { message }   => write(f, "constraint violation: {}", message),
+            TableNotFound { name }            => f"table not found: {name}",
+            ColumnNotFound { name }           => f"column not found: {name}",
+            TypeMismatch { expected, got }    => f"type mismatch: expected {expected}, got {got}",
+            ConstraintViolation { message }   => f"constraint violation: {message}",
         }
     }
 }
