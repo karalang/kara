@@ -132,10 +132,17 @@ karac run - Run a .kara program through the interpreter
 
 USAGE:
     karac run <file.kara> [options]
+    karac run <file.kara> [options] -- [program args]
     karac run --example NAME [options]
     karac <file.kara>                  (shorthand)
 
 OPTIONS:
+    --                  Everything after this belongs to the PROGRAM, not
+                        to karac. `env.args()` then reports
+                        [<file.kara>, ...those args] — the same argv a
+                        built binary sees, so `karac run` and the binary
+                        agree. Without it the program's argv is just the
+                        script path.
     --example NAME      Run examples/<NAME>.kara (or examples/<NAME>/src/main.kara)
     --output=json       Structured JSON output on stdout
     --output=jsonl      Streaming JSONL output on stdout

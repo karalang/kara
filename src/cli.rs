@@ -139,6 +139,13 @@ pub enum Command {
         /// `jsonl` structured run envelopes and the `--timeout` cooperative
         /// deadline.
         interp: bool,
+        /// Arguments after a literal `--`, forwarded to the PROGRAM as its own
+        /// argv tail. `env.args()` then yields `[<script>, ...program_args]` on
+        /// every executor. Without this, a program's `env.args()` saw whatever
+        /// process happened to host it — karac's own argv under `--interp`, and
+        /// the internal `karac_jit_runner` plus a temp `.ll` path under the JIT
+        /// (B-2026-07-29-18).
+        program_args: Vec<String>,
     },
     RunExample {
         name: String,
@@ -727,6 +734,7 @@ pub fn execute(cmd: Command) {
             lint_overrides,
             timeout,
             interp,
+            program_args,
         } => cmd_run(
             &file,
             output,
@@ -736,6 +744,7 @@ pub fn execute(cmd: Command) {
             lint_overrides,
             timeout,
             interp,
+            &program_args,
         ),
         Command::RunExample {
             name,
@@ -4112,6 +4121,8 @@ fn cmd_run_example(
     // so manifest discovery is intentionally skipped.
     // `interp = false`: `run --example` uses the JIT-default backend too (6c),
     // with the same `--interp`/`KARAC_RUN_JIT=0` escape hatches honored inside.
+    // `run --example` takes no trailing program arguments — the examples it
+    // runs are self-contained demos, so the program argv is just the script.
     cmd_run(
         &path,
         output,
@@ -4121,6 +4132,7 @@ fn cmd_run_example(
         lint_overrides,
         None,
         false,
+        &[],
     );
 }
 
@@ -4322,7 +4334,7 @@ fn try_build_run_super_program(filename: &str, no_manifest: bool) -> Option<Prog
 /// binary. Mirrors the machinery `karac test` already uses (proven at
 /// 2084/2084 codegen-E2E-via-JIT parity), but one-shot rather than batched.
 #[cfg(feature = "llvm")]
-fn run_ir_via_jit_subprocess(ir: &str) -> i32 {
+fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i32 {
     let ir_path = std::env::temp_dir().join(format!("karac_run_{}_jit.ll", std::process::id()));
     if let Err(e) = std::fs::write(&ir_path, ir) {
         eprintln!(
@@ -4344,7 +4356,21 @@ fn run_ir_via_jit_subprocess(ir: &str) -> i32 {
     };
     // `.status()` inherits stdin/stdout/stderr, so the JIT'd program writes
     // straight to the user's terminal and its exit code is the run's exit code.
-    let status = std::process::Command::new(&runner).arg(&ir_path).status();
+    // Hand the PROGRAM's argv to the runner's runtime. Under the JIT the
+    // hosting process is `karac_jit_runner`, so `std::env::args()` inside
+    // `karac_runtime_env_args_into` reported the runner's path plus the temp
+    // `.ll` file rather than anything the user wrote (B-2026-07-29-18). The
+    // runtime prefers this variable when present and falls back to process
+    // argv otherwise, which keeps an AOT binary — where the process IS the
+    // program — on exactly the path it always used.
+    //
+    // Unit separator (U+001F) rather than NUL: an environment variable's value
+    // is a NUL-terminated C string, so NUL cannot appear inside it. U+001F is
+    // valid in a value and does not occur in real arguments.
+    let status = std::process::Command::new(&runner)
+        .arg(&ir_path)
+        .env("KARAC_PROGRAM_ARGS", program_argv.join("\u{1F}"))
+        .status();
     let _ = std::fs::remove_file(&ir_path);
     match status {
         Ok(s) => s.code().unwrap_or(1),
@@ -4388,6 +4414,7 @@ fn cmd_run(
     lint_overrides: crate::lints::CliLintOverrides,
     timeout: Option<std::time::Duration>,
     interp: bool,
+    program_args: &[String],
 ) {
     // Mutual exclusion at the entry point — both flags together would
     // be ambiguous (which wins?). Reject early so the operator gets a
@@ -4999,7 +5026,10 @@ fn cmd_run(
                     .lines()
                     .any(|l| l.contains("@karac_regex_") && l.contains("call"));
                 if !uses_regex {
-                    process::exit(run_ir_via_jit_subprocess(&ir));
+                    let mut jit_argv = Vec::with_capacity(program_args.len() + 1);
+                    jit_argv.push(filename.to_string());
+                    jit_argv.extend_from_slice(program_args);
+                    process::exit(run_ir_via_jit_subprocess(&ir, &jit_argv));
                 }
                 // else: fall through to the interpreter below.
             }
@@ -5023,6 +5053,7 @@ fn cmd_run(
     // Run
     let mut interp = Interpreter::new(&pipeline.parsed.program, pipeline.typed.as_ref().unwrap());
     interp.set_source_filename(filename);
+    interp.set_program_args(filename, program_args);
     interp.set_source_text(&source);
     interp.set_dbg_output_mode(match output {
         OutputMode::Json | OutputMode::Jsonl => DbgOutputMode::Json,

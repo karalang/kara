@@ -979,7 +979,16 @@ pub unsafe extern "C" fn karac_runtime_env_args_into(out: *mut KaracVec) {
     if out.is_null() {
         return;
     }
-    let args: Vec<String> = std::env::args().collect();
+    // Prefer the PROGRAM's argv when the host told us what it is. Under
+    // `karac run`'s JIT the hosting process is `karac_jit_runner`, so process
+    // argv is the runner's path plus a temp `.ll` file — nothing the user
+    // wrote (B-2026-07-29-18). An AOT binary never has this set and keeps the
+    // process-argv path, which is correct there because the process IS the
+    // program. Unit-separator encoded; see the writer in `cli.rs`.
+    let args: Vec<String> = match std::env::var("KARAC_PROGRAM_ARGS") {
+        Ok(packed) => packed.split('\u{1F}').map(|s| s.to_string()).collect(),
+        Err(_) => std::env::args().collect(),
+    };
     let count = args.len();
     if count == 0 {
         (*out) = KaracVec {

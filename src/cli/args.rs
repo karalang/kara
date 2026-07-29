@@ -117,9 +117,16 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
     let mut timeout: Option<std::time::Duration> = None;
     let mut interp = false;
     let mut i = file_idx;
+    let mut program_args: Vec<String> = Vec::new();
     while i < args.len() {
         let arg = &args[i];
-        if arg == "--output=json" {
+        if arg == "--" {
+            // Everything after `--` belongs to the PROGRAM, not to karac.
+            // `karac run prog.kara -- a b c` gives the program argv
+            // ["prog.kara", "a", "b", "c"] on every executor (B-2026-07-29-18).
+            program_args = args[i + 1..].to_vec();
+            break;
+        } else if arg == "--output=json" {
             output = OutputMode::Json;
         } else if arg == "--output=jsonl" {
             output = OutputMode::Jsonl;
@@ -194,6 +201,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         lint_overrides,
         timeout,
         interp,
+        program_args,
     }
 }
 

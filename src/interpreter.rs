@@ -177,6 +177,17 @@ pub struct Interpreter<'a> {
     /// sequences. `with_provider[RandomSource](Fake…)` shadows this
     /// entirely; determinism-sensitive tests must opt in via a fake.
     pub(crate) rand_state: u64,
+    /// The PROGRAM's argv, as `env.args()` should report it: element 0 the
+    /// script path, the rest whatever followed `--` on the `karac run` line.
+    ///
+    /// `None` means "fall back to `std::env::args()`", which is correct for an
+    /// AOT binary (its process argv IS the program's) but wrong for every
+    /// hosted execution: under `karac run --interp` the process is karac, so a
+    /// program saw ["karac", "run", "--interp", "prog.kara"] and read the
+    /// literal string "run" as its first argument (B-2026-07-29-18). The CLI
+    /// sets this on the run path; other embedders (REPL, comptime, playground)
+    /// leave it `None`.
+    pub(crate) program_args: Option<Vec<String>>,
     /// Per-call frame of generic-param substitutions: name → concrete type
     /// name. Pushed at every generic call (using
     /// `TypeCheckResult.call_type_subs` keyed by call span); popped on
@@ -632,6 +643,7 @@ impl<'a> Interpreter<'a> {
             effect_resources: HashSet::new(),
             stdlib_distinct_types: HashSet::new(),
             rand_state: seed_rand_state(),
+            program_args: None,
             type_subs_stack: Vec::new(),
             cancel_flag: None,
             drop_trace: Vec::new(),
@@ -1094,6 +1106,16 @@ impl<'a> Interpreter<'a> {
     /// Set the source filename used in error trace frames.
     pub fn set_source_filename(&mut self, filename: &str) {
         self.source_filename = filename.to_string();
+    }
+
+    /// Supply the PROGRAM's argv for `env.args()` — see the `program_args`
+    /// field. Element 0 should be the script path, mirroring an AOT binary's
+    /// `argv[0]`.
+    pub fn set_program_args(&mut self, script: &str, rest: &[String]) {
+        let mut argv = Vec::with_capacity(rest.len() + 1);
+        argv.push(script.to_string());
+        argv.extend_from_slice(rest);
+        self.program_args = Some(argv);
     }
 
     /// Set the program's full source text. Used by `dbg()` to slice

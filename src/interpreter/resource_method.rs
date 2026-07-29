@@ -188,13 +188,27 @@ impl<'a> super::Interpreter<'a> {
                 Value::Int(x as i64)
             }
             ("Env", "args") => {
-                // Process argv as `Vec[String]`. `std::env::args()` is
-                // platform-safe and includes the binary path as element 0,
-                // matching the Kāra spec's `env.args()` surface (design.md
-                // § Built-in Resources — Nondeterminism, line 2799). Lossy
-                // conversion for non-UTF-8 argv: `std::env::args` itself
-                // panics in that case, same as Rust's convention.
-                let vals: Vec<Value> = std::env::args().map(Value::String).collect();
+                // The PROGRAM's argv as `Vec[String]`, element 0 the program
+                // itself — design.md § Built-in Resources (Nondeterminism)
+                // line 2799, whose own CLI skeleton reads the first USER
+                // argument as `args[1]`.
+                //
+                // `program_args` is what the CLI computed for this run
+                // (script path + anything after `--`). Falling back to
+                // `std::env::args()` is right only when the process IS the
+                // program — an AOT binary, or an embedder that never set the
+                // field. Using it unconditionally was B-2026-07-29-18: under
+                // `karac run --interp` the process is karac, so a program saw
+                // ["karac", "run", "--interp", "prog.kara"] and `args[1]` was
+                // the literal string "run".
+                //
+                // Lossy conversion for non-UTF-8 argv is moot on the
+                // `program_args` path (already `String`); the fallback keeps
+                // `std::env::args`'s panic convention.
+                let vals: Vec<Value> = match &self.program_args {
+                    Some(argv) => argv.iter().cloned().map(Value::String).collect(),
+                    None => std::env::args().map(Value::String).collect(),
+                };
                 Value::array_of(vals)
             }
             ("Env", "var") => {

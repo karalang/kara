@@ -22467,3 +22467,102 @@ fn test_build_debug_info_keeps_symbols_and_dwarf() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ── env.args() executor parity (B-2026-07-29-18) ────────────────
+
+/// `env.args()` must report the PROGRAM's argv, not whatever process happens
+/// to be hosting it. Before the fix, `karac run --interp prog.kara` gave the
+/// program `["<karac>", "run", "--interp", "prog.kara"]`, so design.md's own
+/// CLI skeleton — which reads the first user argument as `args[1]` — got the
+/// literal string "run".
+#[test]
+fn test_run_interp_env_args_is_the_programs_argv() {
+    let out = karac_bin()
+        .args([
+            "run",
+            "--interp",
+            "tests/snapshots/env_args_echo.kara",
+            "--",
+            "alpha",
+            "beta",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("count=3"), "got: {stdout}");
+    assert!(
+        stdout.contains("arg0=tests/snapshots/env_args_echo.kara"),
+        "argv[0] should be the script, got: {stdout}"
+    );
+    assert!(stdout.contains("arg1=alpha"), "got: {stdout}");
+    assert!(stdout.contains("arg2=beta"), "got: {stdout}");
+    // The regression itself: no karac flag may appear in the program's argv.
+    assert!(
+        !stdout.contains("arg1=run") && !stdout.contains("--interp"),
+        "karac's own argv leaked into the program: {stdout}"
+    );
+}
+
+/// With no `--`, the program's argv is exactly the script — not karac's flags.
+#[test]
+fn test_run_interp_env_args_without_forwarding_is_script_only() {
+    let out = karac_bin()
+        .args(["run", "--interp", "tests/snapshots/env_args_echo.kara"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("count=1"), "got: {stdout}");
+    assert!(
+        stdout.contains("arg0=tests/snapshots/env_args_echo.kara"),
+        "got: {stdout}"
+    );
+}
+
+/// The JIT is `karac run`'s DEFAULT backend, and it leaked differently and
+/// worse — the hosting process there is `karac_jit_runner`, so a program saw
+/// the runner's path plus a temp `.ll` file. Both backends must now agree.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_run_jit_env_args_matches_interp() {
+    let jit = karac_bin()
+        .args([
+            "run",
+            "tests/snapshots/env_args_echo.kara",
+            "--",
+            "alpha",
+            "beta",
+        ])
+        .output()
+        .unwrap();
+    assert!(jit.status.success());
+    let jit_out = String::from_utf8_lossy(&jit.stdout);
+    assert!(jit_out.contains("count=3"), "got: {jit_out}");
+    assert!(
+        jit_out.contains("arg0=tests/snapshots/env_args_echo.kara"),
+        "got: {jit_out}"
+    );
+    assert!(jit_out.contains("arg1=alpha"), "got: {jit_out}");
+    assert!(
+        !jit_out.contains("karac_jit_runner") && !jit_out.contains(".ll"),
+        "JIT runner internals leaked into the program's argv: {jit_out}"
+    );
+
+    let interp = karac_bin()
+        .args([
+            "run",
+            "--interp",
+            "tests/snapshots/env_args_echo.kara",
+            "--",
+            "alpha",
+            "beta",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        jit_out,
+        String::from_utf8_lossy(&interp.stdout),
+        "JIT and interpreter must report identical argv"
+    );
+}
