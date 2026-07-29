@@ -7845,6 +7845,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
             return Ok((data, len));
         }
+        // Vec interpolation with no variable name to key on (`f"{t.shape()}"`,
+        // `f"{vec![1, 2]}"`) — the variable case is caught by
+        // `try_compile_collection_display` above; this handles the unbound expr
+        // via the span-keyed element-type table. Same silent-empty defect as
+        // the variable case had, and the same reason: a Vec aggregate is
+        // byte-identical to a String's (B-2026-07-28-12). A materialized
+        // temporary registers itself for scope cleanup inside the helper.
+        if let Some((acc, sval)) = self.try_compile_vec_display(e)? {
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.v.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.v.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         // Option/Result *call result* interpolation (`f"{cache.get(1)}"`) — the
         // variable case is caught by `try_compile_collection_display` above; this
         // handles the no-variable-name expr via the span-keyed payload table.

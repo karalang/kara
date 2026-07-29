@@ -926,6 +926,73 @@ mod codegen_tests {
     }
 
     #[test]
+    fn test_e2e_unbound_vec_prints_like_a_bound_one() {
+        // B-2026-07-28-12: a `Vec[T]` expression with no variable name to key
+        // on printed as GARBAGE under `karac build` — `println(vec![9, 8])`
+        // emitted a stray tab, `println(t.shape())` emitted nothing — while the
+        // interpreter printed `[9, 8]` / `[2, 3]`. Binding to a `let` first was
+        // always correct, which is the whole shape of the bug: dispatch keyed
+        // off the name-addressed side-table, so an unbound Vec fell through to
+        // the value-kind arms, where its `{ptr, len, cap}` aggregate is
+        // byte-identical to a String's and was rendered as one.
+        //
+        // The oracle is the interpreter, and every case is asserted in BOTH
+        // forms — bound and unbound — because agreement between those two is
+        // the property that broke, and a test that only checked the unbound
+        // form could pass with both backends wrong in the same way.
+        let cases = [
+            ("literal", "vec![9i64, 8i64]", "Vec[i64]"),
+            ("call result", "mk()", "Vec[i64]"),
+            ("method result", "t.shape()", "Vec[i64]"),
+            ("string elements", "names()", "Vec[String]"),
+            ("float elements", "vec![1.5, 2.5]", "Vec[f64]"),
+            ("empty", "empty()", "Vec[i64]"),
+        ];
+        for (label, expr, ty) in cases {
+            let src = format!(
+                "fn mk() -> Vec[i64] {{ vec![2i64, 3i64] }}\n\
+                 fn names() -> Vec[String] {{ vec![\"ada\", \"bob\"] }}\n\
+                 fn empty() -> Vec[i64] {{ Vec.new() }}\n\
+                 fn main() {{\n\
+                     let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+                     println({expr});\n\
+                     println(f\"<{{{expr}}}>\");\n\
+                     let b: {ty} = {expr};\n\
+                     println(b);\n\
+                     println(f\"<{{b}}>\");\n\
+                 }}"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errors: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            // All four lines must agree with each other, not just with the
+            // oracle — the unbound forms are lines 1-2, the bound forms 3-4.
+            let lines: Vec<&str> = expected.lines().collect();
+            assert_eq!(
+                lines.len(),
+                4,
+                "{label}: interpreter produced {} lines: {expected:?}",
+                lines.len()
+            );
+            assert_eq!(
+                (lines[0], lines[1]),
+                (lines[2], lines[3]),
+                "{label}: the interpreter itself disagrees between bound and \
+                 unbound — the oracle is unusable for this case"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, expected,
+                    "{label}: an unbound Vec must print like a bound one"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_e2e_dataframe_write_csv_serializes_all_backends() {
         // Phase-11 CSV leg — the codegen twin (karac_runtime_df_write_csv
         // walks the DataFrame/Column control blocks; Rust `Display` IS the

@@ -22074,6 +22074,76 @@ fn main() with writes(FileSystem) reads(FileSystem) {{
         );
     }
 
+    /// B-2026-07-28-12: printing a Vec that has no variable name to key on
+    /// materializes the value at the print site, so the print site is also its
+    /// only owner — the buffer must be freed there, and only after the Display
+    /// fn has read it. Both sinks are covered (`println` and f-string
+    /// interpolation) across element types, since a `Vec[String]` additionally
+    /// carries a per-cell heap that the outer-buffer free does NOT reclaim.
+    ///
+    /// The loop at the end is the case that decides WHERE cleanup is timed:
+    /// the temporary lives in one entry alloca reused every iteration, so
+    /// registering it for cleanup only at function-scope exit would free the
+    /// last iteration's buffer and leak the other 63.
+    #[test]
+    fn asan_unbound_vec_display_no_leak() {
+        let label = "unbound_vec_display";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+fn mk() -> Vec[i64] { vec![2i64, 3i64] }
+// HEAP-owning elements: a literal-only `Vec[String]` is all rodata views
+// (cap == 0) and would not exercise the per-cell heap at all.
+fn names() -> Vec[String] { vec!["ada".to_uppercase(), "bob" + "!"] }
+fn empty() -> Vec[i64] { Vec.new() }
+fn main() {
+    println(vec![9i64, 8i64]);
+    println(mk());
+    println(names());
+    println(empty());
+    println(f"<{mk()}>");
+    println(f"<{names()}>");
+    let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    println(t.shape());
+    println(f"<{t.shape()}>");
+    // The bound form still frees exactly once through scope cleanup.
+    let b: Vec[String] = names();
+    println(b);
+    println(f"<{b}>");
+    // IN A LOOP: the temporary's slot is a single entry alloca reused every
+    // iteration, so cleanup timed at scope exit would free only the last
+    // iteration's buffer and leak the rest. 64 iterations makes any per-
+    // iteration leak unmistakable to LSan rather than borderline.
+    let mut n: i64 = 0;
+    while n < 64 {
+        println(names());
+        println(f"<{mk()}>");
+        n = n + 1;
+    }
+    println("done");
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — check the \
+             temporary-Vec free at the print site (after the render, outer buffer \
+             only for POD elements) and that the BOUND form is not double-freed",
+            status.code()
+        );
+        assert!(
+            stdout.contains("[9, 8]")
+                && stdout.contains("[ADA, bob!]")
+                && stdout.ends_with("done\n"),
+            "[{label}] ASAN passed but output mismatched: {stdout:?}"
+        );
+    }
+
     /// Phase-11 Arrow IPC codegen twin: `to_arrow_ipc()` adopts a buffer the
     /// RUNTIME allocated (`karac_arrow_*_to_ipc` → `karac_alloc_or_panic`) as
     /// an owned `Vec[u8]`. That hand-off is the leak / double-free surface —

@@ -224,6 +224,26 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+
+    // Forward the ELEMENT type of every `Vec[T]`-typed expression, keyed by
+    // span, so codegen can render a Vec that has no variable name to key on —
+    // a fresh literal (`println(vec![1, 2])`) or a call result
+    // (`println(t.shape())`). Without it those fall through to codegen's
+    // value-kind arms, where a Vec's `{ptr, len, cap}` aggregate is
+    // indistinguishable from a String's and prints as garbage
+    // (B-2026-07-28-12). The variable case is name-addressed
+    // (`var_elem_type_exprs`, set at the `let` binding); this is the
+    // span-addressed sibling, mirroring `display_option_result_types`.
+    program.display_vec_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(&args[0])))
+            }
+            _ => None,
+        })
+        .collect();
     // Inner `T` of every `Secret[T]`-typed expression, keyed by span. A
     // `.ct_eq(...)` call's result is a plain `bool`, so — unlike a borrow
     // accessor — it leaves no entry in `ref_return_inner_types` for codegen to

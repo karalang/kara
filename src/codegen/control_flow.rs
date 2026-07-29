@@ -964,6 +964,17 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(zero.into());
         }
 
+        // Vec[T] with no variable name to key on — a fresh literal
+        // (`println(vec![1, 2])`), a call result (`println(t.shape())`). Must
+        // precede the value-kind arms below: a Vec's `{ptr, len, cap}`
+        // aggregate is byte-identical to a String's, so those arms rendered it
+        // as a String and printed garbage (B-2026-07-28-12). A materialized
+        // temporary registers itself for scope cleanup inside the helper.
+        if let Some((_acc, sval)) = self.try_compile_vec_display(&args[0].value)? {
+            self.emit_print_and_free_string(sval, nl);
+            return Ok(zero.into());
+        }
+
         // User `impl Display` (a compiled `<Type>.to_string`) wins over every
         // built-in renderer below — render `println(x)` via the user method,
         // matching `f"{x}"` / `x.to_string()` and the interpreter. The owning

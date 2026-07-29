@@ -2703,6 +2703,13 @@ pub(super) struct Codegen<'ctx> {
     /// matching the interpreter's `(a, b)` format (B-2026-07-18-14). Covers both
     /// a tuple variable and a tuple call-result uniformly.
     pub(crate) display_tuple_types: HashMap<(usize, usize), TypeExpr>,
+    /// ELEMENT `TypeExpr` of every `Vec[T]`-typed expression, keyed by span —
+    /// populated from `Program.display_vec_types`. Lets
+    /// `try_compile_vec_display` render a Vec with no variable name to key on
+    /// (a fresh literal, a call result) through the same per-element Display fn
+    /// the identifier path uses, instead of falling through to the value-kind
+    /// arms where a Vec is indistinguishable from a String (B-2026-07-28-12).
+    pub(crate) display_vec_types: HashMap<(usize, usize), TypeExpr>,
     /// Bare names of USER-defined impl methods whose declared return type is
     /// a borrow (`-> ref T`). Gates the method-ref caller path (let-bind +
     /// direct-use rejection) so it fires ONLY for user accessors — builtin
@@ -7453,6 +7460,7 @@ impl<'ctx> Codegen<'ctx> {
             secret_inner_types: HashMap::new(),
             display_option_result_types: HashMap::new(),
             display_tuple_types: HashMap::new(),
+            display_vec_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             heuristic_inline_hints: std::collections::HashMap::new(),
             string_typed_exprs: HashSet::new(),
@@ -8613,6 +8621,7 @@ impl<'ctx> Codegen<'ctx> {
         self.secret_inner_types = program.secret_inner_types.clone();
         self.display_option_result_types = program.display_option_result_types.clone();
         self.display_tuple_types = program.display_tuple_types.clone();
+        self.display_vec_types = program.display_vec_types.clone();
         // Bare names of user impl methods that return a borrow — gates the
         // method-ref caller path away from builtin ref-returning methods.
         for item in &program.items {
@@ -9681,6 +9690,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_secret_inner_types = tp.secret_inner_types.clone();
         let mut t_display_option_result_types = tp.display_option_result_types.clone();
         let mut t_display_tuple_types = tp.display_tuple_types.clone();
+        let mut t_display_vec_types = tp.display_vec_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
         let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
         let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
@@ -9738,6 +9748,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut t_display_option_result_types,
                 );
                 std::mem::swap(&mut self.display_tuple_types, &mut t_display_tuple_types);
+                std::mem::swap(&mut self.display_vec_types, &mut t_display_vec_types);
                 std::mem::swap(
                     &mut self.pattern_binding_types,
                     &mut t_pattern_binding_types,

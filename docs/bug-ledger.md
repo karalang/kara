@@ -840,7 +840,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **716 surfaced 
 | B-2026-07-28-9 | codegen | high | CODEGEN: a whole-struct MOVE does not null a `shared struct` / `shared enum` HANDLE field, so the moved-out source's drop rc-dec's a second time for… | e2dfc58 |
 | B-2026-07-28-10 | interp | medium | INTERP: `Column.from_arrow_ipc` (and the Column constructors generally) ignore the binding's declared element type, so `let c: Column[i64] = Column.f… | b72fab5 |
 | B-2026-07-28-11 | codegen | high | CODEGEN: `Vec[<struct carrying a shared handle>].clone()` does not retain the cloned elements' handles, so the clone's drop and the original's drop b… | a4711ca |
-| B-2026-07-28-12 | codegen | medium | CODEGEN: `println(<Vec expression>)` renders EMPTY (or a stray tab) when the operand is not an identifier — `println(vec![9i64, 8i64])`, `println(t.s… | 0e3d0dd |
+| B-2026-07-28-12 | codegen | medium | CODEGEN: `println(<Vec expression>)` renders EMPTY (or a stray tab) when the operand is not an identifier — `println(vec![9i64, 8i64])`, `println(t.s… | — |
 | B-2026-07-28-13 | autopar | high | explicit `par {}` over 18 arms that all READ one shared graph crashes nondeterministically (~0.8%): silent exit 133 (SIGTRAP) and 139 (SIGSEGV), empt… | c1eeed5 |
 | B-2026-07-28-14 | codegen | medium | SELFHOST EMITTER (codegen.kara): `Option[<plain struct>]` has no representation — `kind_of_ty` collapses it to `Option$i`, whose payload slot is an i… | 46acf5b |
 | B-2026-07-28-15 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct… | 04964fa |

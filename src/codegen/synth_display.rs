@@ -2316,4 +2316,58 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         Ok(Some(self.render_via_display_fn(disp, val_ptr)))
     }
+
+    /// Render a `Vec[T]` expression that is NOT a plain variable — a fresh
+    /// literal (`println(vec![1, 2])`), a free-function or method result
+    /// (`println(t.shape())`) — via the same per-element Display fn the
+    /// identifier path uses.
+    ///
+    /// The identifier case keys off the name-addressed `var_elem_type_exprs`
+    /// (populated at the `let` binding); an unbound expression has no name, so
+    /// this keys off the span-addressed `display_vec_types`, forwarded from
+    /// `TypeCheckResult.expr_types`. That table is what makes the case
+    /// tractable at all: at the LLVM level a `Vec`'s `{ptr, len, cap}`
+    /// aggregate is byte-identical to a `String`'s, so without a source-level
+    /// type there is nothing to dispatch on — which is exactly why these
+    /// expressions used to fall through to the String arm and print garbage
+    /// (B-2026-07-28-12).
+    ///
+    /// A materialized temporary has no other owner, so its slot is registered
+    /// for scope cleanup here (`track_vec_var` with the element type) rather
+    /// than freed inline. That routes it through the same `FreeVecBuffer`
+    /// drain a bound `Vec` uses, which drops per-element heaps — an inline
+    /// free of the outer buffer alone leaks every cell of a `Vec[String]`
+    /// (LSan: 16 bytes in 4 allocations for two two-element temporaries).
+    /// Deferring to scope exit is also what keeps the buffer alive long enough
+    /// for an f-string's memcpy, matching the sibling collection paths.
+    pub(super) fn try_compile_vec_display(
+        &mut self,
+        e: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (e.span.offset, e.span.length);
+        let Some(elem_te) = self.display_vec_types.get(&key).cloned() else {
+            return Ok(None);
+        };
+        // A bound Vec already has a slot and an owner; only an unbound one is
+        // compiled (and owned) here.
+        if let ExprKind::Identifier(n) = &e.kind {
+            if let Some(slot) = self.variables.get(n.as_str()).copied() {
+                let disp = self.emit_vec_display_fn_te(&elem_te);
+                return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            }
+        }
+        let val = self.compile_expr(e)?;
+        // A bare array-literal binding compiles to an `[N x T]` aggregate
+        // rather than the 3-word Vec struct; it has no data pointer to render
+        // through, so leave it to the existing paths.
+        if !val.is_struct_value() || val.into_struct_value().get_type().count_fields() != 3 {
+            return Ok(None);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let slot = self.create_entry_alloca(fn_val, "vec.disp.tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_vec_var(slot, Some(self.llvm_type_for_type_expr(&elem_te)));
+        let disp = self.emit_vec_display_fn_te(&elem_te);
+        Ok(Some(self.render_via_display_fn(disp, slot)))
+    }
 }

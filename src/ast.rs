@@ -360,6 +360,15 @@ pub type DisplayOptionResultTypesTable = std::collections::HashMap<(usize, usize
 /// and a tuple call-result uniformly. Empty unless the lowering pass ran.
 pub type DisplayTupleTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Span → ELEMENT `TypeExpr` of every `Vec[T]`-typed expression. Lets codegen
+/// render a Vec that has no variable name to key on — a fresh literal
+/// (`println(vec![1, 2])`), a call result (`println(t.shape())`) — through the
+/// same per-element Display fn the identifier path uses. The variable case is
+/// name-addressed (`var_elem_type_exprs`, set at the `let` binding); this is
+/// its span-addressed sibling, exactly as `display_option_result_types` is for
+/// `var_option_payload_te` (B-2026-07-28-12).
+pub type DisplayVecTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Side-table populated by the lowering pass from `TypeCheckResult.expr_types`:
 /// for every expression whose Kāra type is a function type (`Fn(...)` /
 /// `OnceFn(...)`), maps its span `(offset, length)` to the equivalent `FnType`
@@ -700,6 +709,10 @@ pub struct Program {
     /// (`f"{t}"`, `println(t)`) via its element-wise Display fn, matching the
     /// interpreter (B-2026-07-18-14). See [`DisplayTupleTypesTable`].
     pub display_tuple_types: DisplayTupleTypesTable,
+    /// Element type of every `Vec[T]`-typed expression, keyed by span, so a
+    /// non-identifier Vec renders like a bound one. See
+    /// [`DisplayVecTypesTable`].
+    pub display_vec_types: DisplayVecTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: the inner
     /// `T` of every expression typed `Secret[T]` (`std.secret`), keyed by span.
     /// Lets codegen resolve a `Secret[T]` receiver's inner type at a
