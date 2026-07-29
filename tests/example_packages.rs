@@ -65,6 +65,9 @@ struct Package {
     /// mode that let these rot in the first place — turns this red.
     expected_tests: usize,
     interp: Expect,
+    /// Read only by the `llvm`-gated codegen leg; without that feature there is
+    /// no LLJIT executor to run it against, so the field is genuinely dead.
+    #[cfg_attr(not(feature = "llvm"), allow(dead_code))]
     codegen: Expect,
     /// Why a leg is pinned, if one is.
     note: &'static str,
