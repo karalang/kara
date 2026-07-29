@@ -1462,21 +1462,29 @@ All functions require `T: Float`. The `clip` family operates analogously to scal
 
 **Sequencing.** The kernel list is a **ceiling**; final scope is narrowed kernel-by-kernel by a §6.4-style auto-vec measurement once Phase 7's LLVM backend can compile a representative kernel (e.g., `cosine_similarity_batched` on `Tensor[f32, [10_000, 768]]`). Rows where LLVM auto-vec already hits ~80% of hand-written SIMD drop out of the hand-vec list and into a "trust auto-vec, benchmark number documented" footnote at implementation time. Rows where auto-vec hits ~20% stay in.
 
-**Measurement (2026-07-29, x86-64 AVX2, `karac build` O2).** The sequencing measurement above has now been run, on exactly the representative kernel it names — `cosine_similarity_batched` over `Tensor[f32, [10_000, 768]]`, 50 iterations, median of 3. Three results, two of them counter to the entry's assumption:
+**Measurement (2026-07-29, x86-64 AVX2, `karac build` O2).** The sequencing measurement above has been run. **All numbers below are from INTERLEAVED A/B runs** — alternating binaries within a single loop, 5 rounds, all built in one session. That methodology is load-bearing, not pedantry: a first pass measured sequentially minutes apart produced a table that inverted under interleaving, because absolute timings on this host drift substantially with page-cache and memory state. Any figure in this entry not gathered that way should be re-gathered.
 
-| form | time | packed instrs |
-|---|---|---|
-| shipping stdlib: fused `zip_with(…).sum()` over `iter_axis` rows | ~924 ms | 27 `vaddps` / 12 `vmulps` |
-| indexed scalar loop, no row copy | ~374 ms | **0** |
-| indexed + `Vector[f32, 8]` | ~207 ms | yes |
+Representative kernel per the sequencing note — `cosine_similarity_batched` over `Tensor[f32, [10_000, 768]]`, 50 iterations:
 
-1. **BLAS-2/3 batched rows STAY hand-written**, but not for the reason assumed. LLVM emits *zero* packed instructions for the natural imperative reduction — float `+` is not associative and nothing licenses reassociation — so auto-vec scores 0%, not 80%. However the larger effect is not SIMD at all: `iter_axis(0)` returns a Vec of row **copies**, so dropping the per-call corpus copy is worth ~2.5× on its own, and 8-lane arithmetic adds ~1.8× on top.
+| form | time |
+|---|---|
+| shipping stdlib: fused `zip_with(…).sum()` over `iter_axis` rows | ~1165 ms |
+| indexed scalar loop, no row copy | ~537 ms |
+| indexed + `Vector[f32, 8]` | ~321 ms |
 
-2. **BLAS-1 single-vector rows DROP OUT** — this is the entry's "trust auto-vec, benchmark number documented" case, and the margin is decisive in the opposite direction: the existing fused `zip_with(…).sum()` path beats a hand-written 8-lane loop by ~3× (68 ms vs 199 ms over 500 000 `cosine_similarity` calls at D = 768), emitting 39 packed instructions to the hand form's 14. It unrolls wider and pays no per-element index. Hand-writing `cosine_similarity` / `l2_norm` / `l2_normalize` would be a **pessimization**; they are removed from the list.
+**The conclusion is per-kernel, not per-BLAS-class.** That is the main finding, and it contradicts the ceiling table's row granularity:
 
-3. **The bulk-load primitive is not needed.** design.md's `chunks_simd` is unimplemented, but the eight indexed reads of a `Vector[f32, 8](t[c], …, t[c+7])` construction fold to a single `vmovups` in the emitted object, so hand-written kernels are expressible today. `chunks_simd` is an ergonomics item, not a blocker.
+- **`cosine_similarity_batched` — hand-vec WINS, ~3.6×.** Two effects: dropping `iter_axis`'s row copy is ~2.2×, 8-lane arithmetic adds ~1.7× on top.
+- **`dot_batched` — hand-vec LOSES, and badly: ~325 ms shipping vs ~1120 ms hand-written (3.4× PESSIMIZATION).** Same corpus, same shape, same `iter_axis`-based structure. The difference is that `dot_batched`'s single `query.zip_with(row, …).sum()` per row hits the fused direct-row-view reduction (B-2026-07-20-11) and never materializes the copy, whereas `cosine_similarity_batched`'s two chained combines per row do not. Two kernels in the same BLAS class, same file, opposite answers — so this list must be narrowed kernel by kernel with a measurement each, exactly as the sequencing note says, and never by class.
+- **BLAS-1 single-vector rows DROP OUT.** The fused path beats a hand-written 8-lane loop by ~3× (68 ms vs 199 ms over 500 000 `cosine_similarity` calls at D = 768), emitting 39 packed instructions to the hand form's 14 — it unrolls wider and pays no per-element index. `cosine_similarity` / `l2_norm` / `l2_normalize` become the entry's own "trust auto-vec, benchmark number documented" case.
 
-**Implementation is BLOCKED (2026-07-29).** The rewrite was attempted and reverted rather than shipped half-working: `Vector[T, N]` bindings and arithmetic do not survive the **stdlib** compilation unit (**B-2026-07-29-7**, high) — identical code compiles and runs correctly in a user module but fails in `runtime/stdlib/*.kara`. Every kernel in this commitment lives there, so the whole spine waits on that fix. A second finding is larger still for these kernels and independent of SIMD: a `ref Tensor` argument to a stdlib function is **copied per call** (**B-2026-07-29-8**, high) — an identical body costs 0.705 s from `std.embeddings` vs 0.465 s in a user module, sys 0.456 s vs 0.008 s. For the batched embedding kernels that copy dominates both the arithmetic and the `iter_axis` row-copy, so it should be fixed before any of these rows are re-benchmarked.
+**Auto-vec on the imperative form scores 0%, not 80%.** The indexed scalar loop emits ZERO packed instructions: float `+` is not associative and nothing here licenses reassociation. Where the shipping code is already fast it is because of the fused `zip_with(…).sum()` path, not because LLVM vectorized a hand-rolled loop.
+
+**`chunks_simd` is not a blocker.** design.md's bulk-load primitive is unimplemented, but the eight indexed reads of a `Vector[f32, 8](t[c], …, t[c+7])` construction fold to a single `vmovups` in the emitted object. Hand kernels are expressible today; the primitive is ergonomics.
+
+**Real prerequisite: fix `iter_axis`, not the arithmetic.** Isolated, 50 bare `iter_axis(0)` calls on the same corpus cost ~850 ms real / ~550 ms sys — the whole gap for the kernels that do not hit the fused path, and it is pure allocation (`iter_axis` materializes rows as COPIES; its own doc comment says so). A borrowing row view would deliver most of the available win across every batched kernel at once, without hand-writing any of them, and would change which rows remain worth hand-vectorizing. That should land before more of this list is attempted.
+
+**Status: no kernel rewritten.** The `cosine_similarity_batched` rewrite was written and verified bit-identical to the shipping kernel on both backends, then reverted — with `dot_batched` showing a 3.4× regression from the same treatment, shipping the pair on a class-level judgement would have been wrong. Two blockers filed during this work have since been resolved by other sessions and are NOT open: B-2026-07-29-7 (`Vector[T, N]` in the stdlib unit) was fixed — the rewrite compiles there now — and B-2026-07-29-8 (`ref Tensor` copied per call) was **withdrawn as invalid**; the per-call cost it measured is real but is `iter_axis`, and the mis-attribution came from the same sequential-timing error described above. A `ref Tensor` parameter does borrow: 50 calls of one whose body sums the whole 30 MB corpus run in ~116 ms, which a per-call copy could not.
 
 **Why non-breaking:** Implementation strategy — no API change. The same scalar-equivalent semantics are observable; only the perf curve changes.
 
