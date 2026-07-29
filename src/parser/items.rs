@@ -167,8 +167,12 @@ impl super::Parser {
                 let name_span = self.span_from(&start);
                 self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
                 let generic_params = self.parse_optional_generic_params();
+                let mut provider_trait_span = None;
                 let provider_trait = if self.eat(&Token::Colon) {
-                    Some(self.expect_identifier()?)
+                    let trait_start = self.current_span();
+                    let t = self.expect_identifier()?;
+                    provider_trait_span = Some(self.span_from(&trait_start));
+                    Some(t)
                 } else {
                     None
                 };
@@ -178,6 +182,7 @@ impl super::Parser {
                     name,
                     generic_params,
                     provider_trait,
+                    provider_trait_span,
                     canonical_host_name: None,
                 }))
             }

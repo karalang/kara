@@ -52,6 +52,7 @@ impl<'a> super::Resolver<'a> {
                     }
                 }
                 Item::EffectGroup(g) => self.resolve_effect_group_def(g),
+                Item::EffectResource(r) => self.resolve_effect_resource_def(r),
                 _ => {}
             }
         }
@@ -555,6 +556,39 @@ impl<'a> super::Resolver<'a> {
             self.resolve_effect_list(effects);
         }
         self.table.pop_scope();
+    }
+
+    /// `effect resource R: SomeTrait;` — validate the provider trait exists.
+    ///
+    /// `resolve_items` previously had no arm for `Item::EffectResource` at all,
+    /// so the trait name was collected into the AST and never looked at
+    /// (B-2026-07-29-17): `effect resource Thing: NoSuchTraitAnywhere;` passed
+    /// every check, while the same undefined name in an ordinary type position
+    /// is rejected with a suggestion. The trait is what a `with_provider` site
+    /// binds against, so a typo'd or renamed name silently yields a resource
+    /// nothing can ever satisfy — and the failure then surfaces far from its
+    /// cause, or not at all for a program that never calls through it.
+    ///
+    /// Deliberately an EXISTENCE check, not a kind check. An imported trait
+    /// resolves to a `SymbolKind::Import` (and an aliased one to the alias),
+    /// so demanding `SymbolKind::Trait` here would reject the legitimate
+    /// cross-module spelling that `examples/db_pipeline` and
+    /// `examples/cartographer` rely on. Narrowing to "resolves, and resolves
+    /// to something trait-like" needs the same import-following the
+    /// typechecker does for trait bounds; that is a separate change.
+    fn resolve_effect_resource_def(&mut self, r: &EffectResourceDecl) {
+        let Some(trait_name) = &r.provider_trait else {
+            // A bare `effect resource R;` declares no provider contract —
+            // legal, and the common form in the stdlib's host resources.
+            return;
+        };
+        if self.table.lookup(trait_name).is_none() {
+            let span = r
+                .provider_trait_span
+                .clone()
+                .unwrap_or_else(|| r.span.clone());
+            self.error_undefined_type(trait_name, span);
+        }
     }
 
     fn resolve_effect_group_def(&mut self, g: &EffectGroupDecl) {

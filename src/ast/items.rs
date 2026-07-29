@@ -839,6 +839,10 @@ pub struct EffectResourceDecl {
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub provider_trait: Option<String>,
+    /// Span of the `provider_trait` identifier itself, so a diagnostic about
+    /// the trait points at the trait rather than at the whole declaration.
+    /// `None` exactly when `provider_trait` is `None`.
+    pub provider_trait_span: Option<Span>,
     /// Phase-10 target gate: when this declaration is an alias-renamed
     /// clone of a gated-stdlib HOST resource (`import std.web.Display
     /// as Screen;` in single-file mode), the canonical host name

@@ -7,15 +7,28 @@
 // sequential-looking code — the compiler parallelizes it.
 //
 // COMPILE-ONLY. This file type-checks and is the subject of the effect
-// analysis the README walks through; it does not RUN, because the three
-// resources below declare a `DatabaseProvider` that nothing implements and no
-// `with_provider` scope binds. Running it stops at "no provider bound for
-// resource 'UserDB'". `examples/db_pipeline` is the runnable counterpart —
-// same shape, with an `InMemoryDb` provider and a `with_provider` binding.
+// analysis the README walks through; it does not RUN, because no
+// `with_provider` scope ever binds an implementation to the three resources
+// below. Running it stops at "no provider bound for resource 'UserDB'".
+// `examples/db_pipeline` is the runnable counterpart — same shape, with an
+// `InMemoryDb` provider and a `with_provider` binding.
 
-effect resource UserDB: DatabaseProvider;
-effect resource OrderDB: DatabaseProvider;
-effect resource NotifDB: DatabaseProvider;
+// Declared WITHOUT a provider trait, which is the bare `effect resource R;`
+// form. These three previously read `: DatabaseProvider` — a trait this file
+// never defined and the resolver never checked (B-2026-07-29-17, fixed
+// 2026-07-29; the declaration is now validated).
+//
+// Writing the contract out is not the smaller fix it looks like. A provider
+// trait IS consulted for call typing once it exists, and these three resources
+// return different row types (`Profile`, `Vec[Order]`, `Vec[Notification]`),
+// so it needs an associated `type Row` plus a concrete `impl` per resource to
+// bind it — at which point this file has become `examples/db_pipeline`, which
+// already demonstrates exactly that with an `InMemoryDb` and a `with_provider`
+// binding. This file's subject is the effect ANALYSIS below, so it declares
+// the resources and stops there.
+effect resource UserDB;
+effect resource OrderDB;
+effect resource NotifDB;
 
 // The error type the three fetches share. Defined locally because this file
 // is a single-file demo: `examples/db_pipeline` declares the same vocabulary
@@ -55,9 +68,11 @@ struct Dashboard {
 //   fetch_orders        → reads(OrderDB)  (from OrderDB.query)
 //   fetch_notifications → reads(NotifDB)  (from NotifDB.query)
 //
-// Each resource name (UserDB, OrderDB, NotifDB) is backed by the
-// DatabaseProvider trait. The concrete implementation is injected
-// at the call site via with_provider (see main below).
+// In a runnable program each resource would be backed by a provider trait and
+// a concrete implementation injected via `with_provider` — see
+// `examples/db_pipeline`. This file stops at the declaration (see the note on
+// the resources above); the effect inference below does not depend on the
+// binding, which is the point being made.
 
 fn fetch_profile(user_id: u64) -> Result[Profile, DbError] {
     UserDB.query_one("SELECT name, email, tier FROM users WHERE id = ?", user_id)

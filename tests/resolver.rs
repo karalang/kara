@@ -5247,3 +5247,71 @@ fn test_par_branch_bindings_escape_to_enclosing_scope() {
          }",
     );
 }
+
+// ── effect resource provider trait (B-2026-07-29-17) ────────────
+
+/// `resolve_items` had no `Item::EffectResource` arm at all, so the provider
+/// trait named by `effect resource R: T;` was parsed and then never looked at.
+/// A name defined nowhere passed every check, while the same name in an
+/// ordinary type position is rejected with a suggestion.
+#[test]
+fn effect_resource_undefined_provider_trait_is_rejected() {
+    let errors = resolve_errors("effect resource Thing: NoSuchTraitAnywhere;");
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one error, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+    assert!(
+        matches!(errors[0].kind, ResolveErrorKind::UndefinedType),
+        "expected UndefinedType, got {:?}",
+        errors[0].kind
+    );
+    assert!(
+        errors[0].message.contains("NoSuchTraitAnywhere"),
+        "message should name the missing trait: {}",
+        errors[0].message
+    );
+}
+
+/// The diagnostic must point at the TRAIT, not at the whole declaration —
+/// `provider_trait_span` exists for exactly this.
+#[test]
+fn effect_resource_undefined_trait_span_points_at_the_trait() {
+    let src = "effect resource Thing: NoSuchTraitAnywhere;";
+    let errors = resolve_errors(src);
+    let span = &errors[0].span;
+    assert_eq!(
+        &src[span.offset..span.offset + span.length],
+        "NoSuchTraitAnywhere",
+        "span should cover the trait name only",
+    );
+}
+
+/// A trait defined in the program satisfies the reference.
+#[test]
+fn effect_resource_with_defined_provider_trait_resolves() {
+    resolve_ok(
+        "trait Provider { fn get(ref self) -> i64; }\n\
+         effect resource Thing: Provider;",
+    );
+}
+
+/// The bare form declares no provider contract and must stay legal — it is the
+/// common spelling for the stdlib's host resources.
+#[test]
+fn effect_resource_without_provider_trait_is_legal() {
+    resolve_ok("effect resource Thing;");
+}
+
+/// An IMPORTED provider trait resolves through its import symbol. The check is
+/// deliberately existence-only for this reason: demanding `SymbolKind::Trait`
+/// would reject the cross-module spelling `examples/db_pipeline` relies on.
+#[test]
+fn effect_resource_with_imported_provider_trait_resolves() {
+    resolve_ok(
+        "import db.Provider;\n\
+         effect resource Thing: Provider;",
+    );
+}
