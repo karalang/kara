@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 48 | 3 |
-| run-vs-build | 43 | 1 |
+| run-vs-build | 44 | 2 |
 | perf | 32 | 1 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 532 | 3 |
+| codegen | 533 | 4 |
 | typecheck | 90 | 1 |
-| interp | 74 | 1 |
+| interp | 75 | 2 |
 | ownership | 29 | 1 |
 | other | 21 | 1 |
 | autopar | 19 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **732 surfaced · 7 open · 718 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **733 surfaced · 8 open · 718 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **732 surfaced 
 | B-2026-07-29-17 | 2026-07-29 | resolver | medium | RESOLVER HOLE: `effect resource R: SomeTrait;` accepts a trait name that is not defined ANYWHERE — no error, all checks pass. The undefined-name check that covers ordinary type positions does not reach an effect resource's trait bound. | — |
 | B-2026-07-29-18 | 2026-07-29 | interp | medium | `env.args()` under `karac run` returns KARAC's OWN argv, not the program's arguments: a program run as `karac run --interp prog.kara` sees ['target/debug/karac', 'run', '--interp', 'prog.kara']. design.md's own CLI example reads `args[1]` as the first USER argument. | — |
 | B-2026-07-29-19 | 2026-07-29 | other | medium | docs/design.md — the AUTHORITATIVE spec — writes `ref` AT CALL SITES in 9 code blocks, a form the parser rejects outright ('`ref` is not written at call sites'). Same rot class as B-2026-07-29-11 (the abandoned Rust-style Display), in the same document. | — |
+| B-2026-07-29-20 | 2026-07-29 | codegen+interp | high | REPL cross-cell value snapshot loses an in-cell container mutation: `let mut v = Vec.new(); v.push(7)` in cell 1 reads back empty in cell 2. Whole container tier (B.5.3a/b/c) broken on the JIT lane; Map+Set broken on the interpreter too, though all three are marked shipped `[x]` in phase-7-codegen.md. | — |
 
 ### Fixed (718)
 
