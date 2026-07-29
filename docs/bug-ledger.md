@@ -97,24 +97,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 85 | 1 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
-| false-positive | 43 | 0 |
-| run-vs-build | 42 | 0 |
+| false-positive | 45 | 1 |
+| run-vs-build | 43 | 1 |
 | perf | 31 | 1 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
 | diagnostics | 18 | 0 |
 | use-after-free | 11 | 0 |
-| other | 4 | 0 |
+| other | 5 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 528 | 3 |
-| typecheck | 87 | 0 |
+| codegen | 529 | 4 |
+| typecheck | 89 | 1 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
-| other | 19 | 0 |
+| other | 20 | 0 |
 | autopar | 19 | 0 |
 | runtime | 15 | 0 |
 | cli | 15 | 0 |
@@ -124,19 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **721 surfaced · 3 open · 712 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **725 surfaced · 5 open · 714 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-6 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): a value-position `match` over a HEAP-PAYLOAD enum leaks the payload the arm binds. `let w = match pick(i) { Word(s) => s, ... }` never frees the String, even though the binding is consumed. | — |
 | B-2026-07-29-7 | 2026-07-29 | codegen | high | CODEGEN: `Vector[T, N]` bindings and arithmetic do not survive the STDLIB compilation unit — identical code compiles and runs correctly in a user module but fails in `runtime/stdlib/*.kara`, first as a `let` allocated `i64` (ICE in `compile_vector_method`) and, once that is inlined away, as `Binary op Add: left operand has non-comparable type VectorType`. Blocks hand-vectorizing any stdlib kernel in Kāra. | — |
 | B-2026-07-29-8 | 2026-07-29 | codegen | high | PERF: a `ref Tensor` argument to a STDLIB function is copied per call — an identical function body costs 0.705 s from `std.embeddings` vs 0.465 s in a user module over 50 calls on a 30 MB corpus, with sys time 0.456 s vs 0.008 s (57×). A `ref` parameter should borrow. | — |
+| B-2026-07-29-10 | 2026-07-29 | typecheck | medium | An ALIASED imported trait bound is rejected at bound satisfaction: `import doer.Doer as D` + `fn go[T: D](...)` reports "trait bound `T: D` is not satisfied; `Impl` does not implement `D`" even though `impl Doer for Impl` exists. | — |
+| B-2026-07-29-12 | 2026-07-29 | codegen | medium | CODEGEN: a `Vec` method called directly on a CALL-RESULT receiver — `h.view().is_empty()` where `view()` returns `ref Vec[i64]` — falls through `compile_method_call` with "no handler for method 'is_empty' on non-identifier receiver". The interpreter runs it fine, and binding the receiver to a variable first works under codegen, so this is receiver classification only. | — |
 
-### Fixed (712)
+### Fixed (714)
 
-<details><summary>712 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>714 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -852,6 +854,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **721 surfaced 
 | B-2026-07-29-3 | resolver | high | A `_test.kara` companion that imports the module it tests is reported as a circular module dependency (`E0223`, bogus `thing → thing`), so the idioma… | 93d14ee |
 | B-2026-07-29-4 | codegen | medium | SELFHOST EMITTER (codegen.kara): `panic` / `todo` / `unreachable` were lowered as USER FUNCTION CALLS | 5e7224b |
 | B-2026-07-29-5 | codegen | high | SELFHOST EMITTER (codegen.kara): an UN-ANNOTATED `let v = Vec.new()` defaults to Vec[i64], so pushing a String stores a 16-byte `{ptr,i64}` into an 8… | 5e7224b |
+| B-2026-07-29-9 | typecheck | high | A trait bound whose trait is IMPORTED resolves no methods: `S: Doer` on an imported `Doer` reports no "unknown trait", yet every call through the bou… | 155f7b3 |
+| B-2026-07-29-11 | other | medium | docs/design.md — the AUTHORITATIVE spec — showed the abandoned Rust-style `Display` in three code blocks, including a full `fn fmt(ref self, f: mut r… | 3e21d84 |
 
 </details>
 
