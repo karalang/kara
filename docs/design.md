@@ -806,8 +806,8 @@ struct Contextual[E] {
 }
 
 impl[E: Display] Display for Contextual[E] {
-    fn fmt(ref self, f: mut ref Formatter) {
-        write(f, "{}: {}", self.message, self.source)
+    fn to_string(ref self) -> String {
+        f"{self.message}: {self.source}"
     }
 }
 ```
@@ -3131,7 +3131,7 @@ where U: From[T] + Display
 impl[T] Display for Vec[T]
 where T: Display
 {
-    fn fmt(ref self) -> String { ... }
+    fn to_string(ref self) -> String { ... }
 }
 ```
 
@@ -3185,7 +3185,7 @@ impl Display for Vec[i64] { ... }     // ERROR: orphan impl
 distinct type DisplayVec = Vec[i64]
 
 impl Display for DisplayVec {
-    fn fmt(ref self) -> String { ... }
+    fn to_string(ref self) -> String { ... }
 }
 ```
 
