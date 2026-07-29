@@ -1072,6 +1072,13 @@ pub struct OwnershipChecker<'a> {
     /// `Own`. Drives `Call`-arg consume-vs-read classification per
     /// design.md § Consume Predicate step 2.
     pub(crate) callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    /// Bare names bound by this unit's `import` declarations, aliases
+    /// included. Lets `arg_is_borrow_position` tell an IMPORTED free function
+    /// — whose signature lives in another module, so it has no
+    /// `callee_param_modes` entry under single-file `karac check` — from a
+    /// function-typed local, whose absence from that table means something
+    /// else. B-2026-07-29-16.
+    pub(crate) imported_names: std::collections::HashSet<String>,
     /// Instance-method key (`"Type.method"`) → per-position NON-self
     /// parameter ownership modes. Companion to `callee_param_modes` (which
     /// is static-only): instance methods dispatch as `MethodCall`, so their
@@ -1258,6 +1265,7 @@ impl<'a> OwnershipChecker<'a> {
             immutable_lets: HashMap::new(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
+            imported_names: crate::use_classifier::collect_imported_names_pub(program),
             method_param_modes: collect_method_param_modes(program),
             callee_param_slice_kind: collect_callee_param_slice_kind(program),
             callee_existential_capture_indices: collect_callee_existential_capture_indices(

@@ -9300,3 +9300,60 @@ fn test_single_par_branch_shared_struct_is_fine() {
          }",
     );
 }
+
+#[test]
+fn imported_callee_does_not_invent_a_move_on_its_args() {
+    // B-2026-07-29-16. Single-file `karac check <file>` parses ONE file, so an
+    // IMPORTED free function has no entry in `callee_param_modes` — its
+    // signature lives in a sibling module resolved only at package level. The
+    // args then fell to the consume default and a correct program was rejected
+    // with "value 'a' moved here, used again here", while `karac build` (full
+    // module tree, real modes) accepted the same program and it ran correctly.
+    //
+    // Consume-by-default is right for the RC-promotion side of this analysis,
+    // but wrong for the use-after-move DIAGNOSTIC: it asserts a move the
+    // compiler cannot substantiate.
+    //
+    // Found on `examples/game_of_life/src/main.kara`, which passes 14/14 of its
+    // own tests while `karac check src/main.kara` called it a move error.
+    //
+    // `Thing` carries a String on purpose: an all-scalar struct is Copy, so no
+    // move is possible and the test would pass vacuously.
+    // `ownership_ok` asserts the check is clean, which IS the assertion here.
+    ownership_ok(
+        "import helper.{peek};\n\
+         struct Thing { name: String }\n\
+         fn make() -> Thing { Thing { name: \"x\".to_string() } }\n\
+         fn main() {\n\
+             let a = make();\n\
+             peek(a);\n\
+             peek(a);\n\
+         }",
+    );
+}
+
+#[test]
+fn local_owned_param_callee_still_reports_the_move() {
+    // The other direction of B-2026-07-29-16's gate: a callee DECLARED in this
+    // unit has real modes, so a genuine move through an owned parameter must
+    // still be reported. Without this pinned, the fix above could be widened
+    // into blindness.
+    // `ownership_errors` panics if the check comes back clean, so reaching the
+    // assertion at all already proves the move was reported; the message check
+    // pins WHICH diagnostic.
+    let errors = ownership_errors(
+        "struct Thing { name: String }\n\
+         fn eat(t: Thing) { println(f\"{t.name}\"); }\n\
+         fn make() -> Thing { Thing { name: \"x\".to_string() } }\n\
+         fn main() {\n\
+             let a = make();\n\
+             eat(a);\n\
+             eat(a);\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("moved")),
+        "a move through a LOCAL owned-param callee must still be reported; got {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+    );
+}

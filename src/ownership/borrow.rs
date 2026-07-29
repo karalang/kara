@@ -61,6 +61,23 @@ impl<'a> super::OwnershipChecker<'a> {
         if crate::lowering::callee_is_relational_operator(callee) {
             return true;
         }
+        // B-2026-07-29-16: mirror the `use_classifier` twin — a NAMEABLE
+        // callee with no `callee_param_modes` entry has a signature this
+        // compilation unit cannot see (an IMPORTED free function under
+        // single-file `karac check`), so do not assert a move on its args.
+        // The two pipelines must agree here or the legacy `states` machine
+        // diverges from the predicate pipeline and mis-drives closure
+        // classification — the same coupling the relational-operator gate
+        // above exists to preserve.
+        //
+        // Gated on the name being IMPORTED — see the twin's note. A closure
+        // binding is a nameable identifier with no table entry too, and
+        // calling one genuinely consumes its owned args.
+        if let ExprKind::Identifier(n) = &callee.kind {
+            if self.imported_names.contains(n) && !self.callee_param_modes.contains_key(n) {
+                return true;
+            }
+        }
         self.callee_modes_for_call(callee)
             .and_then(|modes| modes.get(arg_index))
             .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))

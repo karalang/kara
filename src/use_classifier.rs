@@ -65,6 +65,9 @@ pub struct ClassifierPrelude {
     callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
     method_param_modes: HashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: HashSet<String>,
+    /// Bare names bound by this unit's `import` declarations
+    /// (B-2026-07-29-16). See the call-arg gate in `walk_expr`.
+    imported_names: HashSet<String>,
 }
 
 impl ClassifierPrelude {
@@ -77,8 +80,31 @@ impl ClassifierPrelude {
             callee_param_modes: collect_callee_param_modes(program),
             method_param_modes: collect_method_param_modes(program),
             unit_variant_names: collect_unit_variant_names(tc),
+            imported_names: collect_imported_names(program),
         }
     }
+}
+
+/// Bare names this unit `import`s, aliases included (the ALIAS is what the
+/// body writes, so that is the name to record). Used to tell an imported free
+/// function — whose signature lives in another module and so has no
+/// `callee_param_modes` entry under single-file `karac check` — from a
+/// function-typed local whose absence from that table means something else
+/// entirely. B-2026-07-29-16.
+pub(crate) fn collect_imported_names_pub(program: &Program) -> HashSet<String> {
+    collect_imported_names(program)
+}
+
+fn collect_imported_names(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for item in &program.items {
+        if let Item::Import(imp) = item {
+            for ii in &imp.items {
+                out.insert(ii.alias.clone().unwrap_or_else(|| ii.name.clone()));
+            }
+        }
+    }
+    out
 }
 
 /// Classify every binding-use leaf within `body` as `Read` or `Consume`,
@@ -119,6 +145,7 @@ pub fn classify_function_body_with(
         callee_param_modes: &prelude.callee_param_modes,
         method_param_modes: &prelude.method_param_modes,
         unit_variant_names: &prelude.unit_variant_names,
+        imported_names: &prelude.imported_names,
         param_types,
         local_types: HashMap::new(),
         classification: Classification::default(),
@@ -143,6 +170,7 @@ struct UseClassifier<'a> {
     callee_param_modes: &'a HashMap<String, Vec<OwnershipMode>>,
     method_param_modes: &'a HashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: &'a HashSet<String>,
+    imported_names: &'a HashSet<String>,
     param_types: HashMap<String, Type>,
     /// Round 12.18: name-keyed types for `let`-bound locals,
     /// populated as the walker enters each `let pat = value;` and
@@ -483,9 +511,52 @@ impl<'a> UseClassifier<'a> {
                 // Comparisons borrow both operands (`ref self, other: ref
                 // Self`), so classify every arg as a read.
                 let is_relational = crate::lowering::callee_is_relational_operator(callee);
+                // B-2026-07-29-16: the callee is NAMEABLE but has no entry in
+                // `callee_param_modes` — its signature is not visible in this
+                // compilation unit. That is the normal state of an IMPORTED
+                // free function under single-file `karac check <file>`, which
+                // parses one file: `peek(a)` where `fn peek(t: ref Thing)`
+                // lives in a sibling module resolved only at package level.
+                //
+                // The consume default is right for the RC-promotion side of
+                // this analysis (over-approximating ownership is safe), but it
+                // is WRONG for the use-after-move DIAGNOSTIC, which is what
+                // this pipeline emits: it asserts a move the compiler cannot
+                // substantiate, and a correct program is rejected. The same
+                // program passes `karac build` (full module tree, real modes)
+                // and runs correctly, so `check` was the component in the
+                // wrong.
+                //
+                // Classify as a READ instead. This can only ever REMOVE a
+                // diagnostic, never add one, and only for a callee whose
+                // signature genuinely is not here — a locally-declared or
+                // baked-stdlib function always has an entry, so a real move
+                // through a known callee is still reported. The package path,
+                // which has every signature, remains the authority.
+                //
+                // A NON-nameable callee (a function-typed value, a complex
+                // expression) keeps the consume default: there the modes are
+                // unknowable in principle rather than merely absent.
+                //
+                // Gated on the name being IMPORTED, which is precise: a
+                // closure or other function-typed VALUE is also a nameable
+                // identifier with no `callee_param_modes` entry, and calling
+                // one genuinely does consume its owned args — a looser gate
+                // regressed closure param-mode inference from `Own` to `Ref`
+                // (`nested_closures_each_get_their_own_mode_entry`). Only an
+                // imported name can be BOTH a real function call AND absent
+                // from the table, and only because its definition lives in
+                // another module.
+                let callee_signature_unknown = match &callee.kind {
+                    ExprKind::Identifier(n) => {
+                        self.imported_names.contains(n) && !self.callee_param_modes.contains_key(n)
+                    }
+                    _ => false,
+                };
                 for (i, arg) in args.iter().enumerate() {
                     let is_borrow = arg.mut_marker
                         || is_relational
+                        || callee_signature_unknown
                         || modes.as_ref().and_then(|m| m.get(i)).is_some_and(|m| {
                             matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef)
                         });
