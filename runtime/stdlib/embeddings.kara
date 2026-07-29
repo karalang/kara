@@ -66,9 +66,11 @@ pub fn l2_normalize[D](v: ref Tensor[f32, [D]]) -> Tensor[f32, [D]] with panics 
 #[must_use = "the scores vector is the whole result — discarding it wastes the batch traversal"]
 pub fn dot_batched[N, D](query: ref Tensor[f32, [D]], corpus: ref Tensor[f32, [N, D]]) -> Vec[f32] {
     let mut out: Vec[f32] = Vec.new();
-    // Iterate the rows DIRECTLY rather than binding them first: the direct
-    // form fuses, so the loop walks the corpus through one reused row buffer
-    // instead of materializing all N row copies up front (B-2026-07-29-13).
+    // Iterate the rows directly. Either spelling fuses now — a single-use
+    // `let rows = …` collapses into this one (B-2026-07-29-24) — so the loop
+    // walks the corpus through one reused row buffer rather than
+    // materializing all N row copies up front. Written directly anyway so the
+    // hot path does not depend on that collapse firing.
     for row in corpus.iter_axis(0) {
         out.push(query.zip_with(row, |x, y| x * y).sum());
     }
@@ -90,7 +92,7 @@ pub fn cosine_similarity_batched[N, D](
     // recognized as a borrow even as a chain receiver).
     let nq = query.zip_with(query, |x, y| x * y).sum().sqrt();
     let mut out: Vec[f32] = Vec.new();
-    // Direct-form iteration so the loop fuses — see `dot_batched`.
+    // Direct-form iteration — see `dot_batched`.
     for row in corpus.iter_axis(0) {
         let d = query.zip_with(row, |x, y| x * y).sum();
         let nr = row.zip_with(row, |x, y| x * y).sum().sqrt();

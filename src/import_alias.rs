@@ -596,7 +596,7 @@ fn rewrite_expr_patterns(e: &mut Expr, subst: &HashMap<String, TypeExpr>) {
 /// its patterns left alone, which is the pre-existing behaviour, not a
 /// regression. The forms that CAN carry a pattern are all handled by the
 /// caller above; this only has to reach them.
-fn walk_expr_children(
+pub(crate) fn walk_expr_children(
     e: &mut Expr,
     on_expr: &mut impl FnMut(&mut Expr),
     on_block: &mut impl FnMut(&mut Block),

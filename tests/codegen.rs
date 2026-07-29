@@ -72286,6 +72286,56 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_iter_axis_bound_form_collapse_respects_its_guards() {
+        // B-2026-07-29-24. `let rows = t.iter_axis(0); for row in rows` is
+        // collapsed into the direct form so it reaches the fused lowering —
+        // but only when the binding is used exactly once AND the loop
+        // immediately follows, since collapsing moves the call to the loop's
+        // position. Four shapes, each byte-checked against the interpreter:
+        //
+        //   A  single use, adjacent      -> collapses (and fuses)
+        //   B  iterated twice            -> must not collapse; both loops right
+        //   C  a statement in between    -> must not collapse
+        //   D  also read via `.len()`    -> two uses, must not collapse
+        //
+        // B and D are the ones that would silently corrupt: collapsing them
+        // would leave the second reader with no binding at all.
+        let output = run_program(
+            "fn main() {\n\
+                 let mut t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);\n\
+                 let mut i = 0;\n\
+                 while i < 4 {\n\
+                     let mut j = 0;\n\
+                     while j < 3 { t[i, j] = (i * 3 + j) as f32; j = j + 1; }\n\
+                     i = i + 1;\n\
+                 }\n\
+                 let ra = t.iter_axis(0);\n\
+                 let mut a: f32 = 0.0;\n\
+                 for row in ra { a = a + row.sum(); }\n\
+                 println(a.to_string());\n\
+                 let rb = t.iter_axis(0);\n\
+                 let mut b1: f32 = 0.0;\n\
+                 for row in rb { b1 = b1 + row.sum(); }\n\
+                 let mut b2: f32 = 0.0;\n\
+                 for row in rb { b2 = b2 + row.sum(); }\n\
+                 println((b1 + b2).to_string());\n\
+                 let rc = t.iter_axis(0);\n\
+                 println(\"mid\");\n\
+                 let mut c: f32 = 0.0;\n\
+                 for row in rc { c = c + row.sum(); }\n\
+                 println(c.to_string());\n\
+                 let rd = t.iter_axis(0);\n\
+                 let n = rd.len();\n\
+                 let mut d: f32 = 0.0;\n\
+                 for row in rd { d = d + row.sum(); }\n\
+                 println((n as f32 + d).to_string());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "66\n132\nmid\n66\n70\n");
+    }
+
+    #[test]
     fn test_e2e_tensor_iter_axis_fused_loop_matches_the_materializing_path() {
         // B-2026-07-29-13. Seven shapes through the fused `for row in
         // t.iter_axis(n)` lowering, each byte-checked against the interpreter
@@ -77077,6 +77127,42 @@ mod ref_return_receiver_single_call {
             !escaping.contains("t.fia.cond"),
             "a row pushed into a Vec outlives its iteration and must NOT fuse; \
              IR:\n{escaping}"
+        );
+
+        // B-2026-07-29-24: the BOUND spelling reaches the same lowering,
+        // because `lowering::inline_single_use_iter_axis_lets` collapses a
+        // single-use `let` that is immediately followed by the loop.
+        let bound = module_ir(
+            "fn main() {\n\
+                 let t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);\n\
+                 let rows = t.iter_axis(0);\n\
+                 let mut a: f32 = 0.0;\n\
+                 for row in rows { a = a + row.sum(); }\n\
+                 println(a.to_string());\n\
+             }",
+        );
+        assert!(
+            bound.contains("t.fia.cond"),
+            "the bound spelling must collapse into the direct one and fuse; \
+             IR:\n{bound}"
+        );
+
+        // …but only when the binding is used ONCE. A second loop over it
+        // means the Vec is genuinely needed, so the collapse must not fire.
+        let bound_twice = module_ir(
+            "fn main() {\n\
+                 let t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);\n\
+                 let rows = t.iter_axis(0);\n\
+                 let mut a: f32 = 0.0;\n\
+                 for row in rows { a = a + row.sum(); }\n\
+                 for row in rows { a = a + row.sum(); }\n\
+                 println(a.to_string());\n\
+             }",
+        );
+        assert!(
+            !bound_twice.contains("t.fia.cond"),
+            "a binding iterated twice must keep the materialized Vec; \
+             IR:\n{bound_twice}"
         );
     }
 

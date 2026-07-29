@@ -60,6 +60,19 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     for item in &mut program.items {
         lowerer.lower_item(item);
     }
+    // Collapse `let rows = t.iter_axis(0); for row in rows { … }` into the
+    // direct `for row in t.iter_axis(0) { … }` — B-2026-07-29-24. Only the
+    // direct form reaches codegen's fused row-buffer lowering (the for-loop
+    // arm dispatches on a METHOD-CALL iterable; the bound form presents an
+    // Identifier), so without this the natural spelling silently keeps
+    // materializing every sub-tensor as a copy.
+    //
+    // Done HERE, as one AST rewrite, rather than by teaching the identifier
+    // arm to chase the binding: after it there is exactly one lowering path
+    // for both spellings, so the fused and unfused forms cannot drift.
+    // Running after typecheck also means the moved expression keeps its span,
+    // and therefore its `expr_types` / `owned_temp_drops` entries.
+    inline_single_use_iter_axis_lets(program);
     // Forward the typechecker's `?` cross-error-type conversion table onto
     // the program so codegen can read it without taking a `TypeCheckResult`.
     // Keys are `(span.offset, span.length)`; values are the target type's
@@ -1694,4 +1707,372 @@ fn primitive_type_name(ty: &Type) -> Option<String> {
         _ => return None,
     };
     Some(name.to_string())
+}
+
+// ── `iter_axis` bound-form collapse (B-2026-07-29-24) ─────────────────────
+//
+// `let rows = t.iter_axis(0); for row in rows { … }` is the natural way to
+// write a row scan, and it is what both shipping `std.embeddings` kernels
+// used. It is also the one spelling codegen's fused lowering cannot see: the
+// for-loop arm that fuses dispatches on a method-call iterable, and the bound
+// form presents an `Identifier`. So the direct form ran on one reused row
+// buffer while the bound form materialized all N sub-tensors as copies — a 3x
+// gap and 2x the peak RSS for identical source semantics.
+//
+// This rewrites the bound form INTO the direct form, so exactly one lowering
+// path exists for both.
+//
+// Two conditions, both required, both syntactic:
+//
+//   * The `for` is a LATER statement in the same block, and no statement
+//     strictly between the two mentions either the binding or the receiver's
+//     root name. That is what makes moving the call to the loop's position a
+//     no-op. Within a function body, mutating a tensor requires NAMING it:
+//     Kāra has no `&mut` expression, `ref` / `mut ref` are parameter modes,
+//     and creating a `mut ref` to it means writing `mut t` at a call site,
+//     which names it. So a window that never mentions the receiver cannot
+//     have changed it. (Plain adjacency would be simpler but is too weak for
+//     the shape real code takes — `let rows = …; let mut out = Vec.new();
+//     for row in rows`, which is what both stdlib kernels originally were.)
+//   * The bound name occurs EXACTLY ONCE as an expression in the whole
+//     function, which is necessarily the `for`'s iterable. Any body use, a
+//     second loop over it, an assignment, or a capture pushes the count above
+//     one and the rewrite is skipped.
+//
+// Anything else keeps the binding and the materializing path, unchanged.
+
+use std::collections::HashMap;
+
+fn inline_single_use_iter_axis_lets(program: &mut Program) {
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) => collapse_in_fn(f),
+            Item::ImplBlock(b) => {
+                for ii in &mut b.items {
+                    if let ImplItem::Method(m) = ii {
+                        collapse_in_fn(m);
+                    }
+                }
+            }
+            Item::TraitDef(t) => {
+                for ti in &mut t.items {
+                    if let TraitItem::Method(m) = ti {
+                        if let Some(body) = m.body.as_mut() {
+                            let mut counts = HashMap::new();
+                            count_block_idents(body, &mut counts);
+                            collapse_block(body, &counts);
+                        }
+                    }
+                }
+            }
+            Item::TestCase(t) => {
+                let mut counts = HashMap::new();
+                count_block_idents(&mut t.body, &mut counts);
+                collapse_block(&mut t.body, &counts);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collapse_in_fn(f: &mut Function) {
+    let mut counts = HashMap::new();
+    count_block_idents(&mut f.body, &mut counts);
+    collapse_block(&mut f.body, &counts);
+}
+
+/// Splice adjacent `let R = <recv>.iter_axis(a);` + `for X in R` pairs in
+/// `block`, then recurse into every nested block.
+fn collapse_block(block: &mut Block, counts: &HashMap<String, usize>) {
+    let mut i = 0;
+    while i + 1 < block.stmts.len() {
+        let bound = match &block.stmts[i].kind {
+            StmtKind::Let { pattern, value, .. } => match (&pattern.kind, &value.kind) {
+                (PatternKind::Binding(name), ExprKind::MethodCall { method, object, .. })
+                    if method == "iter_axis" && counts.get(name.as_str()).copied() == Some(1) =>
+                {
+                    // The receiver's root name, when it has one. Without it
+                    // (a chained or literal receiver) the window check below
+                    // cannot be made, so only the adjacent case is taken.
+                    let root = match &object.kind {
+                        ExprKind::Identifier(r) => Some(r.clone()),
+                        _ => None,
+                    };
+                    Some((name.clone(), root))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((name, recv_root)) = bound else {
+            i += 1;
+            continue;
+        };
+        // Find the `for` that iterates it, scanning forward only while the
+        // window stays clean.
+        let mut target: Option<usize> = None;
+        for j in i + 1..block.stmts.len() {
+            let is_the_loop = matches!(
+                &block.stmts[j].kind,
+                StmtKind::Expr(e)
+                    if matches!(&e.kind, ExprKind::For { iterable, .. }
+                        if matches!(&iterable.kind, ExprKind::Identifier(n) if *n == name))
+            );
+            if is_the_loop {
+                target = Some(j);
+                break;
+            }
+            // Anything in between must touch neither the binding nor the
+            // receiver. With no receiver root to check, nothing may intervene.
+            let Some(root) = recv_root.clone() else { break };
+            if stmt_touches(&mut block.stmts[j], &name, &root) {
+                break;
+            }
+        }
+        let Some(j) = target else {
+            i += 1;
+            continue;
+        };
+        // Move the RHS into the loop's iterable slot and drop the binding.
+        let StmtKind::Let { value, .. } = &mut block.stmts[i].kind else {
+            unreachable!("checked above")
+        };
+        let rhs = std::mem::replace(
+            value,
+            Expr {
+                kind: ExprKind::Error,
+                span: value.span.clone(),
+            },
+        );
+        if let StmtKind::Expr(e) = &mut block.stmts[j].kind {
+            if let ExprKind::For { iterable, .. } = &mut e.kind {
+                **iterable = rhs;
+            }
+        }
+        block.stmts.remove(i);
+        // Do NOT advance: the statement now at `i` may itself be a
+        // collapsible `let` (chained row scans).
+    }
+    for stmt in &mut block.stmts {
+        collapse_stmt_blocks(stmt, counts);
+    }
+}
+
+/// Does `stmt` mention `binding` or `recv_root` — as a read, or as a name it
+/// BINDS (which would shadow the one being moved past)?
+fn stmt_touches(stmt: &mut Stmt, binding: &str, recv_root: &str) -> bool {
+    let mut seen = HashMap::new();
+    count_stmt_idents(stmt, &mut seen);
+    if seen.contains_key(binding) || seen.contains_key(recv_root) {
+        return true;
+    }
+    match &stmt.kind {
+        StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => pattern
+            .binding_names()
+            .iter()
+            .any(|n| n == binding || n == recv_root),
+        StmtKind::LetUninit { name, .. } => name == binding || name == recv_root,
+        _ => false,
+    }
+}
+
+fn collapse_stmt_blocks(stmt: &mut Stmt, counts: &HashMap<String, usize>) {
+    match &mut stmt.kind {
+        StmtKind::Let { value, .. } => collapse_expr_blocks(value, counts),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            collapse_expr_blocks(value, counts);
+            collapse_block(else_block, counts);
+        }
+        StmtKind::Expr(e) => collapse_expr_blocks(e, counts),
+        StmtKind::Assign { target, value, .. } | StmtKind::CompoundAssign { target, value, .. } => {
+            collapse_expr_blocks(target, counts);
+            collapse_expr_blocks(value, counts);
+        }
+        StmtKind::MultiAssign {
+            targets, values, ..
+        } => {
+            for e in targets.iter_mut().chain(values.iter_mut()) {
+                collapse_expr_blocks(e, counts);
+            }
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => collapse_block(body, counts),
+        StmtKind::LetUninit { .. } => {}
+    }
+}
+
+fn collapse_expr_blocks(e: &mut Expr, counts: &HashMap<String, usize>) {
+    match &mut e.kind {
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Par(b)
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::LabeledBlock { body: b, .. } => collapse_block(b, counts),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collapse_expr_blocks(condition, counts);
+            collapse_block(then_block, counts);
+            if let Some(x) = else_branch {
+                collapse_expr_blocks(x, counts);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            collapse_expr_blocks(value, counts);
+            collapse_block(then_block, counts);
+            if let Some(x) = else_branch {
+                collapse_expr_blocks(x, counts);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collapse_expr_blocks(scrutinee, counts);
+            for arm in arms.iter_mut() {
+                collapse_expr_blocks(&mut arm.body, counts);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collapse_expr_blocks(condition, counts);
+            collapse_block(body, counts);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            collapse_expr_blocks(value, counts);
+            collapse_block(body, counts);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collapse_expr_blocks(iterable, counts);
+            collapse_block(body, counts);
+        }
+        ExprKind::Lock { mutex, body, .. } => {
+            collapse_expr_blocks(mutex, counts);
+            collapse_block(body, counts);
+        }
+        ExprKind::Providers { bindings, body } => {
+            for b in bindings.iter_mut() {
+                collapse_expr_blocks(&mut b.value, counts);
+            }
+            collapse_block(body, counts);
+        }
+        ExprKind::Closure { body, .. } => collapse_expr_blocks(body, counts),
+        _ => {}
+    }
+}
+
+/// Count bare `Identifier` occurrences per name. Deliberately counts USES
+/// only — a `let` pattern is a `Pattern`, not an expression — so the bound
+/// form's single legitimate use (the `for` iterable) lands on exactly 1.
+fn count_block_idents(block: &mut Block, out: &mut HashMap<String, usize>) {
+    for stmt in &mut block.stmts {
+        count_stmt_idents(stmt, out);
+    }
+    if let Some(e) = block.final_expr.as_mut() {
+        count_expr_idents(e, out);
+    }
+}
+
+fn count_stmt_idents(stmt: &mut Stmt, out: &mut HashMap<String, usize>) {
+    {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } => count_expr_idents(value, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                count_expr_idents(value, out);
+                count_block_idents(else_block, out);
+            }
+            StmtKind::Expr(e) => count_expr_idents(e, out),
+            StmtKind::Assign { target, value, .. }
+            | StmtKind::CompoundAssign { target, value, .. } => {
+                count_expr_idents(target, out);
+                count_expr_idents(value, out);
+            }
+            StmtKind::MultiAssign {
+                targets, values, ..
+            } => {
+                for e in targets.iter_mut().chain(values.iter_mut()) {
+                    count_expr_idents(e, out);
+                }
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                count_block_idents(body, out)
+            }
+            StmtKind::LetUninit { .. } => {}
+        }
+    }
+}
+
+/// Takes `&mut` only to share `import_alias`'s child walk rather than keep a
+/// third copy of the ExprKind recursion in the tree; it mutates nothing.
+///
+/// The pattern-BINDING forms are enumerated here rather than delegated:
+/// `walk_expr_children` deliberately omits `Match` / `IfLet` / `WhileLet` /
+/// `For`, because its own caller matches those first to reach their patterns.
+/// Delegating them would silently skip every loop and match body — an
+/// UNDER-count, which is the unsound direction for a "used exactly once"
+/// test (it would fuse a binding that is in fact read again).
+fn count_expr_idents(e: &mut Expr, out: &mut HashMap<String, usize>) {
+    match &mut e.kind {
+        ExprKind::Identifier(n) => {
+            *out.entry(n.clone()).or_insert(0) += 1;
+            return;
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            count_expr_idents(scrutinee, out);
+            for arm in arms.iter_mut() {
+                if let Some(g) = arm.guard.as_mut() {
+                    count_expr_idents(g, out);
+                }
+                count_expr_idents(&mut arm.body, out);
+            }
+            return;
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            count_expr_idents(value, out);
+            count_block_idents(then_block, out);
+            if let Some(x) = else_branch.as_mut() {
+                count_expr_idents(x, out);
+            }
+            return;
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            count_expr_idents(value, out);
+            count_block_idents(body, out);
+            return;
+        }
+        ExprKind::For { iterable, body, .. } => {
+            count_expr_idents(iterable, out);
+            count_block_idents(body, out);
+            return;
+        }
+        _ => {}
+    }
+    let cell = std::cell::RefCell::new(&mut *out);
+    crate::import_alias::walk_expr_children(
+        e,
+        &mut |c| {
+            let mut g = cell.borrow_mut();
+            count_expr_idents(c, &mut g);
+        },
+        &mut |b| {
+            let mut g = cell.borrow_mut();
+            count_block_idents(b, &mut g);
+        },
+    );
 }
