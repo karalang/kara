@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 184 | 0 |
 | leak | 98 | 0 |
+| codegen-gap | 84 | 2 |
 | double-free | 83 | 0 |
-| codegen-gap | 82 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 42 | 0 |
 | run-vs-build | 42 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 521 | 0 |
+| codegen | 523 | 2 |
 | typecheck | 87 | 0 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
@@ -124,11 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **713 surfaced · 0 open · 707 fixed** (2026-05-20 → 2026-07-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **715 surfaced · 2 open · 707 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (2)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-29-1 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): `==` with a BOOL operand emits an i64 compare against an i1 value — `icmp eq i64 %t, false` — which LLVM rejects. `not b` is unaffected. This is the only thing between the port and emitting codegen.kara itself. | — |
+| B-2026-07-29-2 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): a match-expression RESULT slot is allocated `i64` in `Parser.collect_leading_doc_comments` while an arm yields a String, so the later read does `extractvalue { ptr, i64 }` on an i64 load. Localized to the function and slot; not yet reduced to a minimal repro. | — |
 
 ### Fixed (707)
 
