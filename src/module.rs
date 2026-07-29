@@ -372,16 +372,40 @@ pub fn build_program_tree_with_deps(
                             })
                         })
                         .collect();
+                    // A companion shares its sibling's module path, so an
+                    // import naming *that same module* is a no-op once the two
+                    // files are merged — those items are already in scope.
+                    // Left in, the import resolves back to the merged module
+                    // itself, `collect_import_edges` records a self-edge, and
+                    // Tarjan reports a bogus size-1-SCC-with-self-loop cycle
+                    // (`thing → thing`, E0223). That is what made the
+                    // idiomatic `foo.kara` / `foo_test.kara` layout unusable
+                    // under `karac test` while `karac build` — which skips
+                    // companions entirely — accepted the same package.
+                    // Dropped rather than diagnosed: the identical import is
+                    // meaningful when the companion is checked as a standalone
+                    // file, so it is the merge that makes it redundant, not
+                    // the source.
+                    let own_path = pf.path.as_slice();
+                    let is_self_import = |path: &[String], name: &str| -> bool {
+                        // `import thing.double;` from module `thing`, and
+                        // `import db.connection;` from module `db.connection`.
+                        path == own_path
+                            || (path.len() + 1 == own_path.len()
+                                && own_path.starts_with(path)
+                                && own_path[path.len()].as_str() == name)
+                    };
                     let dedup_import = |d: &ImportDecl| -> Option<ImportDecl> {
                         let kept: Vec<ImportItem> = d
                             .items
                             .iter()
                             .filter(|ii| {
-                                !prod_bound.contains(&(
-                                    d.path.as_slice(),
-                                    ii.name.as_str(),
-                                    ii.alias.as_deref(),
-                                ))
+                                !is_self_import(d.path.as_slice(), ii.name.as_str())
+                                    && !prod_bound.contains(&(
+                                        d.path.as_slice(),
+                                        ii.name.as_str(),
+                                        ii.alias.as_deref(),
+                                    ))
                             })
                             .cloned()
                             .collect();

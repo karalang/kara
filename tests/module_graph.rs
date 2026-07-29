@@ -1894,6 +1894,109 @@ fn local_module_shadows_whole_dep_package() {
     );
 }
 
+/// Walk with tests included and merge companions — the `karac test` shape.
+fn merged_tree(root: &Path) -> karac::module::BuildTreeOk {
+    let w = walk_project(
+        root,
+        WalkerOpts {
+            include_tests: true,
+            ..WalkerOpts::default()
+        },
+    )
+    .expect("walker succeeds");
+    karac::module::build_program_tree_with(
+        &w,
+        karac::module::BuildTreeOpts {
+            merge_test_companions: true,
+        },
+    )
+    .expect("build tree")
+}
+
+/// A companion shares its sibling's module path, so `import thing.double;`
+/// inside `thing_test.kara` names the very module it is merged into. Before
+/// the fix that import survived the merge, `collect_import_edges` recorded a
+/// self-edge, and Tarjan reported a bogus `thing → thing` cycle (E0223) —
+/// which made the idiomatic `foo.kara` / `foo_test.kara` layout unusable
+/// under `karac test` even though `karac build` accepted the same package.
+#[test]
+fn companion_self_import_is_not_a_module_cycle() {
+    let d = ScratchDir::new("companion-self-import");
+    d.write("src/main.kara", "fn main() {}\n");
+    d.write("src/thing.kara", "pub fn double(x: i64) -> i64 { x * 2 }\n");
+    d.write(
+        "src/thing_test.kara",
+        "import thing.double;\n\ntest \"double\" {\n    assert_eq(double(3), 6);\n}\n",
+    );
+
+    let built = merged_tree(d.root());
+    let cycles = karac::module::detect_cycles(&built.tree);
+    assert!(
+        cycles.is_empty(),
+        "companion self-import must not register a cycle, got: {:?}",
+        cycles
+            .iter()
+            .map(|c| c.format(&built.tree))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// The same shape for a nested module (`src/db/connection_test.kara`), in both
+/// self-import spellings: naming an item of the module (`db.connection.open`)
+/// and naming the module itself (`db.connection`).
+#[test]
+fn nested_companion_self_import_is_not_a_module_cycle() {
+    for companion_import in ["import db.connection.open;", "import db.connection;"] {
+        let d = ScratchDir::new("nested-companion-self-import");
+        d.write("src/main.kara", "fn main() {}\n");
+        d.write("src/db/connection.kara", "pub fn open() -> i64 { 7 }\n");
+        d.write(
+            "src/db/connection_test.kara",
+            &format!("{companion_import}\n\ntest \"open\" {{\n    assert_eq(open(), 7);\n}}\n"),
+        );
+
+        let built = merged_tree(d.root());
+        assert!(
+            karac::module::detect_cycles(&built.tree).is_empty(),
+            "nested companion self-import `{companion_import}` must not register a cycle",
+        );
+    }
+}
+
+/// The self-import filter must be narrow: a companion importing a *different*
+/// module still records a real edge, so a genuine cycle through a test file is
+/// still caught, and a genuine production cycle is untouched.
+#[test]
+fn companion_filter_does_not_mask_genuine_cycles() {
+    let d = ScratchDir::new("genuine-cycle-with-companion");
+    d.write("src/main.kara", "fn main() {}\n");
+    d.write(
+        "src/a.kara",
+        "import b.beta;\npub fn alpha() -> i64 { beta() }\n",
+    );
+    d.write(
+        "src/b.kara",
+        "import a.alpha;\npub fn beta() -> i64 { 1 }\n",
+    );
+    d.write(
+        "src/a_test.kara",
+        "import a.alpha;\n\ntest \"alpha\" {\n    assert_eq(alpha(), 1);\n}\n",
+    );
+
+    let built = merged_tree(d.root());
+    let cycles = karac::module::detect_cycles(&built.tree);
+    assert_eq!(
+        cycles.len(),
+        1,
+        "the genuine a <-> b cycle must still fire (companion self-import filtered)",
+    );
+    let rendered = cycles[0].format(&built.tree);
+    assert!(
+        rendered.contains('a') && rendered.contains('b'),
+        "cycle should name both production modules, got {rendered}",
+    );
+}
+
 #[test]
 fn dep_test_companions_are_skipped() {
     let d = ScratchDir::new("dep-tests-skipped");
