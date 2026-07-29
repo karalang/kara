@@ -694,6 +694,88 @@ fn typecheck_module_errors(
         .errors
 }
 
+/// A trait bound whose trait is IMPORTED must still resolve the trait's
+/// methods on the bounded type parameter. `build_type_env` registers an
+/// imported trait in `env.traits`, but `TraitInfo` carries no method list, so
+/// the bound resolved (no "unknown trait") while every call through it failed
+/// with `E0200 no method '…' on type parameter` (B-2026-07-29-9). Any package
+/// that declares a trait in one module and writes generic code over it in
+/// another was blocked.
+#[test]
+fn imported_trait_bound_resolves_methods_on_type_param() {
+    for (label, main_src) in [
+        (
+            "free fn",
+            "import doer.{Doer, Impl};\n\
+             fn go[T: Doer](t: ref T) -> i64 { t.do_it() }\n\
+             fn main() { let i = Impl {}; println(f\"{go(i)}\"); }\n",
+        ),
+        (
+            "generic struct impl block",
+            "import doer.{Doer, Impl};\n\
+             struct Holder[S: Doer] { d: S }\n\
+             impl[S: Doer] Holder[S] { fn run(ref self) -> i64 { self.d.do_it() } }\n\
+             fn main() { let h = Holder { d: Impl {} }; println(f\"{h.run()}\"); }\n",
+        ),
+    ] {
+        let d = ScratchDir::new("imported-trait-bound");
+        d.write(
+            "src/doer.kara",
+            "pub trait Doer { fn do_it(ref self) -> i64; }\n\
+             pub struct Impl {}\n\
+             impl Doer for Impl { fn do_it(ref self) -> i64 { 42 } }\n",
+        );
+        d.write("src/main.kara", main_src);
+
+        let w = walked(d.root());
+        let built = build_program_tree(&w).expect("build tree");
+        let root = built.tree.root;
+        let errors = typecheck_module_errors(&built.tree, root);
+        assert!(
+            errors.is_empty(),
+            "{label}: imported trait bound should resolve its methods, got: {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+        );
+    }
+}
+
+/// Residue of B-2026-07-29-9 (tracked as B-2026-07-29-10), pinned rather than dropped: an ALIASED imported
+/// trait (`import doer.Doer as D` + `T: D`) still fails, now at bound
+/// SATISFACTION rather than method lookup — the impl-matching path compares
+/// against the local alias `D`, so `impl Doer for Impl` is not recognised.
+/// Distinct from the fixed bug (method lookup, which canonicalizes through
+/// `type_origins`) and pre-existing: before that fix this shape died earlier
+/// with `E0200`. Asserted to STILL fail so that fixing alias canonicalization
+/// trips this test and forces it to be promoted to the passing case above.
+#[test]
+fn aliased_imported_trait_bound_is_known_broken() {
+    let d = ScratchDir::new("aliased-trait-bound");
+    d.write(
+        "src/doer.kara",
+        "pub trait Doer { fn do_it(ref self) -> i64; }\n\
+         pub struct Impl {}\n\
+         impl Doer for Impl { fn do_it(ref self) -> i64 { 42 } }\n",
+    );
+    d.write(
+        "src/main.kara",
+        "import doer.{Doer as D, Impl};\n\
+         fn go[T: D](t: ref T) -> i64 { t.do_it() }\n\
+         fn main() { let i = Impl {}; println(f\"{go(i)}\"); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let errors = typecheck_module_errors(&built.tree, built.tree.root);
+    let messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+    assert!(
+        messages.iter().any(|m| m.contains("is not satisfied")),
+        "expected the known alias residue (unsatisfied bound); if this now \
+         passes, alias canonicalization was fixed — fold this shape back into \
+         `imported_trait_bound_resolves_methods_on_type_param` and close the \
+         B-2026-07-29-10 residue. Got: {messages:?}",
+    );
+}
+
 #[test]
 fn slice6b_pub_signature_with_imported_non_pub_type_trips_e0221() {
     // `pub fn open() -> Connection` in `main` leaks a non-pub imported

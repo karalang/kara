@@ -91,6 +91,21 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // A trait IMPORTED from another module of this package. Registered in
+        // `env.traits` (so the bound resolves) but its method list is not,
+        // hence this walk to the defining module — see
+        // [`Self::find_imported_trait_def`]. Placed before the stdlib sweep so
+        // a user trait shadows a same-named baked one, matching the
+        // local-program-first rule above.
+        if let Some(t) = self.find_imported_trait_def(trait_name) {
+            for ti in &t.items {
+                if let TraitItem::Method(m) = ti {
+                    if m.name == method_name {
+                        return Some(m);
+                    }
+                }
+            }
+        }
         // Baked stdlib (`STDLIB_PROGRAMS`): trait declarations like
         // `Display`, `Iterator`, `Ord`, etc. live here. Walking the
         // baked surface lets `T: Display`-bounded type params resolve
@@ -117,10 +132,39 @@ impl<'a> super::TypeChecker<'a> {
         None
     }
 
-    /// Locate the AST `TraitDef` for `trait_name` — user program first,
-    /// then the baked stdlib, mirroring [`Self::find_trait_method`]'s
-    /// lookup order. Needed to read the trait's own `generic_params` when
-    /// binding a bound's generic args (`C: Reduce[i64]` → `T := i64`).
+    /// Locate the AST `TraitDef` for a trait IMPORTED from another module,
+    /// by walking to its defining module through the program tree.
+    ///
+    /// `build_type_env` registers an imported trait in `env.traits`, but
+    /// `TraitInfo` carries only assoc types / supertraits / generic params —
+    /// not the method list. That is enough for bound RESOLUTION (which is why
+    /// `S: Doer` on an imported `Doer` reports no "unknown trait") but leaves
+    /// method LOOKUP with no AST to search, so every call through the bound
+    /// failed with `E0200 no method '…' on type parameter` (B-2026-07-29-9).
+    /// Reaching through the tree here mirrors `infer_imported_field_access`'s
+    /// canonical-origin walk rather than widening `TraitInfo`.
+    ///
+    /// `trait_name` is the LOCALLY bound name; `type_origins` maps it to the
+    /// canonical `(module path, item name)`, so an aliased import
+    /// (`import m.Doer as D`) resolves through `D` to `Doer`.
+    fn find_imported_trait_def<'p>(&'p self, trait_name: &str) -> Option<&'p crate::ast::TraitDef> {
+        let tree = self.tree?;
+        let (origin_path, canonical_name, _vis) = self.type_origins.get(trait_name)?;
+        let &origin_id = tree.graph.by_path.get::<[String]>(origin_path.as_slice())?;
+        tree.module(origin_id)
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::TraitDef(t) if t.name == *canonical_name => Some(t),
+                _ => None,
+            })
+    }
+
+    /// Locate the AST `TraitDef` for `trait_name` — user program first, then
+    /// imported traits, then the baked stdlib, mirroring
+    /// [`Self::find_trait_method`]'s lookup order. Needed to read the trait's
+    /// own `generic_params` when binding a bound's generic args
+    /// (`C: Reduce[i64]` → `T := i64`).
     pub(super) fn find_trait_def<'p>(
         &'p self,
         trait_name: &str,
@@ -131,6 +175,9 @@ impl<'a> super::TypeChecker<'a> {
                     return Some(t);
                 }
             }
+        }
+        if let Some(t) = self.find_imported_trait_def(trait_name) {
+            return Some(t);
         }
         for (_, program) in crate::prelude::STDLIB_PROGRAMS.iter() {
             for item in &program.items {
