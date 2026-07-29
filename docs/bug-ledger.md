@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 184 | 0 |
-| leak | 98 | 0 |
-| codegen-gap | 84 | 2 |
+| miscompile | 186 | 0 |
+| leak | 99 | 1 |
+| codegen-gap | 84 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 43 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 523 | 2 |
+| codegen | 526 | 1 |
 | typecheck | 87 | 0 |
 | interp | 73 | 0 |
 | ownership | 28 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **716 surfaced · 2 open · 708 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **719 surfaced · 1 open · 712 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-29-1 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): `==` with a BOOL operand emits an i64 compare against an i1 value — `icmp eq i64 %t, false` — which LLVM rejects. `not b` is unaffected. This is the only thing between the port and emitting codegen.kara itself. | — |
-| B-2026-07-29-2 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): a match-expression RESULT slot is allocated `i64` in `Parser.collect_leading_doc_comments` while an arm yields a String, so the later read does `extractvalue { ptr, i64 }` on an i64 load. Localized to the function and slot; not yet reduced to a minimal repro. | — |
+| B-2026-07-29-6 | 2026-07-29 | codegen | medium | SELFHOST EMITTER (codegen.kara): a value-position `match` over a HEAP-PAYLOAD enum leaks the payload the arm binds. `let w = match pick(i) { Word(s) => s, ... }` never frees the String, even though the binding is consumed. | — |
 
-### Fixed (708)
+### Fixed (712)
 
-<details><summary>708 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>712 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -846,7 +845,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **716 surfaced 
 | B-2026-07-28-15 | codegen | high | SELFHOST EMITTER (codegen.kara): no IMPORT resolution — a type named by an `import` hits `kind_of_ty`'s i64 fallback SILENTLY, so an imported struct… | 04964fa |
 | B-2026-07-28-16 | codegen | high | SEED CODEGEN: an owned struct's `Option`/`Result` field passed BY VALUE to a parameter that owns it was not treated as a move — the callee freed the… | 6dc5854 |
 | B-2026-07-28-17 | codegen | high | SEED CODEGEN: passing an `Option[<heap>]` field of a struct bound out of a `shared enum` payload to an owning parameter double-frees — `match a { V(n… | 09ffe5a |
+| B-2026-07-29-1 | codegen | medium | SELFHOST EMITTER (codegen.kara): `==` with a BOOL operand emits an i64 compare against an i1 value — `icmp eq i64 %t, false` — which LLVM rejects | 5e7224b |
+| B-2026-07-29-2 | codegen | high | SELFHOST EMITTER (codegen.kara): a match-expression RESULT slot is allocated `i64` in `Parser.collect_leading_doc_comments` while an arm yields a Str… | 5e7224b |
 | B-2026-07-29-3 | resolver | high | A `_test.kara` companion that imports the module it tests is reported as a circular module dependency (`E0223`, bogus `thing → thing`), so the idioma… | 93d14ee |
+| B-2026-07-29-4 | codegen | medium | SELFHOST EMITTER (codegen.kara): `panic` / `todo` / `unreachable` were lowered as USER FUNCTION CALLS | 5e7224b |
+| B-2026-07-29-5 | codegen | high | SELFHOST EMITTER (codegen.kara): an UN-ANNOTATED `let v = Vec.new()` defaults to Vec[i64], so pushing a String stores a 16-byte `{ptr,i64}` into an 8… | 5e7224b |
 
 </details>
 
