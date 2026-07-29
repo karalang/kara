@@ -52,6 +52,14 @@ enum Expect {
     Matches,
     /// Known-broken (B-2026-07-28-4). Asserted NOT to match, so a fix trips
     /// this test and forces promotion to `Matches`.
+    ///
+    /// Currently unconstructed — every program in the corpus reached
+    /// `Matches`. Retained (rather than deleted) because it is the mechanism
+    /// for landing the next corpus program whose backend legs disagree: a new
+    /// `Case` pins the broken leg here and the harness holds the line until it
+    /// is fixed. `allow` rather than `expect` so that re-using the variant
+    /// does not itself become an unfulfilled-lint error.
+    #[allow(dead_code)]
     KnownBroken,
 }
 
