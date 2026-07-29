@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 83 | 0 |
 | missing-feature | 63 | 0 |
 | false-positive | 48 | 1 |
-| run-vs-build | 44 | 1 |
+| run-vs-build | 44 | 0 |
 | perf | 32 | 1 |
 | crash | 30 | 0 |
 | soundness | 26 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 534 | 3 |
+| codegen | 534 | 2 |
 | typecheck | 90 | 1 |
-| interp | 75 | 1 |
+| interp | 75 | 0 |
 | ownership | 29 | 0 |
 | other | 21 | 0 |
 | autopar | 19 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **734 surfaced · 3 open · 724 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **734 surfaced · 2 open · 725 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-13 | 2026-07-29 | codegen | high | PERF: `Tensor.iter_axis(n)` materializes every sub-tensor as a COPY, so one pass over a 30 MB `[10000, 768]` corpus costs ~10 ms of page faults per call — 91% of the cost of the batched embedding kernels, and ~6x the cost of reading the same bytes. | — |
 | B-2026-07-29-14 | 2026-07-29 | typecheck+codegen | medium | AOT `karac build` re-typechecks a TREE-LESS flattened program, so NO import-alias information survives: `import m.{T as A}` fails there for traits AND structs even after the per-module typecheck accepts it. | — |
-| B-2026-07-29-20 | 2026-07-29 | codegen+interp | high | REPL cross-cell value snapshot loses an in-cell container mutation: `let mut v = Vec.new(); v.push(7)` in cell 1 reads back empty in cell 2. Whole container tier (B.5.3a/b/c) broken on the JIT lane; Map+Set broken on the interpreter too, though all three are marked shipped `[x]` in phase-7-codegen.md. | — |
 
-### Fixed (724)
+### Fixed (725)
 
-<details><summary>724 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>725 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -863,6 +862,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **734 surfaced 
 | B-2026-07-29-17 | resolver | medium | RESOLVER HOLE: `effect resource R: SomeTrait;` accepts a trait name that is not defined ANYWHERE — no error, all checks pass | 9ddb52e |
 | B-2026-07-29-18 | interp | medium | `env.args()` reported the HOSTING PROCESS's argv rather than the program's, differently on each executor: `karac run --interp prog.kara` gave [karac,… | 8db4602 |
 | B-2026-07-29-19 | other | medium | docs/design.md — the AUTHORITATIVE spec — writes `ref` AT CALL SITES in 9 code blocks, a form the parser rejects outright ('`ref` is not written at c… | d8fd573 |
+| B-2026-07-29-20 | codegen+interp | high | REPL cross-cell value snapshot was taken at each binding's INITIALIZER, so EVERY in-cell mutation was lost crossing to the next cell — on both lanes… | 8172bae |
 | B-2026-07-29-21 | codegen | high | Every call to a `-> ref String` accessor leaks one `karac_string_clone` block under AOT | b74a9a7 |
 
 </details>
