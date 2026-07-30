@@ -20,7 +20,9 @@
 //! subsequent round — the existing linear forward state machine continues
 //! to drive RC fallback decisions until the new pass is wired through.
 
-use crate::ast::{Block, Expr, ExprKind, Pattern, PatternKind, Stmt, StmtKind};
+use crate::ast::{
+    Block, Expr, ExprKind, ParsedInterpolationPart, Pattern, PatternKind, Stmt, StmtKind,
+};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
@@ -923,9 +925,35 @@ impl<'a> CfgBuilder<'a> {
             | ExprKind::CharLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
-            | ExprKind::InterpolatedStringLit(..)
             | ExprKind::Path { .. }
             | ExprKind::SelfType => cur,
+
+            // B-2026-07-29-28: an f-string is NOT a pure-constant form — each
+            // `{...}` hole holds an arbitrary expression, which may consume a
+            // value. Grouping it with the literals above meant the holes were
+            // never lowered, so the CFG had no node for anything inside them and
+            // `direct_uam_candidates` had no witness to find: a consuming call
+            // written `f"{consume(t)}"` did not move `t`, while the identical
+            // call in statement position was correctly rejected.
+            //
+            // Two passes had to agree for the move to become visible again —
+            // `use_classifier` classifies the uses, and this lowering gives them
+            // CFG nodes to be classified AT. Fixing either alone changes
+            // nothing, which is why the first attempt at this bug appeared to do
+            // nothing at all.
+            //
+            // Holes are lowered left to right, threading `cur`, so evaluation
+            // order matches the desugaring in design.md § String Interpolation
+            // and a consume in an earlier slot dominates a use in a later one.
+            ExprKind::InterpolatedStringLit(parts) => {
+                let mut c = cur;
+                for part in parts {
+                    if let ParsedInterpolationPart::Expr(e, _) = part {
+                        c = self.lower_expr(e, c, exit, loops);
+                    }
+                }
+                c
+            }
 
             ExprKind::Binary { left, right, .. }
             | ExprKind::Pipe { left, right }

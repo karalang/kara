@@ -9762,9 +9762,12 @@ fn main() {
                  let c2 = Shape.Circle { r: 2 };\n\
                  let sq = Shape.Square { side: 3 };\n\
                  let u = Shape.Unknown;\n\
-                 println(f\"{area(c)}\");\n\
-                 println(f\"{area(sq)}\");\n\
-                 println(f\"{area(u)}\");\n\
+                 let ca = Shape.Circle { r: 2 };\n\
+                 let sqa = Shape.Square { side: 3 };\n\
+                 let ua = Shape.Unknown;\n\
+                 println(f\"{area(ca)}\");\n\
+                 println(f\"{area(sqa)}\");\n\
+                 println(f\"{area(ua)}\");\n\
                  println(f\"{c == c2}\");\n\
                  println(f\"{c == sq}\");\n\
                  println(f\"{c == u}\");\n\
@@ -9838,11 +9841,14 @@ fn main() {
              fn main() {\n\
              \x20   let a = A { n: 10 };\n\
              \x20   println(f\"{a.plus_one()}\");\n\
-             \x20   println(f\"{a.plus_two()}\");\n\
-             \x20   println(f\"{a.constant()}\");\n\
+             \x20   let a2 = A { n: 10 };\n\
+             \x20   println(f\"{a2.plus_two()}\");\n\
+             \x20   let a3 = A { n: 10 };\n\
+             \x20   println(f\"{a3.constant()}\");\n\
              \x20   let b = B { n: 20 };\n\
              \x20   println(f\"{b.plus_two()}\");\n\
-             \x20   println(f\"{b.constant()}\");\n\
+             \x20   let b2 = B { n: 20 };\n\
+             \x20   println(f\"{b2.constant()}\");\n\
              }",
         ) {
             // a: plus_one=11, plus_two=12, constant(default)=42
@@ -9933,12 +9939,15 @@ fn main() {
              fn main() {\n\
              \x20   let p = P { x: 1, y: 2 };\n\
              \x20   println(f\"{p.shift().x}\");\n\
-             \x20   println(f\"{p.shift().y}\");\n\
-             \x20   println(f\"{p.shift().shift().x}\");\n\
+             \x20   let p2 = P { x: 1, y: 2 };\n\
+             \x20   println(f\"{p2.shift().y}\");\n\
+             \x20   let p3 = P { x: 1, y: 2 };\n\
+             \x20   println(f\"{p3.shift().shift().x}\");\n\
              \x20   println(f\"{mk(7).y}\");\n\
              \x20   let n = N { name: \"start\", id: 5 };\n\
              \x20   println(f\"{n.relabel().name}\");\n\
-             \x20   println(f\"{n.relabel().id}\");\n\
+             \x20   let n2 = N { name: \"start\", id: 5 };\n\
+             \x20   println(f\"{n2.relabel().id}\");\n\
              }",
         ) {
             // p.shift().x=2, .y=12, .shift().x=3; mk(7).y=14;
@@ -10758,9 +10767,10 @@ fn main() {
              fn gat[T](s: Slice[T], i: i64) -> T { s[i] }\n\
              fn main() {\n\
              \x20   let vs: Vec[String] = [\"first-payload-long-enough-string\", \"second-payload-also-long-here\"];\n\
+             \x20   let vs2: Vec[String] = [\"first-payload-long-enough-string\", \"second-payload-also-long-here\"];\n\
              \x20   let arr: Array[String, 2] = [\"array-elem-zero-long-payload\", \"array-elem-one-long-payload\"];\n\
              \x20   println(f\"{gsum(vs)}\");\n\
-             \x20   println(f\"{gat(vs, 1)}\");\n\
+             \x20   println(f\"{gat(vs2, 1)}\");\n\
              \x20   println(f\"{gsum(arr)}\");\n\
              }",
         ) {
@@ -19464,10 +19474,11 @@ fn main() {
              fn same_res(x: Result[String, i64], y: Result[String, i64]) -> bool { x == y }\n\
              fn main() {\n\
                  let a: Option[String] = Some(\"a\" + \"b\");\n\
+                 let a2: Option[String] = Some(\"a\" + \"b\");\n\
                  let b: Option[String] = Some(\"ab\");\n\
                  let c: Option[String] = Some(\"zz\");\n\
                  println(f\"{same_opt(a, b)}\");\n\
-                 println(f\"{same_opt(a, c)}\");\n\
+                 println(f\"{same_opt(a2, c)}\");\n\
                  let r: Result[String, i64] = Ok(\"x\" + \"y\");\n\
                  let s: Result[String, i64] = Ok(\"xy\");\n\
                  println(f\"{same_res(r, s)}\");\n\
@@ -36718,8 +36729,8 @@ fn nth(s: String, i: i64) -> String {
 fn main() {
     let s: String = "héllo";
     println(f"{s.len()} {s.char_count()}");
-    println(f"{nth(s, 0)} {nth(s, 1)} {nth(s, 4)}");
-    println(f"{nth(s, 5)} {nth(s, 99)} {nth(s, -1)}");
+    println(f"{nth(s.clone(), 0)} {nth(s.clone(), 1)} {nth(s.clone(), 4)}");
+    println(f"{nth(s.clone(), 5)} {nth(s.clone(), 99)} {nth(s, -1)}");
     let cjk: String = "日本語";
     println(f"{cjk.len()} {cjk.char_count()} {nth(cjk, 1)}");
 }

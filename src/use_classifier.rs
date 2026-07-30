@@ -38,8 +38,8 @@
 //!   block of the call site, mirroring the closure-body lowering.
 
 use crate::ast::{
-    Block, Expr, ExprKind, Item, Pattern, PatternKind, Program, RestPattern, SelfParam, Stmt,
-    StmtKind,
+    Block, Expr, ExprKind, Item, ParsedInterpolationPart, Pattern, PatternKind, Program,
+    RestPattern, SelfParam, Stmt, StmtKind,
 };
 use crate::cfg::{Classification, ConsumeOrigin, PlacePath, PlaceSeg, UseKind};
 use crate::ownership::{
@@ -470,9 +470,37 @@ impl<'a> UseClassifier<'a> {
             | ExprKind::CharLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
-            | ExprKind::InterpolatedStringLit(..)
             | ExprKind::Path { .. }
             | ExprKind::SelfType => {}
+
+            // B-2026-07-29-28: an f-string was grouped with the LEAF literals
+            // above, so every expression inside a `{...}` hole was invisible to
+            // this pass. A nested consuming call therefore never had its
+            // arguments classified against the callee's declared modes:
+            // `let a = f"{consume(t)}"` did not move `t`, so two such calls on
+            // one value passed `karac check` while the identical call in
+            // statement position was correctly rejected — a value the callee
+            // declared ownership of outlived it, and its `impl Drop` ran at the
+            // CALLER's last use instead of inside the callee.
+            //
+            // The hole itself is a READ, not a consume: design.md § String
+            // Interpolation (L4667) desugars `{expr}` to `expr.to_string()` with
+            // `Display.to_string(ref self)` borrowing the receiver, so "the same
+            // value can appear in multiple {} slots without being consumed".
+            // `Mode::Reading` preserves that for a plain `f"{t}"`, while the
+            // `Call`/`MethodCall` arms still derive their own argument modes
+            // from the callee's signature independently of the enclosing mode —
+            // which is what makes the nested move visible again.
+            //
+            // The format spec half of a part is a raw string with no expression
+            // in it, so only the hole's expression is walked.
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let ParsedInterpolationPart::Expr(e, _) = part {
+                        self.walk_expr(e, Mode::Reading);
+                    }
+                }
+            }
 
             ExprKind::Binary { left, right, .. }
             | ExprKind::Pipe { left, right }
