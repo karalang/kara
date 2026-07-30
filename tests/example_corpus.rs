@@ -91,15 +91,13 @@ const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
     //
     // Every remaining error is a compiler-side gap, none of them filed as a
     // bug yet because each is arguably a design question rather than a defect.
-    "15 errors, none of them example rot, in three groups. (a) 5 × `Map.get` \
-         requires an OWNED key, so a `ref String` cannot be used for lookup \
-         without cloning (db.kara:73/80/95/103, executor.kara:105/91). (b) 2 × \
-         the error type of a `?`-chained `Result` is not inferred through a \
-         trait method (executor.kara:52/57). (c) 1 × E_NOT_CROSS_TASK — the \
-         `InMemoryDb` provider cannot cross the `par` boundary main.kara:43 \
-         puts it across. A fourth group, 3 × a map literal typing as `HashMap` \
-         and so unwritable in a typed position, was B-2026-07-30-14 and is \
-         fixed.",
+    "3 errors, none of them example rot. (a) 2 × the error type of a \
+         `?`-chained `Result` is not inferred through a trait method \
+         (executor.kara:52/57). (b) 1 × E_NOT_CROSS_TASK — the `InMemoryDb` \
+         provider cannot cross the `par` boundary main.kara:43 puts it across. \
+         Two earlier groups are gone: a map literal typing as `HashMap`, so \
+         unwritable in a typed position (B-2026-07-30-14), and `Map` lookup \
+         rejecting a borrowed key (B-2026-07-30-17).",
 )];
 
 /// Single files that do not currently check, with the first reported error.

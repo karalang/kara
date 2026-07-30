@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 71 | 2 |
-| false-positive | 50 | 0 |
+| false-positive | 51 | 0 |
 | run-vs-build | 46 | 0 |
 | perf | 39 | 2 |
 | crash | 32 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 555 | 5 |
-| typecheck | 100 | 1 |
+| typecheck | 101 | 1 |
 | interp | 80 | 3 |
 | ownership | 33 | 0 |
 | autopar | 24 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **768 surfaced · 5 open · 755 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **769 surfaced · 5 open · 756 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -136,9 +136,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **768 surfaced 
 | B-2026-07-30-15 | 2026-07-30 | codegen+interp | high | `Json` has no integer variant — every i64 serializes through f64, so whole numbers emit `1.0` (which Go's encoding/json REFUSES into an int field) and any value past 2^53 is silently corrupted. Both defects survive a `Json.parse` round-trip, so a service cannot echo an integer field unchanged. | — |
 | B-2026-07-30-16 | 2026-07-30 | typecheck+codegen+interp | high | `File.sync_all()` / `sync_data()` — the durability API design.md:9150 mandates — TYPECHECKS CLEAN but is unimplemented in codegen AND the interpreter, so `karac check` goes green on a program neither backend can run. No fsync path exists in the runtime at all (`file_flush` is Rust's no-op `Write::flush`), so a Kāra program cannot make any write durable. | — |
 
-### Fixed (755)
+### Fixed (756)
 
-<details><summary>755 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>756 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -897,6 +897,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **768 surfaced 
 | B-2026-07-30-12 | codegen | medium | A by-value owned-struct arg that the callee RETURNS mishandled its caller temp TWO ways: a fn-call arg (`pass(mk())`) leaked the orphaned buffer, and… | 3ee768a |
 | B-2026-07-30-13 | typecheck | low | An arithmetic mismatch whose wrong operand is an Option/Result was reported as an integer/floating-point mix, naming a float type that appears nowher… | 3981fef |
 | B-2026-07-30-14 | typecheck | high | A MAP LITERAL typed as `HashMap<K, V>` — a name Kāra source cannot write — so it matched no annotation: `let m: Map[String, i64] = Map["x": 1];` fail… | b9995ce |
+| B-2026-07-30-17 | typecheck | medium | Map LOOKUP (`get` / `get_or` / `contains_key` / `remove`) rejected a borrowed key: `m.get(key)` where `key: ref String` failed with `expected 'String… | 097f0a4 |
 
 </details>
 
