@@ -1211,6 +1211,113 @@ fn test_query_effects_resolves_instance_method_network_effect() {
     assert!(stdout.contains("\"verb\":\"receives\""));
 }
 
+/// B-2026-07-29-29: `query concurrency` reported statement-level
+/// `parallel_groups` but nothing about **loop-reduction fan-out** — the
+/// Tier-2 mechanism the kata parallel lane rests on. Programs that differed
+/// in whether they fan out returned indistinguishable JSON, so establishing
+/// the fan-out decision required building twice and diffing the binary under
+/// `KARAC_AUTO_PAR`.
+///
+/// Pins all three outcomes as *distinguishable*, and pins that a
+/// recognized-but-sequential loop is NOT reported as parallel:
+///
+/// - `sum = sum + f(k)`      → `parallel_fanout`
+/// - `out.push(f(k))`        → `sequential_tabulate` (single-threaded rewrite)
+/// - `out[k] = f(k)`         → not recognized at all (empty array)
+///
+/// The `sequential_tabulate` case is the one that matters: it *is* a
+/// recognized `LoopReduction`, and reporting it without the `seq`
+/// discriminator would say "reduction" about a loop that never leaves one
+/// core.
+#[test]
+fn test_query_concurrency_reports_loop_reduction_lowering() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-loop-reductions-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // Each case: (file stem, loop body, expected lowering substring).
+    let cases: [(&str, &str, &str); 3] = [
+        (
+            "reduce",
+            "sum = sum + work(k);",
+            "\"lowering\":\"parallel_fanout\"",
+        ),
+        (
+            "tabulate",
+            "out.push(work(k));",
+            "\"lowering\":\"sequential_tabulate\"",
+        ),
+        ("indexed", "out[k] = work(k);", "\"loop_reductions\":[]"),
+    ];
+
+    for (stem, body, expected) in cases {
+        let path = tmp.join(format!("{stem}.kara"));
+        let src = format!(
+            "fn work(v: i64) -> i64 {{\n\
+             \x20   let mut a: i64 = v;\n\
+             \x20   let mut j: i64 = 0i64;\n\
+             \x20   while j < 40i64 {{ a = (a * 31i64 + j) % 1000003i64; j = j + 1i64; }}\n\
+             \x20   a\n\
+             }}\n\
+             fn main() {{\n\
+             \x20   let n: i64 = 100000i64;\n\
+             \x20   let mut sum: i64 = 0i64;\n\
+             \x20   let mut out: Vec[i64] = Vec.filled(n, 0i64);\n\
+             \x20   let mut k: i64 = 0i64;\n\
+             \x20   while k < n {{\n\
+             \x20       {body}\n\
+             \x20       k = k + 1i64;\n\
+             \x20   }}\n\
+             \x20   println(sum + out.len());\n\
+             }}\n"
+        );
+        std::fs::write(&path, &src).unwrap();
+
+        let target = format!("{}.main", path.to_str().unwrap());
+        let out = karac_bin()
+            .args(["query", "concurrency", &target])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "query failed for {stem}: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("\"loop_reductions\":"),
+            "{stem}: query output must carry a loop_reductions field; got: {stdout}",
+        );
+        assert!(
+            stdout.contains(expected),
+            "{stem}: expected {expected} in query output; got: {stdout}",
+        );
+        // A sequential tabulate must never be labelled parallel, and a
+        // parallel fan-out must declare that codegen still gates it.
+        if expected.contains("sequential_tabulate") {
+            assert!(
+                !stdout.contains("\"lowering\":\"parallel_fanout\""),
+                "{stem}: sequential tabulate reported as parallel; got: {stdout}",
+            );
+            assert!(stdout.contains("\"cost_gate\":\"n/a\""));
+        }
+        if expected.contains("parallel_fanout") {
+            assert!(
+                stdout.contains("\"cost_gate\":\"deferred_to_codegen\""),
+                "{stem}: parallel fan-out must state that codegen gates emission; got: {stdout}",
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 #[test]
 fn test_query_effects_whole_program_emits_nodes_and_call_edges() {
     // A bare `<file>.kara` target (no trailing `.function`) emits the

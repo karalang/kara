@@ -25,6 +25,22 @@
 //! groups (`group.is_trivial == true` — pure-arithmetic groups too cheap to
 //! justify thread dispatch) are deliberately omitted, matching the
 //! storyboard's "what parallelizes and why" framing.
+//!
+//! Recognized loop reductions are emitted after a function's parallel groups,
+//! labelled by their **lowering** rather than under one shared `reduction`
+//! tag (B-2026-07-29-29):
+//!
+//! ```text
+//!   parallel_reduction  { op: +, accumulator: sum, line: 58 }
+//!   sequential_tabulate { op: collect, accumulator: out, line: 71 }
+//! ```
+//!
+//! `LoopReduction::seq` is the discriminator. A `seq` entry is the
+//! single-threaded push→in-place-store rewrite, so printing it as a bare
+//! `reduction` beside `parallel_group` blocks made a loop that never leaves
+//! one core read as parallelized. The machine-readable twin of this
+//! distinction is the `lowering` field of `query concurrency`'s
+//! `loop_reductions` array (`effect_graph::loop_reductions_json`).
 
 use crate::ast::{
     EffectVerbKind, Expr, ExprKind, Function, ImplBlock, ImplItem, Item, Program, Stmt, StmtKind,
@@ -148,11 +164,23 @@ fn render_function(
     // Reductions are reported alongside parallel groups so the user sees
     // every opportunity the analyzer surfaced in one block. Stable
     // ordering: by loop_line.
+    //
+    // The `seq` discriminator is rendered, not dropped (B-2026-07-29-29).
+    // A `seq: true` entry is the SEQUENTIAL tabulate rewrite (push →
+    // in-place store, single-threaded); printing it as a bare `reduction`
+    // next to `parallel_group` blocks made a loop that never leaves one
+    // core read as parallelized. The two lowerings get two labels.
     let mut sorted_reductions: Vec<&_> = reductions.iter().collect();
     sorted_reductions.sort_by_key(|r| r.loop_line);
     for red in sorted_reductions {
+        let kind = if red.seq {
+            "sequential_tabulate"
+        } else {
+            "parallel_reduction"
+        };
         out.push_str(&format!(
-            "  reduction {{ op: {}, accumulator: {}, line: {} }}\n",
+            "  {} {{ op: {}, accumulator: {}, line: {} }}\n",
+            kind,
             red.op.symbol(),
             red.accumulator,
             red.loop_line,

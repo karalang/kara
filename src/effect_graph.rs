@@ -204,6 +204,55 @@ pub(crate) fn reorder_opportunities_json(fc: &FunctionConcurrency) -> String {
     format!("[{}]", entries.join(","))
 }
 
+/// Render a function's recognized `loop_reductions` as a JSON array — the
+/// **Tier-2 loop fan-out** decisions (`design.md § 8876` "compute fan-out …
+/// associative reductions"), which are a *separate* mechanism from the
+/// statement-level `parallel_groups` above and were previously absent from
+/// this surface entirely (B-2026-07-29-29).
+///
+/// Field contract, deliberately named so no field over-promises:
+///
+/// - `lowering` — what the analysis decided this loop becomes:
+///   `"parallel_fanout"` (dispatched across the worker pool) or
+///   `"sequential_tabulate"` (the single-threaded push→in-place-store
+///   rewrite, which is *not* parallel). `LoopReduction::seq` is the
+///   discriminator; conflating the two is what made a recognized-but-
+///   sequential loop read as parallelized.
+/// - `cost_gate` — `"deferred_to_codegen"` on a `parallel_fanout` entry.
+///   Recognition and emission are different questions: codegen applies
+///   further memory-bound and cost-model gates (`src/codegen/reduce.rs`)
+///   that can still decline a recognized reduction, and those gates are
+///   not evaluable from the analysis result alone. Reporting recognition
+///   as though it were emission is precisely the misleading answer
+///   B-2026-07-29-29 warns against, so the field says which question was
+///   answered. `"n/a"` on a sequential entry — no dispatch to gate.
+/// - `collect_tabulate` — the exactly-one-unconditional-push shape that
+///   licenses in-place slot writes (order-preserving).
+pub(crate) fn loop_reductions_json(fc: &FunctionConcurrency) -> String {
+    let entries: Vec<String> = fc
+        .loop_reductions
+        .iter()
+        .map(|r| {
+            let (lowering, cost_gate) = if r.seq {
+                ("sequential_tabulate", "n/a")
+            } else {
+                ("parallel_fanout", "deferred_to_codegen")
+            };
+            format!(
+                "{{\"statement\":{},\"loop_line\":{},\"accumulator\":{},\"op\":{},\"lowering\":{},\"collect_tabulate\":{},\"cost_gate\":{}}}",
+                r.stmt_index,
+                r.loop_line,
+                json_string(&r.accumulator),
+                json_string(r.op.symbol()),
+                json_string(lowering),
+                r.collect_tabulate,
+                json_string(cost_gate),
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
 /// Build the whole-program effect-graph JSON envelope: effect-annotated
 /// nodes (one per source function) plus the directed call-graph edges.
 pub(crate) fn build_effect_graph_json(
@@ -264,12 +313,13 @@ pub(crate) fn build_concurrency_graph_json(
         .filter_map(|(key, node)| {
             analysis.function_decisions.get(key).map(|fc| {
                 format!(
-                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
+                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
                     json_string(key),
                     node.line,
                     fc.total_statements,
                     statement_spans_json(fc, scope),
                     parallel_groups_json(fc),
+                    loop_reductions_json(fc),
                     serialization_points_json(fc),
                     reorder_opportunities_json(fc),
                 )
