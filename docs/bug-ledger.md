@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 50 | 0 |
 | run-vs-build | 45 | 0 |
 | perf | 38 | 4 |
-| crash | 31 | 1 |
+| crash | 32 | 0 |
 | soundness | 29 | 1 |
 | diagnostics | 23 | 1 |
 | use-after-free | 11 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 547 | 5 |
+| codegen | 548 | 4 |
 | typecheck | 96 | 3 |
 | interp | 77 | 1 |
 | ownership | 33 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **757 surfaced · 10 open · 739 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **758 surfaced · 9 open · 741 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,13 +137,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **757 surfaced 
 | B-2026-07-29-39 | 2026-07-29 | ownership+interp+codegen | high | An aggregate NEVER runs its fields' user `impl Drop` when it dies: a struct holding a Drop-implementing value drops nothing at scope exit, so any resource stored in a struct field leaks (fd, handle, buffer) for the program's lifetime. | — |
 | B-2026-07-30-1 | 2026-07-30 | autopar | medium | Auto-par's cross-task-safety gate is TYPE-based, so it declines a reduction whose body allocates an iteration-LOCAL shared value (kata #23, #86 par lanes get zero speedup) | — |
 | B-2026-07-30-2 | 2026-07-30 | codegen+runtime | medium | Vec.sort_by calls the comparator through a function pointer, so sort-bound katas track C's qsort instead of Rust's monomorphized sort (~2x) | — |
-| B-2026-07-30-3 | 2026-07-30 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` argument passed to a GENERIC `ref Slice[T]` parameter builds and then aborts — SIGTRAP (133) with literal elements, SIGSEGV (139) with owned elements AND with scalar elements — while the interpreter is correct. `fn f[T](s: ref Slice[T]) -> T { s[0] }` with `let a: Array[String, 2] = ["lit-x", "lit-y"]; println(f"[{f(a)}]")` prints `[lit-x]` under --interp and traps under `karac build`. Element type is IRRELEVANT (an `Array[i64, 2]` segfaults too), which rules out the clone/heap-element class entirely. NOT the generic-ness alone and NOT `ref` alone: a CONCRETE `ref Slice[String]` param with the same Array argument is correct, and a BARE generic `Slice[T]` param with the same argument is correct. It takes generic + `ref` + Array together. THIS IS B-2026-06-19-1 SURVIVING ON THE MONOMORPHIZED PATH. That entry (fixed) was the same crash for the non-generic case: an Array binding's storage is its raw elements with no `{ptr,len}` header, so the `get_data_ptr` identifier fast-path handed `&array[0]` to a param expecting a header pointer and the callee read `ptr = elem0, len = elem1` — a bogus slice. Its fix synthesizes the header for Array sources at src/codegen/call_dispatch.rs:1300, but that synthesis is GATED on `slice_elems.get(i)` being `Some(Some(elem_ty))`, read from `fn_param_slice_elem`. For a generic param that table is filled by `declare_mono_function` via `extract_slice_elem_type(Slice[T])`, which resolves `T` through `type_subst_names` — the NAME map. With an Array argument that name binding is absent, the entry is `None`, the synthesis is skipped, and the bogus fast-path runs. The pre-fix symptom described in B-2026-06-19-1 (ptr = elem0, len = elem1) matches what is observed, including why scalars crash. | src/codegen/call_dispatch.rs:1300 (Array->ref-Slice header synthesis gate) |
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane — the corpus's largest genuine deficit, cause not yet found | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
 
-### Fixed (739)
+### Fixed (741)
 
-<details><summary>739 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>741 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -886,6 +885,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **757 surfaced 
 | B-2026-07-29-35 | codegen | high | SILENT WRONG OUTPUT (run-vs-build): a GENERIC `fn f[T](s: Slice[T]) -> T` returning a HEAP element yields an EMPTY/garbage value under `karac build`… | 5f2cb6ad |
 | B-2026-07-29-36 | ownership | low | The use-after-move suggestion advised `.clone()` for EVERY type: 'clone 'x' at the move site (`x.clone()`), declare the callee parameter `ref` if it… | 697e6de8 |
 | B-2026-07-29-38 | ownership+interp+codegen | high | PREMATURE DROP on move-out: a binding moved into an aggregate literal is dropped AT THE MOVE POINT, because the shared NLL last-use analysis is a pur… | 1a536d29 |
+| B-2026-07-30-3 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` argument passed to a GENERIC `ref Slice[T]` parameter builds and then aborts — SIGTRAP (133) with literal elem… | f0395667 |
+| B-2026-07-30-6 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` REF PARAM forwarded to a `Slice[T]` parameter segfaults under `karac build` while the interpreter is correct | f0395667 |
 
 </details>
 
