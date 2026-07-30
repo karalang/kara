@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 29 | 0 |
 | diagnostics | 23 | 0 |
 | use-after-free | 11 | 0 |
-| other | 7 | 1 |
+| other | 7 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 553 | 4 |
+| codegen | 553 | 3 |
 | typecheck | 97 | 0 |
 | interp | 78 | 1 |
 | ownership | 33 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced · 4 open · 752 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced · 3 open · 753 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane — the corpus's largest genuine deficit, cause not yet found | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
-| B-2026-07-30-9 | 2026-07-30 | codegen | low | `println` is not line-atomic across tasks: it emits TWO separate `write_console` calls (payload, then the newline), so two spawned tasks printing concurrently interleave into `12\n\n` instead of `1\n2\n` -- makes tests/spawn_e2e.rs::test_spawn_fan_out_five_tasks_all_join flaky (~1 in 3 on a 4-core container) | src/codegen/control_flow.rs (emit_nul_safe_write: the trailing-newline second write_console call) |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body runs ONLY for a value reachable from a direct binding through STRUCT FIELDS. SHAPE 2 (owned aggregate temp) FIXED in d794aad; the residual is SIX containers that all stay silent -- enum payload, Option, Result, Vec element, Map value, tuple element -- so a resource held in any of them leaks for the program's lifetime. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 
-### Fixed (752)
+### Fixed (753)
 
-<details><summary>752 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>753 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -891,6 +890,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced 
 | B-2026-07-30-6 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` REF PARAM forwarded to a `Slice[T]` parameter segfaults under `karac build` while the interpreter is correct | f0395667 |
 | B-2026-07-30-7 | codegen | high | A PLAIN type alias whose base is not `i64`-shaped, used as a parameter or return type, lowers to the `i64` unknown-name fall-through in codegen: `typ… | b528fa2 |
 | B-2026-07-30-8 | autopar | low | Auto-par's early-exit gate declines a reduction for a `break`/`continue` that targets a NESTED loop and therefore cannot exit the reduction body at a… | 3993c2e |
+| B-2026-07-30-9 | codegen | low | `println` is not line-atomic across tasks: it emits TWO separate `write_console` calls (payload, then the newline), so two spawned tasks printing con… | 36a7fa5 |
 | B-2026-07-30-10 | typecheck+codegen | low | `Result[T, E].clone()` is still rejected at typecheck (`no method 'clone' on type 'Result'`) after B-2026-07-29-31 gave `Option[T]` a callable one —… | 4b5f811 |
 | B-2026-07-30-12 | codegen | medium | A by-value owned-struct arg that the callee RETURNS mishandled its caller temp TWO ways: a fn-call arg (`pass(mk())`) leaked the orphaned buffer, and… | 3ee768a |
 
