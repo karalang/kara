@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 83 | 0 |
 | missing-feature | 67 | 2 |
 | false-positive | 50 | 0 |
-| run-vs-build | 46 | 1 |
+| run-vs-build | 46 | 0 |
 | perf | 38 | 3 |
 | crash | 32 | 0 |
 | soundness | 29 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 549 | 4 |
+| codegen | 549 | 3 |
 | typecheck | 96 | 2 |
 | interp | 77 | 1 |
 | ownership | 33 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **759 surfaced · 8 open · 743 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **759 surfaced · 7 open · 744 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,11 +137,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **759 surfaced 
 | B-2026-07-30-1 | 2026-07-30 | autopar | medium | Auto-par's cross-task-safety gate is TYPE-based, so it declines a reduction whose body allocates an iteration-LOCAL shared value (kata #23, #86 par lanes get zero speedup) | — |
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane — the corpus's largest genuine deficit, cause not yet found | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
-| B-2026-07-30-7 | 2026-07-30 | codegen | high | A PLAIN type alias whose base is not `i64`-shaped, used as a parameter or return type, lowers to the `i64` unknown-name fall-through in codegen: `type Plain = Vec[i64]; fn total(xs: Plain)` passes `karac check` and `karac run --interp` but fails LLVM module verification under `karac build` / `karac run` (JIT). A REFINEMENT alias over the same base works. | — |
 
-### Fixed (743)
+### Fixed (744)
 
-<details><summary>743 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>744 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -888,6 +887,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **759 surfaced 
 | B-2026-07-30-2 | codegen+runtime | medium | Vec.sort_by calls the comparator through a function pointer, so sort-bound katas track C's qsort instead of Rust's monomorphized sort (~2x) | 0139427 |
 | B-2026-07-30-3 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` argument passed to a GENERIC `ref Slice[T]` parameter builds and then aborts — SIGTRAP (133) with literal elem… | f0395667 |
 | B-2026-07-30-6 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` REF PARAM forwarded to a `Slice[T]` parameter segfaults under `karac build` while the interpreter is correct | f0395667 |
+| B-2026-07-30-7 | codegen | high | A PLAIN type alias whose base is not `i64`-shaped, used as a parameter or return type, lowers to the `i64` unknown-name fall-through in codegen: `typ… | b528fa2 |
 
 </details>
 
