@@ -25687,3 +25687,28 @@ fn test_vec_elements_run_user_drop_bodies() {
         "2\ndA1\ndA2\n1\ndA3\n0\nend\n"
     );
 }
+
+/// B-2026-07-30-11 (tuple leg) — the interpreter half: a tuple's elements run
+/// their user `impl Drop` bodies when the tuple binding dies.
+///
+/// Same source and expected output as `tests/codegen.rs`'s
+/// `e2e_tuple_elements_run_user_drop_bodies`. Both backends cover exactly the
+/// `let` position — the interpreter because `push_drops_for_stmt` registers a
+/// Drop action only there, codegen because that is where the bodies fn is
+/// registered — so the pair pins the coverage boundary as well as the values.
+#[test]
+fn test_tuple_elements_run_user_drop_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             struct W { r: Res }\n\
+             fn main() {\n\
+                 { let t: (Res, i64) = (Res { id: 21 }, 7); println(t.1); }\n\
+                 { let u: (i64, Res, Res) = (1, Res { id: 22 }, Res { id: 23 }); println(u.0); }\n\
+                 { let w: (W, i64) = (W { r: Res { id: 24 } }, 0); println(w.1); }\n\
+                 { let p: (i64, i64) = (1, 2); println(p.0); }\n\
+                 println(999);\n\
+             }\n"),
+        "7\n21\n1\n22\n23\n0\n24\n1\n999\n"
+    );
+}

@@ -611,12 +611,18 @@ impl<'a> super::Interpreter<'a> {
     /// The element list is cloned out before the walk so a body that touches
     /// the same container cannot deadlock against a held read guard.
     fn run_array_element_user_drops(&mut self, name: &str) -> bool {
-        let Some(Value::Array(cell)) = self.env.get(name) else {
-            return false;
-        };
-        let elems: Vec<Value> = match cell.read() {
-            Ok(g) => g.clone(),
-            Err(_) => return true,
+        let elems: Vec<Value> = match self.env.get(name) {
+            Some(Value::Array(cell)) => match cell.read() {
+                Ok(g) => g.clone(),
+                Err(_) => return true,
+            },
+            // B-2026-07-30-11 (tuple leg) — a tuple binding's ELEMENTS, same
+            // treatment and the same forward order. Reached only for `let`
+            // bindings, because `push_drops_for_stmt` registers a `Drop` action
+            // only for those — which is exactly the position codegen's tuple
+            // registration covers, so the two stay in step.
+            Some(Value::Tuple(items)) => items,
+            _ => return false,
         };
         for e in elems {
             if let Value::Struct { name: tn, .. } = &e {

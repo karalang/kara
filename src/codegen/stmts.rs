@@ -5061,6 +5061,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                         }
                                     }
                                 }
+                                // B-2026-07-30-11 (tuple leg) — a tuple ELEMENT's
+                                // user `impl Drop` body. Outside the
+                                // `type_expr_has_drop_heap` gate above on purpose:
+                                // that gate asks whether an element owns HEAP, and
+                                // `(Res, i64)` where `Res: Drop { id: i64 }` owns
+                                // none — yet its body still has to run. Bodies
+                                // only, on the NLL `UserDrop` channel, exactly as
+                                // the Vec leg does; the memory registration above
+                                // is untouched.
+                                //
+                                // LET-SITE ONLY, and deliberately so. A tuple drop
+                                // is registered from six-plus places (match arms,
+                                // owned params, inline temps); the other positions
+                                // keep today's silence, which is a leak, not a
+                                // divergence. That stays parity-safe because the
+                                // interpreter reaches its tuple arm from
+                                // `push_drops_for_stmt`, which also fires only for
+                                // `let` bindings — so both backends cover exactly
+                                // this position and no more.
+                                if let Some(elem_tes) =
+                                    self.tuple_binding_elem_tes(ty.as_ref(), value)
+                                {
+                                    if let Some(bodies) =
+                                        self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elem_tes)
+                                    {
+                                        self.track_user_drop_var_with_fn(
+                                            "", var_name, slot.ptr, bodies,
+                                        );
+                                    }
+                                }
                             } else if let BasicTypeEnum::ArrayType(arr_ty) = slot.ty {
                                 // Array-store slice (B-2026-06-22-2): a heap-env
                                 // closure stored in a fixed-size array element

@@ -5610,6 +5610,43 @@ fn main() {
         assert_eq!(out, "2\ndA1\ndA2\n1\ndA3\n0\nend\n");
     }
 
+    /// B-2026-07-30-11 (tuple leg) — a tuple's ELEMENTS run their user
+    /// `impl Drop` bodies when the tuple binding dies.
+    ///
+    /// The registration deliberately sits OUTSIDE the existing
+    /// `type_expr_has_drop_heap` gate on the tuple drop: that gate asks whether
+    /// an element owns HEAP, and `(Res, i64)` where `Res { id: i64 }` owns none
+    /// — yet its body still has to run. Pinning the heapless case is the point.
+    ///
+    /// Also pins forward element order, the nested `(W, i64)` case where only
+    /// W's FIELD is Drop, and that an all-scalar tuple emits nothing.
+    ///
+    /// LET-SITE ONLY: a tuple drop is registered from six-plus places, and the
+    /// others still run no body. That is a leak, not a divergence, and it stays
+    /// parity-safe because the interpreter reaches its tuple arm from
+    /// `push_drops_for_stmt`, which also fires only for `let` bindings.
+    ///
+    /// Twinned with `tests/interpreter.rs`'s
+    /// `test_tuple_elements_run_user_drop_bodies`.
+    #[test]
+    fn e2e_tuple_elements_run_user_drop_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             struct W { r: Res }\n\
+             fn main() {\n\
+             \x20   { let t: (Res, i64) = (Res { id: 21 }, 7); println(t.1); }\n\
+             \x20   { let u: (i64, Res, Res) = (1, Res { id: 22 }, Res { id: 23 }); println(u.0); }\n\
+             \x20   { let w: (W, i64) = (W { r: Res { id: 24 } }, 0); println(w.1); }\n\
+             \x20   { let p: (i64, i64) = (1, 2); println(p.0); }\n\
+             \x20   println(999);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "7\n21\n1\n22\n23\n0\n24\n1\n999\n");
+    }
+
     /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS
     /// runs its `Drop` body exactly ONCE, and its buffer is freed exactly once.
     ///

@@ -5308,6 +5308,91 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-07-30-11 (tuple leg) — emit `__karac_dropelems_tuple_<n>_<...>`:
+    /// run the user `impl Drop` BODY of each tuple element that has one, in
+    /// FORWARD element order. `None` when no element runs a body.
+    ///
+    /// The tuple sibling of [`Self::emit_vec_elem_user_drop_bodies_fn`], and
+    /// the same contract: BODIES ONLY. Element memory is still freed by the
+    /// `synthesize_tuple_drop_fn_te` walk on the scope-exit channel, so this
+    /// frees nothing, cannot double-free, and moves no existing free. It rides
+    /// the `UserDrop` channel so the body lands at the binding's NLL
+    /// live-range end, where the interpreter puts it.
+    ///
+    /// Elements are addressed by struct-GEP index rather than a computed
+    /// stride: a tuple is a heterogeneous LLVM struct, so unlike a Vec there is
+    /// no single element type to step by.
+    pub(super) fn emit_tuple_elem_user_drop_bodies_fn(
+        &mut self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+    ) -> Option<FunctionValue<'ctx>> {
+        // (index, element type name) for every element that runs a body.
+        let mut targets: Vec<(u32, String)> = Vec::new();
+        for (i, te) in elem_tes.iter().enumerate() {
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            let Some(name) = p.segments.first().cloned() else {
+                continue;
+            };
+            if self.shared_types.contains_key(&name) || !self.struct_types.contains_key(&name) {
+                continue;
+            }
+            if self.type_runs_user_drop(&name, &mut Vec::new()) {
+                targets.push((i as u32, name));
+            }
+        }
+        if targets.is_empty() {
+            return None;
+        }
+
+        let key: Vec<String> = targets.iter().map(|(i, n)| format!("{i}_{n}")).collect();
+        let fn_name = format!("__karac_dropelems_tuple_{}", key.join("_"));
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        self.builder.position_at_end(entry);
+        let base = walker.get_nth_param(0).unwrap().into_pointer_value();
+
+        for (idx, name) in targets {
+            let ep = self
+                .builder
+                .build_struct_gep(agg_ty, base, idx, &format!("dt.e{idx}"))
+                .ok();
+            let Some(ep) = ep else { continue };
+            let owns_body = self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(&name));
+            if owns_body {
+                if let Some(f) = self.module.get_function(&format!("{name}.drop")) {
+                    self.builder.build_call(f, &[ep.into()], "").unwrap();
+                }
+            }
+            if let Some(f) =
+                self.emit_user_drop_field_bodies_fn(&name, &std::collections::HashMap::new())
+            {
+                self.builder.build_call(f, &[ep.into()], "").unwrap();
+            }
+        }
+
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
         if let Some(f) = self.user_drop_wrapper_fns.get(type_name) {
             return Some(*f);
