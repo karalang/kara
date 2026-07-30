@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 67 | 3 |
 | false-positive | 50 | 0 |
 | run-vs-build | 45 | 0 |
-| perf | 36 | 2 |
+| perf | 37 | 3 |
 | crash | 31 | 1 |
 | soundness | 29 | 1 |
 | diagnostics | 23 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 545 | 3 |
+| codegen | 546 | 4 |
 | typecheck | 96 | 3 |
 | interp | 77 | 1 |
 | ownership | 33 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **755 surfaced · 8 open · 739 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **756 surfaced · 9 open · 739 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **755 surfaced 
 | B-2026-07-30-1 | 2026-07-30 | autopar | medium | Auto-par's cross-task-safety gate is TYPE-based, so it declines a reduction whose body allocates an iteration-LOCAL shared value (kata #23, #86 par lanes get zero speedup) | — |
 | B-2026-07-30-2 | 2026-07-30 | codegen+runtime | medium | Vec.sort_by calls the comparator through a function pointer, so sort-bound katas track C's qsort instead of Rust's monomorphized sort (~2x) | — |
 | B-2026-07-30-3 | 2026-07-30 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` argument passed to a GENERIC `ref Slice[T]` parameter builds and then aborts — SIGTRAP (133) with literal elements, SIGSEGV (139) with owned elements AND with scalar elements — while the interpreter is correct. `fn f[T](s: ref Slice[T]) -> T { s[0] }` with `let a: Array[String, 2] = ["lit-x", "lit-y"]; println(f"[{f(a)}]")` prints `[lit-x]` under --interp and traps under `karac build`. Element type is IRRELEVANT (an `Array[i64, 2]` segfaults too), which rules out the clone/heap-element class entirely. NOT the generic-ness alone and NOT `ref` alone: a CONCRETE `ref Slice[String]` param with the same Array argument is correct, and a BARE generic `Slice[T]` param with the same argument is correct. It takes generic + `ref` + Array together. THIS IS B-2026-06-19-1 SURVIVING ON THE MONOMORPHIZED PATH. That entry (fixed) was the same crash for the non-generic case: an Array binding's storage is its raw elements with no `{ptr,len}` header, so the `get_data_ptr` identifier fast-path handed `&array[0]` to a param expecting a header pointer and the callee read `ptr = elem0, len = elem1` — a bogus slice. Its fix synthesizes the header for Array sources at src/codegen/call_dispatch.rs:1300, but that synthesis is GATED on `slice_elems.get(i)` being `Some(Some(elem_ty))`, read from `fn_param_slice_elem`. For a generic param that table is filled by `declare_mono_function` via `extract_slice_elem_type(Slice[T])`, which resolves `T` through `type_subst_names` — the NAME map. With an Array argument that name binding is absent, the entry is `None`, the synthesis is skipped, and the bogus fast-path runs. The pre-fix symptom described in B-2026-06-19-1 (ptr = elem0, len = elem1) matches what is observed, including why scalars crash. | src/codegen/call_dispatch.rs:1300 (Array->ref-Slice header synthesis gate) |
+| B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane — the corpus's largest genuine deficit, cause not yet found | — |
 
 ### Fixed (739)
 
