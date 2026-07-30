@@ -3427,9 +3427,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// borrowed-receiver field-return shape below it is a LEAK: `fn label(ref
     /// self) -> ref String { self.name }` emitted
     ///
-    ///     call void @karac_clone_String(ptr %retfld.clone.src, ptr %..dst)
-    ///     %retfld.cloned = load { ptr, i64, i64 }, ptr %..dst   ; unused
-    ///     ret ptr %ret_borrow_name
+    /// ```text
+    /// call void @karac_clone_String(ptr %retfld.clone.src, ptr %..dst)
+    /// %retfld.cloned = load { ptr, i64, i64 }, ptr %..dst   ; unused
+    /// ret ptr %ret_borrow_name
+    /// ```
     ///
     /// — one malloc'd copy per call that nothing owns and nothing frees, so a
     /// 1000-iteration loop leaked 1000 blocks (B-2026-07-29-21). The `ref
