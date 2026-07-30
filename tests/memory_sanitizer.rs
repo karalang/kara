@@ -33602,4 +33602,50 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-07-30-7 — struct fields declared through a PLAIN type alias
+    /// (`type Name = String; type Ints = Vec[i64];`) must reach drop synthesis
+    /// as their heap base. Codegen recorded the field's type under the ALIAS
+    /// name, which matches no known heap shape, so `register_struct_metadata`
+    /// now peels the alias before writing `struct_field_type_names` /
+    /// `struct_field_type_exprs`. The failure mode this pins is the pair on
+    /// either side of that peel: no drop action at all (leak of every
+    /// alias-typed String/Vec field) or a drop emitted twice once the field is
+    /// visible to both the alias and base paths (double-free). Churns the
+    /// allocations in a loop so a per-iteration imbalance accumulates well past
+    /// LSan's noise floor.
+    #[test]
+    fn asan_plain_alias_struct_fields_no_leak() {
+        assert_clean_asan_run(
+            r#"
+type Name = String;
+type Ints = Vec[i64];
+
+struct Holder { label: Name, nums: Ints }
+
+fn build(n: i64) -> Holder {
+    let mut v: Ints = Vec.new();
+    let mut i = 0i64;
+    while i < n { v.push(i); i = i + 1i64; }
+    return Holder { label: f"held{n}", nums: v };
+}
+
+fn weigh(h: Holder) -> i64 { return h.label.len() + h.nums.len(); }
+
+fn main() {
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < 200i64 {
+        let h = build(8i64);
+        total = total + weigh(h);
+        k = k + 1i64;
+    }
+    println(total);
+}
+"#,
+            // Each iter: label "held8" is 5 chars + 8 elements = 13; x200 = 2600.
+            &["2600"],
+            "plain_alias_struct_fields_no_leak",
+        );
+    }
 }

@@ -323,30 +323,63 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         for item in &program.items {
             if let Item::StructDef(s) = item {
-                // Per-field user-type name (last path segment if the
-                // declared type is a `Path`; `None` otherwise). Lets
-                // chained field-access lowering resolve the inner type
-                // of `o.inner` so `o.inner.name` walks past the first
-                // hop into the nested struct's field registry. See
-                // `field_index_for` / `type_name_of_expr`.
-                let field_type_names: Vec<Option<String>> = s
-                    .fields
-                    .iter()
-                    .map(|f| match &f.ty.kind {
-                        TypeKind::Path(p) => p.segments.last().cloned(),
-                        _ => None,
-                    })
-                    .collect();
-                self.struct_field_type_names
-                    .insert(s.name.clone(), field_type_names);
+                // Both per-field tables record the field's type with every
+                // transparent type alias PEELED to its base — a refinement
+                // (`type Email = String where …`) or a plain alias
+                // (`type Ints = Vec[i64];`) has no layout, no fields, and no
+                // methods of its own, so a table keyed by the alias NAME
+                // resolves to nothing downstream: `h.pt.x` (field `pt: Pt`,
+                // `type Pt = Point;`) failed `field_index_for` and a
+                // `Vec`-aliased field went unseen by drop synthesis and enum
+                // payload sizing. `populate_type_alias_bases` runs before
+                // this pass precisely so the peel is available here
+                // (B-2026-07-30-7).
+                //
+                // The struct's OWN generic params shadow a same-named global
+                // alias (`type T = String;` alongside `struct S[T] { v: T }`):
+                // `T` there is the param, not the alias, so it stays opaque
+                // and the existing per-instantiation machinery
+                // (`mono_struct_type` / `struct_generic_params`) resolves it.
+                let own_params: std::collections::HashSet<&str> = s
+                    .generic_params
+                    .as_ref()
+                    .map(|g| g.params.iter().map(|p| p.name.as_str()).collect())
+                    .unwrap_or_default();
                 // Full per-field TypeExpr for the field-receiver method
                 // dispatch path — generic args (`Vec[Node]`) are needed to
                 // populate the synth's element-type side tables via
                 // `register_var_from_type_expr`. Also consumed by
                 // `payload_word_count_for_type_expr` to size enum payloads
                 // before any struct LLVM type exists.
-                let field_type_exprs: Vec<TypeExpr> =
-                    s.fields.iter().map(|f| f.ty.clone()).collect();
+                let field_type_exprs: Vec<TypeExpr> = s
+                    .fields
+                    .iter()
+                    .map(|f| match &f.ty.kind {
+                        TypeKind::Path(p)
+                            if p.generic_args.is_none()
+                                && p.segments.len() == 1
+                                && own_params.contains(p.segments[0].as_str()) =>
+                        {
+                            f.ty.clone()
+                        }
+                        _ => self.peel_type_alias_te(&f.ty),
+                    })
+                    .collect();
+                // Per-field user-type name (last path segment if the peeled
+                // type is a `Path`; `None` otherwise). Lets chained
+                // field-access lowering resolve the inner type of `o.inner`
+                // so `o.inner.name` walks past the first hop into the nested
+                // struct's field registry. See `field_index_for` /
+                // `type_name_of_expr`.
+                let field_type_names: Vec<Option<String>> = field_type_exprs
+                    .iter()
+                    .map(|te| match &te.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned(),
+                        _ => None,
+                    })
+                    .collect();
+                self.struct_field_type_names
+                    .insert(s.name.clone(), field_type_names);
                 self.struct_field_type_exprs
                     .insert(s.name.clone(), field_type_exprs);
                 // Declared generic-param names, for generic-struct field

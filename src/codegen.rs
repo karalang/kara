@@ -1175,18 +1175,45 @@ pub(super) struct Codegen<'ctx> {
     /// parameters (`type NonEmpty[T] = Vec[T] where …` → `["T"]`). Parallel
     /// to `refinement_bases`, which stores only the *uninstantiated* base
     /// (`Vec[T]`). When a refinement alias is used at a concrete arity
-    /// (`NonEmpty[EnrichedRow]`), `resolve_refinement_alias_te` zips these
+    /// (`NonEmpty[EnrichedRow]`), `resolve_type_alias_te` zips these
     /// param names against the use-site generic args and substitutes them
     /// into the base so the binding registers as `Vec[EnrichedRow]` (correct
     /// element type), not `Vec[T]` (which would mis-size the element as the
     /// `i64` unknown-name fall-through). Empty for non-generic refinements.
     pub(crate) refinement_generic_params: HashMap<String, Vec<String>>,
+    /// PLAIN type alias name → its base `TypeExpr` (`type Name = String;` →
+    /// the `String` type expr). The `where`-free sibling of
+    /// `refinement_bases`, populated from the same `Item::TypeAlias`es and
+    /// consulted at exactly the same layout / dispatch sites — a plain alias
+    /// is *more* transparent than a refinement (no nominal identity at all,
+    /// no predicate, no `try_from`), so every place that peels a refinement
+    /// to its base must peel a plain alias too.
+    ///
+    /// B-2026-07-30-7: without this map a plain alias hit the `i64`
+    /// unknown-name fall-through in `llvm_type_for_name`, so `type Plain =
+    /// Vec[i64]; fn total(xs: Plain)` passed `karac check` and `karac run
+    /// --interp` (the typechecker lowers a plain alias transparently, see
+    /// `env_build::env_add_type_alias`) and then failed LLVM module
+    /// verification under `karac build` — a `{ptr, i64, i64}` argument
+    /// against an `i64` parameter. The paradox that localized it: adding a
+    /// `where` clause *fixed* the program, because only the refinement arm
+    /// had a base map. Integer-shaped aliases (`type Count = i64`) stayed
+    /// invisible for the same reason the fall-through exists — `i64` happens
+    /// to be the right layout.
+    pub(crate) plain_alias_bases: HashMap<String, crate::ast::TypeExpr>,
+    /// Plain type alias name → the ordered names of its generic parameters
+    /// (`type Plain[T] = Vec[T];` → `["T"]`). The `where`-free sibling of
+    /// `refinement_generic_params`; see `resolve_type_alias_te`, which zips
+    /// these against the use-site generic args so `Plain[i64]` resolves to
+    /// `Vec[i64]` (correct element type) rather than `Vec[T]`. Empty for a
+    /// non-generic alias.
+    pub(crate) plain_alias_generic_params: HashMap<String, Vec<String>>,
     /// Distinct-type name → its base `TypeExpr` (`distinct type UserId = i64`
     /// → the `i64` type expression). A distinct type is layout-identical to
     /// its base (zero-cost wrapper, no runtime tag), so codegen lowers it to
     /// the base's LLVM layout — consulted ONLY at the pure-layout sites
     /// (`llvm_type_for_type_expr`, `llvm_type_for_name`), NOT in
-    /// `refinement_base_name`: unlike a refinement, a distinct type keeps its
+    /// `type_alias_base_name`: unlike a refinement, a distinct type keeps its
     /// own name for value-level method dispatch (no base-method deref).
     /// Populated from `Item::DistinctType`. design.md § Distinct Types.
     pub(crate) distinct_bases: HashMap<String, crate::ast::TypeExpr>,
@@ -7312,6 +7339,8 @@ impl<'ctx> Codegen<'ctx> {
             boxed_enum_payload_vars: std::collections::HashSet::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),
+            plain_alias_bases: HashMap::new(),
+            plain_alias_generic_params: HashMap::new(),
             distinct_bases: HashMap::new(),
             refinement_predicates: HashMap::new(),
             current_contract_ensures: Vec::new(),
@@ -8199,13 +8228,14 @@ impl<'ctx> Codegen<'ctx> {
 
     // ── Program / function compilation ───────────────────────────
 
-    /// Populate the refinement-alias and distinct-type base maps from the
-    /// user program (plus baked-stdlib distinct types). Called early in
-    /// `compile_program`, *before* struct/enum layouts are built, so a field
-    /// whose type names a refinement (`type Email = String where …`) or a
-    /// distinct type resolves to the base's layout while the aggregate is
-    /// lowered — not after, where the name would hit the `i64` unknown-name
-    /// fall-through and mis-size the field.
+    /// Populate the type-alias (refinement + plain) and distinct-type base
+    /// maps from the user program (plus baked-stdlib distinct types). Called
+    /// early in `compile_program`, *before* struct/enum layouts are built, so
+    /// a field whose type names a refinement (`type Email = String where …`),
+    /// a plain alias (`type Name = String;`), or a distinct type resolves to
+    /// the base's layout while the aggregate is lowered — not after, where
+    /// the name would hit the `i64` unknown-name fall-through and mis-size
+    /// the field.
     fn populate_type_alias_bases(&mut self, program: &Program) {
         // Refinement type aliases (`type Email = String where …`): record
         // each one's base `TypeExpr` so type lowering resolves the
@@ -8222,6 +8252,31 @@ impl<'ctx> Codegen<'ctx> {
                     // substitutes the right element type into the base.
                     if let Some(gp) = &t.generic_params {
                         self.refinement_generic_params.insert(
+                            t.name.clone(),
+                            gp.params.iter().map(|p| p.name.clone()).collect(),
+                        );
+                    }
+                } else if !matches!(t.ty.kind, TypeKind::ImplTrait { .. }) {
+                    // Plain type alias (`type Name = String;`) — the
+                    // `where`-free arm, B-2026-07-30-7. Fully transparent:
+                    // the typechecker lowers it straight to its base
+                    // (`env_add_type_alias`), so codegen must too or the
+                    // name hits the `i64` unknown-name fall-through and
+                    // mis-sizes every param / return / field / binding
+                    // written against a non-`i64`-shaped base.
+                    //
+                    // TAIT aliases (`type X = impl Trait;`) are excluded: the
+                    // RHS has no layout to project (`impl Trait` is still
+                    // `E_TAIT_NOT_IMPLEMENTED_YET` at witness-required use
+                    // sites), so peeling to it buys nothing over the
+                    // fall-through and would only obscure the diagnostic.
+                    self.plain_alias_bases.insert(t.name.clone(), t.ty.clone());
+                    // Generic alias (`type Plain[T] = Vec[T];`): remember the
+                    // param names so a use at concrete arity substitutes the
+                    // right element type into the base — same reason as the
+                    // refinement arm above.
+                    if let Some(gp) = &t.generic_params {
+                        self.plain_alias_generic_params.insert(
                             t.name.clone(),
                             gp.params.iter().map(|p| p.name.clone()).collect(),
                         );
@@ -8269,6 +8324,63 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
+        }
+
+        self.prune_cyclic_type_aliases();
+    }
+
+    /// Drop every type-alias entry that sits on a base-name CYCLE, so the
+    /// alias-peeling recursions (`llvm_type_for_type_expr` →
+    /// `resolve_type_alias_te` → itself, and `register_var_from_type_expr`'s
+    /// nested-alias recursion) are guaranteed to terminate.
+    ///
+    /// Nothing upstream rejects `type A = A;`, `type A = B; type B = A;`, or
+    /// the shadowing form `type Vec = Vec[i64];` — the typechecker lowers
+    /// such an alias to an opaque named type and moves on. A pruned entry
+    /// falls back to the pre-existing unknown-name behavior (the `i64`
+    /// fall-through), which is wrong but bounded; the alternative is a
+    /// compiler stack overflow on nonsense input. Well-formed programs never
+    /// reach the prune list, so this costs one bounded walk per alias at
+    /// startup and nothing at lowering time.
+    fn prune_cyclic_type_aliases(&mut self) {
+        fn head_name(te: &TypeExpr) -> Option<&String> {
+            match &te.kind {
+                TypeKind::Path(p) => p.segments.first(),
+                _ => None,
+            }
+        }
+        let cyclic: Vec<String> = self
+            .refinement_bases
+            .keys()
+            .chain(self.plain_alias_bases.keys())
+            .filter(|name| {
+                let mut cur = (*name).clone();
+                let mut seen = std::collections::HashSet::new();
+                seen.insert(cur.clone());
+                loop {
+                    let Some(base) = self
+                        .refinement_bases
+                        .get(&cur)
+                        .or_else(|| self.plain_alias_bases.get(&cur))
+                    else {
+                        return false;
+                    };
+                    let Some(next) = head_name(base) else {
+                        return false;
+                    };
+                    if !seen.insert(next.clone()) {
+                        return true;
+                    }
+                    cur = next.clone();
+                }
+            })
+            .cloned()
+            .collect();
+        for name in cyclic {
+            self.refinement_bases.remove(&name);
+            self.refinement_generic_params.remove(&name);
+            self.plain_alias_bases.remove(&name);
+            self.plain_alias_generic_params.remove(&name);
         }
     }
 

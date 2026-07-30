@@ -2861,7 +2861,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // base: normalize so the String/Vec branches below
                             // register `string_vars` / `vec_elem_types` and
                             // method dispatch sees the base (phase-9 step 5a).
-                            let surface = self.refinement_base_name(&surface);
+                            let surface = self.type_alias_base_name(&surface);
                             if surface == "Vec" || surface == "VecDeque" {
                                 if let Some(elem_te) =
                                     self.pattern_binding_inner_types.get(&key).cloned()

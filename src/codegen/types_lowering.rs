@@ -236,13 +236,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
-                // Refinement alias (`type Email = String where …`): lower to
-                // the base's layout (phase-9 step 4). A refinement is
-                // layout-identical to its base — without this it would hit
-                // the `i64` fall-through in `llvm_type_for_name` and
-                // mis-size a non-`i64`-based refinement.
-                if let Some(base) = self.refinement_bases.get(name) {
-                    return self.llvm_type_for_type_expr(&base.clone());
+                // Type alias — refinement (`type Email = String where …`,
+                // phase-9 step 4) or plain (`type Name = String;`,
+                // B-2026-07-30-7): lower to the base's layout. Both are
+                // layout-identical to their base; without this the name
+                // would hit the `i64` fall-through in `llvm_type_for_name`
+                // and mis-size a non-`i64`-based alias. Resolution
+                // substitutes the use-site generic args into the base
+                // (`Plain[i64]` → `Vec[i64]`), so a generic alias over a
+                // shape whose layout DOES depend on its argument (an aliased
+                // struct, a tuple) lowers to the right monomorph rather than
+                // to the uninstantiated `Vec[T]`. A bound generic param wins
+                // over a same-named global alias (`type T = String;` inside a
+                // `[T]`-generic mono) — the same precedence
+                // `llvm_type_for_name` applies by checking `type_subst` first.
+                if !self.type_subst.contains_key(name) {
+                    if let Some(base) = self.resolve_type_alias_te(ty) {
+                        return self.llvm_type_for_type_expr(&base);
+                    }
                 }
                 // Distinct type (`distinct type UserId = i64`): layout-
                 // identical to its base, so lower to the base's layout (the
@@ -1243,16 +1254,21 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// If `name` is a refinement type (`type Email = String where …`),
-    /// resolve it to the *name* of its base type, peeling nested
-    /// refinements; otherwise return `name` unchanged. Codegen records a
-    /// binding's type name in `var_type_names` for value-level dispatch
-    /// (method calls, `println`, arg coercion); a refinement carries no
-    /// runtime identity, so those sites must see the base name to dispatch
-    /// correctly (phase-9 step 5a). A no-op for every non-refinement name.
-    pub(super) fn refinement_base_name(&self, name: &str) -> String {
+    /// If `name` is a transparent type alias — a refinement (`type Email =
+    /// String where …`) or a plain one (`type Name = String;`) — resolve it
+    /// to the *name* of its base type, peeling nested aliases; otherwise
+    /// return `name` unchanged. Codegen records a binding's type name in
+    /// `var_type_names` for value-level dispatch (method calls, `println`,
+    /// arg coercion); neither alias form carries runtime identity, so those
+    /// sites must see the base name to dispatch correctly (phase-9 step 5a;
+    /// B-2026-07-30-7 for the plain arm). A no-op for every non-alias name.
+    pub(super) fn type_alias_base_name(&self, name: &str) -> String {
         let mut cur = name.to_string();
-        while let Some(base) = self.refinement_bases.get(&cur) {
+        while let Some(base) = self
+            .refinement_bases
+            .get(&cur)
+            .or_else(|| self.plain_alias_bases.get(&cur))
+        {
             let next = Self::mangled_type_name(base);
             if next == cur {
                 break;
@@ -1262,10 +1278,10 @@ impl<'ctx> super::Codegen<'ctx> {
         cur
     }
 
-    /// Record a binding's type name in `var_type_names`, normalizing a
-    /// refinement to its base name first (see `refinement_base_name`). All
-    /// `var_type_names` writes route through here so a refinement-typed
-    /// binding dispatches as its base everywhere downstream.
+    /// Record a binding's type name in `var_type_names`, normalizing a type
+    /// alias to its base name first (see `type_alias_base_name`). All
+    /// `var_type_names` writes route through here so an alias-typed binding
+    /// dispatches as its base everywhere downstream.
     pub(super) fn record_var_type_name(&mut self, var: String, ty_name: String) {
         // B-2026-07-03-11: inside a monomorph the typechecker's recorded binding
         // type is the abstract generic param (`let b = w.bump()` where
@@ -1279,7 +1295,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&ty_name)
             .cloned()
             .unwrap_or(ty_name);
-        let normalized = self.refinement_base_name(&ty_name);
+        let normalized = self.type_alias_base_name(&ty_name);
         // DataFrame is non-generic, so its bindings don't flow through a
         // typed-exprs side-table the way Column/Tensor do — record
         // membership here (every path that names a binding goes through
@@ -1374,30 +1390,39 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `var_elem_type_exprs` / `map_key_type_exprs` / `set_elem_types` /
     /// `set_elem_type_names` / `set_elem_type_exprs` matches the `TypeExpr`
     /// shape; primitives (and other shapes we don't track) are no-ops.
-    /// If `te` names a refinement alias (`type NonEmpty[T] = Vec[T] where …`),
-    /// resolve it to its *instantiated* base `TypeExpr` — substituting the
-    /// alias's generic params with the use-site's generic args
-    /// (`NonEmpty[EnrichedRow]` → `Vec[EnrichedRow]`). A refinement carries no
-    /// runtime identity, so a binding must register against its base for
-    /// collection method dispatch (`.len()`, `for x in`, indexing) and field
-    /// access to see the real `Vec`/`String`/`Map`/struct. Returns `None` for
-    /// every non-refinement type; callers recurse to peel nested aliases.
-    pub(super) fn resolve_refinement_alias_te(&self, te: &TypeExpr) -> Option<TypeExpr> {
+    /// If `te` names a transparent type alias — a refinement
+    /// (`type NonEmpty[T] = Vec[T] where …`) or a plain one
+    /// (`type Plain[T] = Vec[T];`) — resolve it to its *instantiated* base
+    /// `TypeExpr`, substituting the alias's generic params with the use-site's
+    /// generic args (`NonEmpty[EnrichedRow]` → `Vec[EnrichedRow]`). Neither
+    /// form carries runtime identity, so a binding must register against its
+    /// base for collection method dispatch (`.len()`, `for x in`, indexing)
+    /// and field access to see the real `Vec`/`String`/`Map`/struct. Returns
+    /// `None` for every non-alias type; callers recurse to peel nested
+    /// aliases (`prune_cyclic_type_aliases` guarantees that recursion
+    /// terminates).
+    pub(super) fn resolve_type_alias_te(&self, te: &TypeExpr) -> Option<TypeExpr> {
         let TypeKind::Path(path) = &te.kind else {
             return None;
         };
         let name = path.segments.first()?;
-        let base = self.refinement_bases.get(name)?.clone();
+        // Refinement first, then plain: the two maps are disjoint by
+        // construction (`populate_type_alias_bases` keys off `t.refinement`),
+        // so the order is documentation, not precedence.
+        let (base, params) = match self.refinement_bases.get(name) {
+            Some(b) => (b.clone(), self.refinement_generic_params.get(name)),
+            None => (
+                self.plain_alias_bases.get(name)?.clone(),
+                self.plain_alias_generic_params.get(name),
+            ),
+        };
         // Build the param→arg substitution from the alias's declared param
-        // names (parallel `refinement_generic_params`) zipped against the
+        // names (the parallel `*_generic_params` map) zipped against the
         // use-site type args. Non-`Type` args (const/shape) and arity
         // mismatches simply don't contribute — the base is returned with as
         // much substituted as is well-formed.
         let mut subst = std::collections::HashMap::new();
-        if let (Some(params), Some(args)) = (
-            self.refinement_generic_params.get(name),
-            path.generic_args.as_ref(),
-        ) {
+        if let (Some(params), Some(args)) = (params, path.generic_args.as_ref()) {
             for (pname, arg) in params.iter().zip(args.iter()) {
                 if let GenericArg::Type(t) = arg {
                     subst.insert(pname.clone(), t.clone());
@@ -1405,6 +1430,19 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Some(Self::subst_type_params(&base, &subst))
+    }
+
+    /// Fully peel a transparent type alias to its base `TypeExpr`,
+    /// instantiating generic args at each hop (`type A[T] = Vec[T]; type B =
+    /// A[i64];` → `Vec[i64]`). Returns `te` cloned unchanged when it names no
+    /// alias. Terminates because `prune_cyclic_type_aliases` has already
+    /// removed every entry that sits on a base-name cycle.
+    pub(super) fn peel_type_alias_te(&self, te: &TypeExpr) -> TypeExpr {
+        let mut cur = te.clone();
+        while let Some(base) = self.resolve_type_alias_te(&cur) {
+            cur = base;
+        }
+        cur
     }
 
     pub(super) fn register_var_from_type_expr(&mut self, var_name: &str, te: &TypeExpr) {
@@ -1416,10 +1454,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // isn't a scoped slice param); harmless during param setup (the map is
         // still empty, as `build_slice_alias_scopes` runs after registration).
         self.slice_alias_md.remove(var_name);
-        // Refinement alias: register against the instantiated base type so the
-        // binding dispatches as its real `Vec`/`String`/struct everywhere. The
-        // recursion peels nested aliases (`type A = B`, `type B = Vec[T]`).
-        if let Some(base) = self.resolve_refinement_alias_te(te) {
+        // Type alias (refinement or plain): register against the instantiated
+        // base type so the binding dispatches as its real `Vec`/`String`/struct
+        // everywhere. The recursion peels nested aliases (`type A = B`,
+        // `type B = Vec[T]`).
+        if let Some(base) = self.resolve_type_alias_te(te) {
             self.register_var_from_type_expr(var_name, &base);
             return;
         }
@@ -2054,11 +2093,19 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(&ty) = self.type_subst.get(name) {
             return ty;
         }
-        // Refinement alias → base layout (phase-9 step 4). See the parallel
-        // arm in `llvm_type_for_type_expr`; this name-level path is hit when
-        // a refinement is referenced by bare name (e.g. a recorded
-        // `var_type_names` entry or a struct-field type name).
-        if let Some(base) = self.refinement_bases.get(name) {
+        // Type alias → base layout (refinement: phase-9 step 4; plain:
+        // B-2026-07-30-7). See the parallel arm in `llvm_type_for_type_expr`;
+        // this name-level path is hit when an alias is referenced by bare
+        // name (e.g. a recorded `var_type_names` entry or a struct-field type
+        // name). No generic args are available here, so the base is lowered
+        // uninstantiated — fine for the collection shapes whose layout is
+        // argument-independent (`Vec`/`Map`/`Set` are all fat pointers), and
+        // the `TypeExpr` path above covers the rest.
+        if let Some(base) = self
+            .refinement_bases
+            .get(name)
+            .or_else(|| self.plain_alias_bases.get(name))
+        {
             return self.llvm_type_for_type_expr(&base.clone());
         }
         // Distinct type → base layout. The name-level path is hit when a

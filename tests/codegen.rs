@@ -66190,12 +66190,6 @@ fn main() {
         // the `i64` fall-through default. Prove it by comparing the `@takes`
         // parameter type against the equivalent plain-`String` signature —
         // they must be identical.
-        fn takes_param_type(ir: &str) -> String {
-            let i = ir.find("@takes(").expect("no @takes in IR");
-            let rest = &ir[i + "@takes(".len()..];
-            let end = rest.find([' ', ')']).unwrap_or(rest.len());
-            rest[..end].to_string()
-        }
         let refined = ir_for(
             "type Name = String where self.len() > 0;
              fn takes(n: Name) -> i64 { 0 }",
@@ -66212,6 +66206,142 @@ fn main() {
             "i64",
             "refinement over String must not hit the i64 fall-through:\n{refined}"
         );
+    }
+
+    /// Extract `@takes`'s single parameter type from an IR dump. Shared by the
+    /// alias-layout tests below; mirrors the local helper in
+    /// `test_ir_refinement_over_string_matches_base_layout`.
+    fn takes_param_type(ir: &str) -> String {
+        let i = ir.find("@takes(").expect("no @takes in IR");
+        let rest = &ir[i + "@takes(".len()..];
+        let end = rest.find([' ', ')']).unwrap_or(rest.len());
+        rest[..end].to_string()
+    }
+
+    #[test]
+    fn test_ir_plain_alias_over_string_matches_base_layout() {
+        // B-2026-07-30-7 — the `where`-FREE sibling of
+        // `test_ir_refinement_over_string_matches_base_layout`. Only the
+        // refinement arm had a base map, so a plain alias over a non-`i64`
+        // base hit the `i64` unknown-name fall-through and the emitted module
+        // failed LLVM verification ("Call parameter type does not match
+        // function signature"). Pin the plain param type against the
+        // equivalent bare-`String` signature.
+        let aliased = ir_for(
+            "type Name = String;\n\
+             fn takes(n: Name) -> i64 { 0 }",
+        );
+        let plain = ir_for("fn takes(n: String) -> i64 { 0 }");
+        assert_eq!(
+            takes_param_type(&aliased),
+            takes_param_type(&plain),
+            "plain alias over String must lower to the String base layout\naliased IR:\n{aliased}"
+        );
+        assert_ne!(
+            takes_param_type(&aliased),
+            "i64",
+            "plain alias over String must not hit the i64 fall-through:\n{aliased}"
+        );
+    }
+
+    #[test]
+    fn test_ir_plain_alias_over_vec_matches_base_layout() {
+        // B-2026-07-30-7, both alias arities: `type Ints = Vec[i64];` and
+        // `type Boxed[T] = Vec[T];` must each lower a parameter to the
+        // `Vec` fat pointer, not the `i64` fall-through. The generic arm is
+        // the one that proved this was not a generics bug — the non-generic
+        // alias fails identically.
+        let plain = ir_for("fn takes(xs: Vec[i64]) -> i64 { 0 }");
+        for src in [
+            "type Ints = Vec[i64];\nfn takes(xs: Ints) -> i64 { 0 }",
+            "type Boxed[T] = Vec[T];\nfn takes(xs: Boxed[i64]) -> i64 { 0 }",
+        ] {
+            let aliased = ir_for(src);
+            assert_eq!(
+                takes_param_type(&aliased),
+                takes_param_type(&plain),
+                "plain alias over Vec must lower to the Vec base layout\nsrc:\n{src}\nIR:\n{aliased}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_plain_alias_param_and_return() {
+        // B-2026-07-30-7's minimal repro, all three arms: a generic plain
+        // alias, its non-generic twin, and a `String` alias that hits the
+        // RETURN position too. Each passed `karac check` and `karac run
+        // --interp` while failing LLVM module verification under
+        // `karac build`, so this is a run-vs-build pin, not a wrong-answer
+        // one. Iteration and `+` on the aliased bindings also exercise the
+        // side-table registration (`vec_elem_types` / `string_vars`) that
+        // resolving the alias to its base feeds.
+        if let Some(out) = run_program(
+            "type Plain[T] = Vec[T];\n\
+             type Ints = Vec[i64];\n\
+             type Name = String;\n\
+             fn total(xs: Plain[i64]) -> i64 {\n\
+                 let mut t = 0;\n\
+                 for x in xs { t = t + x; }\n\
+                 t\n\
+             }\n\
+             fn count(xs: Ints) -> i64 { xs.len() }\n\
+             fn shout(n: Name) -> Name { n + \"!\" }\n\
+             fn main() {\n\
+                 println(total(vec![1, 2, 3]));\n\
+                 println(count(vec![4, 5]));\n\
+                 println(shout(\"hi\"));\n\
+             }",
+        ) {
+            assert_eq!(out, "6\n2\nhi!\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_plain_alias_struct_field_and_nested_access() {
+        // B-2026-07-30-7, the struct-field leg: a field declared with a plain
+        // alias records the ALIAS name in `struct_field_type_names`, which
+        // resolves to no struct/collection downstream — so `h.pt.x` failed
+        // `field_index_for` ("cannot resolve field 'x' on this receiver") and
+        // `h.nums.len()` had no element registration. Peeling the alias at
+        // `register_struct_metadata` is what makes both walk into the base.
+        if let Some(out) = run_program(
+            "type Name = String;\n\
+             type Ints = Vec[i64];\n\
+             type Pt = Point;\n\
+             struct Point { x: i64, y: i64 }\n\
+             struct Holder { label: Name, nums: Ints, pt: Pt }\n\
+             fn dist(p: Pt) -> i64 { p.x + p.y }\n\
+             fn main() {\n\
+                 let h = Holder { label: \"L\", nums: vec![1, 2], pt: Point { x: 3, y: 4 } };\n\
+                 println(h.label);\n\
+                 println(h.nums.len());\n\
+                 println(h.pt.x);\n\
+                 println(dist(h.pt));\n\
+             }",
+        ) {
+            assert_eq!(out, "L\n2\n3\n7\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_plain_alias_chain_and_cycle_are_bounded() {
+        // Two guards in one program. (a) A CHAIN of plain aliases
+        // (`type Alias2 = Ints; type Ints = Vec[i64];`) must peel all the way
+        // to `Vec[i64]` — the peel recurses. (b) A self-referential alias
+        // (`type Loop = Loop;`) is nonsense no upstream phase rejects; before
+        // `prune_cyclic_type_aliases` the peel recursion would not terminate.
+        // It must fall back to the (wrong but bounded) unknown-name layout
+        // rather than overflow the compiler's stack, so the rest of the
+        // program still compiles and runs.
+        if let Some(out) = run_program(
+            "type Ints = Vec[i64];\n\
+             type Alias2 = Ints;\n\
+             type Loop = Loop;\n\
+             fn count(xs: Alias2) -> i64 { xs.len() }\n\
+             fn main() { println(count(vec![7, 8, 9])); }",
+        ) {
+            assert_eq!(out, "3\n");
+        }
     }
 
     #[test]
