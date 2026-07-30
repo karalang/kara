@@ -99,10 +99,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 67 | 3 |
 | false-positive | 50 | 0 |
 | run-vs-build | 45 | 1 |
-| perf | 33 | 0 |
+| perf | 34 | 1 |
 | crash | 30 | 0 |
 | soundness | 27 | 0 |
-| diagnostics | 21 | 2 |
+| diagnostics | 22 | 2 |
 | use-after-free | 11 | 0 |
 | other | 6 | 0 |
 
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 538 | 1 |
+| codegen | 539 | 2 |
 | typecheck | 96 | 3 |
 | interp | 75 | 0 |
 | ownership | 30 | 0 |
+| autopar | 22 | 2 |
 | other | 21 | 0 |
-| autopar | 21 | 2 |
-| cli | 16 | 1 |
+| cli | 18 | 2 |
 | runtime | 15 | 0 |
 | resolver | 13 | 0 |
 | parser | 6 | 0 |
@@ -124,22 +124,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **745 surfaced · 6 open · 732 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **747 surfaced · 7 open · 733 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-26 | 2026-07-29 | typecheck | medium | A GENERIC REFINEMENT alias is opaque to its base's operations: `type NonEmpty[T] = Vec[T] where self.len() > 0;` then `for r in rows` binds `r` to `NonEmpty`, so `r.price` fails with `no field 'price' on type 'NonEmpty'`. The same alias WITHOUT the `where` clause iterates correctly. | — |
 | B-2026-07-29-27 | 2026-07-29 | typecheck | high | `#[derive(Clone)]` synthesizes NO callable `.clone()` method: `s.clone()` on a derived struct or enum fails with `no method 'clone' on type 'S'`, while the very same derive DOES satisfy a `T: Clone` bound. Silently accepted, so the attribute reads as working. | — |
-| B-2026-07-29-29 | 2026-07-29 | autopar+cli | medium | `karac query concurrency` reports statement-level parallel groups but NOT loop-reduction fan-out, so the Tier-2 decision the entire kata parallel lane rests on is invisible in the query surface: four programs that differ in whether they get loop fan-out return indistinguishable JSON. | — |
 | B-2026-07-29-30 | 2026-07-29 | autopar | low | `#[par_unordered]` asserts a behaviour that does not occur: it is the required opt-in for Collect loop fan-out, but BOTH Collect paths preserve iteration order exactly today, so the attribute name and its justifying comment describe a reordering hazard that no shipped code path exhibits — discouraging the fastest data-parallel idiom. | — |
 | B-2026-07-29-31 | 2026-07-29 | typecheck | medium | `.clone()` is callable ONLY on the built-in heap/RC types. It is missing on `Option`/`Result` and on EVERY user type — including ones carrying `#[derive(Clone)]` — rejected at TYPECHECK with `no method 'clone' on type '<T>'`. The sharp half: `#[derive(Clone)]` still DISCHARGES a `T: Clone` BOUND (typechecker/derives.rs consults `info.derived_traits.contains("Clone")` for both structs and enums), so a `T: Clone` bound can be REQUIRED and satisfied but never INVOKED — `fn dup[T: Clone](x: T) -> T { x }` type-checks with a `#[derive(Clone)]` struct argument, while changing the body to `x.clone()` is rejected `no method 'clone' on type 'T'`. The bound is decorative. MEASURED SURFACE (all via `karac check`, same verdict under --interp and build): WORKS — String, Vec, Map, Set, VecDeque, SortedMap, SortedSet, Rc/Arc/shared (the `type_supports_clone` allowlist in typechecker/exprs.rs, mirrored by `moved_type_supports_clone` in ownership.rs). REJECTED — `Option[String]`, `Option[i64]` (so not payload-heap-specific), `Result[String, i64]`, a user `struct` with `#[derive(Clone)]`, a user `enum` with `#[derive(Clone)]`, a user `enum` without it, and a `T: Clone`-bounded generic parameter inside the generic body. CONSEQUENCE — the ownership checker's own advice recommends this. A use-after-move diagnostic prints `suggestion: clone '<x>' at the move site (`<x>.clone()`), declare the callee parameter `ref` if it only reads, or restructure` REGARDLESS of whether the type has `clone`; following it on an `Option`/`Result` or a user type yields code that does not typecheck. The MACHINE-APPLICABLE half is safe — `moved_type_supports_clone` gates the `TextEdit` to the built-ins, so `karac fix` will not insert a broken `.clone()` — but the human/LLM-facing sentence is unconditional, which is exactly how this was hit (see detail). | src/typechecker/derives.rs:503, src/typechecker/exprs.rs (type_supports_clone) |
 | B-2026-07-29-32 | 2026-07-29 | codegen | medium | A FRESH-TEMP (non-`let`-bound) `Vec` argument passed to a `Slice[T]` parameter fails LLVM MODULE VERIFICATION under `karac build`, while the tree-walk interpreter runs it correctly — a run-vs-build divergence. `fn first[T](s: Slice[T]) -> T { s[0] }` called as `first(vs.clone())` or `first(make())` aborts with `Module verification failed: "Call parameter type does not match function signature!\n %clone.val = load { ptr, i64, i64 }, ptr %clone.dst, align 8\n { ptr, i64 } %call = call i64 @first({ ptr, i64, i64 } %clone.val)"` — the Vec's 3-word header {ptr, len, cap} is handed to a parameter whose lowered type is the 2-word Slice header {ptr, len}, i.e. the Vec->Slice COERCION that is applied to a place expression is NOT applied to a fresh rvalue. NARROWED (each a separate one-file probe; `karac check` passes on all of them, so this is loud only at build time): FAILS — `first(vs.clone())`, and `first(make())` where `fn make() -> Vec[String]`. PASSES — `let tmp = vs.clone(); first(tmp)` (binding the temp is the workaround), and plain `first(vs)`. IRRELEVANT AXES — element type (`Vec[i64]` fails identically, so not heap-element-specific) and genericity (a concrete `fn first(s: Slice[String]) -> String` fails identically, so it is not monomorphization). The trigger is purely that the argument is a fresh temp rather than a place. RELATED: B-2026-07-06-1 (fixed) was the same fresh-temp-Vec-argument class at a different callee — `Column.from_vec(<temporary Vec[String]>)` unsupported under `karac build`, where the fix was specific to that constructor. This looks like the same hole surviving at the generic Slice-coercion site; worth checking whether -06-1's fix generalizes before writing a new one. | src/codegen (Vec->Slice argument coercion for fresh rvalues) |
+| B-2026-07-29-33 | 2026-07-29 | autopar+cli | low | `query concurrency`'s `loop_reductions` reports the ANALYSIS decision, not codegen's final verdict: a recognized `parallel_fanout` loop can still be declined by codegen's memory-bound and cost-model gates, so the query cannot answer "did this loop actually fan out". | — |
+| B-2026-07-29-34 | 2026-07-29 | codegen+cli | medium | REGRESSION SURFACE: `test_build_debug_info_keeps_symbols_and_dwarf` — the test pinning B-2026-07-27-4 (profiling attribution, marked FIXED at f569aac) is RED on main; cause not yet classified between a code regression and host-toolchain sensitivity. | — |
 
-### Fixed (732)
+### Fixed (733)
 
-<details><summary>732 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>733 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -875,6 +876,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **745 surfaced 
 | B-2026-07-29-21 | codegen | high | Every call to a `-> ref String` accessor leaks one `karac_string_clone` block under AOT | b74a9a7 |
 | B-2026-07-29-25 | typecheck | high | An IMPORTED type alias is not expanded to its underlying type: `import types.Row;` where `pub type Row = Map[String, i64]` leaves `Row` nominal, so `… | 0a23cf8+6de8b3b |
 | B-2026-07-29-28 | ownership+codegen | medium | A call's PARAMETER MODES change with syntactic position: a bare (owning) param is CONSUMED in statement position but only BORROWED inside an f-string… | c8bce5d3 |
+| B-2026-07-29-29 | autopar+cli | medium | `karac query concurrency` reports statement-level parallel groups but NOT loop-reduction fan-out, so the Tier-2 decision the entire kata parallel lan… | 6936f1ab |
 
 </details>
 
