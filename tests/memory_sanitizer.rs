@@ -33771,4 +33771,54 @@ fn main() {
             "derived_clone_deep_copies_no_leak_no_double_free",
         );
     }
+
+    // ── Aggregate field user-`impl Drop` glue (B-2026-07-29-39) ──────
+    // The bug was a LEAK: an aggregate never ran its fields' `Drop`, so any
+    // resource stored in a struct field was held for the program's lifetime.
+    // Fixing it means new drop calls on the hot path, and the way to get that
+    // wrong is to over-fire — a field whose body also frees, run twice, is a
+    // double free. So this asserts both directions at once: the Drop body owns
+    // a `Vec` it drains, the holder also owns heap of its own, and the whole
+    // thing runs in a loop so an under-drop shows up as a definite LSan report
+    // and an over-drop as a double-free abort.
+    //
+    // `MovedOut` is the sharp case the fix has to disarm: `let taken = m.res;`
+    // hands the field's `Drop` to `taken`, so the holder must stop running it.
+    #[test]
+    fn asan_aggregate_field_user_drop_fires_once() {
+        assert_clean_asan_run(
+            r#"
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) { self.buf.clear(); }
+}
+struct Holder { label: String, r: Res }
+struct MovedOut { res: Res }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let mut inner: Vec[i64] = Vec.new();
+        inner.push(i);
+        let h = Holder { label: "held", r: Res { tag: i, buf: inner } };
+        n = n + h.label.len();
+
+        // Field moved OUT: exactly one drop of `res` must happen (the
+        // destination's), never the holder's as well.
+        let mut inner2: Vec[i64] = Vec.new();
+        inner2.push(i);
+        let m = MovedOut { res: Res { tag: i, buf: inner2 } };
+        let taken = m.res;
+        n = n + taken.tag - i;
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 4 ("held") per iteration; `taken.tag - i` is 0. ×200 = 800.
+            &["800"],
+            "aggregate_field_user_drop_fires_once",
+        );
+    }
 }

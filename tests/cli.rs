@@ -1876,11 +1876,6 @@ fn test_stdin_lines_run_and_build_parity() {
 /// missing field drop breaks the count.
 #[cfg(feature = "llvm")]
 #[test]
-// KNOWN-FAILING until B-2026-07-29-39 lands: parity holds (both backends agree)
-// but the field's drop never fires, so the correctness assertion is red. Landed
-// ignored, ahead of the fix, so the gate exists and the fix has something to
-// turn green — un-ignore as part of that slice, NOT separately.
-#[ignore = "B-2026-07-29-39: aggregates do not yet drop their Drop-implementing fields"]
 fn test_user_drop_on_aggregate_field_run_build_parity() {
     let tmp = scratch_project("aggregate-field-drop-parity");
     // `Holder` itself has NO `impl Drop` — that is the whole point. The field

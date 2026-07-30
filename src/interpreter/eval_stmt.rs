@@ -172,6 +172,11 @@ impl<'a> super::Interpreter<'a> {
             // NLL placement / scope-exit ordering tests for plain
             // bindings stay unchanged.
             self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
+            // B-2026-07-29-39 — `let x = h.a;` moves a Drop-bearing FIELD out
+            // of `h`, so `h` must stop running that field's body (`x` runs it
+            // now). Mirrors codegen's
+            // `disarm_user_drop_fields_for_moved_field`.
+            self.suppress_moved_out_drop_field(stmt);
             // Move-suppression for `forget(x);` — the FFI ownership-handoff
             // primitive removes the source binding's Drop slot so the
             // destructor never fires (Slice 4).
@@ -625,6 +630,14 @@ impl<'a> super::Interpreter<'a> {
             return;
         }
         if !has_user_drop {
+            // B-2026-07-29-39 — the binding's own type declares no `Drop`, but
+            // a FIELD's type may. That is the whole bug: drop glue dispatched a
+            // user body for a direct binding of a Drop type and never walked an
+            // aggregate's fields, so `struct Holder { r: Res }` dropped nothing
+            // when `h` died and every resource held in a field leaked for the
+            // program's lifetime. This must sit OUTSIDE the early-out, not
+            // after the body call below.
+            self.drop_user_drop_fields_of_binding(name);
             return;
         }
         // A `#[compiler_builtin]` stdlib `impl Drop` (e.g.
@@ -634,7 +647,149 @@ impl<'a> super::Interpreter<'a> {
         if self.try_eval_builtin_drop(&type_name, name) {
             return;
         }
+        // Parent body first, then its fields die (design.md § Drop ordering),
+        // exactly like codegen's `karac_drop_<T>` wrapper. Split rather than
+        // routed through `run_user_drop_body_on_value` so the field walk goes
+        // through the NAME-keyed entry point, which is what consults the
+        // moved-out-field set (`let x = h.a;` hands that body to `x`).
         self.run_user_drop_body(&type_name, name);
+        self.drop_user_drop_fields_of_binding(name);
+    }
+
+    /// B-2026-07-29-39 — run the user `impl Drop` of every Drop-bearing FIELD
+    /// reachable from a dying binding. Mirrors the codegen pass
+    /// `emit_user_drop_field_bodies_fn`, including its order (reverse
+    /// declaration) and its exclusions, so `karac run` and `karac build`
+    /// produce the same output — the observable signal for a user drop, and
+    /// what the parity gate asserts.
+    fn drop_user_drop_fields_of_binding(&mut self, name: &str) {
+        if self.moved_out_drop_field_bindings.contains(name) {
+            return;
+        }
+        let Some(value) = self.env.get(name) else {
+            return;
+        };
+        self.drop_user_drop_fields_of_value(&value);
+    }
+
+    /// B-2026-07-29-39 — record that a `let x = <src>.<field>;` moved a
+    /// Drop-bearing field out of `<src>`, so `<src>`'s field walk skips it and
+    /// only the destination binding runs the body.
+    ///
+    /// Coarse, exactly like codegen's
+    /// `emit_user_drop_wrapper_without_field_bodies`: it disarms the source's
+    /// WHOLE field walk, not just the moved field. For the common
+    /// single-Drop-field aggregate that is exact; for a multi-field one it
+    /// under-drops, which is the safe side of the trade — the two backends stay
+    /// in step either way, which is what the parity gate pins.
+    fn suppress_moved_out_drop_field(&mut self, stmt: &Stmt) {
+        let StmtKind::Let { value, .. } = &stmt.kind else {
+            return;
+        };
+        let ExprKind::FieldAccess { object, field, .. } = &value.kind else {
+            return;
+        };
+        let ExprKind::Identifier(src) = &object.kind else {
+            return;
+        };
+        let Some(Value::Struct { fields, .. }) = self.env.get(src) else {
+            return;
+        };
+        let Some(field_value) = fields.get(field).cloned() else {
+            return;
+        };
+        if self.value_runs_user_drop(&field_value) {
+            self.moved_out_drop_field_bindings.insert(src.clone());
+        }
+    }
+
+    /// The head type name of a field's DECLARED type (`r: Res` -> `Res`),
+    /// or `None` for a non-path type. A bare generic param yields its own
+    /// letter (`T`), which never matches a runtime struct name — which is how
+    /// `drop_user_drop_fields_of_value` keeps erased fields out of the walk.
+    fn declared_field_type_head(ty: &TypeExpr) -> Option<String> {
+        match &ty.kind {
+            TypeKind::Path(p) => p.segments.last().cloned(),
+            _ => None,
+        }
+    }
+
+    /// Does this value (or anything reachable through its struct fields) carry a
+    /// user `impl Drop`? The interpreter's value-level twin of codegen's
+    /// type-level `type_runs_user_drop`, so both backends disarm on the same
+    /// condition. `Value::SharedStruct` is not walked — its drop is
+    /// refcount-driven, never the holder's business.
+    fn value_runs_user_drop(&self, value: &Value) -> bool {
+        let Value::Struct { name, fields } = value else {
+            return false;
+        };
+        self.program.drop_method_keys.contains_key(name)
+            || fields.values().any(|v| self.value_runs_user_drop(v))
+    }
+
+    /// Value-level worker for [`Self::drop_user_drop_fields_of_binding`].
+    ///
+    /// Walks a `Value::Struct`'s fields in REVERSE declaration order (read off
+    /// the `StructDef` — the interpreter stores fields in a `HashMap`, whose
+    /// iteration order is neither the source order nor even stable run to run,
+    /// so drop order has to come from the AST), running each field's own body
+    /// before recursing into it.
+    ///
+    /// `shared struct` fields are SKIPPED: their drop is refcount-driven, so
+    /// firing on this holder's death would drop a value other holders still
+    /// reference — the same reason the direct-binding path above gates on
+    /// `count == 1`. Enum payloads are not walked either; codegen's pass is
+    /// struct-field-only, and matching its scope exactly is what keeps the two
+    /// backends in step.
+    pub(crate) fn drop_user_drop_fields_of_value(&mut self, value: &Value) {
+        let Value::Struct {
+            name: struct_name,
+            fields,
+        } = value
+        else {
+            return;
+        };
+        let Some(def) = self.find_struct_def(struct_name) else {
+            return;
+        };
+        // (field name, declared head type name). The DECLARED type is what
+        // gates the walk — see `declared_field_type_head`.
+        let declared: Vec<(String, Option<String>)> = def
+            .fields
+            .iter()
+            .map(|f| (f.name.clone(), Self::declared_field_type_head(&f.ty)))
+            .collect();
+        for (field, declared_head) in declared.into_iter().rev() {
+            let Some(field_value) = fields.get(&field).cloned() else {
+                continue;
+            };
+            let Value::Struct {
+                name: field_type, ..
+            } = &field_value
+            else {
+                continue;
+            };
+            // SCOPING DECISION (B-2026-07-29-39 asked for one explicitly): the
+            // walk is DECLARED-type-driven, not value-driven. A field declared
+            // as a bare generic param — `struct W[T] { r: T }` instantiated at a
+            // Drop type — is skipped, because codegen reads the declared name
+            // (`struct_field_type_names`) and simply cannot see through the
+            // erasure at the point its glue is emitted. The interpreter, which
+            // holds the runtime value, WOULD see it; letting it fire would make
+            // `karac run` and `karac build` disagree, and the whole point of the
+            // parity gate is that they do not. So both backends skip it and the
+            // residual is a LEAK, the safe direction. Comparing the declared
+            // head against the runtime struct name is what implements that: they
+            // differ exactly when the declared type was erased.
+            if declared_head.as_deref() != Some(field_type.as_str()) {
+                continue;
+            }
+            if self.program.drop_method_keys.contains_key(field_type) {
+                let field_type = field_type.clone();
+                self.run_user_drop_body_only(&field_type, field_value.clone());
+            }
+            self.drop_user_drop_fields_of_value(&field_value);
+        }
     }
 
     /// Native interpreter `Drop` for `#[compiler_builtin]` stdlib types
@@ -670,14 +825,29 @@ impl<'a> super::Interpreter<'a> {
             Some(v) => v,
             None => return,
         };
-        self.run_user_drop_body_on_value(type_name, value);
+        self.run_user_drop_body_only(type_name, value);
     }
 
     /// Value-based core of `run_user_drop_body` — also used by the
     /// fresh-temp call-arg drop hook in `eval_call` (B-2026-07-01-8's
     /// second half: `consume(Guard { id: 7 })` / `consume(Sig.A(1))` had
     /// no binding for the name-keyed runner to resolve).
+    ///
+    /// B-2026-07-29-39: runs the type's own body and THEN its Drop-bearing
+    /// fields' bodies, mirroring codegen's `karac_drop_<T>` wrapper (user body,
+    /// then `__karac_dropbodies_<T>`). Every discarded-temp hook in the
+    /// interpreter funnels through here, which is what keeps them in step with
+    /// codegen's equivalents — those all invoke the wrapper.
     pub(crate) fn run_user_drop_body_on_value(&mut self, type_name: &str, value: Value) {
+        self.run_user_drop_body_only(type_name, value.clone());
+        self.drop_user_drop_fields_of_value(&value);
+    }
+
+    /// The type's OWN `<Type>.drop` body and nothing else. Split out of
+    /// [`Self::run_user_drop_body_on_value`] so the recursive field walk can run
+    /// a field's body without re-entering the walk for that field (which would
+    /// visit every grandchild twice).
+    fn run_user_drop_body_only(&mut self, type_name: &str, value: Value) {
         let method_key = format!("{}.drop", type_name);
         let func = match self.env.get(&method_key) {
             Some(f) => f,

@@ -4896,6 +4896,28 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(f) => *f,
             None => return,
         };
+        self.track_user_drop_var_with_fn(type_name, binding_name, binding_ptr, drop_fn);
+    }
+
+    /// [`Self::track_user_drop_var`] with the drop fn supplied by the caller
+    /// rather than looked up in `user_drop_wrapper_fns` (B-2026-07-29-39).
+    ///
+    /// A type that merely CONTAINS a Drop-bearing field declares no `impl Drop`
+    /// of its own, so no `karac_drop_<T>` wrapper is ever built for it — there
+    /// is nothing in the wrapper cache to find. Its drop glue is the ordinary
+    /// per-monomorph `__karac_drop_struct_<T>` (which the field-drop pass in
+    /// `emit_struct_drop_synthesis_impl` extended to invoke the field's body),
+    /// and it belongs on THIS channel rather than `StructDrop` because only
+    /// `UserDrop` entries are fired at their binding's NLL live-range end — the
+    /// placement the interpreter uses, and therefore the one run/build parity
+    /// requires once the drop became observable.
+    pub(super) fn track_user_drop_var_with_fn(
+        &mut self,
+        type_name: &str,
+        binding_name: &str,
+        binding_ptr: PointerValue<'ctx>,
+        drop_fn: FunctionValue<'ctx>,
+    ) {
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::UserDrop {
                 binding_name: binding_name.to_string(),

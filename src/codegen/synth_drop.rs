@@ -2223,6 +2223,204 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(drop_fn)
     }
 
+    /// B-2026-07-29-39 — does a value of `type_name` have to run a user
+    /// `impl Drop` body when it dies? True for its OWN `impl Drop`
+    /// (`drop_method_keys`) AND, transitively, for one reached through a
+    /// non-shared struct FIELD.
+    ///
+    /// The transitive half is the bug: drop glue dispatched a user body for a
+    /// DIRECT binding of a Drop type but never walked an aggregate's fields, so
+    /// `struct Holder { r: Res }` dropped nothing when `h` died. Every resource
+    /// type with a synthesized drop — `TcpListener`, `TcpStream`, `WebSocket`,
+    /// `TlsStream`, `TlsListener` — therefore leaked its fd whenever it was held
+    /// in a struct field rather than a bare local, which is the idiomatic way to
+    /// write a server (`struct Server { listener: TcpListener }`).
+    ///
+    /// `shared` types are NOT recursed into and never report `true`: their drop
+    /// is refcount-driven (`emit_rc_dec` → `__karac_rc_drop_<T>` at count 0), so
+    /// firing on a holder's death would drop a value other holders still
+    /// reference. This is the same gate the interpreter's `count == 1` check
+    /// enforces.
+    ///
+    /// `seen` breaks a cycle in the type graph. Structs cannot be directly
+    /// cyclic (infinite size), so this is belt-and-braces against an
+    /// indirectly-registered shape rather than a live case.
+    pub(super) fn type_runs_user_drop(&self, type_name: &str, seen: &mut Vec<String>) -> bool {
+        if self.shared_types.contains_key(type_name) {
+            return false;
+        }
+        if self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(type_name))
+        {
+            return true;
+        }
+        if seen.iter().any(|s| s == type_name) {
+            return false;
+        }
+        seen.push(type_name.to_string());
+        let found = self
+            .struct_field_type_names
+            .get(type_name)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .flatten()
+                    .any(|n| self.type_runs_user_drop(n, seen))
+            })
+            .unwrap_or(false);
+        seen.pop();
+        found
+    }
+
+    /// The field indices of `struct_name` whose declared type must run a user
+    /// `impl Drop` when the struct dies (B-2026-07-29-39). Companion of
+    /// [`Self::type_runs_user_drop`]; drives both the "does this struct need
+    /// field drop glue at all" decision and the emit order in
+    /// [`Self::emit_user_drop_field_bodies_fn`].
+    pub(super) fn user_drop_field_indices(&self, struct_name: &str) -> Vec<usize> {
+        let Some(fields) = self.struct_field_type_names.get(struct_name) else {
+            return Vec::new();
+        };
+        fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, name)| {
+                let name = name.as_deref()?;
+                self.type_runs_user_drop(name, &mut Vec::new())
+                    .then_some(idx)
+            })
+            .collect()
+    }
+
+    /// B-2026-07-29-39 — emit `__karac_dropbodies_<T>(self: *mut T)`: run the
+    /// user `impl Drop` BODY of every Drop-bearing field of `T`, in reverse
+    /// declaration order, recursing through nested aggregates. `None` when `T`
+    /// has no such field (nothing to emit, and the caller skips the call).
+    ///
+    /// This is the step the drop glue was missing: a user body was dispatched
+    /// for a DIRECT binding of a Drop type but nothing ever walked an
+    /// aggregate's fields, so `struct Holder { r: Res }` ran nothing when `h`
+    /// died. Every resource type with a synthesized drop — `TcpListener`,
+    /// `TcpStream`, `WebSocket`, `TlsStream`, `TlsListener` — therefore leaked
+    /// its fd whenever it was held in a field rather than a bare local, which is
+    /// the normal way to write a server (`struct Server { listener: TcpListener
+    /// }`).
+    ///
+    /// BODIES ONLY, deliberately. It would be tempting to call the field's
+    /// `karac_drop_<F>` wrapper (body + memory) or its
+    /// `__karac_drop_struct_<F>`, but the parent's own memory drop ALREADY
+    /// reaches that field — `emit_struct_drop_synthesis_impl` classifies it
+    /// `NestedStruct` and calls `__karac_drop_struct_<F>`. Adding a second
+    /// memory-freeing call here would double-free its buffers. Restricting this
+    /// fn to `<F>.drop` calls makes it purely additive: not one existing free
+    /// moves, and there is no path on which memory is released twice.
+    ///
+    /// `<F>.drop` is the right symbol for a `#[compiler_builtin]` stdlib
+    /// resource too — `emit_hardcoded_stdlib_drop_bodies` runs before every
+    /// caller of this fn and hand-rolls exactly that symbol (the
+    /// `karac_runtime_tcp_close(self.fd)` body for `TcpListener`).
+    ///
+    /// Per-MONOMORPH like the `NestedStruct` arm: a generic parent that binds
+    /// its param to a wider heap type shifts every following field's offset, so
+    /// the GEPs run against the mono layout and the symbol carries a mono
+    /// suffix (B-2026-07-11-35 / B-2026-07-15-24).
+    pub(super) fn emit_user_drop_field_bodies_fn(
+        &mut self,
+        struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        // A `shared` parent is dropped through the RC machinery
+        // (`__karac_rc_drop_<T>`) against a heap box with a refcount header, so
+        // the plain-struct GEPs below would be off by that header. Its wrapper
+        // is never called anyway; declining keeps a wrong-offset write
+        // structurally impossible.
+        if self.shared_types.contains_key(struct_name) {
+            return None;
+        }
+        let field_idxs = self.user_drop_field_indices(struct_name);
+        if field_idxs.is_empty() {
+            return None;
+        }
+        let mono_suffix: String = self
+            .struct_generic_params
+            .get(struct_name)
+            .cloned()
+            .map(|params| {
+                params
+                    .iter()
+                    .filter_map(|p| subst.get(p))
+                    .map(|te| format!("${}", Self::drop_mono_mangle_component(te)))
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        let fn_name = format!("__karac_dropbodies_{struct_name}{mono_suffix}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let effective_subst = (!mono_suffix.is_empty()).then_some(subst);
+        let st = effective_subst
+            .and_then(|s| self.mono_struct_type_from_subst(struct_name, s))
+            .or_else(|| self.struct_types.get(struct_name).copied())?;
+        let field_kinds = self.struct_field_type_names.get(struct_name)?.clone();
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let bodies_fn = self
+            .module
+            .add_function(&fn_name, fn_ty, Some(Linkage::Internal));
+        let entry_bb = self.context.append_basic_block(bodies_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let p_arg = bodies_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // Reverse declaration order — design.md § Drop ordering: fields die in
+        // reverse of introduction. The interpreter's `drop_user_drop_fields_of_
+        // value` walks the same order, which is what the run/build parity gate
+        // pins.
+        for &field_idx in field_idxs.iter().rev() {
+            let Some(Some(field_type)) = field_kinds.get(field_idx).cloned() else {
+                continue;
+            };
+            let field_ptr = self
+                .builder
+                .build_struct_gep(
+                    st,
+                    p_arg,
+                    field_idx as u32,
+                    &format!("dropbodies.field{field_idx}.p"),
+                )
+                .unwrap();
+            if let Some(body_fn) = self.module.get_function(&format!("{field_type}.drop")) {
+                self.builder
+                    .build_call(body_fn, &[field_ptr.into()], "")
+                    .unwrap();
+            }
+            // Then the field's OWN Drop-bearing fields, one level deeper. The
+            // recursion terminates because `user_drop_field_indices` is empty at
+            // the leaves, and a struct cannot transitively contain itself.
+            let nsub = self.nested_struct_field_subst(
+                struct_name,
+                field_idx,
+                effective_subst,
+                &field_type,
+            );
+            // The recursive call saves and restores the builder's insert block,
+            // so emission resumes in THIS fn's entry block.
+            if let Some(nested) = self.emit_user_drop_field_bodies_fn(&field_type, &nsub) {
+                self.builder
+                    .build_call(nested, &[field_ptr.into()], "")
+                    .unwrap();
+            }
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(bodies_fn)
+    }
+
     /// #21 — does a (tuple-element or nested) `TypeExpr` carry heap a synthesized
     /// drop must free? Drives classification of an anonymous tuple struct field:
     /// the LLVM-type-driven `aggregate_has_heap_field` is enum-blind, so a tuple
@@ -4855,6 +5053,132 @@ impl<'ctx> super::Codegen<'ctx> {
     /// records entries in `drop_method_keys` for impl blocks that
     /// reached `env.add_impl`, and the impl-method compile pass emits
     /// `Type.drop` for every such block).
+    /// B-2026-07-29-39 — `karac_dropnf_<T>`: the user drop wrapper WITHOUT the
+    /// field-body step, i.e. exactly what `karac_drop_<T>` was before this fix
+    /// (user body, then heap-field cleanup).
+    ///
+    /// Needed at a field move-out. `let x = h.a;` hands the field's value — and
+    /// its `Drop` — to `x`, which registers its own drop; if `h` also kept
+    /// running that field's body, the body would run TWICE (for a resource type
+    /// that is a double close). Re-pointing `h`'s registered action at this
+    /// variant disarms just the field step and leaves `h`'s own body and heap
+    /// cleanup intact. A type with no Drop of its own has no wrapper to
+    /// re-point; its action is dropped outright instead (see
+    /// `disarm_user_drop_fields_for_moved_field`).
+    ///
+    /// Coarse on purpose: it disarms EVERY field body, not only the moved one.
+    /// For the overwhelmingly common single-Drop-field struct that is exact;
+    /// for a multi-field one it under-drops, which the ledger's own bar puts on
+    /// the correct side of the trade ("an under-suppressed field drop
+    /// double-frees; an over-suppressed one leaks").
+    pub(super) fn emit_user_drop_wrapper_without_field_bodies(
+        &mut self,
+        type_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let fn_name = format!("karac_dropnf_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let user_drop_fn = self.module.get_function(&format!("{type_name}.drop"))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let wrapper_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let wrapper = self
+            .module
+            .add_function(&fn_name, wrapper_ty, Some(Linkage::Internal));
+        let entry_bb = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = wrapper.get_nth_param(0).unwrap().into_pointer_value();
+        self.builder
+            .build_call(user_drop_fn, &[self_ptr.into()], "")
+            .unwrap();
+        if let Some(field_drop_fn) = self.emit_struct_drop_synthesis(type_name) {
+            self.builder
+                .build_call(field_drop_fn, &[self_ptr.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(wrapper)
+    }
+
+    /// B-2026-07-29-39 — a Drop-bearing FIELD was moved out of the aggregate
+    /// held at `base_ptr`, so the destination binding now owns that field's
+    /// `Drop`. Stop the aggregate from running it too.
+    ///
+    /// Two shapes, keyed off whether the aggregate declares a `Drop` of its own
+    /// (which is what decides which fn its registered action points at):
+    ///  * it does → re-point to `karac_dropnf_<T>`, keeping its own body and
+    ///    heap cleanup and dropping only the field-body step;
+    ///  * it does not → its action IS the field-body walk, so remove it.
+    ///
+    /// Matching on `binding_ptr` rather than a binding name is what makes this
+    /// work from a move site that only has the source slot in hand.
+    pub(super) fn disarm_user_drop_fields_for_moved_field(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        field: &str,
+    ) {
+        let Some(idx) = self
+            .struct_field_names
+            .get(struct_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        let Some(Some(field_type)) = self
+            .struct_field_type_names
+            .get(struct_name)
+            .and_then(|v| v.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        if !self.type_runs_user_drop(&field_type, &mut Vec::new()) {
+            return;
+        }
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(struct_name));
+        let replacement = if owns_body {
+            self.emit_user_drop_wrapper_without_field_bodies(struct_name)
+        } else {
+            None
+        };
+        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+            if owns_body {
+                let Some(replacement) = replacement else {
+                    continue;
+                };
+                for action in frame.iter_mut() {
+                    if let super::state::CleanupAction::UserDrop {
+                        binding_ptr,
+                        drop_fn,
+                        type_name,
+                        ..
+                    } = action
+                    {
+                        if *binding_ptr == base_ptr && type_name == struct_name {
+                            *drop_fn = replacement;
+                        }
+                    }
+                }
+            } else {
+                frame.retain(|action| {
+                    !matches!(
+                        action,
+                        super::state::CleanupAction::UserDrop { binding_ptr, type_name, .. }
+                            if *binding_ptr == base_ptr && type_name == struct_name
+                    )
+                });
+            }
+        }
+    }
+
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
         if let Some(f) = self.user_drop_wrapper_fns.get(type_name) {
             return Some(*f);
@@ -4889,6 +5213,20 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(user_drop_fn, &[self_ptr.into()], "")
             .unwrap();
+
+        // (a½) B-2026-07-29-39 — then each Drop-bearing FIELD's user body, in
+        // reverse declaration order. Parent body first, then fields die
+        // (design.md § Drop ordering). Bodies only: the memory side of those
+        // fields is already reached by the `NestedStruct` classification inside
+        // the field-cleanup synthesizer called next, so freeing here too would
+        // double-free.
+        if let Some(bodies_fn) =
+            self.emit_user_drop_field_bodies_fn(type_name, &std::collections::HashMap::new())
+        {
+            self.builder
+                .build_call(bodies_fn, &[self_ptr.into()], "")
+                .unwrap();
+        }
 
         // (b) Hand off to the existing per-struct field-cleanup
         // synthesizer for heap-owning fields. Returns `None` for structs

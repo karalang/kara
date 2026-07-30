@@ -402,6 +402,13 @@ pub struct Interpreter<'a> {
     /// after binding. The REPL drains this map after `run()` returns
     /// so the next cell can use the captured values as overrides.
     pub let_snapshot_watch: HashSet<String>,
+    /// B-2026-07-29-39 — binding names out of which a Drop-bearing struct FIELD
+    /// has been moved (`let x = h.a;`). The destination binding runs that
+    /// field's `Drop` body, so the source's field walk must skip it or the body
+    /// runs twice — a double close for a resource type. Mirrors codegen's
+    /// `disarm_user_drop_fields_for_moved_field`, including its coarseness: the
+    /// source's whole field walk is disarmed, not just the moved field.
+    pub(crate) moved_out_drop_field_bindings: HashSet<String>,
     /// REPL value-snapshot output channel. Populated by the Let arm of
     /// `eval_stmt_cf` whenever the binding name is in
     /// `let_snapshot_watch`. The REPL reads this after `run()` returns;
@@ -674,6 +681,7 @@ impl<'a> Interpreter<'a> {
             bounded_channel_handle_counter: 0,
             let_value_overrides: HashMap::new(),
             let_snapshot_watch: HashSet::new(),
+            moved_out_drop_field_bindings: HashSet::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,
             timed_out: false,

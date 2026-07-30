@@ -25561,3 +25561,32 @@ fn test_user_clone_impl_wins_over_derive_synthesis() {
         "101\n"
     );
 }
+
+/// B-2026-07-29-39 — the interpreter half of aggregate field drop glue: a
+/// struct holding a Drop-implementing value must run that value's body when it
+/// dies. Pre-fix nothing walked an aggregate's fields, so `Holder { r: Res }`
+/// dropped nothing and any resource in a field was held for the program's
+/// lifetime.
+///
+/// Pins the same three properties as the codegen twin (`tests/codegen.rs`'s
+/// `e2e_aggregate_runs_field_user_drop`), because the pair IS the parity
+/// contract: the drop fires, nested aggregates recurse, fields die in reverse
+/// declaration order, and a field moved out is dropped once by its destination.
+#[test]
+fn test_aggregate_runs_field_user_drop() {
+    assert_eq!(
+        run("struct A { t: i64 }\n\
+             impl Drop for A { fn drop(mut ref self) { println(f\"dA{self.t}\"); } }\n\
+             struct Mid { a: A }\n\
+             struct Outer { m: Mid, a2: A }\n\
+             struct Two { x: A, y: A }\n\
+             struct Moved { a: A }\n\
+             fn main() {\n\
+                 { let o = Outer { m: Mid { a: A { t: 1 } }, a2: A { t: 2 } }; println(f\"{o.a2.t}\"); }\n\
+                 { let t = Two { x: A { t: 4 }, y: A { t: 5 } }; println(f\"{t.x.t}\"); }\n\
+                 { let h = Moved { a: A { t: 7 } }; let x = h.a; println(f\"{x.t}\"); }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "2\ndA2\ndA1\n4\ndA5\ndA4\n7\ndA7\nend\n"
+    );
+}

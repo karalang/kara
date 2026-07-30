@@ -5384,6 +5384,44 @@ fn main() {
         assert_eq!(out, "inner\n5\ntrue\n");
     }
 
+    /// B-2026-07-29-39 — an aggregate runs its fields' user `impl Drop`.
+    ///
+    /// Pre-fix, drop glue dispatched a user body for a DIRECT binding of a Drop
+    /// type but never walked an aggregate's fields, so a struct holding a
+    /// Drop-implementing value dropped nothing at scope exit. Every resource
+    /// type with a synthesized drop (`TcpListener`, `TcpStream`, `TlsStream`, …)
+    /// therefore leaked its fd whenever it was held in a field rather than a
+    /// bare local — which is how a server is normally written.
+    ///
+    /// Also pins the two properties that make the fix safe rather than merely
+    /// present: fields die in REVERSE declaration order (`Two` prints 5 then 4),
+    /// and a field MOVED OUT is dropped by its destination only, never twice.
+    #[test]
+    fn e2e_aggregate_runs_field_user_drop() {
+        let Some(out) = run_program(
+            "struct A { t: i64 }\n\
+             impl Drop for A { fn drop(mut ref self) { println(f\"dA{self.t}\"); } }\n\
+             struct Mid { a: A }\n\
+             struct Outer { m: Mid, a2: A }\n\
+             struct Two { x: A, y: A }\n\
+             struct Moved { a: A }\n\
+             fn main() {\n\
+             \x20   { let o = Outer { m: Mid { a: A { t: 1 } }, a2: A { t: 2 } }; println(f\"{o.a2.t}\"); }\n\
+             \x20   { let t = Two { x: A { t: 4 }, y: A { t: 5 } }; println(f\"{t.x.t}\"); }\n\
+             \x20   { let h = Moved { a: A { t: 7 } }; let x = h.a; println(f\"{x.t}\"); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            // Outer: `a2` before `m` (reverse declaration), and `m` recurses
+            // into `Mid.a`. Two: y before x. Moved: exactly one dA7, from `x`.
+            "2\ndA2\ndA1\n4\ndA5\ndA4\n7\ndA7\nend\n"
+        );
+    }
+
     /// Spawn a built kara test binary and capture stdout+stderr, with a
     /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
     /// in `tests/common/mod.rs` — see the module doc there for the full

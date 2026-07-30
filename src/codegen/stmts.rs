@@ -5233,6 +5233,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             .as_deref()
                             .map(|p| p.drop_method_keys.contains_key(&struct_name))
                             .unwrap_or(false);
+                        // B-2026-07-29-39 — the binding's type declares no
+                        // Drop of its own but CONTAINS a Drop-bearing field, so
+                        // a body has to run when it dies. There is no
+                        // `karac_drop_<T>` wrapper for such a type to hang that
+                        // off (nothing builds one for a type with no Drop), so
+                        // the registration below adds the field-body walk
+                        // (`__karac_dropbodies_<T>`) on the UserDrop channel —
+                        // the only channel `fire_due_user_drops` fires at the
+                        // binding's NLL live-range end, which is where the
+                        // interpreter places it. On StructDrop the body would
+                        // print AFTER the statements following the binding's
+                        // last use: a run-vs-build divergence in the exact
+                        // output the parity gate compares.
+                        //
+                        // A struct that ALSO owns a `shared` field is included:
+                        // the added action is bodies-only and orthogonal to
+                        // memory, so `track_struct_var_inst` still picks its
+                        // COMBINED drop (value drop + shared-field rc-dec
+                        // walker) exactly as before.
+                        let has_field_user_drop = !has_user_drop
+                            && self.struct_types.contains_key(&struct_name)
+                            && !self.shared_types.contains_key(&struct_name)
+                            && self.type_runs_user_drop(&struct_name, &mut Vec::new());
                         // Move-suppression: when the RHS is an
                         // Identifier, the source binding's value has
                         // been moved into the destination. The source
@@ -5278,6 +5301,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         // hang. `spread` (`..base`) is NOT a move source: it
                         // copies from a base that stays live and keeps its own
                         // drop.
+                        // B-2026-07-29-39 — `let x = h.a;` moves a Drop-bearing
+                        // FIELD out of `h`. `x` registers its own drop below, so
+                        // `h` has to stop running that field's body or it fires
+                        // twice (a double close for a resource type). The
+                        // aggregate keeps everything else it was doing.
+                        if let ExprKind::FieldAccess {
+                            object,
+                            field: moved_field,
+                            ..
+                        } = &value.kind
+                        {
+                            if let ExprKind::Identifier(src) = &object.kind {
+                                if let (Some(src_slot), Some(src_type)) = (
+                                    self.variables.get(src.as_str()).copied(),
+                                    self.var_type_names.get(src.as_str()).cloned(),
+                                ) {
+                                    self.disarm_user_drop_fields_for_moved_field(
+                                        src_slot.ptr,
+                                        &src_type,
+                                        moved_field,
+                                    );
+                                }
+                            }
+                        }
                         let mut struct_lit_sources: Vec<&str> = Vec::new();
                         if let ExprKind::StructLiteral { fields, .. } = &value.kind {
                             for f in fields {
@@ -5295,7 +5342,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             _ => None,
                         };
                         if let Some(source_name) = move_source_name {
-                            if has_user_drop {
+                            if has_field_user_drop {
+                                // B-2026-07-29-39 — this binding class carries
+                                // BOTH a `UserDrop` (the field bodies) and a
+                                // `StructDrop` (memory), so a move out of it has
+                                // to suppress both: drop the body action, and
+                                // cap-zero the source's heap so its memory drop
+                                // no-ops while the destination becomes the owner.
+                                self.suppress_user_drop_for_var(source_name);
+                                self.suppress_source_vec_cleanup_for_arg_ex(
+                                    value,
+                                    shared_info.is_none(),
+                                );
+                            } else if has_user_drop {
                                 self.suppress_user_drop_for_var(source_name);
                             } else {
                                 // StructDrop move-suppression: `let g = f;`
@@ -5406,6 +5465,36 @@ impl<'ctx> super::Codegen<'ctx> {
                             } else if has_user_drop && !self.shared_types.contains_key(&struct_name)
                             {
                                 self.track_user_drop_var(&struct_name, var_name, alloca);
+                            } else if has_field_user_drop {
+                                // B-2026-07-29-39 — TWO registrations, doing
+                                // disjoint work on the same slot:
+                                //  * the field bodies on the `UserDrop` channel,
+                                //    because only that channel is fired at the
+                                //    binding's NLL live-range end — where the
+                                //    interpreter places it, and now observable;
+                                //  * the ordinary memory drop, unchanged, at
+                                //    scope exit.
+                                // Splitting them is what keeps this additive:
+                                // no existing free moves or is duplicated, and
+                                // the memory stays valid until scope exit so a
+                                // body reading `self.<field>` at its NLL point
+                                // is safe.
+                                let inst = self.enum_inst_var_types.get(var_name).cloned();
+                                let subst = inst
+                                    .as_ref()
+                                    .map(|i| self.generic_struct_subst_from_inst(&struct_name, i))
+                                    .unwrap_or_default();
+                                if let Some(bodies_fn) =
+                                    self.emit_user_drop_field_bodies_fn(&struct_name, &subst)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        &struct_name,
+                                        var_name,
+                                        alloca,
+                                        bodies_fn,
+                                    );
+                                }
+                                self.track_struct_var_inst(&struct_name, alloca, inst);
                             } else if self.struct_types.contains_key(&struct_name) {
                                 // B-2026-07-11-35 (push leg) — thread the binding's
                                 // recorded generic instantiation (`S[String]`) so
