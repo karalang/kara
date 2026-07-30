@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 188 | 0 |
-| leak | 101 | 1 |
+| leak | 102 | 2 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 68 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 552 | 4 |
+| codegen | 553 | 5 |
 | typecheck | 97 | 0 |
 | interp | 78 | 1 |
 | ownership | 33 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **763 surfaced · 4 open · 751 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced · 5 open · 751 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **763 surfaced 
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
 | B-2026-07-30-9 | 2026-07-30 | codegen | low | `println` is not line-atomic across tasks: it emits TWO separate `write_console` calls (payload, then the newline), so two spawned tasks printing concurrently interleave into `12\n\n` instead of `1\n2\n` -- makes tests/spawn_e2e.rs::test_spawn_fan_out_five_tasks_all_join flaky (~1 in 3 on a 4-core container) | src/codegen/control_flow.rs (emit_nul_safe_write: the trailing-newline second write_console call) |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | medium | The aggregate field drop glue B-2026-07-29-39 added covers STRUCT FIELDS only: an enum variant's Drop-bearing PAYLOAD, and a by-value aggregate param whose own type declares no Drop, still run no field drop body — so a resource carried in either shape leaks for the program's lifetime. | src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value) |
+| B-2026-07-30-12 | 2026-07-30 | codegen | medium | A DISCARDED fn-returned Drop temp combined with a later passthrough (`pass(g) -> Guard { g }`) emits THREE heap allocations for TWO values and frees only two — invisible today because LLVM elides the whole malloc/free set, which also means the ASAN test covering this exact shape passes VACUOUSLY. | src/codegen/call_dispatch.rs (__owned_agg_tmp registration), src/codegen/param_own.rs (passthrough defensive copy), tests/memory_sanitizer.rs (asan_fnret_drop_temp_arg_passthrough_and_discard_single_fire) |
 
 ### Fixed (751)
 
