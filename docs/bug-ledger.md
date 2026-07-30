@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 188 | 0 |
-| leak | 102 | 2 |
+| leak | 102 | 1 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 68 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 553 | 5 |
+| codegen | 553 | 4 |
 | typecheck | 97 | 0 |
 | interp | 78 | 1 |
 | ownership | 33 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced · 5 open · 751 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced · 4 open · 752 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,11 +134,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced 
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
 | B-2026-07-30-9 | 2026-07-30 | codegen | low | `println` is not line-atomic across tasks: it emits TWO separate `write_console` calls (payload, then the newline), so two spawned tasks printing concurrently interleave into `12\n\n` instead of `1\n2\n` -- makes tests/spawn_e2e.rs::test_spawn_fan_out_five_tasks_all_join flaky (~1 in 3 on a 4-core container) | src/codegen/control_flow.rs (emit_nul_safe_write: the trailing-newline second write_console call) |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body runs ONLY for a value reachable from a direct binding through STRUCT FIELDS. SHAPE 2 (owned aggregate temp) FIXED in d794aad; the residual is SIX containers that all stay silent -- enum payload, Option, Result, Vec element, Map value, tuple element -- so a resource held in any of them leaks for the program's lifetime. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
-| B-2026-07-30-12 | 2026-07-30 | codegen | medium | A by-value owned-struct param that is RETURNED (`fn pass(g: Guard) -> Guard { g }`) leaks the caller's buffer when the argument is a fn CALL: the callee entry-copies and returns the copy, and `arg_is_entry_copied_heap_struct` only recognises a struct LITERAL, so the return-passthrough guard skips the caller-side drop. The sibling literal path does not leak but double-fires the user Drop vs the interpreter — both halves are wrong, and the covering ASAN test passes vacuously. | src/codegen/call_dispatch.rs (__owned_agg_tmp registration), src/codegen/param_own.rs (passthrough defensive copy), tests/memory_sanitizer.rs (asan_fnret_drop_temp_arg_passthrough_and_discard_single_fire) |
 
-### Fixed (751)
+### Fixed (752)
 
-<details><summary>751 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>752 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -893,6 +892,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **764 surfaced 
 | B-2026-07-30-7 | codegen | high | A PLAIN type alias whose base is not `i64`-shaped, used as a parameter or return type, lowers to the `i64` unknown-name fall-through in codegen: `typ… | b528fa2 |
 | B-2026-07-30-8 | autopar | low | Auto-par's early-exit gate declines a reduction for a `break`/`continue` that targets a NESTED loop and therefore cannot exit the reduction body at a… | 3993c2e |
 | B-2026-07-30-10 | typecheck+codegen | low | `Result[T, E].clone()` is still rejected at typecheck (`no method 'clone' on type 'Result'`) after B-2026-07-29-31 gave `Option[T]` a callable one —… | 4b5f811 |
+| B-2026-07-30-12 | codegen | medium | A by-value owned-struct arg that the callee RETURNS mishandled its caller temp TWO ways: a fn-call arg (`pass(mk())`) leaked the orphaned buffer, and… | 3ee768a |
 
 </details>
 
