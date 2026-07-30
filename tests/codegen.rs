@@ -5314,6 +5314,76 @@ fn main() {
         assert_eq!(out, "a#b#c#\nno digits\n");
     }
 
+    /// B-2026-07-29-27 / B-2026-07-29-31 — `#[derive(Clone)]` synthesizes a
+    /// CALLABLE `.clone()`, not just a satisfiable `T: Clone` bound.
+    ///
+    /// Pre-fix the two halves of `Clone` had drifted apart: bound discharge
+    /// honoured the derive (`type_supports_clone`) while method resolution went
+    /// through a pure free fn with a stdlib-collection allowlist
+    /// (`clone_self_type_for`), so `fn dup[T: Clone](x: T) -> T { x }`
+    /// type-checked with a derived argument but `{ x.clone() }` was rejected
+    /// `no method 'clone' on type 'T'`. The bound was decorative.
+    ///
+    /// The clone must be DEEP — the assertions below mutate the copy and read
+    /// the source back, so a shallow `{ptr,len,cap}` bitcopy (which would also
+    /// double-free at the two drops) fails here rather than only under ASAN.
+    #[test]
+    fn e2e_derived_clone_is_callable_and_deep() {
+        let Some(out) = run_program(
+            "#[derive(Clone)]\n\
+             struct S { n: i64, s: String, v: Vec[i64] }\n\
+             #[derive(Clone)]\n\
+             enum E { A(i64), B(String) }\n\
+             fn dup[T: Clone](x: T) -> T { x.clone() }\n\
+             fn main() {\n\
+             \x20   let mut a = S { n: 1, s: \"hi\", v: Vec.new() };\n\
+             \x20   a.v.push(10);\n\
+             \x20   let mut b = a.clone();\n\
+             \x20   b.v.push(20);\n\
+             \x20   b.n = 99;\n\
+             \x20   println(f\"{a.n} {a.v.len()} {b.n} {b.v.len()} {b.s}\");\n\
+             \x20   let c = dup(a);\n\
+             \x20   println(f\"{c.s} {c.v.len()}\");\n\
+             \x20   let e = E.B(\"payload\");\n\
+             \x20   let f = dup(e);\n\
+             \x20   match f {\n\
+             \x20       E.A(k) => println(f\"{k}\"),\n\
+             \x20       E.B(t) => println(t),\n\
+             \x20   }\n\
+             \x20   println(f\"{dup(7)}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "1 1 99 2 hi\nhi 1\npayload\n7\n");
+    }
+
+    /// The `Option[T]` half of B-2026-07-29-31. `Option[String]` was rejected
+    /// at typecheck alongside the user types; `Option[i64]` too, so the gap was
+    /// never payload-heap-specific. Codegen routes the heap payload through the
+    /// existing tag-guarded `emit_option_value_clone_fn` and the scalar payload
+    /// through the shallow whole-value copy (exact for a `{tag, w…}` of
+    /// scalars). `None` must survive both.
+    #[test]
+    fn e2e_option_clone_deep_copies_payload() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let o: Option[String] = Option.Some(\"inner\");\n\
+             \x20   let p = o.clone();\n\
+             \x20   println(p.unwrap());\n\
+             \x20   let q: Option[i64] = Option.Some(5);\n\
+             \x20   let r = q.clone();\n\
+             \x20   println(f\"{r.unwrap()}\");\n\
+             \x20   let n: Option[String] = Option.None;\n\
+             \x20   let m = n.clone();\n\
+             \x20   println(f\"{m.is_none()}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "inner\n5\ntrue\n");
+    }
+
     /// Spawn a built kara test binary and capture stdout+stderr, with a
     /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
     /// in `tests/common/mod.rs` — see the module doc there for the full

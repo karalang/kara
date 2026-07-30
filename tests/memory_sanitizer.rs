@@ -33707,4 +33707,68 @@ fn main() {
             "plain_alias_struct_fields_no_leak",
         );
     }
+
+    // ── `#[derive(Clone)]` synthesized `.clone()` (B-2026-07-29-27 /
+    // B-2026-07-29-31) ───────────────────────────────────────────────
+    // Making `.clone()` callable on user structs / enums and on `Option[T]`
+    // puts a NEW deep-copy emitter on the hot path for heap-owning aggregates,
+    // and the failure mode of getting it wrong is invisible to an output
+    // assertion: a shallow bitcopy aliases the source's `{ptr,len,cap}`, both
+    // drops free it, and the program still prints the right answer. Only a
+    // sanitizer sees it (this is the B-2026-06-14-12 shape, and the class the
+    // Linux `memory-sanitizer` job exists to gate — macOS asan has no leak
+    // detection).
+    //
+    // Every clone here owns heap at a different depth: a struct with a String
+    // AND a `Vec[String]` field, an enum whose live variant carries a String,
+    // and an `Option[String]`. Looped so an under-freed copy accumulates into a
+    // definite LeakSanitizer report rather than a single stray block.
+    #[test]
+    fn asan_derived_clone_deep_copies_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Clone)]
+struct S { tag: String, items: Vec[String] }
+
+#[derive(Clone)]
+enum E { Empty, Payload(String) }
+
+fn dup[T: Clone](x: T) -> T { x.clone() }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let mut a = S { tag: "src", items: Vec.new() };
+        a.items.push("one");
+        // The copy must own INDEPENDENT buffers: it grows, the source does not.
+        let mut b = a.clone();
+        b.items.push("two");
+        n = n + a.items.len() + b.items.len();
+        // Through a `T: Clone` generic body — the bound that used to be
+        // decorative. `a` is moved in, so only `c` and `b` reach a drop.
+        let c = dup(a);
+        n = n + c.tag.len();
+
+        let e = E.Payload("enum-heap");
+        let f = e.clone();
+        match f {
+            E.Empty => {}
+            E.Payload(t) => { n = n + t.len(); }
+        }
+
+        let o: Option[String] = Option.Some("opt-heap");
+        let p = o.clone();
+        n = n + p.unwrap().len();
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // per iteration: 1 + 2 (Vec lens) + 3 ("src") + 9 ("enum-heap")
+            //              + 8 ("opt-heap") = 23; ×200 = 4600.
+            &["4600"],
+            "derived_clone_deep_copies_no_leak_no_double_free",
+        );
+    }
 }

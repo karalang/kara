@@ -1504,10 +1504,35 @@ impl<'a> super::Interpreter<'a> {
             // `obj.clone()` does the right thing without per-type
             // unrolling. Non-Clone payloads (closures, iterators, refs,
             // entries, shared cells) fall through; the typechecker
-            // rejects `clone()` on those receivers via `clone_self_type_for`.
+            // rejects `clone()` on those receivers via
+            // `clone_receiver_self_type`.
             "clone" => {
                 if let Value::Sender(ref queue) = obj {
                     return Some(Value::Sender(Arc::clone(queue)));
+                }
+                // B-2026-07-29-27 / B-2026-07-29-31 — a user struct / enum
+                // (and `Option`, which is an `EnumVariant` too) whose
+                // `Clone` comes from `#[derive(Clone)]`. `deep_clone_value`
+                // is the right worker rather than the derived `Clone`: the
+                // latter bumps the `Arc<RwLock<..>>` of an `Array`/`Tensor`
+                // FIELD, so `let b = a.clone(); b.items.push(x)` would
+                // mutate `a` too — value semantics demand independent
+                // storage. It also preserves aliasing for the
+                // reference-semantics variants (`SharedStruct`, channels),
+                // which is what `shared struct`'s RC `clone` means.
+                //
+                // A user-declared `fn clone` WINS: the typechecker declines
+                // the derive path when one exists (`user_clone_method_exists`),
+                // so this arm must decline too or it would shadow the body the
+                // typechecker resolved.
+                if matches!(
+                    &obj,
+                    Value::Struct { .. } | Value::EnumVariant { .. } | Value::SharedStruct(_)
+                ) {
+                    let type_name = self.value_type_name(&obj);
+                    if self.env.get(&format!("{}.clone", type_name)).is_none() {
+                        return Some(deep_clone_value(&obj));
+                    }
                 }
                 match &obj {
                     Value::Array(rc) => {

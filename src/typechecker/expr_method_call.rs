@@ -20,9 +20,8 @@ use super::inference::{
     resolve_type_var_top, resolve_type_vars, substitute_type_params, unify_types,
 };
 use super::types::{
-    clone_self_type_for, is_numeric, iterator_item_type_for, method_callee_type_name,
-    receiver_for_method_lookup, type_display, ConstArg, FloatSize, IntSize, SubstValue, Type,
-    UIntSize,
+    is_numeric, iterator_item_type_for, method_callee_type_name, receiver_for_method_lookup,
+    type_display, ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -3610,8 +3609,17 @@ impl<'a> super::TypeChecker<'a> {
         // checking; primitives and String satisfy it trivially. The
         // canonical bullet lives in `phase-8-stdlib-floor.md` (search
         // `Clone trait surface for collections`).
+        //
+        // B-2026-07-29-27 / B-2026-07-29-31 — routed through the env-aware
+        // `clone_receiver_self_type` rather than the pure free fn
+        // `clone_self_type_for`, so `Option[T]` and user types carrying
+        // `#[derive(Clone)]` (plus a `T: Clone`-bounded generic param) get the
+        // callable method their satisfiable bound already implied. The free fn
+        // is still the first thing consulted inside, so the collection surface
+        // is byte-for-byte unchanged. `Result` is deliberately still rejected —
+        // see the note in `clone_receiver_self_type`.
         if method == "clone" {
-            if let Some(self_ty) = clone_self_type_for(&obj_ty) {
+            if let Some(self_ty) = self.clone_receiver_self_type(&obj_ty) {
                 if !args.is_empty() {
                     self.type_error(
                         "clone() takes no arguments".to_string(),

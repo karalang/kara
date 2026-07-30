@@ -14,7 +14,7 @@
 use crate::ast::*;
 
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::state::VarSlot;
@@ -105,11 +105,33 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
         let name_owned = name.clone();
-        let Some(te) = self.receiver_collection_type_expr(&name_owned)? else {
-            return Ok(None);
+        let (te, clone_fn) = match self.receiver_collection_type_expr(&name_owned)? {
+            Some(te) => {
+                let f = self.emit_clone_fn_for_type_expr(&te);
+                (te, f)
+            }
+            // B-2026-07-29-27 / B-2026-07-29-31 — the AGGREGATE receivers:
+            // a user struct / enum carrying `#[derive(Clone)]`, an
+            // `Option[T]`, or a `shared` handle. Typecheck and the
+            // interpreter accept these now, so codegen must too or the
+            // feature is a run-vs-build divergence.
+            None => {
+                // A `Copy` scalar receiver: `clone` is identity. The
+                // dispatch-key-driven check in `compile_method_call` covers a
+                // receiver whose STATIC type is a primitive, but a MONOMORPHIZED
+                // generic param (`fn dup[T: Clone](x: T) -> T { x.clone() }`
+                // instantiated at `i64`) carries the erased `T` in its key.
+                // Making `T: Clone` non-decorative is the point of
+                // B-2026-07-29-31, so the generic body has to lower.
+                if let Some(v) = self.scalar_identity_clone(&name_owned)? {
+                    return Ok(Some(v));
+                }
+                match self.aggregate_clone_fn_for_receiver(&name_owned) {
+                    Some(pair) => pair,
+                    None => return Ok(None),
+                }
+            }
         };
-
-        let clone_fn = self.emit_clone_fn_for_type_expr(&te);
         let llvm_ty = self.llvm_type_for_type_expr(&te);
         let fn_val = self
             .current_fn
@@ -133,6 +155,165 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let dst_val = self.builder.build_load(llvm_ty, dst, "clone.val").unwrap();
         Ok(Some(dst_val))
+    }
+
+    /// `x.clone()` where `x`'s slot holds a `Copy` scalar (any integer width,
+    /// float, or bool): the clone is the value itself. Returns `None` for every
+    /// other slot shape so the aggregate/collection paths still run.
+    ///
+    /// Only reached after `receiver_collection_type_expr` declines, so a
+    /// String/Vec/Map/Set binding never lands here. What does land here is a
+    /// monomorphized `T: Clone` param — the typechecker admits `x.clone()` in a
+    /// generic body (B-2026-07-29-31), and the mono's slot is the concrete
+    /// scalar. Anything the typechecker did NOT admit cannot reach this point,
+    /// which is what keeps an opaque i64 side-table handle out.
+    fn scalar_identity_clone(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(slot) = self.variables.get(name).copied() else {
+            return Ok(None);
+        };
+        if !matches!(
+            slot.ty,
+            BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
+        ) {
+            return Ok(None);
+        }
+        let ptr = self
+            .get_data_ptr(name)
+            .ok_or_else(|| format!("clone: unknown variable '{name}'"))?;
+        Ok(Some(
+            self.builder
+                .build_load(slot.ty, ptr, "clone.scalar")
+                .unwrap(),
+        ))
+    }
+
+    /// B-2026-07-29-27 / B-2026-07-29-31 — resolve `(TypeExpr, clone_fn)` for an
+    /// identifier receiver whose type is an AGGREGATE rather than a builtin
+    /// collection: a user `struct` / `enum` with `#[derive(Clone)]`, an
+    /// `Option[T]`, or a `shared struct` / `shared enum` handle. `None` when the
+    /// receiver isn't one of those, or when its deep clone is not implemented —
+    /// the caller then falls through to ordinary dispatch.
+    ///
+    /// The emitter is resolved EXPLICITLY here rather than by handing the
+    /// TypeExpr to `emit_clone_fn_for_type_expr`, because that dispatcher's
+    /// fallback arm is `emit_primitive_clone_fn` (a plain load+store). For a
+    /// heap-owning aggregate a shallow copy aliases the source's buffer and both
+    /// the source's and the copy's drop free it — the B-2026-06-14-12 double-free
+    /// shape. Where the deep clone is missing we would rather fall through to a
+    /// loud "no handler for method 'clone'" than silently mis-build, so every arm
+    /// below pairs its emitter with an explicit "shallow is exact" check.
+    ///
+    /// `Result[T, E]` is deliberately NOT here: it has the same inline-payload
+    /// overlay as `Option` but no in-place deep-copy helper (see the `Option`
+    /// note in `emit_clone_fn_for_type_expr`), so it would take exactly that
+    /// shallow path. The typechecker keeps rejecting `Result.clone()` to match.
+    fn aggregate_clone_fn_for_receiver(
+        &mut self,
+        name: &str,
+    ) -> Option<(TypeExpr, FunctionValue<'ctx>)> {
+        let te = self.aggregate_clone_receiver_type_expr(name)?;
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let head = p.segments.first()?.clone();
+
+        // A `shared` handle: `clone` is the refcount bump, so route through the
+        // OWNING clone (copy + retain). The plain dispatcher would copy the
+        // pointer without retaining — an uncounted alias whose two drops
+        // over-release (B-2026-07-28-11's shape).
+        if self.shared_types.contains_key(&head) {
+            let f = self.emit_owning_clone_fn_for_type_expr(&te);
+            return Some((te, f));
+        }
+        // `Option[T]`: the tag-guarded deep clone when the payload owns heap,
+        // the shallow whole-value copy when it does not (a `{tag, w0, w1, w2}`
+        // of scalars is complete on its own).
+        if head == "Option" {
+            if let Some(f) = self.emit_option_value_clone_fn(&te) {
+                return Some((te, f));
+            }
+            if self.type_expr_has_drop_heap(&te) {
+                return None;
+            }
+            let mangled = Self::display_mangle_te(&te);
+            let f = self.emit_primitive_clone_fn(&mangled, &te);
+            return Some((te, f));
+        }
+        if self.struct_types.contains_key(&head) {
+            let f = self.emit_struct_clone_fn(&head)?;
+            return Some((te, f));
+        }
+        if self.enum_layouts.contains_key(&head) {
+            if let Some(f) = self.emit_enum_clone_fn(&head) {
+                return Some((te, f));
+            }
+            // `emit_enum_clone_fn` returns `None` for a shared enum (RC
+            // machinery) and for an enum no variant of which owns heap. Only
+            // the latter is shallow-safe.
+            if self.type_expr_has_drop_heap(&te) {
+                return None;
+            }
+            let mangled = Self::display_mangle_te(&te);
+            let f = self.emit_primitive_clone_fn(&mangled, &te);
+            return Some((te, f));
+        }
+        None
+    }
+
+    /// Reconstruct an aggregate receiver's `TypeExpr` from the codegen
+    /// side-tables, the sibling of `receiver_collection_type_expr` for
+    /// struct/enum/Option/shared bindings.
+    ///
+    /// `enum_inst_var_types` is consulted FIRST because it is the only table
+    /// carrying a generic enum's instantiation (`opt` → `Option[String]`), and
+    /// the payload is what decides `Option`'s clone depth. A bare `Option` head
+    /// with no args would read as "no heap" and take the shallow copy, so when
+    /// the instantiation is missing, rebuild it from the per-variable payload
+    /// record (`var_option_payload_te`) instead of accepting the erased head.
+    fn aggregate_clone_receiver_type_expr(&self, name: &str) -> Option<TypeExpr> {
+        let span_zero = crate::token::Span {
+            line: 0,
+            column: 0,
+            offset: 0,
+            length: 0,
+        };
+        let mk_path = |seg: &str, args: Vec<TypeExpr>| -> TypeExpr {
+            TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec![seg.to_string()],
+                    generic_args: if args.is_empty() {
+                        None
+                    } else {
+                        Some(args.into_iter().map(GenericArg::Type).collect())
+                    },
+                    span: span_zero.clone(),
+                }),
+                span: span_zero.clone(),
+            }
+        };
+        if let Some(te) = self.enum_inst_var_types.get(name) {
+            if let TypeKind::Path(p) = &te.kind {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                if head != "Option" || p.generic_args.is_some() {
+                    return Some(te.clone());
+                }
+            }
+        }
+        let type_name = self.var_type_names.get(name)?;
+        if type_name == "Option" {
+            let payload = self.var_option_payload_te.get(name)?.clone();
+            return Some(mk_path("Option", vec![payload]));
+        }
+        if self.shared_types.contains_key(type_name)
+            || self.struct_types.contains_key(type_name)
+            || self.enum_layouts.contains_key(type_name)
+        {
+            return Some(mk_path(type_name, Vec::new()));
+        }
+        None
     }
 
     /// Lower `recv.try_clone()` (phase-8-stdlib-floor item 8) — the fallible

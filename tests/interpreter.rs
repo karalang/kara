@@ -25517,3 +25517,47 @@ fn test_narrow_float_literals_and_casts_round_to_storage_precision() {
     // Exact values stay exact.
     assert_eq!(run("println(1.25bf16);\nprintln(1.5f16);\n"), "1.25\n1.5\n");
 }
+
+/// B-2026-07-29-27 / B-2026-07-29-31 — the interpreter half of the synthesized
+/// `#[derive(Clone)]` method. The worker is `deep_clone_value`, not the derived
+/// Rust `Clone`: the latter bumps the `Arc<RwLock<..>>` behind a `Value::Array`
+/// FIELD, so the copy would share the source's storage and `b.items.push(..)`
+/// would be visible through `a`. Value semantics demand independent storage,
+/// and codegen's emitters deep-copy — so a shallow interpreter clone would also
+/// be a run-vs-build divergence.
+#[test]
+fn test_derived_clone_is_deep_on_struct_enum_and_option() {
+    assert_eq!(
+        run("#[derive(Clone)]\n\
+             struct S { n: i64, items: Vec[i64] }\n\
+             #[derive(Clone)]\n\
+             enum E { A(i64), B(String) }\n\
+             fn dup[T: Clone](x: T) -> T { x.clone() }\n\
+             let mut a = S { n: 1, items: Vec.new() };\n\
+             a.items.push(10);\n\
+             let mut b = a.clone();\n\
+             b.items.push(20);\n\
+             b.n = 99;\n\
+             println(f\"{a.n} {a.items.len()} {b.n} {b.items.len()}\");\n\
+             let e = E.B(\"payload\");\n\
+             match dup(e) { E.A(k) => println(f\"{k}\"), E.B(t) => println(t) }\n\
+             let o: Option[String] = Option.Some(\"inner\");\n\
+             println(o.clone().unwrap());\n"),
+        "1 1 99 2\npayload\ninner\n"
+    );
+}
+
+/// A hand-written `fn clone` must WIN over the derive-driven synthesis on both
+/// surfaces: the typechecker declines the built-in arm when `env.find_method`
+/// resolves one, so the interpreter's arm has to decline too or it would shadow
+/// the body the typechecker resolved.
+#[test]
+fn test_user_clone_impl_wins_over_derive_synthesis() {
+    assert_eq!(
+        run("struct S { n: i64 }\n\
+             impl S { fn clone(ref self) -> S { S { n: self.n + 100 } } }\n\
+             let s = S { n: 1 };\n\
+             println(f\"{s.clone().n}\");\n"),
+        "101\n"
+    );
+}

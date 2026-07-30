@@ -34308,3 +34308,63 @@ fn test_shared_struct_captured_by_two_taskgroup_spawns_rejected() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+/// B-2026-07-29-27 / B-2026-07-29-31 — the two halves of `Clone` must agree.
+///
+/// Pre-fix, bound DISCHARGE consulted `type_supports_clone` (which honours
+/// `#[derive(Clone)]`) while method RESOLUTION went through the env-less free
+/// fn `clone_self_type_for`, whose allowlist is the stdlib collections. So a
+/// `T: Clone` bound could be required and satisfied but never invoked:
+/// `fn dup[T: Clone](x: T) -> T { x }` type-checked with a derived argument
+/// while `{ x.clone() }` was rejected. This asserts the callable half for every
+/// surface the ledger measured as rejected.
+#[test]
+fn derive_clone_makes_clone_callable() {
+    typecheck_ok(
+        "#[derive(Clone)]\n\
+         struct S { n: i64 }\n\
+         #[derive(Clone)]\n\
+         enum E { A(i64) }\n\
+         fn dup[T: Clone](x: T) -> T { x.clone() }\n\
+         fn main() {\n\
+             let s = S { n: 1 };\n\
+             let _a = s.clone();\n\
+             let e = E.A(2);\n\
+             let _b = e.clone();\n\
+             let o: Option[String] = Option.Some(\"x\");\n\
+             let _c = o.clone();\n\
+             let q: Option[i64] = Option.Some(3);\n\
+             let _d = q.clone();\n\
+             let _e = dup(7);\n\
+         }",
+    );
+}
+
+/// The other side of the same fix: exposing the method must not make `Clone`
+/// universal. A user type WITHOUT the derive, and an unbounded generic param,
+/// both still have no `clone` — otherwise the derive would carry no meaning and
+/// codegen would be asked to copy types it has no emitter for.
+#[test]
+fn clone_still_rejected_without_derive_or_bound() {
+    for (src, what) in [
+        (
+            "struct S { n: i64 }\n\
+             fn main() { let s = S { n: 1 }; let _a = s.clone(); }",
+            "a struct with no #[derive(Clone)]",
+        ),
+        (
+            "fn dup[T](x: T) -> T { x.clone() }\n\
+             fn main() { let _a = dup(1); }",
+            "an UNBOUNDED generic param",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no method 'clone'")),
+            "{what} must still be rejected. Got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}

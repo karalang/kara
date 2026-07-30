@@ -454,6 +454,134 @@ impl<'a> super::TypeChecker<'a> {
         false
     }
 
+    /// Env-aware `Self` type for a `<recv>.clone()` CALL — the method-side
+    /// twin of [`Self::type_supports_clone`] (the bound-side predicate).
+    /// Returns `Some(Self)` when the receiver has a callable `clone`, `None`
+    /// when the arm must fall through to ordinary method resolution.
+    ///
+    /// B-2026-07-29-27 / B-2026-07-29-31: the two halves of `Clone` had drifted
+    /// apart. Bound DISCHARGE consulted `type_supports_clone`, which honours
+    /// `#[derive(Clone)]` and `impl Clone` on user types — so a `T: Clone`
+    /// bound was satisfiable. Method RESOLUTION went through the pure free fn
+    /// `clone_self_type_for` (src/typechecker/types.rs), whose allowlist is
+    /// `Str`/`Array`/`Vector` plus the named stdlib collections. It takes no
+    /// `env`, which is exactly WHY user types were excluded — it cannot consult
+    /// `info.derived_traits`. Result: `fn dup[T: Clone](x: T) -> T { x }`
+    /// type-checked with a `#[derive(Clone)]` argument while the same body
+    /// written `x.clone()` was rejected `no method 'clone' on type 'T'`. The
+    /// bound was decorative.
+    ///
+    /// The fix EXPOSES the method rather than tightening the bound: codegen
+    /// already ships every emitter needed (`emit_clone_fn_for_type_expr`
+    /// dispatches user structs, user enums, and `Option` via
+    /// `emit_option_value_clone_fn`), so nothing had to be invented and code
+    /// that compiles today keeps compiling.
+    ///
+    /// A user-declared `clone` method WINS: when `env.find_method` resolves one
+    /// on the receiver's nominal type, this returns `None` so the ordinary
+    /// impl-block dispatch runs the user's body (with its own declared return
+    /// type). Only types whose `Clone` comes from a derive — i.e. types with no
+    /// method to dispatch to — are answered here.
+    pub(super) fn clone_receiver_self_type(&self, ty: &Type) -> Option<Type> {
+        // Existing stdlib-collection surface first, byte-for-byte unchanged.
+        if let Some(t) = super::types::clone_self_type_for(ty) {
+            return Some(t);
+        }
+        match ty {
+            // A borrow of a clonable receiver clones the underlying owned type
+            // — same unwrapping rule `clone_self_type_for` applies.
+            Type::Ref(inner) | Type::MutRef(inner) => self.clone_receiver_self_type(inner),
+            // `Refinement { base }` clones as its base: the predicate is a
+            // static fact about the value, and a copy satisfies it too.
+            Type::Refinement { base, .. } => self.clone_receiver_self_type(base),
+            // `Rc[T]` / `Arc[T]` / a `shared struct` handle: `clone` is the
+            // refcount bump (the canonical RC surface).
+            Type::Rc(_) | Type::Arc(_) => Some(ty.clone()),
+            Type::Shared(name) => {
+                if self.user_clone_method_exists(name, &[]) {
+                    return None;
+                }
+                Some(ty.clone())
+            }
+            Type::Named { name, args } => {
+                // A user-written `fn clone` (inherent or via `impl Clone`) owns
+                // the call — fall through to impl dispatch.
+                if self.user_clone_method_exists(name, args) {
+                    return None;
+                }
+                // `Option[T]`: structurally clonable when the payload is. Not
+                // payload-heap-specific — `Option[i64]` was rejected too.
+                //
+                // `Result[T, E]` is NOT admitted, even though it shares
+                // `Option`'s inline-payload overlay and `type_supports_clone`
+                // says yes: codegen has no in-place deep-copy helper for it
+                // (`emit_clone_fn_for_type_expr`'s `Option` arm records this),
+                // so a `Result[String, _]` clone would take the SHALLOW copy
+                // and alias the source's buffer — a double-free at the two
+                // drops. Better a live gap than a silent miscompile; tracked on
+                // the ledger with B-2026-07-29-31.
+                if name == "Option" {
+                    return args
+                        .iter()
+                        .all(|a| self.type_supports_clone(a))
+                        .then(|| ty.clone());
+                }
+                // User struct / enum / distinct type carrying `#[derive(Clone)]`
+                // (or a `Clone` impl recorded in the impl table).
+                let derived = self.env.has_impl("Clone", name, args)
+                    || self
+                        .env
+                        .structs
+                        .get(name)
+                        .is_some_and(|i| i.derived_traits.contains("Clone"))
+                    || self
+                        .env
+                        .enums
+                        .get(name)
+                        .is_some_and(|i| i.derived_traits.contains("Clone"))
+                    || self
+                        .env
+                        .distinct_types
+                        .get(name)
+                        .is_some_and(|t| t.contains("Clone"));
+                derived.then(|| ty.clone())
+            }
+            // Inside a generic body, `x.clone()` on a `T: Clone`-bounded param
+            // is the whole point of the bound. Discharged against the declared
+            // bounds only — an unbounded `T` still gets the `no method` error.
+            Type::TypeParam(p) => self.type_param_has_clone_bound(p).then(|| ty.clone()),
+            _ => None,
+        }
+    }
+
+    /// True when the program declares a `clone` method on `name` — an inherent
+    /// `impl` or a hand-written `impl Clone for name`. Such a method must win
+    /// over the derive-driven synthesis, so `clone_receiver_self_type` declines
+    /// the receiver and lets ordinary dispatch find the body.
+    fn user_clone_method_exists(&self, name: &str, args: &[Type]) -> bool {
+        self.env.find_method(name, args, "clone").is_some()
+    }
+
+    /// True when the in-scope generic parameter `p` carries a `Clone` bound
+    /// (directly, or through a supertrait of one of its bounds). Reads
+    /// `enclosing_bounds` — the same table `gat_rhs_satisfies_bound` proves
+    /// `TypeParam` bounds against — so `fn dup[T: Clone](x: T) -> T
+    /// { x.clone() }` resolves while an unbounded `[T]` still reports
+    /// `no method 'clone'`.
+    fn type_param_has_clone_bound(&self, p: &str) -> bool {
+        self.enclosing_bounds.get(p).is_some_and(|bounds| {
+            bounds.iter().any(|tb| {
+                let trait_name = tb.path.last().cloned().unwrap_or_default();
+                trait_name == "Clone"
+                    || self
+                        .env
+                        .supertrait_closure_traits(&trait_name)
+                        .iter()
+                        .any(|st| st == "Clone")
+            })
+        })
+    }
+
     /// Check whether a type supports `Clone`. GAT slice 8b
     /// carry-forward (a). All primitives clone trivially; named
     /// types require `#[derive(Clone)]` (Copy implies Clone by the
