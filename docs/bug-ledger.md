@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 102 | 1 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
-| missing-feature | 69 | 0 |
+| missing-feature | 70 | 1 |
 | false-positive | 50 | 0 |
 | run-vs-build | 46 | 0 |
 | perf | 39 | 2 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 553 | 3 |
+| codegen | 554 | 4 |
 | typecheck | 99 | 0 |
-| interp | 78 | 1 |
+| interp | 79 | 2 |
 | ownership | 33 | 0 |
 | autopar | 24 | 0 |
 | other | 21 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **766 surfaced · 3 open · 755 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **767 surfaced · 4 open · 755 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane -- the corpus's largest genuine deficit. Cause is quantitatively CONSISTENT with B-2026-07-30-5 (VecDeque.pop_front O(n)): at the measured 3.61 G elem-moves/s, an average queue depth of ~21k-23.5k of n=50k accounts for the whole gap. Confirming it needs one number -- the kata's average queue depth. | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | medium | VecDeque.pop_front is O(n) (memmove per pop), making a DEEP queue drain O(n^2) — real, but NOT the cause of B-2026-07-30-4 | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. SHAPE 2 (owned aggregate temp) fixed in d794aad; Vec/VecDeque ELEMENTS fixed in b55743b, which also taught the NLL channel to carry container bindings at all. Still silent: Map values, tuple elements, Option/Result payloads, enum payloads. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
+| B-2026-07-30-15 | 2026-07-30 | codegen+interp | high | `Json` has no integer variant — every i64 serializes through f64, so whole numbers emit `1.0` (which Go's encoding/json REFUSES into an int field) and any value past 2^53 is silently corrupted. Both defects survive a `Json.parse` round-trip, so a service cannot echo an integer field unchanged. | — |
 
 ### Fixed (755)
 
