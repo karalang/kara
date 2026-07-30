@@ -6185,8 +6185,102 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(self.build_slice_header(slice_ty, data, len)));
         }
 
+        // Fresh owned `Vec[T]` rvalue at a call boundary — `f(vs.clone())`,
+        // `f(make())`. The same class as the literal case above, one step more
+        // general (B-2026-07-29-32).
+        if let Some((data, len)) = self.fresh_vec_rvalue_slice_parts(arg)? {
+            return Ok(Some(self.build_slice_header(slice_ty, data, len)));
+        }
+
         let _ = elem_ty;
         Ok(None)
+    }
+
+    /// A fresh, owned `Vec[T]` rvalue passed where a `Slice[T]` is expected —
+    /// `f(vs.clone())`, `f(make())`. Returns `(data_ptr, len)` for a slice
+    /// header, or `None` when `expr` is not one of the recognised fresh shapes,
+    /// so the caller's compile is never double-emitted.
+    ///
+    /// B-2026-07-29-32: the paths above understand a named local, a `ref` param,
+    /// a range index and a bare literal. A fresh call result fell through to
+    /// `Ok(None)`, so the Vec's 3-word `{ptr,len,cap}` reached a 2-word
+    /// `{ptr,len}` `Slice[T]` parameter and LLVM module verification failed with
+    /// `Call parameter type does not match function signature!`. The interpreter
+    /// accepted the same coercion, so this was a run-vs-build divergence:
+    /// `karac check` passed, `karac run` worked, `karac build` died with a raw
+    /// verifier dump and no user-level diagnostic. The workaround was to bind the
+    /// temp to a `let`, which took the Identifier fast path.
+    ///
+    /// This was written once before and deliberately WITHHELD, because for a
+    /// generic `Slice[T] -> T` over a heap element it converted that loud abort
+    /// into B-2026-07-29-35's silent wrong answer. -35 is fixed (5f2cb6ad), and
+    /// the `let`-bound form was re-measured as correct before landing this, so
+    /// the trade no longer exists.
+    ///
+    /// The slice only BORROWS, so the backing Vec gets a caller-scope free via
+    /// `materialize_owned_temp`, exactly as the literal path does
+    /// (B-2026-07-02-6). That is why the accepted shapes are ENUMERATED rather
+    /// than "any rvalue that compiles to a Vec struct": queueing that free for a
+    /// value we do not own — a field read, an index, a `ref`-returning accessor —
+    /// would be a double-free. A place expression must keep falling through to
+    /// `Ok(None)` and failing loudly as before.
+    ///
+    /// Recognised: a `Call` to a named fn whose declared return type is `Vec`,
+    /// and `<vec>.clone()`. Both are unconditionally fresh and owned. Widening
+    /// this needs a positive freshness proof for the new shape, not merely an
+    /// absence of evidence that it is borrowed.
+    pub(super) fn fresh_vec_rvalue_slice_parts(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)>, String> {
+        let is_vec_name = |n: &str| n == "Vec" || n.starts_with("Vec[");
+        let fresh = match &expr.kind {
+            // A declared-`Vec`-returning free function. Borrow-returning calls
+            // are excluded: their result aliases the callee's source, so the
+            // caller never owns it and must not queue a free for it.
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(name) => {
+                    !self.is_borrow_returning_call_expr(expr)
+                        && self
+                            .fn_return_type_names
+                            .get(name.as_str())
+                            .is_some_and(|t| is_vec_name(t))
+                }
+                _ => false,
+            },
+            // `<vec>.clone()` — the derived clone always hands back a new buffer.
+            ExprKind::MethodCall { object, method, .. } if method == "clone" => self
+                .type_name_of_expr(object)
+                .is_some_and(|t| is_vec_name(&t)),
+            _ => false,
+        };
+        if !fresh {
+            return Ok(None);
+        }
+
+        let compiled = self.compile_expr(expr)?;
+        let BasicTypeEnum::StructType(st) = compiled.get_type() else {
+            return Err("fresh Vec rvalue compiled to a non-struct value".into());
+        };
+        // Guard the layout assumption rather than trusting the type name: only a
+        // 3-field `{ptr,len,cap}` Vec is unpacked here. Anything else (a Slice
+        // already in the param's shape, some other struct return) is left alone.
+        if st.count_fields() != 3 {
+            return Ok(None);
+        }
+        self.materialize_owned_temp(compiled, (expr.span.offset, expr.span.length));
+        let sv = compiled.into_struct_value();
+        let data = self
+            .builder
+            .build_extract_value(sv, 0, "freshvec.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(sv, 1, "freshvec.len")
+            .unwrap()
+            .into_int_value();
+        Ok(Some((data, len)))
     }
 
     /// For an anonymous collection literal — a bare `[..]` (which lowering

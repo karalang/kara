@@ -10826,6 +10826,45 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-29-32): a FRESH owned `Vec` rvalue passed where a
+    /// `Slice[T]` is expected. Pre-fix `coerce_to_slice` understood only a named
+    /// local, a `ref` param, a range index and a bare literal, so a call result
+    /// reached the call as a raw 3-word `{ptr,len,cap}` against a 2-word
+    /// `{ptr,len}` param and LLVM module verification aborted the build —
+    /// `karac check` passed and `karac run` worked, so it was a run-vs-build
+    /// divergence with no user-level diagnostic.
+    ///
+    /// Landing the coercion alone was not enough and is why this bug outlived
+    /// B-2026-07-29-35: once these arguments compiled, they arrived with `T`
+    /// unbound because BOTH mono substitution sources keyed on the argument being
+    /// a plain identifier. Binding only the name reproduced -35's
+    /// `karac_clone_T`; binding only the LLVM type gave `Function return type
+    /// does not match operand type of return inst`. The name and the type have to
+    /// move together, which is what the two `*_arg_elem_*` helpers ensure.
+    ///
+    /// Covers all four shapes the fix repairs: generic and concrete params, a
+    /// `.clone()` and a `Vec`-returning call as the fresh argument, and a scalar
+    /// element (the case that masked the original bug, since an unbound `T`
+    /// defaults to `i64` and matched by luck).
+    #[test]
+    fn e2e_fresh_vec_rvalue_coerces_to_slice_param() {
+        if let Some(out) = run_program(
+            "fn first[T](s: Slice[T]) -> T { s[0] }\n\
+             fn firstc(s: Slice[String]) -> String { s[0] }\n\
+             fn make() -> Vec[String] { [\"mk-alpha\", \"mk-beta\"] }\n\
+             fn main() {\n\
+             \x20   let vs: Vec[String] = [\"own-\" + \"a\", \"own-\" + \"b\"];\n\
+             \x20   println(f\"[{first(vs.clone())}]\");\n\
+             \x20   println(f\"[{firstc(vs.clone())}]\");\n\
+             \x20   println(f\"[{first(make())}]\");\n\
+             \x20   let ns: Vec[i64] = [7i64, 8i64];\n\
+             \x20   println(f\"[{first(ns.clone())}]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "[own-a]\n[own-a]\n[mk-alpha]\n[7]\n");
+        }
+    }
+
     /// B-2026-07-03-7 (codegen side): `Vec[Struct].sort()` and
     /// `Vec[Enum].sort()` for a `#[derive(Ord)]` user type. Pre-fix codegen
     /// errored "Vec.sort() in codegen supports integer, String, float, tuple,

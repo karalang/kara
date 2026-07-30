@@ -20,7 +20,9 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, Int
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
-use super::helpers::{const_value_from_literal_expr, const_value_to_mangle_str};
+use super::helpers::{
+    const_value_from_literal_expr, const_value_to_mangle_str, vec_inner_type_expr,
+};
 use super::state::{LayoutId, MapMonoMethods, VarSlot};
 
 /// Snapshot of every name-keyed per-function variable side-table that
@@ -179,8 +181,18 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
         for (param, arg) in func.params.iter().zip(args.iter()) {
-            let ExprKind::Identifier(arg_name) = &arg.value.kind else {
-                continue;
+            // B-2026-07-29-32: the argument is no longer required to be a plain
+            // identifier. A `Slice[T]` param can now receive a FRESH Vec rvalue
+            // (`f(vs.clone())`, `f(make())`), which reaches codegen only because
+            // -32 taught `coerce_to_slice` to coerce it; the arms that genuinely
+            // need a variable NAME to index a side table still demand one below.
+            // Leaving the blanket gate here bound `T`'s NAME (via
+            // `resolve_container_param_elem_substs`) without binding its LLVM
+            // TYPE, so the mono returned `i64` while its body cloned a String —
+            // `Function return type does not match operand type of return inst`.
+            let arg_ident: Option<&str> = match &arg.value.kind {
+                ExprKind::Identifier(n) => Some(n.as_str()),
+                _ => None,
             };
             let peeled = match &param.ty.kind {
                 TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
@@ -214,9 +226,10 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             match head {
                 "Vec" | "VecDeque" => {
-                    if let (Some(pn), Some(&elem)) =
-                        (param_at(0), self.vec_elem_types.get(arg_name.as_str()))
-                    {
+                    if let (Some(pn), Some(&elem)) = (
+                        param_at(0),
+                        arg_ident.and_then(|n| self.vec_elem_types.get(n)),
+                    ) {
                         subst.entry(pn).or_insert(elem);
                     }
                 }
@@ -233,28 +246,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     // returned value printed as a raw pointer). The i64/Array
                     // cases masked it: an unbound `T` defaults to `i64`, which
                     // matched those element types by luck (B-2026-07-03-22).
-                    if let (Some(pn), Some(elem)) =
-                        (param_at(0), self.infer_elem_from_source(&arg.value))
-                    {
+                    // B-2026-07-29-32 adds the fresh-rvalue fallback. The
+                    // shared `infer_elem_from_source` stays identifier-only
+                    // deliberately — it has three other callers whose behaviour
+                    // should not shift for this fix.
+                    if let (Some(pn), Some(elem)) = (
+                        param_at(0),
+                        self.infer_elem_from_source(&arg.value)
+                            .or_else(|| self.fresh_container_arg_elem_llvm(&arg.value)),
+                    ) {
                         subst.entry(pn).or_insert(elem);
                     }
                 }
                 "Set" => {
-                    if let (Some(pn), Some(&elem)) =
-                        (param_at(0), self.set_elem_types.get(arg_name.as_str()))
-                    {
+                    if let (Some(pn), Some(&elem)) = (
+                        param_at(0),
+                        arg_ident.and_then(|n| self.set_elem_types.get(n)),
+                    ) {
                         subst.entry(pn).or_insert(elem);
                     }
                 }
                 "Map" => {
-                    if let (Some(kn), Some(&kty)) =
-                        (param_at(0), self.map_key_types.get(arg_name.as_str()))
-                    {
+                    if let (Some(kn), Some(&kty)) = (
+                        param_at(0),
+                        arg_ident.and_then(|n| self.map_key_types.get(n)),
+                    ) {
                         subst.entry(kn).or_insert(kty);
                     }
-                    if let (Some(vn), Some(&vty)) =
-                        (param_at(1), self.map_val_types.get(arg_name.as_str()))
-                    {
+                    if let (Some(vn), Some(&vty)) = (
+                        param_at(1),
+                        arg_ident.and_then(|n| self.map_val_types.get(n)),
+                    ) {
                         subst.entry(vn).or_insert(vty);
                     }
                 }
@@ -401,9 +423,6 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
         for (param, arg) in func.params.iter().zip(args.iter()) {
-            let ExprKind::Identifier(arg_name) = &arg.value.kind else {
-                continue;
-            };
             let peeled = match &param.ty.kind {
                 TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
                 _ => &param.ty,
@@ -433,9 +452,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             }
             let pname = &ep.segments[0];
-            // The caller's registered element TypeExpr for the argument — the
-            // same source `vec_index_elem_type_expr` reads.
-            let Some(elem_te) = self.var_elem_type_exprs.get(arg_name.as_str()).cloned() else {
+            let Some(elem_te) = self.arg_container_elem_type_expr(&arg.value) else {
                 continue;
             };
             let TypeKind::Path(elem_path) = &elem_te.kind else {
@@ -446,6 +463,69 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             subst_names.entry(pname.clone()).or_insert(head);
             subst_type_exprs.entry(pname.clone()).or_insert(elem_te);
+        }
+    }
+
+    /// The element LLVM type of a FRESH container rvalue argument — the
+    /// type-side twin of [`Self::arg_container_elem_type_expr`], for the `Slice`
+    /// arm of `augment_subst_from_arg_elem_types` (B-2026-07-29-32).
+    ///
+    /// Kept separate from the shared `infer_elem_from_source` on purpose: that
+    /// helper has three other callers, and widening it would shift their
+    /// behaviour for a fix that only needs this one call site. Covers the same
+    /// two shapes `arg_container_elem_type_expr` does — `<vec>.clone()` and a
+    /// named `Vec`-returning call — so the NAME and TYPE bindings for `T` can
+    /// never disagree. They must move together: binding one without the other
+    /// produced either `Function return type does not match operand type of
+    /// return inst` (name bound, type still defaulted to `i64`) or a raw pointer
+    /// printed as an integer (type bound, name still the literal `"T"`).
+    fn fresh_container_arg_elem_llvm(&self, arg: &Expr) -> Option<BasicTypeEnum<'ctx>> {
+        // A plain identifier is already served by `infer_elem_from_source`,
+        // which is consulted first; this is only the fresh-rvalue fallback.
+        if matches!(&arg.kind, ExprKind::Identifier(_)) {
+            return None;
+        }
+        let te = self.arg_container_elem_type_expr(arg)?;
+        Some(self.llvm_type_for_type_expr(&te))
+    }
+
+    /// The element `TypeExpr` of a container ARGUMENT, for
+    /// `resolve_container_param_elem_substs`.
+    ///
+    /// Three shapes, all of which can reach a `Slice[T]` parameter:
+    ///
+    /// * a named local — read its registered element (the same source
+    ///   `vec_index_elem_type_expr` uses);
+    /// * `<vec>.clone()` — the element is the RECEIVER's element;
+    /// * a call to a named `Vec`-returning fn — peel the declared return type.
+    ///
+    /// The last two were added with B-2026-07-29-32. Before it, a fresh Vec
+    /// rvalue could not reach a `Slice[T]` param at all (codegen aborted in the
+    /// LLVM verifier), so `Identifier` was the only shape that ever got here.
+    /// Once -32 made those arguments compile, they arrived with `T` unbound by
+    /// name and hit exactly the `karac_clone_T` path B-2026-07-29-35 had just
+    /// closed for named locals — silent wrong output again. So -32 could not land
+    /// without widening this.
+    ///
+    /// Deliberately NOT covered: an `Array` local, which has no registered
+    /// element TypeExpr at all (B-2026-07-29-37).
+    fn arg_container_elem_type_expr(&self, arg: &Expr) -> Option<TypeExpr> {
+        match &arg.kind {
+            ExprKind::Identifier(name) => self.var_elem_type_exprs.get(name.as_str()).cloned(),
+            // `<vec>.clone()` yields a Vec with the receiver's element type.
+            ExprKind::MethodCall { object, method, .. } if method == "clone" => {
+                self.arg_container_elem_type_expr(object)
+            }
+            // A named fn returning `Vec[E]` — peel one Vec layer off the
+            // DECLARED return type to get `E`.
+            ExprKind::Call { callee, .. } => {
+                let ExprKind::Identifier(fname) = &callee.kind else {
+                    return None;
+                };
+                let ret = self.fn_return_type_exprs.get(fname.as_str())?;
+                vec_inner_type_expr(ret)
+            }
+            _ => None,
         }
     }
 
