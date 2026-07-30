@@ -2070,6 +2070,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             let slot =
                                 self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                             self.builder.build_store(slot, val).unwrap();
+                            if arg_flows_into_return && is_struct {
+                                // B-2026-07-30-12 — MEMORY ONLY, for the reason
+                                // spelled out at the struct-literal sibling
+                                // below: on the entry-copy passthrough path the
+                                // orphaned buffer is ours to free but the body
+                                // belongs to the result's consumer. Struct-only
+                                // because the enum leg's dual registration below
+                                // has no memory-half-alone form.
+                                self.track_struct_var(&ret_ty_name, slot);
+                                return;
+                            }
                             self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot);
                             if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
                                 self.track_enum_var(&ret_ty_name, slot);
@@ -2232,7 +2243,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 if has_user_drop && !self.shared_types.contains_key(&name) {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
-                    self.track_user_drop_var(&name, "__owned_agg_tmp", slot);
+                    if arg_flows_into_return {
+                        // B-2026-07-30-12 — MEMORY ONLY on the passthrough path.
+                        // We are here despite the guard because
+                        // `arg_is_entry_copied_heap_struct` overrode it
+                        // (B-2026-07-08-6): the callee entry-copies and returns
+                        // an INDEPENDENT copy, so this original buffer is
+                        // orphaned and does need freeing. Its user `Drop` BODY
+                        // does not belong here — the value flows out to the
+                        // result's consumer, whose own drop runs it. Registering
+                        // the full `karac_drop_<T>` wrapper (body + fields +
+                        // memory) ran the body TWICE: `let p = pass(Guard { .. })`
+                        // printed the body once under the interpreter and twice
+                        // under AOT/JIT. That parity break shipped with -08-6 and
+                        // is what this arm fixes; `track_struct_var` is the
+                        // memory half alone.
+                        self.track_struct_var(&name, slot);
+                    } else {
+                        self.track_user_drop_var(&name, "__owned_agg_tmp", slot);
+                    }
                     return;
                 }
                 // B-2026-07-30-11 SHAPE 2 — `name` declares no `Drop` of its own
@@ -2396,20 +2425,40 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (the arg-pass move-suppression handles the transfer), matching
     /// `track_inline_owned_aggregate_arg`'s own scope.
     pub(super) fn arg_is_entry_copied_heap_struct(&self, arg: &Expr) -> bool {
-        let ExprKind::StructLiteral { path, .. } = &arg.kind else {
-            return false;
-        };
-        // An enum struct-variant literal (`E.V { .. }`) forwards through the
-        // enum arm, not the struct entry-copy — exclude it.
-        if self.enum_name_of_expr(arg).is_some() {
-            return false;
-        }
-        let Some(name) = path.last() else {
-            return false;
+        let name = match &arg.kind {
+            ExprKind::StructLiteral { path, .. } => {
+                // An enum struct-variant literal (`E.V { .. }`) forwards through
+                // the enum arm, not the struct entry-copy — exclude it.
+                if self.enum_name_of_expr(arg).is_some() {
+                    return false;
+                }
+                match path.last() {
+                    Some(n) => n.clone(),
+                    None => return false,
+                }
+            }
+            // B-2026-07-30-12 — a fn-call arg is entry-copied just the same:
+            // `pass(mk())` where `mk() -> Guard`. Only the struct-LITERAL shape
+            // was matched here, so the fn-call temp fell through the
+            // B-2026-07-08-6 override, registered no cleanup, and its buffer was
+            // orphaned exactly as the literal's had been — the same leak, one
+            // expression shape over. `enum_name_of_expr`'s Call arm resolves
+            // variant ctors, so an enum-variant call is excluded by the
+            // `struct_types` test below.
+            ExprKind::Call { callee, .. } => {
+                let ExprKind::Identifier(fn_name) = &callee.kind else {
+                    return false;
+                };
+                match self.fn_return_type_names.get(fn_name) {
+                    Some(n) => n.clone(),
+                    None => return false,
+                }
+            }
+            _ => return false,
         };
         self.struct_types.contains_key(name.as_str())
             && !self.shared_types.contains_key(name.as_str())
-            && self.aggregate_param_copy_supported_struct(name, &mut Vec::new())
+            && self.aggregate_param_copy_supported_struct(&name, &mut Vec::new())
             && self
                 .struct_field_type_exprs
                 .get(name.as_str())

@@ -5508,6 +5508,54 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS
+    /// runs its `Drop` body exactly ONCE, and its buffer is freed exactly once.
+    ///
+    /// `pass(g: Guard) -> Guard { g }` entry-copies the param and returns an
+    /// INDEPENDENT copy, so the caller's original buffer is orphaned.
+    /// B-2026-07-08-6 recovered that buffer by registering the caller temp's
+    /// drop even on the passthrough path — but it registered the FULL
+    /// `karac_drop_<T>` wrapper, so the user body ran on the caller's temp AND
+    /// on the consumer of the result: one drop under the interpreter, two under
+    /// AOT/JIT. A run/build parity break, shipped, and invisible to the suite.
+    ///
+    /// The split this pins: on the passthrough path the caller registers the
+    /// MEMORY drop only. Memory follows the buffer, bodies follow the value.
+    ///
+    /// Both arg shapes, because the predicate that routes them here matched only
+    /// the first: a struct LITERAL and a fn CALL. The literal double-fired; the
+    /// call fell through the override entirely and leaked instead.
+    ///
+    /// `G` MUST carry a heap field. `arg_is_entry_copied_heap_struct` requires
+    /// one, so a scalar-only `G` never reaches the override at all and the whole
+    /// shape is already correct — a scalar version of this test passes on the
+    /// unfixed compiler and pins nothing.
+    ///
+    /// Twinned with `tests/interpreter.rs`'s
+    /// `test_fnret_passthrough_arg_drop_fires_once` — the interpreter was always
+    /// right here, so the twin is what pins codegen to it.
+    #[test]
+    fn e2e_fnret_passthrough_arg_drop_fires_once() {
+        let Some(out) = run_program(
+            "struct G { name: String, id: i64 }\n\
+             impl Drop for G { fn drop(mut ref self) { println(f\"dG{self.id}\"); } }\n\
+             fn pass(g: G) -> G { g }\n\
+             fn mk(i: i64) -> G { G { name: \"a padded payload string here\", id: i } }\n\
+             fn main() {\n\
+             \x20   let p = pass(G { name: \"a padded payload string here\", id: 1 });\n\
+             \x20   println(f\"{p.id}\");\n\
+             \x20   let q = pass(mk(2));\n\
+             \x20   println(f\"{q.id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // Pre-fix AOT appended a second `dG1` after `end` — the caller temp's
+        // body firing on top of `p`'s. The interpreter printed this string.
+        assert_eq!(out, "1\ndG1\n2\ndG2\nend\n");
+    }
+
     /// Spawn a built kara test binary and capture stdout+stderr, with a
     /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
     /// in `tests/common/mod.rs` — see the module doc there for the full

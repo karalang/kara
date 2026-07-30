@@ -25630,3 +25630,31 @@ fn test_owned_aggregate_temp_runs_field_user_drop() {
         "c\ndA1\n-\nc\ndA2\n-\ndA3\n-\n4\ndA4\nend\n"
     );
 }
+
+/// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS runs
+/// its `Drop` body exactly once.
+///
+/// The interpreter was always correct here (its `run_fresh_temp_arg_drops`
+/// skips any arg the callee can return), so this is the ORACLE half of the
+/// pair: codegen registered the full drop wrapper on the passthrough path and
+/// printed the body twice, a run/build divergence that shipped with
+/// B-2026-07-08-6. Same source and expected string as `tests/codegen.rs`'s
+/// `e2e_fnret_passthrough_arg_drop_fires_once`; pinning it here is what stops a
+/// future codegen change from drifting away from the interpreter again.
+#[test]
+fn test_fnret_passthrough_arg_drop_fires_once() {
+    assert_eq!(
+        run("struct G { name: String, id: i64 }\n\
+             impl Drop for G { fn drop(mut ref self) { println(f\"dG{self.id}\"); } }\n\
+             fn pass(g: G) -> G { g }\n\
+             fn mk(i: i64) -> G { G { name: \"a padded payload string here\", id: i } }\n\
+             fn main() {\n\
+                 let p = pass(G { name: \"a padded payload string here\", id: 1 });\n\
+                 println(f\"{p.id}\");\n\
+                 let q = pass(mk(2));\n\
+                 println(f\"{q.id}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "1\ndG1\n2\ndG2\nend\n"
+    );
+}
