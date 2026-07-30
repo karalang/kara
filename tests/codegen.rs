@@ -5384,6 +5384,39 @@ fn main() {
         assert_eq!(out, "inner\n5\ntrue\n");
     }
 
+    /// B-2026-07-30-10 — `Result[T, E].clone()`, the sibling gap
+    /// B-2026-07-29-31 left open. Admitted for the DIRECT String/Vec/scalar
+    /// halves class codegen can deep-copy in place (`emit_result_value_clone_fn`
+    /// → `deep_copy_result_inline_heap_halves_in_place`). Exercises a live-Ok
+    /// String half, a live-Err String half, an all-scalar Result (shallow whole-
+    /// value copy), and a Vec half — reusing the SOURCE after each clone so the
+    /// two independent drops both fire. A shallow-alias regression would double-
+    /// free under the memory-sanitizer suite; here we pin the deep-copy output.
+    #[test]
+    fn e2e_result_clone_deep_copies_live_half() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let a: Result[String, i64] = Result.Ok(\"okstr\");\n\
+             \x20   let ca = a.clone();\n\
+             \x20   match ca { Result.Ok(s) => println(s), Result.Err(e) => println(f\"{e}\"), }\n\
+             \x20   match a  { Result.Ok(s) => println(s), Result.Err(e) => println(f\"{e}\"), }\n\
+             \x20   let b: Result[i64, String] = Result.Err(\"errstr\");\n\
+             \x20   let cb = b.clone();\n\
+             \x20   match cb { Result.Ok(n) => println(f\"{n}\"), Result.Err(e) => println(e), }\n\
+             \x20   let c: Result[i64, i64] = Result.Ok(9);\n\
+             \x20   let cc = c.clone();\n\
+             \x20   match cc { Result.Ok(n) => println(f\"{n}\"), Result.Err(e) => println(f\"{e}\"), }\n\
+             \x20   let d: Result[Vec[String], i64] = Result.Ok(vec![\"x\", \"y\"]);\n\
+             \x20   let cd = d.clone();\n\
+             \x20   match cd { Result.Ok(v) => println(f\"{v.len()}\"), Result.Err(e) => println(f\"{e}\"), }\n\
+             \x20   match d  { Result.Ok(v) => println(f\"{v.len()}\"), Result.Err(e) => println(f\"{e}\"), }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "okstr\nokstr\nerrstr\n9\n2\n2\n");
+    }
+
     /// B-2026-07-29-39 — an aggregate runs its fields' user `impl Drop`.
     ///
     /// Pre-fix, drop glue dispatched a user body for a DIRECT binding of a Drop

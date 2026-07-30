@@ -206,10 +206,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// loud "no handler for method 'clone'" than silently mis-build, so every arm
     /// below pairs its emitter with an explicit "shallow is exact" check.
     ///
-    /// `Result[T, E]` is deliberately NOT here: it has the same inline-payload
-    /// overlay as `Option` but no in-place deep-copy helper (see the `Option`
-    /// note in `emit_clone_fn_for_type_expr`), so it would take exactly that
-    /// shallow path. The typechecker keeps rejecting `Result.clone()` to match.
+    /// `Result[T, E]` (B-2026-07-30-10) joins `Option` here for the DIRECT
+    /// String/Vec/scalar-halves class: `emit_result_value_clone_fn` deep-copies
+    /// the live half through `deep_copy_result_inline_heap_halves_in_place`, and
+    /// returns `None` for a heap-free or uncovered-half Result so the shallow
+    /// path (exact only when heap-free) is taken. The typechecker admits
+    /// `Result.clone()` for exactly the covered class, so an uncovered heap half
+    /// never reaches this shallow fallthrough.
     fn aggregate_clone_fn_for_receiver(
         &mut self,
         name: &str,
@@ -233,6 +236,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // of scalars is complete on its own).
         if head == "Option" {
             if let Some(f) = self.emit_option_value_clone_fn(&te) {
+                return Some((te, f));
+            }
+            if self.type_expr_has_drop_heap(&te) {
+                return None;
+            }
+            let mangled = Self::display_mangle_te(&te);
+            let f = self.emit_primitive_clone_fn(&mangled, &te);
+            return Some((te, f));
+        }
+        // `Result[T, E]` (B-2026-07-30-10): the direct String/Vec-halves deep
+        // clone, else the shallow whole-value copy when no half owns heap. A
+        // heap-owning half outside the covered class returns `None` (loud
+        // fallthrough) rather than a shallow alias — but the typecheck gate
+        // keeps those out, so in practice only the two exact shapes arrive.
+        if head == "Result" {
+            if let Some(f) = self.emit_result_value_clone_fn(&te) {
                 return Some((te, f));
             }
             if self.type_expr_has_drop_heap(&te) {

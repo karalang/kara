@@ -113,6 +113,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         return f;
                     }
                 }
+                // `Result[T, E]` (B-2026-07-30-10): tag-guarded deep clone of
+                // whichever direct String/Vec half is live. `None` for a
+                // heap-free or uncovered-half Result — falls through to the
+                // enum/primitive path below (shallow, exact only when heap-free;
+                // the typecheck gate excludes uncovered heap halves).
+                if head == Some("Result") {
+                    if let Some(f) = self.emit_result_value_clone_fn(te) {
+                        self.clone_fn_cache.insert(type_name, f);
+                        return f;
+                    }
+                }
                 // User struct / enum: deep-clone the heap payload (the
                 // `#[derive(Clone)]` analog of the synthesized drop). Without
                 // this, a `let w = v[i]` move-out of a `Vec[E]`/`Vec[S]` whose
@@ -347,6 +358,69 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         self.current_fn = Some(clone_fn);
         self.deep_copy_option_inline_payload_in_place(dst, opt_te);
+        self.current_fn = saved_fn;
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(clone_fn)
+    }
+
+    /// B-2026-07-30-10 — the `Result[T, E]` twin of `emit_option_value_clone_fn`.
+    /// Emit `karac_clone_Result_<ok>_<err>(*const, *mut)`: a tag-guarded deep
+    /// clone that shallow-copies the whole `{tag, w0, w1, w2}` value, then
+    /// rewrites the DST's live half in place with an independent copy via
+    /// `deep_copy_result_inline_heap_halves_in_place` (the same overlay helper
+    /// the B-2026-07-21-14 param entry-copy uses, so copy-depth == drop-depth).
+    ///
+    /// Self-gates on `result_field_direct_vecstr_halves_ok`: the in-place helper
+    /// only covers the DIRECT `String`/`Vec`/`VecDeque`(-non-shared-element)
+    /// halves class, so any other heap-bearing half (struct/enum/shared wrapper,
+    /// nested Option/Result, Map) returns `None` — the dispatcher then falls to
+    /// the shallow primitive clone, which is exact ONLY for a heap-free Result.
+    /// The typechecker gate (`clone_receiver_self_type`) admits `Result.clone()`
+    /// for exactly this covered class, so an uncovered heap half never reaches
+    /// here to be silently mis-cloned.
+    pub(super) fn emit_result_value_clone_fn(
+        &mut self,
+        res_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        // No deep-copyable heap half ⇒ the shallow whole-value copy is already
+        // exact (`Result[i64, i64]` and friends); let the dispatcher fall
+        // through to the primitive clone.
+        if !self.result_field_direct_vecstr_halves_ok(res_te) {
+            return None;
+        }
+        let result_ty = self.enum_layouts.get("Result")?.llvm_type;
+
+        let type_name = Self::display_mangle_te(res_te);
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let v = self.builder.build_load(result_ty, src, "res.v").unwrap();
+        self.builder.build_store(dst, v).unwrap();
+        // The in-place helper appends its guard blocks to `self.current_fn`
+        // — swap it to the clone fn for the duration so the blocks land in
+        // THIS function, then restore (identical discipline to the Option twin).
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(clone_fn);
+        self.deep_copy_result_inline_heap_halves_in_place(dst, res_te);
         self.current_fn = saved_fn;
         self.builder.build_return(None).unwrap();
 

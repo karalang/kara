@@ -1010,6 +1010,66 @@ fn test_string_clone_returns_string() {
     );
 }
 
+// B-2026-07-30-10 — `Result[T, E].clone()` is admitted for the direct
+// String/Vec/scalar-halves class codegen can deep-copy in place, and stays
+// rejected for any other heap-bearing half (which would take a shallow
+// aliasing copy — a double-free at the two drops).
+
+#[test]
+fn test_result_clone_admitted_for_direct_vecstr_scalar_halves() {
+    typecheck_ok(
+        "fn main() {\n\
+             let a: Result[String, i64] = Result.Ok(\"x\");\n\
+             let _ca = a.clone();\n\
+             let b: Result[i64, String] = Result.Err(\"e\");\n\
+             let _cb = b.clone();\n\
+             let c: Result[i64, i64] = Result.Ok(1);\n\
+             let _cc = c.clone();\n\
+             let d: Result[Vec[String], i64] = Result.Ok(vec![\"a\"]);\n\
+             let _cd = d.clone();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_result_clone_rejected_for_uncovered_heap_half() {
+    // A user struct half owns heap in a shape the in-place overlay helper
+    // does not cover, so `clone` stays rejected rather than mis-cloning.
+    let errors = typecheck_errors(
+        "struct Bag { items: Vec[String] }\n\
+         fn main() {\n\
+             let r: Result[Bag, i64] = Result.Ok(Bag { items: vec![\"a\"] });\n\
+             let _c = r.clone();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "expected NoMethodFound on Result[Bag, i64].clone(), got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_result_clone_rejected_for_nested_option_half() {
+    // A nested `Option[String]` half is heap-owning but outside the direct
+    // String/Vec class — kept rejected.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let r: Result[Option[String], i64] = Result.Ok(Option.Some(\"z\"));\n\
+             let _c = r.clone();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "expected NoMethodFound on Result[Option[String], i64].clone(), got {:?}",
+        errors
+    );
+}
+
 #[test]
 fn test_string_slice_returns_string() {
     // `s[a..b]` on a String yields a fresh String — assignable to a

@@ -511,20 +511,27 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 // `Option[T]`: structurally clonable when the payload is. Not
                 // payload-heap-specific — `Option[i64]` was rejected too.
-                //
-                // `Result[T, E]` is NOT admitted, even though it shares
-                // `Option`'s inline-payload overlay and `type_supports_clone`
-                // says yes: codegen has no in-place deep-copy helper for it
-                // (`emit_clone_fn_for_type_expr`'s `Option` arm records this),
-                // so a `Result[String, _]` clone would take the SHALLOW copy
-                // and alias the source's buffer — a double-free at the two
-                // drops. Better a live gap than a silent miscompile; tracked on
-                // the ledger with B-2026-07-29-31.
                 if name == "Option" {
                     return args
                         .iter()
                         .all(|a| self.type_supports_clone(a))
                         .then(|| ty.clone());
+                }
+                // `Result[T, E]` (B-2026-07-30-10): admitted for the DIRECT
+                // String/Vec/scalar-halves class codegen's
+                // `emit_result_value_clone_fn` deep-copies in place. A half that
+                // owns heap in any other shape (user struct/enum, `shared`
+                // handle, nested `Option`/`Result`, `Map`) still has no in-place
+                // deep-copy helper, so it stays REJECTED — admitting it would let
+                // codegen emit a shallow overlay copy that aliases the source
+                // buffer and double-frees at the two drops. `result_halves_
+                // clone_codegen_safe` is the typecheck-side twin of codegen's
+                // `result_field_direct_vecstr_halves_ok` (widened to also accept
+                // the all-scalar heap-free case, where shallow == deep).
+                if name == "Result" {
+                    return (args.iter().all(|a| self.type_supports_clone(a))
+                        && Self::result_halves_clone_codegen_safe(args))
+                    .then(|| ty.clone());
                 }
                 // User struct / enum / distinct type carrying `#[derive(Clone)]`
                 // (or a `Clone` impl recorded in the impl table).
@@ -551,6 +558,48 @@ impl<'a> super::TypeChecker<'a> {
             // bounds only — an unbounded `T` still gets the `no method` error.
             Type::TypeParam(p) => self.type_param_has_clone_bound(p).then(|| ty.clone()),
             _ => None,
+        }
+    }
+
+    /// B-2026-07-30-10 — the typecheck-side twin of codegen's
+    /// `result_field_direct_vecstr_halves_ok`: `Result[T, E].clone()` is
+    /// admitted only when BOTH halves are a shape `emit_result_value_clone_fn`
+    /// can deep-copy in place — a heap-free scalar, a `String`, or a
+    /// `Vec`/`VecDeque` whose element is itself half-safe. Every other
+    /// heap-bearing half (user struct/enum, `shared` handle, nested
+    /// `Option`/`Result`, `Map`) would take the shallow overlay copy and alias
+    /// the source buffer, so it is kept rejected until the in-place helper
+    /// grows those arms. Deliberately a STRICT SUBSET of the codegen predicate
+    /// (which also accepts a `Vec` of a non-shared struct element): every shape
+    /// this admits is one codegen provably clones correctly, so the gate can
+    /// never let a silent-alias miscompile through.
+    fn result_halves_clone_codegen_safe(args: &[Type]) -> bool {
+        args.len() == 2 && args.iter().all(Self::result_half_clone_codegen_safe)
+    }
+
+    fn result_half_clone_codegen_safe(ty: &Type) -> bool {
+        match ty {
+            Type::Refinement { base, .. } => Self::result_half_clone_codegen_safe(base),
+            // Heap-free scalars: the shallow whole-value copy is already exact.
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Unit => true,
+            // The `String` half the overlay helper deep-copies.
+            Type::Str => true,
+            // A `Vec`/`VecDeque` half: the defensive copy duplicates the buffer
+            // and recursively deep-copies each element. Restricted to a
+            // half-safe element (scalar / String / nested Vec) so a shared or
+            // struct-heap element — which the buffer copy alone would alias —
+            // never slips through.
+            Type::Named { name, args }
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+            {
+                Self::result_half_clone_codegen_safe(&args[0])
+            }
+            _ => false,
         }
     }
 
