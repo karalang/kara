@@ -96,9 +96,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 100 | 0 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
-| missing-feature | 67 | 3 |
+| missing-feature | 67 | 2 |
 | false-positive | 50 | 0 |
-| run-vs-build | 45 | 0 |
+| run-vs-build | 46 | 1 |
 | perf | 38 | 4 |
 | crash | 32 | 0 |
 | soundness | 29 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 548 | 4 |
-| typecheck | 96 | 3 |
+| codegen | 549 | 5 |
+| typecheck | 96 | 2 |
 | interp | 77 | 1 |
 | ownership | 33 | 1 |
 | autopar | 23 | 2 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **758 surfaced · 9 open · 741 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **759 surfaced · 9 open · 742 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-29-26 | 2026-07-29 | typecheck | medium | A GENERIC REFINEMENT alias is opaque to its base's operations: `type NonEmpty[T] = Vec[T] where self.len() > 0;` then `for r in rows` binds `r` to `NonEmpty`, so `r.price` fails with `no field 'price' on type 'NonEmpty'`. The same alias WITHOUT the `where` clause iterates correctly. | — |
 | B-2026-07-29-27 | 2026-07-29 | typecheck | high | `#[derive(Clone)]` synthesizes NO callable `.clone()` method: `s.clone()` on a derived struct or enum fails with `no method 'clone' on type 'S'`, while the very same derive DOES satisfy a `T: Clone` bound. Silently accepted, so the attribute reads as working. | — |
 | B-2026-07-29-30 | 2026-07-29 | autopar | low | `#[par_unordered]` asserts a behaviour that does not occur: it is the required opt-in for Collect loop fan-out, but BOTH Collect paths preserve iteration order exactly today, so the attribute name and its justifying comment describe a reordering hazard that no shipped code path exhibits — discouraging the fastest data-parallel idiom. | — |
 | B-2026-07-29-31 | 2026-07-29 | typecheck | medium | `.clone()` is callable ONLY on the built-in heap/RC types. It is missing on `Option`/`Result` and on EVERY user type — including ones carrying `#[derive(Clone)]` — rejected at TYPECHECK with `no method 'clone' on type '<T>'`. The sharp half: `#[derive(Clone)]` still DISCHARGES a `T: Clone` BOUND (typechecker/derives.rs consults `info.derived_traits.contains("Clone")` for both structs and enums), so a `T: Clone` bound can be REQUIRED and satisfied but never INVOKED — `fn dup[T: Clone](x: T) -> T { x }` type-checks with a `#[derive(Clone)]` struct argument, while changing the body to `x.clone()` is rejected `no method 'clone' on type 'T'`. The bound is decorative. MEASURED SURFACE (all via `karac check`, same verdict under --interp and build): WORKS — String, Vec, Map, Set, VecDeque, SortedMap, SortedSet, Rc/Arc/shared (the `type_supports_clone` allowlist in typechecker/exprs.rs, mirrored by `moved_type_supports_clone` in ownership.rs). REJECTED — `Option[String]`, `Option[i64]` (so not payload-heap-specific), `Result[String, i64]`, a user `struct` with `#[derive(Clone)]`, a user `enum` with `#[derive(Clone)]`, a user `enum` without it, and a `T: Clone`-bounded generic parameter inside the generic body. CONSEQUENCE — the ownership checker's own advice recommends this. A use-after-move diagnostic prints `suggestion: clone '<x>' at the move site (`<x>.clone()`), declare the callee parameter `ref` if it only reads, or restructure` REGARDLESS of whether the type has `clone`; following it on an `Option`/`Result` or a user type yields code that does not typecheck. The MACHINE-APPLICABLE half is safe — `moved_type_supports_clone` gates the `TextEdit` to the built-ins, so `karac fix` will not insert a broken `.clone()` — but the human/LLM-facing sentence is unconditional, which is exactly how this was hit (see detail). DESIGN QUESTION ANSWERED 2026-07-30 (investigated, NOT yet implemented — the direction was this entry's open question, and the evidence now settles it). The answer is SYNTHESIZE/EXPOSE the method, not tighten the bound discharge, because codegen ALREADY HAS every clone emitter needed: `emit_clone_fn_for_type_expr` (src/codegen/clone_drop.rs) dispatches Vec/VecDeque, Map, Set, String, tuples, `Option` via `emit_option_value_clone_fn`, user STRUCTS via the struct arm, and user ENUMS via `emit_enum_clone_fn` — the last two described in that file as 'the `#[derive(Clone)]` analog of the synthesized drop'. Nothing needs inventing; the capability is already shipped and used for element clones. Tightening the bound instead would break code that compiles today for no gain. THE ONE GATE: `clone_self_type_for` (src/typechecker/types.rs:958) is a PURE FREE FUNCTION with an allowlist of `Str`, `Array`, `Vector`, and Named `Vec|Set|SortedSet|VecDeque|Map|SortedMap|TreeMap`. It takes no `env`, which is exactly WHY user types are excluded — it cannot consult `info.derived_traits.contains("Clone")`, while `type_supports_clone` (src/typechecker/exprs.rs), which CAN and does, is only wired to bound discharge. That split is the whole bug. WORK LIST, three surfaces (each small, but they must land together — this session twice shipped half of a two-sided binding and got a different bug each time, cf. -32): (1) TYPECHECK — route `.clone()` method resolution through an env-aware predicate rather than the free fn; `Option`/`Result` are `Type::Named { name, args }` so they need only an allowlist entry plus a payload-cloneability rule, and note scalar payloads are typed by a SEPARATE path (expr_method_call.rs handles Copy primitives), so `Option[i64]` must not be rejected for its payload not being in the allowlist. (2) INTERPRETER — the clone arm in method_call_seq.rs:1508 covers Sender/Array/Slice/String/Map/Set/SortedSet/SortedMap and needs Option/enum/struct value arms; method_call.rs:2316 already handles Copy scalars. (3) CODEGEN — wire a `clone` method-call dispatch arm to the existing emitters. Then verify on all four surfaces per the corpus rule. NOT DONE and deliberately not rushed: the implementation. Filed this way because it is a cross-surface language feature rather than a bug fix, and half-landing it is a known failure mode on this exact machinery. B-2026-07-29-36 (fixed) already removed the sharp edge — the ownership diagnostic no longer advises `.clone()` on a type that has none — so nothing is actively misleading users while this waits. | src/typechecker/derives.rs:503, src/typechecker/exprs.rs (type_supports_clone) |
@@ -139,10 +138,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **758 surfaced 
 | B-2026-07-30-2 | 2026-07-30 | codegen+runtime | medium | Vec.sort_by calls the comparator through a function pointer, so sort-bound katas track C's qsort instead of Rust's monomorphized sort (~2x) | — |
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane — the corpus's largest genuine deficit, cause not yet found | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
+| B-2026-07-30-7 | 2026-07-30 | codegen | high | A PLAIN type alias whose base is not `i64`-shaped, used as a parameter or return type, lowers to the `i64` unknown-name fall-through in codegen: `type Plain = Vec[i64]; fn total(xs: Plain)` passes `karac check` and `karac run --interp` but fails LLVM module verification under `karac build` / `karac run` (JIT). A REFINEMENT alias over the same base works. | — |
 
-### Fixed (741)
+### Fixed (742)
 
-<details><summary>741 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>742 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -877,6 +877,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **758 surfaced 
 | B-2026-07-29-20 | codegen+interp | high | REPL cross-cell value snapshot was taken at each binding's INITIALIZER, so EVERY in-cell mutation was lost crossing to the next cell — on both lanes… | 8172bae |
 | B-2026-07-29-21 | codegen | high | Every call to a `-> ref String` accessor leaks one `karac_string_clone` block under AOT | b74a9a7 |
 | B-2026-07-29-25 | typecheck | high | An IMPORTED type alias is not expanded to its underlying type: `import types.Row;` where `pub type Row = Map[String, i64]` leaves `Row` nominal, so `… | 0a23cf8+6de8b3b |
+| B-2026-07-29-26 | typecheck | medium | A GENERIC REFINEMENT alias is opaque to its base's operations: `type NonEmpty[T] = Vec[T] where self.len() > 0;` then `for r in rows` binds `r` to `N… | 5445e85 |
 | B-2026-07-29-28 | ownership+codegen | medium | A call's PARAMETER MODES change with syntactic position: a bare (owning) param is CONSUMED in statement position but only BORROWED inside an f-string… | c8bce5d3 |
 | B-2026-07-29-29 | autopar+cli | medium | `karac query concurrency` reports statement-level parallel groups but NOT loop-reduction fan-out, so the Tier-2 decision the entire kata parallel lan… | 6936f1ab |
 | B-2026-07-29-32 | codegen | medium | A FRESH-TEMP (non-`let`-bound) `Vec` argument passed to a `Slice[T]` parameter fails LLVM MODULE VERIFICATION under `karac build`, while the tree-wal… | 0c3fea05 |
