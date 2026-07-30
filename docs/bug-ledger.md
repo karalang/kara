@@ -93,15 +93,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 188 | 0 |
-| leak | 100 | 0 |
+| leak | 101 | 1 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
-| missing-feature | 67 | 2 |
+| missing-feature | 68 | 1 |
 | false-positive | 50 | 0 |
 | run-vs-build | 46 | 0 |
 | perf | 39 | 3 |
 | crash | 32 | 0 |
-| soundness | 29 | 1 |
+| soundness | 29 | 0 |
 | diagnostics | 23 | 0 |
 | use-after-free | 11 | 0 |
 | other | 7 | 1 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 550 | 4 |
-| typecheck | 96 | 2 |
-| interp | 77 | 1 |
-| ownership | 33 | 1 |
+| codegen | 552 | 5 |
+| typecheck | 97 | 1 |
+| interp | 78 | 1 |
+| ownership | 33 | 0 |
 | autopar | 24 | 1 |
 | other | 21 | 0 |
 | cli | 18 | 0 |
@@ -124,23 +124,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **761 surfaced · 7 open · 746 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **763 surfaced · 6 open · 749 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-29-27 | 2026-07-29 | typecheck | high | `#[derive(Clone)]` synthesizes NO callable `.clone()` method: `s.clone()` on a derived struct or enum fails with `no method 'clone' on type 'S'`, while the very same derive DOES satisfy a `T: Clone` bound. Silently accepted, so the attribute reads as working. | — |
-| B-2026-07-29-31 | 2026-07-29 | typecheck | medium | `.clone()` is callable ONLY on the built-in heap/RC types. It is missing on `Option`/`Result` and on EVERY user type — including ones carrying `#[derive(Clone)]` — rejected at TYPECHECK with `no method 'clone' on type '<T>'`. The sharp half: `#[derive(Clone)]` still DISCHARGES a `T: Clone` BOUND (typechecker/derives.rs consults `info.derived_traits.contains("Clone")` for both structs and enums), so a `T: Clone` bound can be REQUIRED and satisfied but never INVOKED — `fn dup[T: Clone](x: T) -> T { x }` type-checks with a `#[derive(Clone)]` struct argument, while changing the body to `x.clone()` is rejected `no method 'clone' on type 'T'`. The bound is decorative. MEASURED SURFACE (all via `karac check`, same verdict under --interp and build): WORKS — String, Vec, Map, Set, VecDeque, SortedMap, SortedSet, Rc/Arc/shared (the `type_supports_clone` allowlist in typechecker/exprs.rs, mirrored by `moved_type_supports_clone` in ownership.rs). REJECTED — `Option[String]`, `Option[i64]` (so not payload-heap-specific), `Result[String, i64]`, a user `struct` with `#[derive(Clone)]`, a user `enum` with `#[derive(Clone)]`, a user `enum` without it, and a `T: Clone`-bounded generic parameter inside the generic body. CONSEQUENCE — the ownership checker's own advice recommends this. A use-after-move diagnostic prints `suggestion: clone '<x>' at the move site (`<x>.clone()`), declare the callee parameter `ref` if it only reads, or restructure` REGARDLESS of whether the type has `clone`; following it on an `Option`/`Result` or a user type yields code that does not typecheck. The MACHINE-APPLICABLE half is safe — `moved_type_supports_clone` gates the `TextEdit` to the built-ins, so `karac fix` will not insert a broken `.clone()` — but the human/LLM-facing sentence is unconditional, which is exactly how this was hit (see detail). DESIGN QUESTION ANSWERED 2026-07-30 (investigated, NOT yet implemented — the direction was this entry's open question, and the evidence now settles it). The answer is SYNTHESIZE/EXPOSE the method, not tighten the bound discharge, because codegen ALREADY HAS every clone emitter needed: `emit_clone_fn_for_type_expr` (src/codegen/clone_drop.rs) dispatches Vec/VecDeque, Map, Set, String, tuples, `Option` via `emit_option_value_clone_fn`, user STRUCTS via the struct arm, and user ENUMS via `emit_enum_clone_fn` — the last two described in that file as 'the `#[derive(Clone)]` analog of the synthesized drop'. Nothing needs inventing; the capability is already shipped and used for element clones. Tightening the bound instead would break code that compiles today for no gain. THE ONE GATE: `clone_self_type_for` (src/typechecker/types.rs:958) is a PURE FREE FUNCTION with an allowlist of `Str`, `Array`, `Vector`, and Named `Vec|Set|SortedSet|VecDeque|Map|SortedMap|TreeMap`. It takes no `env`, which is exactly WHY user types are excluded — it cannot consult `info.derived_traits.contains("Clone")`, while `type_supports_clone` (src/typechecker/exprs.rs), which CAN and does, is only wired to bound discharge. That split is the whole bug. WORK LIST, three surfaces (each small, but they must land together — this session twice shipped half of a two-sided binding and got a different bug each time, cf. -32): (1) TYPECHECK — route `.clone()` method resolution through an env-aware predicate rather than the free fn; `Option`/`Result` are `Type::Named { name, args }` so they need only an allowlist entry plus a payload-cloneability rule, and note scalar payloads are typed by a SEPARATE path (expr_method_call.rs handles Copy primitives), so `Option[i64]` must not be rejected for its payload not being in the allowlist. (2) INTERPRETER — the clone arm in method_call_seq.rs:1508 covers Sender/Array/Slice/String/Map/Set/SortedSet/SortedMap and needs Option/enum/struct value arms; method_call.rs:2316 already handles Copy scalars. (3) CODEGEN — wire a `clone` method-call dispatch arm to the existing emitters. Then verify on all four surfaces per the corpus rule. NOT DONE and deliberately not rushed: the implementation. Filed this way because it is a cross-surface language feature rather than a bug fix, and half-landing it is a known failure mode on this exact machinery. B-2026-07-29-36 (fixed) already removed the sharp edge — the ownership diagnostic no longer advises `.clone()` on a type that has none — so nothing is actively misleading users while this waits. | src/typechecker/derives.rs:503, src/typechecker/exprs.rs (type_supports_clone) |
-| B-2026-07-29-39 | 2026-07-29 | ownership+interp+codegen | high | An aggregate NEVER runs its fields' user `impl Drop` when it dies: a struct holding a Drop-implementing value drops nothing at scope exit, so any resource stored in a struct field leaks (fd, handle, buffer) for the program's lifetime. | — |
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane — the corpus's largest genuine deficit, cause not yet found | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
 | B-2026-07-30-8 | 2026-07-30 | autopar | low | Auto-par's early-exit gate declines a reduction for a `break`/`continue` that targets a NESTED loop and therefore cannot exit the reduction body at all -- the idiomatic `loop { match cur { Some(n) => ..., None => break } }` list walk never fans out | src/codegen/reduce.rs (expr_has_early_exit / block_has_early_exit) |
 | B-2026-07-30-9 | 2026-07-30 | codegen | low | `println` is not line-atomic across tasks: it emits TWO separate `write_console` calls (payload, then the newline), so two spawned tasks printing concurrently interleave into `12\n\n` instead of `1\n2\n` -- makes tests/spawn_e2e.rs::test_spawn_fan_out_five_tasks_all_join flaky (~1 in 3 on a 4-core container) | src/codegen/control_flow.rs (emit_nul_safe_write: the trailing-newline second write_console call) |
+| B-2026-07-30-10 | 2026-07-30 | typecheck+codegen | low | `Result[T, E].clone()` is still rejected at typecheck (`no method 'clone' on type 'Result'`) after B-2026-07-29-31 gave `Option[T]` a callable one — codegen has no in-place deep-copy helper for Result's inline payload, so admitting it would emit a SHALLOW copy that aliases the source buffer. | src/codegen/clone_drop.rs (emit_option_value_clone_fn), src/typechecker/derives.rs (clone_receiver_self_type) |
+| B-2026-07-30-11 | 2026-07-30 | interp+codegen | medium | The aggregate field drop glue B-2026-07-29-39 added covers STRUCT FIELDS only: an enum variant's Drop-bearing PAYLOAD, and a by-value aggregate param whose own type declares no Drop, still run no field drop body — so a resource carried in either shape leaks for the program's lifetime. | src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value) |
 
-### Fixed (746)
+### Fixed (749)
 
-<details><summary>746 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>749 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -876,15 +875,18 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **761 surfaced 
 | B-2026-07-29-21 | codegen | high | Every call to a `-> ref String` accessor leaks one `karac_string_clone` block under AOT | b74a9a7 |
 | B-2026-07-29-25 | typecheck | high | An IMPORTED type alias is not expanded to its underlying type: `import types.Row;` where `pub type Row = Map[String, i64]` leaves `Row` nominal, so `… | 0a23cf8+6de8b3b |
 | B-2026-07-29-26 | typecheck | medium | A GENERIC REFINEMENT alias is opaque to its base's operations: `type NonEmpty[T] = Vec[T] where self.len() > 0;` then `for r in rows` binds `r` to `N… | 5445e85 |
+| B-2026-07-29-27 | typecheck | high | `#[derive(Clone)]` synthesizes NO callable `.clone()` method: `s.clone()` on a derived struct or enum fails with `no method 'clone' on type 'S'`, whi… | 91c43cfa |
 | B-2026-07-29-28 | ownership+codegen | medium | A call's PARAMETER MODES change with syntactic position: a bare (owning) param is CONSUMED in statement position but only BORROWED inside an f-string… | c8bce5d3 |
 | B-2026-07-29-29 | autopar+cli | medium | `karac query concurrency` reports statement-level parallel groups but NOT loop-reduction fan-out, so the Tier-2 decision the entire kata parallel lan… | 6936f1ab |
 | B-2026-07-29-30 | autopar | low | `#[par_unordered]` asserts a behaviour that does not occur: it is the required opt-in for Collect loop fan-out, but BOTH Collect paths preserve itera… | 05b1fe66 |
+| B-2026-07-29-31 | typecheck | medium | `.clone()` is callable ONLY on the built-in heap/RC types | 91c43cfa |
 | B-2026-07-29-32 | codegen | medium | A FRESH-TEMP (non-`let`-bound) `Vec` argument passed to a `Slice[T]` parameter fails LLVM MODULE VERIFICATION under `karac build`, while the tree-wal… | 0c3fea05 |
 | B-2026-07-29-33 | autopar+cli | low | `query concurrency`'s `loop_reductions` reports the ANALYSIS decision, not codegen's final verdict: a recognized `parallel_fanout` loop can still be… | 795fb62c |
 | B-2026-07-29-34 | codegen+cli | medium | REGRESSION SURFACE: `test_build_debug_info_keeps_symbols_and_dwarf` — the test pinning B-2026-07-27-4 (profiling attribution, marked FIXED at f569aac… | 795fb62c |
 | B-2026-07-29-35 | codegen | high | SILENT WRONG OUTPUT (run-vs-build): a GENERIC `fn f[T](s: Slice[T]) -> T` returning a HEAP element yields an EMPTY/garbage value under `karac build`… | 5f2cb6ad |
 | B-2026-07-29-36 | ownership | low | The use-after-move suggestion advised `.clone()` for EVERY type: 'clone 'x' at the move site (`x.clone()`), declare the callee parameter `ref` if it… | 697e6de8 |
 | B-2026-07-29-38 | ownership+interp+codegen | high | PREMATURE DROP on move-out: a binding moved into an aggregate literal is dropped AT THE MOVE POINT, because the shared NLL last-use analysis is a pur… | 1a536d29 |
+| B-2026-07-29-39 | ownership+interp+codegen | high | An aggregate NEVER runs its fields' user `impl Drop` when it dies: a struct holding a Drop-implementing value drops nothing at scope exit, so any res… | 10c1763a |
 | B-2026-07-30-1 | autopar | medium | Auto-par's cross-task-safety gate is TYPE-based, so it declines a reduction whose body allocates an iteration-LOCAL shared value (kata #23, #86 par l… | 05b1fe66 |
 | B-2026-07-30-2 | codegen+runtime | medium | Vec.sort_by calls the comparator through a function pointer, so sort-bound katas track C's qsort instead of Rust's monomorphized sort (~2x) | 0139427 |
 | B-2026-07-30-3 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` argument passed to a GENERIC `ref Slice[T]` parameter builds and then aborts — SIGTRAP (133) with literal elem… | f0395667 |
