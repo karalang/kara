@@ -4951,6 +4951,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// double-fire. Memory-only drops (no user body) also stay at scope
     /// exit: with no observable side effects, scope-exit free is
     /// equivalent to NLL free.
+    /// B-2026-07-30-11 — is this `UserDrop` action a CONTAINER element-bodies
+    /// walk (`__karac_dropelems_<T>`)?
+    ///
+    /// The NLL filter below is keyed on `type_name` naming a struct, which a
+    /// container binding never does — so a `Vec[T]` binding's bodies action
+    /// would sit in the frame and drain at scope exit, printing at a different
+    /// time than the interpreter. Keyed on the SYMBOL PREFIX rather than by
+    /// widening the `type_name` test, for the same reason SHAPE 1's note gives:
+    /// enum- and struct-typed `UserDrop` entries already exist on this channel
+    /// carrying `karac_drop_<T>` wrappers that intentionally drain at scope
+    /// exit, and a type-based widening would retime those.
+    fn is_container_elem_bodies_fn(f: FunctionValue<'ctx>) -> bool {
+        f.get_name()
+            .to_str()
+            .is_ok_and(|n| n.starts_with("__karac_dropelems_"))
+    }
+
     pub(super) fn fire_due_user_drops(
         &mut self,
         last_use: &std::collections::HashMap<String, usize>,
@@ -4981,8 +4998,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         drop_fn,
                         type_name,
                     } if last_use.get(binding_name.as_str()).copied() == Some(stmt_idx)
-                        && self.struct_types.contains_key(type_name.as_str())
-                        && !self.shared_types.contains_key(type_name.as_str()) =>
+                        && (Self::is_container_elem_bodies_fn(*drop_fn)
+                            || (self.struct_types.contains_key(type_name.as_str())
+                                && !self.shared_types.contains_key(type_name.as_str()))) =>
                     {
                         Some((binding_name.clone(), *binding_ptr, *drop_fn))
                     }

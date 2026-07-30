@@ -4764,6 +4764,40 @@ impl<'ctx> super::Codegen<'ctx> {
                                 } else {
                                     self.track_vec_var(slot_ptr, Some(elem_ty));
                                 }
+                                // B-2026-07-30-11 — the element MEMORY drops
+                                // above; its user `impl Drop` BODY did not.
+                                // `Vec[Res]` with `Res: Drop` freed each
+                                // element's buffers and ran no body, so a
+                                // resource held in an element leaked for the
+                                // program's lifetime — silently, on both
+                                // backends.
+                                //
+                                // Registered on the `UserDrop` channel, NOT
+                                // folded into the element drop above, because
+                                // that one rides the scope-exit drain while a
+                                // body belongs at the binding's NLL live-range
+                                // end — where the interpreter puts it. Bodies
+                                // here, memory there; the split is what keeps
+                                // `karac run` and `karac build` printing the
+                                // same thing.
+                                let elem_struct_name =
+                                    elem_te.as_ref().and_then(|te| match &te.kind {
+                                        TypeKind::Path(p) => p
+                                            .segments
+                                            .first()
+                                            .filter(|n| self.struct_types.contains_key(n.as_str()))
+                                            .cloned(),
+                                        _ => None,
+                                    });
+                                if let Some(en) = elem_struct_name {
+                                    if let Some(bodies) =
+                                        self.emit_vec_elem_user_drop_bodies_fn(&en, elem_ty)
+                                    {
+                                        self.track_user_drop_var_with_fn(
+                                            &en, var_name, slot_ptr, bodies,
+                                        );
+                                    }
+                                }
                             }
                         }
                         // Move-aware suppression for `let outer = inner;`

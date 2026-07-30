@@ -595,7 +595,51 @@ impl<'a> super::Interpreter<'a> {
     /// cleanup follows (the interpreter's value model already releases
     /// heap-owned fields when the binding's `Value::Struct` is dropped
     /// at scope-exit Rust-level GC).
+    /// B-2026-07-30-11 — run each ELEMENT's user `impl Drop` body when a
+    /// `Vec`/`VecDeque` binding dies. Returns `true` when `name` resolved to an
+    /// array, so the caller stops (an array is not a `drop_target` shape).
+    ///
+    /// `Env::drop_target` reports only `Struct` / `SharedStruct` /
+    /// `EnumVariant`, so an array binding resolved to `None` and the whole hook
+    /// early-returned: `let v: Vec[Res] = [...]` ran nothing when `v` died and
+    /// every element's resource was held for the program's lifetime.
+    ///
+    /// FORWARD order (`0..len`), matching codegen's `__karac_dropelems_<T>`
+    /// walk and the memory drain's. Struct FIELDS drop in reverse declaration
+    /// order; container ELEMENTS do not, and both backends agree on the split.
+    ///
+    /// The element list is cloned out before the walk so a body that touches
+    /// the same container cannot deadlock against a held read guard.
+    fn run_array_element_user_drops(&mut self, name: &str) -> bool {
+        let Some(Value::Array(cell)) = self.env.get(name) else {
+            return false;
+        };
+        let elems: Vec<Value> = match cell.read() {
+            Ok(g) => g.clone(),
+            Err(_) => return true,
+        };
+        for e in elems {
+            if let Value::Struct { name: tn, .. } = &e {
+                if self.program.drop_method_keys.contains_key(tn) {
+                    let tn = tn.clone();
+                    self.run_user_drop_body_on_value(&tn, e);
+                    continue;
+                }
+            }
+            if self.value_runs_user_drop(&e) {
+                self.drop_user_drop_fields_of_value(&e);
+            }
+        }
+        true
+    }
+
     fn invoke_user_drop_if_applicable(&mut self, name: &str) {
+        // B-2026-07-30-11 — a container binding never resolved through
+        // `drop_target`, so its elements' bodies never ran. Checked first: an
+        // array is not one of the shapes that function reports on at all.
+        if self.run_array_element_user_drops(name) {
+            return;
+        }
         // Resolve the binding's type (and, for a shared struct, its Arc
         // strong-count) WITHOUT cloning — cloning the value first would
         // bump a shared struct's refcount and break the last-reference

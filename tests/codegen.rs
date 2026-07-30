@@ -5563,6 +5563,53 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (Vec leg) — a `Vec[T]`'s ELEMENTS run their user
+    /// `impl Drop` bodies when the Vec dies.
+    ///
+    /// A user body used to run only for a value reachable from a direct binding
+    /// through STRUCT FIELDS. `Vec[Res]` freed each element's buffers via the
+    /// scope-exit drain and ran no body, so a resource held in an element was
+    /// held for the program's lifetime — silently, and on both backends.
+    ///
+    /// Three properties, and the second is the one the first attempt got wrong:
+    ///  * elements fire in FORWARD order (`dA1` then `dA2`), matching the
+    ///    memory drain and the interpreter — struct fields go in reverse, and
+    ///    container elements deliberately do not;
+    ///  * they fire at the binding's NLL live-range end, not scope exit. The
+    ///    bodies ride the `UserDrop` channel for exactly this reason; folded
+    ///    into the scope-exit drain instead they printed `100 1 2` against the
+    ///    interpreter's `1 2 100`;
+    ///  * `Vec[W]` where only `W`'s FIELD is Drop composes — B-2026-07-29-39's
+    ///    field walk did not reach through a container, so this went silent one
+    ///    Vec deep.
+    ///
+    /// The `pop()` case is the disarm check: the element leaves through the
+    /// returned `Option`, and the Vec must not also drop it.
+    ///
+    /// Twinned with `tests/interpreter.rs`'s
+    /// `test_vec_elements_run_user_drop_bodies` on identical source and
+    /// expected output — that pair IS the parity contract.
+    #[test]
+    fn e2e_vec_elements_run_user_drop_bodies() {
+        let Some(out) = run_program(
+            "struct A { t: i64 }\n\
+             impl Drop for A { fn drop(mut ref self) { println(f\"dA{self.t}\"); } }\n\
+             struct W { a: A }\n\
+             fn main() {\n\
+             \x20   { let v: Vec[A] = [A { t: 1 }, A { t: 2 }]; println(f\"{v.len()}\"); }\n\
+             \x20   { let w: Vec[W] = [W { a: A { t: 3 } }]; println(f\"{w.len()}\"); }\n\
+             \x20   { let mut p: Vec[A] = [A { t: 4 }]; let g = p.pop(); println(f\"{p.len()}\"); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // No `dA4`: the popped element left through the Option, which does not
+        // yet run payload bodies (the Option leg of this entry is still open).
+        // What matters here is that the Vec does not drop it a second time.
+        assert_eq!(out, "2\ndA1\ndA2\n1\ndA3\n0\nend\n");
+    }
+
     /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS
     /// runs its `Drop` body exactly ONCE, and its buffer is freed exactly once.
     ///

@@ -5179,6 +5179,135 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-07-30-11 — emit `__karac_dropelems_<T>(vec: *mut {ptr,len,cap})`:
+    /// run the user `impl Drop` BODY of every live element of a `Vec[T]` /
+    /// `VecDeque[T]`, forward over `0..len`. `None` when `T` runs no user body.
+    ///
+    /// BODIES ONLY, which is what makes this safe to add: each element's MEMORY
+    /// is already freed by the existing `FreeVecBuffer` drain (whose per-element
+    /// `elem_agg_drop` is `__karac_drop_struct_<T>`). This walk frees nothing,
+    /// so it cannot double-free and no existing free moves.
+    ///
+    /// It is a SEPARATE fn rather than folded into the element drop the drain
+    /// already calls, because of WHERE each must run. `FreeVecBuffer` is the
+    /// SCOPE-EXIT channel; a user body belongs at the binding's NLL live-range
+    /// end (design.md § Drop ordering), which is where the interpreter puts it.
+    /// Folding the body into the drain compiles and runs, but prints at a
+    /// different time than `karac run` — measured, `1 2 100` vs `100 1 2`. That
+    /// run/build parity break is why the first attempt at this was reverted.
+    /// So: bodies on the `UserDrop` channel at the NLL point, memory on the
+    /// scope-exit drain, unchanged.
+    ///
+    /// Forward order (`0..len`), matching the drain's own element walk and the
+    /// interpreter's. Struct FIELDS drop in reverse declaration order; container
+    /// ELEMENTS do not, and both backends agree on that split.
+    pub(super) fn emit_vec_elem_user_drop_bodies_fn(
+        &mut self,
+        elem_name: &str,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if self.shared_types.contains_key(elem_name) {
+            return None;
+        }
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(elem_name));
+        let field_bodies =
+            self.emit_user_drop_field_bodies_fn(elem_name, &std::collections::HashMap::new());
+        let body_fn = if owns_body {
+            self.module.get_function(&format!("{elem_name}.drop"))
+        } else {
+            None
+        };
+        if body_fn.is_none() && field_bodies.is_none() {
+            return None;
+        }
+
+        let fn_name = format!("__karac_dropelems_{elem_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+        let saved = self.builder.get_insert_block();
+
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        let check = self.context.append_basic_block(walker, "check");
+        let body = self.context.append_basic_block(walker, "body");
+        let done = self.context.append_basic_block(walker, "done");
+
+        self.builder.position_at_end(entry);
+        let vp = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let data_g = self
+            .builder
+            .build_struct_gep(vec_ty, vp, 0, "de.data.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_g, "de.data")
+            .unwrap()
+            .into_pointer_value();
+        let len_g = self
+            .builder
+            .build_struct_gep(vec_ty, vp, 1, "de.len.p")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_g, "de.len")
+            .unwrap()
+            .into_int_value();
+        let idx = self.builder.build_alloca(i64_t, "de.i").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_unconditional_branch(check).unwrap();
+
+        self.builder.position_at_end(check);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "de.i.v")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, len, "de.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body, done)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let ep = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[i], "de.elem")
+                .unwrap()
+        };
+        if let Some(f) = body_fn {
+            self.builder.build_call(f, &[ep.into()], "").unwrap();
+        }
+        if let Some(f) = field_bodies {
+            self.builder.build_call(f, &[ep.into()], "").unwrap();
+        }
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "de.i.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(check).unwrap();
+
+        self.builder.position_at_end(done);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
         if let Some(f) = self.user_drop_wrapper_fns.get(type_name) {
             return Some(*f);

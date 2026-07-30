@@ -25658,3 +25658,32 @@ fn test_fnret_passthrough_arg_drop_fires_once() {
         "1\ndG1\n2\ndG2\nend\n"
     );
 }
+
+/// B-2026-07-30-11 (Vec leg) — the interpreter half: a `Vec[T]`'s elements run
+/// their user `impl Drop` bodies when the Vec dies.
+///
+/// `Env::drop_target` reports only Struct / SharedStruct / EnumVariant, so an
+/// array binding resolved to `None` and the whole user-drop hook early-returned
+/// — a resource held in a Vec element was held for the program's lifetime.
+///
+/// Same source and same expected output as `tests/codegen.rs`'s
+/// `e2e_vec_elements_run_user_drop_bodies`. The pair IS the parity contract,
+/// and it is load-bearing here: the first attempt at this fix ran the bodies on
+/// both backends but at different TIMES (interp at the NLL point, codegen at
+/// scope exit), which is a run/build divergence and strictly worse than the
+/// leak it replaced.
+#[test]
+fn test_vec_elements_run_user_drop_bodies() {
+    assert_eq!(
+        run("struct A { t: i64 }\n\
+             impl Drop for A { fn drop(mut ref self) { println(f\"dA{self.t}\"); } }\n\
+             struct W { a: A }\n\
+             fn main() {\n\
+                 { let v: Vec[A] = [A { t: 1 }, A { t: 2 }]; println(f\"{v.len()}\"); }\n\
+                 { let w: Vec[W] = [W { a: A { t: 3 } }]; println(f\"{w.len()}\"); }\n\
+                 { let mut p: Vec[A] = [A { t: 4 }]; let g = p.pop(); println(f\"{p.len()}\"); }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "2\ndA1\ndA2\n1\ndA3\n0\nend\n"
+    );
+}

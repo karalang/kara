@@ -33851,6 +33851,60 @@ fn main() {
         );
     }
 
+    // B-2026-07-30-11 (Vec leg) — element bodies added to `Vec[T]`'s drop.
+    //
+    // Same direction as the two tests above: the bug was a LEAK, and the fix is
+    // bodies-only (the element MEMORY was always freed by the `FreeVecBuffer`
+    // drain), so LSan cannot witness the fix landing. What it guards is
+    // OVER-firing — a body run once per element is correct, twice is a
+    // use-after-free for anything that touches heap, and the walk is a fresh
+    // `0..len` loop over a buffer another drain also visits.
+    //
+    // Non-vacuity, same lesson as above: `buf.clear()` alone lets LLVM delete
+    // every element allocation. The `self.buf[0]` read observes the BYTES and
+    // keeps them. The guard is never true (values are `i >= 0`), so the branch
+    // is dead at runtime but not to the optimizer.
+    #[test]
+    fn asan_vec_element_user_drop_bodies_fire_once() {
+        assert_clean_asan_run(
+            r#"
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        self.buf.clear();
+    }
+}
+struct Wrap { r: Res }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let mut b1: Vec[i64] = Vec.new();
+        b1.push(i);
+        let mut b2: Vec[i64] = Vec.new();
+        b2.push(i);
+        let v: Vec[Res] = [Res { tag: 1, buf: b1 }, Res { tag: 2, buf: b2 }];
+        n = n + v.len();
+
+        // Drop-bearing element FIELD, reached through the container — the
+        // shape B-2026-07-29-39's field walk went silent on one Vec deep.
+        let mut b3: Vec[i64] = Vec.new();
+        b3.push(i);
+        let w: Vec[Wrap] = [Wrap { r: Res { tag: 3, buf: b3 } }];
+        n = n + w.len();
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 2 + 1 per iteration x 200 = 600.
+            &["600"],
+            "vec_element_user_drop_bodies_fire_once",
+        );
+    }
+
     // B-2026-07-30-11 SHAPE 2 — the same glue for an owned aggregate TEMP
     // (`consume(H { .. })`, and the return-passthrough `pass(H { .. })`).
     //
