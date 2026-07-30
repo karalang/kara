@@ -3478,6 +3478,17 @@ pub(super) struct Codegen<'ctx> {
     /// LLVM-type-only tracking can't distinguish `Vec[String]` from
     /// `Vec[Vec[T]]` (both store `vec_struct_type` as the element LLVM type).
     pub(crate) var_elem_type_exprs: HashMap<String, TypeExpr>,
+    /// Per `Array[T, N]` BINDING: the element `TypeExpr` `T` (B-2026-07-30-3).
+    ///
+    /// Deliberately a SEPARATE map rather than an `Array` arm in
+    /// `var_elem_type_exprs`: that table has ~170 readers across codegen, many
+    /// of which treat a present entry as "this binding is a Vec/Slice/Map", so
+    /// adding Arrays to it changes behaviour far outside the one call-site
+    /// substitution this is for. One writer (`register_var_from_type_expr`) and
+    /// one reader (`arg_container_elem_type_expr`), saved/restored alongside the
+    /// other var side-tables so a nested mono compile can't see the caller's
+    /// arrays (see `SavedVarSideTables`).
+    pub(crate) array_elem_type_exprs: HashMap<String, TypeExpr>,
     /// Per closure BINDING (`let g = || v`): the `Vec[T]` / `VecDeque[T]`
     /// `TypeExpr` the closure RETURNS, recorded at the let site (where the
     /// captured source's element type is still visible). Lets an INLINE index of
@@ -7580,6 +7591,7 @@ impl<'ctx> Codegen<'ctx> {
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
             var_elem_type_exprs: HashMap::new(),
+            array_elem_type_exprs: HashMap::new(),
             closure_ret_vec_te: HashMap::new(),
             once_var_types: HashMap::new(),
             interner_vars: std::collections::HashSet::new(),

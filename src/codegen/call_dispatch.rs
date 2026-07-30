@@ -1297,13 +1297,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // already yields a header pointer, so those forward correctly
                 // through the fast-path below — intercepting them would re-coerce
                 // a ref-slice binding and corrupt the forward.
+                // B-2026-07-30-3 widened the Array test to cover an Array REF
+                // PARAM forwarding here, not just an owned Array local — see
+                // `arg_is_array_source`. The ref-param spelling crashed on this
+                // non-generic path too.
                 if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
-                    let src_is_array = matches!(&a.value.kind, ExprKind::Identifier(var)
-                        if self
-                            .variables
-                            .get(var.as_str())
-                            .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_))));
-                    if src_is_array {
+                    if self.arg_is_array_source(&a.value) {
                         if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
                             let ptr = self.materialize_rvalue_for_ref_arg(slice_val, i);
                             compiled_args.push(ptr.into());

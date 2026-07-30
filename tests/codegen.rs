@@ -10865,6 +10865,131 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-30-3): an `Array[T, N]` argument passed to a
+    /// GENERIC `ref Slice[T]` parameter. This is B-2026-06-19-1 — an Array
+    /// binding's storage is its raw elements with no `{ptr,len}` header — left
+    /// open on the MONOMORPHIZED call path. That entry's fix synthesizes the
+    /// header for Array sources on the non-generic path (call_dispatch.rs); the
+    /// generic path's ref-arg arm (mono.rs) went straight to `get_data_ptr`, so
+    /// the callee received `&array[0]` and read `ptr = elem0, len = elem1`.
+    ///
+    /// The `size` line is the load-bearing assertion, and it is a SILENT wrong
+    /// answer rather than a crash: pre-fix, `s.len()` over `[100, 7, 3, 4]`
+    /// returned **7** — literally the second element — on both `karac build`
+    /// and the JIT, while the interpreter returned 4. Reading elem0 as a
+    /// pointer then trapped (SIGTRAP for `String` elements, SIGSEGV for
+    /// scalars), which is why the element reads are covered too.
+    ///
+    /// Element type is irrelevant to the bug (the header is wrong before any
+    /// element is touched), so a scalar and a heap element are both covered.
+    /// The three shapes that were always correct are asserted alongside as
+    /// controls, because they are what localizes the fault to generic + `ref` +
+    /// Array specifically: a CONCRETE `ref Slice[String]` param takes the
+    /// non-generic path that already had the fix, a BARE generic `Slice[T]`
+    /// param takes the by-value arm that coerces via `coerce_to_slice`, and a
+    /// `Vec` argument to the very same generic `ref Slice[T]` signature
+    /// forwards correctly because its storage starts with a `{ptr,len}` header
+    /// superset. That last one must keep working: the fix is deliberately
+    /// restricted to Array sources so the Vec/Slice forward is not re-coerced.
+    #[test]
+    fn e2e_array_arg_to_generic_ref_slice_param_gets_a_real_header() {
+        if let Some(out) = run_program(
+            "fn first[T](s: ref Slice[T]) -> T { s[0] }\n\
+             fn size[T](s: ref Slice[T]) -> i64 { s.len() }\n\
+             fn firstc(s: ref Slice[String]) -> String { s[0] }\n\
+             fn firstv[T](s: Slice[T]) -> T { s[0] }\n\
+             fn main() {\n\
+             \x20   let ns: Array[i64, 4] = [100i64, 7i64, 3i64, 4i64];\n\
+             \x20   println(f\"[{size(ns)}]\");\n\
+             \x20   println(f\"[{first(ns)}]\");\n\
+             \x20   let ss: Array[String, 2] = [\"lit-x\", \"lit-y\"];\n\
+             \x20   println(f\"[{first(ss)}]\");\n\
+             \x20   println(f\"[{firstc(ss)}]\");\n\
+             \x20   println(f\"[{firstv(ss)}]\");\n\
+             \x20   let vs: Vec[String] = [\"vec-x\", \"vec-y\"];\n\
+             \x20   println(f\"[{first(vs)}]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "[4]\n[100]\n[lit-x]\n[lit-x]\n[lit-x]\n[vec-x]\n");
+        }
+    }
+
+    /// Regression (B-2026-07-30-3, second defect): the CALL ORDER above is
+    /// load-bearing, so this asserts the reverse.
+    ///
+    /// Fixing the slice header alone left a second, independent fault. An Array
+    /// argument bound `T`'s LLVM type (the `Slice` arm of
+    /// `augment_subst_from_arg_elem_types` reads the array slot via
+    /// `infer_elem_from_source`) but NOT `T`'s NAME, because an Array local had
+    /// no registered element `TypeExpr` anywhere. The name is what specializes
+    /// the per-type clone helper, so two instantiations of ONE generic emitted a
+    /// single shared `karac_clone_T` sized to whichever was lowered FIRST:
+    ///
+    ///   * `i64` then `String` → the String ran through an 8-byte i64 clone,
+    ///     leaving `len`/`cap` as uninitialized alloca garbage → SIGSEGV;
+    ///   * `String` then `i64` → the i64 ran through a 24-byte clone, reading
+    ///     past an 8-byte alloca and writing 24 bytes into it. That one PRINTED
+    ///     THE RIGHT ANSWER while corrupting the stack, which is why order
+    ///     decided whether the bug looked real.
+    ///
+    /// Both orders are asserted here for that reason, and the elements are
+    /// heap-allocated (`"own-" + ...`) rather than literals so a shallow clone
+    /// of the `{ptr,len,cap}` cannot accidentally survive.
+    #[test]
+    fn e2e_array_generic_monos_get_per_type_clone_helpers_either_order() {
+        if let Some(out) = run_program(
+            "fn first[T](s: ref Slice[T]) -> T { s[0] }\n\
+             fn main() {\n\
+             \x20   let a1: Array[i64, 2] = [100i64, 7i64];\n\
+             \x20   let a2: Array[String, 2] = [\"own-\" + \"alpha\", \"own-\" + \"beta\"];\n\
+             \x20   println(f\"[{first(a1)}]\");\n\
+             \x20   println(f\"[{first(a2)}]\");\n\
+             \x20   let b1: Array[String, 2] = [\"own-\" + \"gamma\", \"own-\" + \"delta\"];\n\
+             \x20   let b2: Array[i64, 2] = [42i64, 9i64];\n\
+             \x20   println(f\"[{first(b1)}]\");\n\
+             \x20   println(f\"[{first(b2)}]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "[100]\n[own-alpha]\n[own-gamma]\n[42]\n");
+        }
+    }
+
+    /// Regression (B-2026-07-30-3, third defect): an Array REF PARAM forwarded
+    /// to a `Slice[T]` parameter, e.g. `fn via(a: ref Array[String, 2]) ->
+    /// String { first(a) }`.
+    ///
+    /// B-2026-06-19-1 synthesizes the `{ptr,len}` header for Array sources, but
+    /// its gate tested only `variables[name].ty` for an LLVM array type — true
+    /// for an owned Array local, FALSE for an Array `ref` param, whose alloca
+    /// holds a `ptr`. The declared array type lives in `ref_params` instead, so
+    /// the forward fell through to `get_data_ptr` and the callee read
+    /// `ptr = elem0, len = elem1` — SIGSEGV.
+    ///
+    /// This one was NOT generic-specific: it reproduced on plain `main` with a
+    /// CONCRETE `ref Slice[String]` callee, i.e. on the non-generic path that
+    /// already had -06-19-1's fix. Both callee spellings are asserted, since the
+    /// two call sites now share `arg_is_array_source` and either could regress.
+    #[test]
+    fn e2e_array_ref_param_forwarded_to_slice_param_gets_a_real_header() {
+        if let Some(out) = run_program(
+            "fn firstg[T](s: ref Slice[T]) -> T { s[0] }\n\
+             fn firstc(s: ref Slice[String]) -> String { s[0] }\n\
+             fn sizeg[T](s: ref Slice[T]) -> i64 { s.len() }\n\
+             fn via_generic(a: ref Array[String, 3]) -> String { firstg(a) }\n\
+             fn via_concrete(a: ref Array[String, 3]) -> String { firstc(a) }\n\
+             fn via_len(a: ref Array[i64, 4]) -> i64 { sizeg(a) }\n\
+             fn main() {\n\
+             \x20   let ss: Array[String, 3] = [\"own-\" + \"x\", \"own-\" + \"y\", \"own-\" + \"z\"];\n\
+             \x20   println(f\"[{via_generic(ss)}]\");\n\
+             \x20   println(f\"[{via_concrete(ss)}]\");\n\
+             \x20   let ns: Array[i64, 4] = [100i64, 7i64, 3i64, 4i64];\n\
+             \x20   println(f\"[{via_len(ns)}]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "[own-x]\n[own-x]\n[4]\n");
+        }
+    }
+
     /// B-2026-07-03-7 (codegen side): `Vec[Struct].sort()` and
     /// `Vec[Enum].sort()` for a `#[derive(Ord)]` user type. Pre-fix codegen
     /// errored "Vec.sort() in codegen supports integer, String, float, tuple,

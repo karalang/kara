@@ -29,8 +29,8 @@ use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 
 use super::helpers::{
-    const_value_as_u32, map_kv_type_exprs, set_inner_type_expr, slice_inner_type_expr,
-    vec_inner_type_expr,
+    array_inner_type_expr, const_value_as_u32, map_kv_type_exprs, set_inner_type_expr,
+    slice_inner_type_expr, vec_inner_type_expr,
 };
 use super::state::SharedTypeInfo;
 
@@ -1598,6 +1598,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert(var_name.to_string(), self.context.i8_type().into());
             self.string_vars.insert(var_name.to_string());
             return;
+        }
+        // `Array[T, N]` — record the element `TypeExpr` only (B-2026-07-30-3),
+        // into its own table rather than `var_elem_type_exprs`; see that field's
+        // comment for why the shared table is not safe to widen here. NO early
+        // return and no other registration: this is purely additive metadata for
+        // the generic call-site element substitution, so every existing Array
+        // path (the LLVM array slot, indexing, cleanup) behaves exactly as
+        // before. Without it a generic `Slice[T]` param fed an Array bound `T`'s
+        // LLVM type but not its name, and the mono emitted a shared
+        // `karac_clone_T` sized to the first instantiation.
+        if let Some(inner) = array_inner_type_expr(te) {
+            self.array_elem_type_exprs
+                .insert(var_name.to_string(), inner);
         }
         if let Some(elem_ty) = self.extract_slice_elem_type(te) {
             self.slice_elem_types.insert(var_name.to_string(), elem_ty);

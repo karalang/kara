@@ -6093,6 +6093,41 @@ impl<'ctx> super::Codegen<'ctx> {
 
     // ── Slice coercion ────────────────────────────────────────────
 
+    /// Is this argument expression an `Array[T, N]` SOURCE — i.e. a binding
+    /// whose storage is raw elements with no `{ptr,len}` header, so a `ref
+    /// Slice[T]` parameter needs one synthesized (B-2026-06-19-1)?
+    ///
+    /// Two spellings, and both matter:
+    ///
+    /// * an owned Array LOCAL — the alloca's LLVM type is `[N x T]`;
+    /// * an Array REF PARAM (`fn f(a: ref Array[String, 2])`) forwarding to a
+    ///   `ref Slice[T]` callee — here `variables[a].ty` is the `ptr` the alloca
+    ///   holds, NOT an array type, so a `variables`-only test misses it and the
+    ///   `get_data_ptr` fast-path hands over a pointer to the raw elements. The
+    ///   declared array type is in `ref_params`, which is exactly what
+    ///   `coerce_to_slice`'s own ref-param arm reads to build the header.
+    ///
+    /// Added with B-2026-07-30-3, which found the ref-param spelling still
+    /// crashing — on the NON-generic path too, so this is shared by both call
+    /// sites (`call_dispatch.rs` and the mono path in `mono.rs`) to keep the two
+    /// gates from drifting apart again.
+    pub(super) fn arg_is_array_source(&self, arg: &Expr) -> bool {
+        let ExprKind::Identifier(var) = &arg.kind else {
+            return false;
+        };
+        if self
+            .variables
+            .get(var.as_str())
+            .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)))
+        {
+            return true;
+        }
+        matches!(
+            self.ref_params.get(var.as_str()),
+            Some(BasicTypeEnum::ArrayType(_))
+        )
+    }
+
     /// Synthesize a `{ptr, i64}` slice header at a call site when the
     /// argument is an Array, Vec, or Slice value and the callee parameter
     /// expects `Slice[T]` / `mut Slice[T]`.

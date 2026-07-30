@@ -19,7 +19,8 @@ use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
 use super::helpers::{
-    map_kv_type_exprs, set_inner_type_expr, slice_inner_type_expr, vec_inner_type_expr,
+    array_inner_type_expr, map_kv_type_exprs, set_inner_type_expr, slice_inner_type_expr,
+    vec_inner_type_expr,
 };
 use super::state::{B2Role, ReturnSlot, SharedTypeInfo, VarSlot};
 
@@ -2690,6 +2691,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         // substitution keys).
                         let te_subst = self.subst_monomorph_type_params(te);
                         let te = &te_subst;
+                        // `let a: Array[T, N] = [...]` — record the element
+                        // `TypeExpr` for the generic call-site substitution
+                        // (B-2026-07-30-3). Reads the SUBSTITUTED annotation, so
+                        // an `Array[T, N]` local inside a monomorph records its
+                        // concrete element. Deliberately does NOT set `detected`
+                        // and writes only its own table: Array bindings are
+                        // otherwise registered by their LLVM array slot, and this
+                        // must not divert any of that. Without it, passing the
+                        // array to a generic `Slice[T]` param bound `T`'s LLVM
+                        // type but not its NAME, so the mono fell back to a
+                        // single shared `karac_clone_T` sized to whichever
+                        // instantiation was emitted first.
+                        if let Some(inner) = array_inner_type_expr(te) {
+                            self.array_elem_type_exprs.insert(var_name.clone(), inner);
+                        }
                         // `let t: Tensor[T, [dims]] = ...` — register the
                         // binding's element type + static dims
                         // (`src/codegen/tensor.rs`); the pending-info

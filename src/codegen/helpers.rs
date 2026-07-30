@@ -144,6 +144,27 @@ pub(super) fn vec_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
     None
 }
 
+/// Pull the element `TypeExpr` out of `Array[T, N]` — the FIRST generic arg
+/// (the second is the const length). Returns `None` for non-Array shapes.
+///
+/// The Array twin of [`vec_inner_type_expr`] / [`slice_inner_type_expr`], added
+/// with B-2026-07-30-3: an Array local had no registered element `TypeExpr`
+/// anywhere, so a generic `Slice[T]` param fed an `Array` bound `T`'s LLVM TYPE
+/// (via `infer_elem_from_source`, which reads the array slot) while leaving its
+/// NAME unbound — the asymmetry that emits a shared `karac_clone_T`.
+pub(super) fn array_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
+    if let TypeKind::Path(path) = &te.kind {
+        if path.segments.last().map(|s| s.as_str()) == Some("Array") {
+            if let Some(args) = &path.generic_args {
+                if let Some(GenericArg::Type(elem)) = args.first() {
+                    return Some(elem.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Pull the element `TypeExpr` out of `Slice[T]` or `mut Slice[T]`.
 pub(super) fn slice_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
     match &te.kind {

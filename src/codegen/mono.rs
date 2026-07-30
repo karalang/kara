@@ -43,6 +43,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     dataframe_var_infos: std::collections::HashSet<String>,
     vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     var_elem_type_exprs: HashMap<String, TypeExpr>,
+    array_elem_type_exprs: HashMap<String, TypeExpr>,
     closure_ret_vec_te: HashMap<String, TypeExpr>,
     enum_inst_var_types: HashMap<String, TypeExpr>,
     string_vars: std::collections::HashSet<String>,
@@ -507,11 +508,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// closed for named locals — silent wrong output again. So -32 could not land
     /// without widening this.
     ///
-    /// Deliberately NOT covered: an `Array` local, which has no registered
-    /// element TypeExpr at all (B-2026-07-29-37).
+    /// An `Array` local is covered too, via its own `array_elem_type_exprs`
+    /// (B-2026-07-30-3). It needs a separate table because `Array` has no entry
+    /// in `var_elem_type_exprs` — the reason this arm used to return `None` for
+    /// one. The consequence was NOT that `T` stayed wholly unbound: the `Slice`
+    /// arm of `augment_subst_from_arg_elem_types` binds an Array argument's
+    /// element LLVM TYPE through `infer_elem_from_source` (which reads the array
+    /// slot), so `T` got a type but no NAME. That is precisely the split -32
+    /// established must never happen: the name drives the per-type clone helper,
+    /// so the mono emitted a shared `karac_clone_T` specialized to whichever
+    /// instantiation was lowered FIRST. Two monos of one generic (`first(ns)`
+    /// at `i64` then `first(ss)` at `String`) then ran the String through an
+    /// 8-byte i64 clone, leaving `len`/`cap` as uninitialized alloca garbage —
+    /// order-dependent: reversing the calls made the i64 mono copy 24 bytes out
+    /// of an 8-byte alloca instead, which happened to print correctly.
     fn arg_container_elem_type_expr(&self, arg: &Expr) -> Option<TypeExpr> {
         match &arg.kind {
-            ExprKind::Identifier(name) => self.var_elem_type_exprs.get(name.as_str()).cloned(),
+            ExprKind::Identifier(name) => self
+                .var_elem_type_exprs
+                .get(name.as_str())
+                .or_else(|| self.array_elem_type_exprs.get(name.as_str()))
+                .cloned(),
             // `<vec>.clone()` yields a Vec with the receiver's element type.
             ExprKind::MethodCall { object, method, .. } if method == "clone" => {
                 self.arg_container_elem_type_expr(object)
@@ -790,6 +807,7 @@ impl<'ctx> super::Codegen<'ctx> {
             dataframe_var_infos: std::mem::take(&mut self.dataframe_var_infos),
             vec_elem_types: std::mem::take(&mut self.vec_elem_types),
             var_elem_type_exprs: std::mem::take(&mut self.var_elem_type_exprs),
+            array_elem_type_exprs: std::mem::take(&mut self.array_elem_type_exprs),
             closure_ret_vec_te: std::mem::take(&mut self.closure_ret_vec_te),
             enum_inst_var_types: std::mem::take(&mut self.enum_inst_var_types),
             string_vars: std::mem::take(&mut self.string_vars),
@@ -813,6 +831,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.dataframe_var_infos = saved.dataframe_var_infos;
         self.vec_elem_types = saved.vec_elem_types;
         self.var_elem_type_exprs = saved.var_elem_type_exprs;
+        self.array_elem_type_exprs = saved.array_elem_type_exprs;
         self.closure_ret_vec_te = saved.closure_ret_vec_te;
         self.enum_inst_var_types = saved.enum_inst_var_types;
         self.string_vars = saved.string_vars;
@@ -1552,6 +1571,39 @@ impl<'ctx> super::Codegen<'ctx> {
             .enumerate()
             .map(|(i, v)| -> Result<BasicMetadataValueEnum<'ctx>, String> {
                 if ref_flags.get(i).copied().unwrap_or(false) {
+                    // B-2026-07-30-3: a GENERIC `ref Slice[T]` param fed an
+                    // `Array[T, N]`. This is the hole B-2026-06-19-1 closed on
+                    // the NON-generic path (the Array->header synthesis at
+                    // call_dispatch.rs) which this monomorphized path never
+                    // got. An Array binding's storage is its raw elements with
+                    // no `{ptr,len}` header, so the `get_data_ptr` fast-path
+                    // below hands the callee `&array[0]` and it reads
+                    // `ptr = elem0, len = elem1` — a bogus slice. Observed
+                    // directly: `s.len()` over `[100,7,3,4]` returned 7 (elem1)
+                    // instead of 4, and using elem0 as a pointer trapped
+                    // (SIGTRAP for String elements, SIGSEGV for scalars), while
+                    // the interpreter was correct. Synthesize the header and
+                    // pass a pointer to it, exactly as the non-generic path
+                    // does. Array sources ONLY, mirroring that gate: a `Vec`
+                    // binding's storage starts with `{ptr,len}` (a header
+                    // superset) and a `Slice` / `ref Slice` binding's
+                    // `get_data_ptr` already yields a header pointer, so both
+                    // forward correctly below — intercepting them would
+                    // re-coerce a ref-slice binding and corrupt the forward.
+                    // `coerce_to_slice`'s Array fast-path derives ptr and len
+                    // from the binding's own alloca and `ArrayType::len()`, so
+                    // it does not depend on `elem_ty` — which is why no
+                    // `type_subst` element binding is needed here.
+                    if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
+                        if self.arg_is_array_source(&args[i].value) {
+                            if let Some(slice_val) =
+                                self.coerce_to_slice(&args[i].value, elem_ty)?
+                            {
+                                let ptr = self.materialize_rvalue_for_ref_arg(slice_val, i);
+                                return Ok(BasicMetadataValueEnum::from(ptr));
+                            }
+                        }
+                    }
                     let ptr: BasicValueEnum<'ctx> = if let ExprKind::Identifier(var_name) =
                         &args[i].value.kind
                     {
