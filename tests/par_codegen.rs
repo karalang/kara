@@ -5860,7 +5860,7 @@ fn main() {
         .expect("codegen failed (recursion should bottom out at depth cap)");
     }
 
-    // ── Phase 3 (2026-05-21): `#[par_unordered]` collect-style codegen ─────
+    // ── Phase 3 (2026-05-21): `#[par_order_free]` collect-style codegen ─────
     //
     // Tests for the Vec-accumulator code path in `src/codegen/reduce.rs`:
     // `try_emit_collect_reduction_lowering` + per-elem-type init/combine
@@ -5878,7 +5878,7 @@ fn main() {
         let src = r#"
 fn main() {
     let mut results: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         results.push(k);
     }
@@ -5910,7 +5910,7 @@ fn main() {
         let src = r#"
 fn main() {
     let mut hits: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         if (k % 3i64) == 0i64 {
             hits.push(k);
@@ -5946,7 +5946,7 @@ fn main() {
     let mut acc: Vec[i64] = Vec.new();
     acc.push(0i64 - 1i64);
     acc.push(0i64 - 2i64);
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..100i64 {
         acc.push(k);
     }
@@ -5975,7 +5975,7 @@ fn main() {
 
     #[test]
     fn test_ir_collect_emits_par_reduce_call_and_collect_helpers() {
-        // IR pin: the `#[par_unordered]` collect lowering must emit a
+        // IR pin: the `#[par_order_free]` collect lowering must emit a
         // call to karac_par_reduce plus the per-elem-type init/combine
         // helpers (`__karac_reduce_init_collect`,
         // `__karac_reduce_combine_collect_b8` — combine is cached by elem BYTE SIZE) and a Collect-specific
@@ -5986,7 +5986,7 @@ fn main() {
         let src = r#"
 fn main() {
     let mut results: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         results.push(k);
     }
@@ -6010,7 +6010,7 @@ fn main() {
         .expect("codegen failed");
         assert!(
             ir.contains("call void @karac_par_reduce"),
-            "expected karac_par_reduce call for #[par_unordered] collect loop; got:\n{ir}"
+            "expected karac_par_reduce call for #[par_order_free] collect loop; got:\n{ir}"
         );
         assert!(
             ir.contains("__karac_reduce_init_collect"),
@@ -6028,7 +6028,7 @@ fn main() {
 
     #[test]
     fn test_ir_collect_without_attribute_stays_sequential() {
-        // Regression guard: without `#[par_unordered]` the analyzer
+        // Regression guard: without `#[par_order_free]` the analyzer
         // doesn't tag `acc.push(k)` as a Collect reduction (the gate is
         // attribute-driven per Phase 2 design — order-not-preserved
         // requires explicit user opt-in). Codegen must fall through to
@@ -6060,11 +6060,11 @@ fn main() {
         .expect("codegen failed");
         assert!(
             !ir.contains("__karac_reduce_init_collect"),
-            "no `#[par_unordered]` ⇒ no init_collect helper; got:\n{ir}"
+            "no `#[par_order_free]` ⇒ no init_collect helper; got:\n{ir}"
         );
         assert!(
             !ir.contains("__karac_reduce_worker_collect_"),
-            "no `#[par_unordered]` ⇒ no worker_collect fn; got:\n{ir}"
+            "no `#[par_order_free]` ⇒ no worker_collect fn; got:\n{ir}"
         );
     }
 
@@ -6072,7 +6072,7 @@ fn main() {
     //
     // The Collect lowering originally gated on integer element types
     // (i8/16/32/64); a `Vec[Cell]`-accumulator loop — the LBM-substep
-    // workload shape, `#[par_unordered] while … { out.push(collide(g[c])) }`
+    // workload shape, `#[par_order_free] while … { out.push(collide(g[c])) }`
     // over a 9×f32 struct — fell through to sequential SILENTLY. The gate
     // is now POD-shaped (int/float/struct-of-scalars; pointer-free), with
     // the combine helper cached by element byte size. These tests pin the
@@ -6084,7 +6084,7 @@ fn main() {
         // contiguous chunk of the iteration space and the join combines
         // slots in worker order, so a pure tabulate body (`push(f(k))`)
         // reconstructs exact source order — every slot must match its own
-        // index formula, not just the multiset. (The `#[par_unordered]`
+        // index formula, not just the multiset. (The `#[par_order_free]`
         // attribute grants reorder license; this pins the CURRENT
         // chunk+in-order-combine implementation so a future reordering
         // change fails loudly here rather than silently corrupting
@@ -6093,7 +6093,7 @@ fn main() {
 struct P { a: f64, b: i64 }
 fn main() {
     let mut out: Vec[P] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         out.push(P { a: (k as f64) * 0.5, b: k * 2i64 });
     }
@@ -6126,7 +6126,7 @@ fn main() {
         let src = r#"
 fn main() {
     let mut out: Vec[f64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..100i64 {
         out.push((k as f64) * 0.5);
     }
@@ -6158,7 +6158,7 @@ fn main() {
 struct P { a: f64, b: i64 }
 fn main() {
     let mut out: Vec[P] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         out.push(P { a: k as f64, b: k });
     }
@@ -6192,7 +6192,7 @@ fn main() {
 
     #[test]
     fn test_e2e_collect_nested_in_outer_loop() {
-        // THE LBM-substep shape: a `#[par_unordered]` collect loop NESTED
+        // THE LBM-substep shape: a `#[par_order_free]` collect loop NESTED
         // inside an outer sequential loop, rebuilding a struct grid from
         // the previous iteration's each round. Both halves of the
         // 2026-07-15 extension must hold together here — (a) the analyzer
@@ -6217,7 +6217,7 @@ fn main() {
     while round < 3i64 {
         let mut next: Vec[C2] = Vec.new();
         let mut k: i64 = 0i64;
-        #[par_unordered]
+        #[par_order_free]
         while k < 4000i64 {
             let prev: i64 = if k == 0i64 { 0i64 } else { g[k - 1i64].v };
             next.push(C2 { v: g[k].v + prev, w: g[k].w });
@@ -6259,7 +6259,7 @@ fn main() {
     while round < 3i64 {
         let mut next: Vec[C2] = Vec.new();
         let mut k: i64 = 0i64;
-        #[par_unordered]
+        #[par_order_free]
         while k < 100i64 {
             next.push(C2 { v: g[k].v + 1i64, w: g[k].w });
             k = k + 1i64;
@@ -6287,7 +6287,7 @@ fn main() {
         .expect("codegen failed");
         assert!(
             ir.contains("call void @karac_par_reduce"),
-            "nested #[par_unordered] collect loop must lower to par_reduce; got:\n{ir}"
+            "nested #[par_order_free] collect loop must lower to par_reduce; got:\n{ir}"
         );
         assert!(
             ir.contains("__karac_reduce_worker_collect_"),
@@ -6304,7 +6304,7 @@ fn main() {
         let src = r#"
 fn main() {
     let mut out: Vec[String] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         out.push("x");
     }
@@ -6375,7 +6375,7 @@ fn main() {
             r#"
 fn main() {
     let mut out: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         out.push(k * 2i64);
     }
@@ -6402,7 +6402,7 @@ fn main() {
             r#"
 fn main() {
     let mut hits: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         if (k % 3i64) == 0i64 {
             hits.push(k);
@@ -6433,7 +6433,7 @@ fn main() {
             r#"
 fn main() {
     let mut out: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..100i64 {
         out.push(k);
         out.push(k);
@@ -6458,7 +6458,7 @@ fn main() {
             r#"
 fn main() {
     let mut out: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..100i64 {
         let l = out.len();
         out.push(k + l);
@@ -6486,7 +6486,7 @@ fn main() {
 struct Q { a: i64, b: i32 }
 fn main() {
     let mut out: Vec[Q] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         out.push(Q { a: k, b: 7i32 });
     }
@@ -6518,7 +6518,7 @@ struct Q { a: i64, b: i32 }
 fn main() {
     let mut out: Vec[Q] = Vec.new();
     out.push(Q { a: 0i64 - 5i64, b: 9i32 });
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         out.push(Q { a: k * 3i64, b: (k % 100i64) as i32 });
     }
@@ -6553,7 +6553,7 @@ fn main() {
         let src = r#"
 fn main() {
     let mut out: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 100i64..1100i64 {
         out.push(k * 7i64);
     }
@@ -6584,7 +6584,7 @@ fn main() {
     let n: i64 = 500i64;
     let mut out: Vec[i64] = Vec.new();
     let mut c: i64 = 0i64;
-    #[par_unordered]
+    #[par_order_free]
     while c < n {
         out.push(c * 3i64);
         c = c + 1i64;
@@ -6617,11 +6617,11 @@ fn main() {
     let mut out: Vec[i64] = Vec.new();
     out.push(41i64);
     out.push(42i64);
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..0i64 {
         out.push(k);
     }
-    #[par_unordered]
+    #[par_order_free]
     for k in 5i64..3i64 {
         out.push(k);
     }
@@ -6656,7 +6656,7 @@ fn main() {
 struct P { a: f64, b: i64 }
 fn main() {
     let mut out: Vec[P] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..1000i64 {
         out.push(P { a: (k as f64) * 0.5, b: k * 2i64 });
     }
@@ -6697,7 +6697,7 @@ fn main() {
         let src = r#"
 fn main() {
     let mut out: Vec[i64] = Vec.new();
-    #[par_unordered]
+    #[par_order_free]
     for k in 0i64..200i64 {
         let s = f"x{k}";
         out.push((s.len() as i64) + k * 10i64);
@@ -6741,7 +6741,7 @@ fn main() {
 fn main() {
     let mut out: Vec[i64] = Vec.new();
     let mut c: i64 = 0i64;
-    #[par_unordered]
+    #[par_order_free]
     while c < 100000i64 {
         out.push(c * 2i64);
         c = c + 1i64;
@@ -6777,7 +6777,7 @@ fn main() {
     out.push(-7i64);
     out.push(-9i64);
     let mut c: i64 = 0i64;
-    #[par_unordered]
+    #[par_order_free]
     while c < 100i64 {
         out.push(c * 3i64);
         c = c + 1i64;
@@ -6814,7 +6814,7 @@ fn main() {
     out.push(-7i64);
     out.push(-9i64);
     let mut c: i64 = 0i64;
-    #[par_unordered]
+    #[par_order_free]
     while c < 100i64 {
         out.push(c * 3i64);
         c = c + 1i64;
@@ -6951,7 +6951,7 @@ fn main() {
         // per-element ownership). Values must survive read-back.
         let src = HEAP_ENUM_ELEM_SRC.replace(
             "    while i < 4i64 {",
-            "    #[par_unordered]\n    while i < 4i64 {",
+            "    #[par_order_free]\n    while i < 4i64 {",
         );
         let ir = ir_for_par(&src);
         assert!(

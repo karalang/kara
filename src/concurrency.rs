@@ -731,15 +731,25 @@ impl DataDepKind {
 /// `Collect` is a different reduction kind from the scalar ops: it
 /// represents a Vec/String/Buffer accumulator that *collects* per-iter
 /// contributions via `acc.push(x)` rather than scalar-folding. The
-/// combine model concatenates per-worker partial buffers, which produces
-/// worker-order output (not iteration-order). For this reason the
 /// analyzer only recognizes `Collect` when the enclosing loop carries
-/// the `#[par_unordered]` attribute — an explicit user opt-in to the
-/// unordered-output property. See `phase-7-codegen.md` collect-style
-/// reduction entry for the full design + slice plan. Codegen lowering
-/// is Phase 3 and not yet implemented; for now `try_emit_reduction_lowering`
-/// returns `Ok(None)` on a `Collect` reduction and the loop falls back
-/// to sequential codegen.
+/// the `#[par_order_free]` attribute (see
+/// [`crate::ast::Attribute::is_par_order_free`]).
+///
+/// What that opt-in means, precisely (B-2026-07-29-30): today's lowering
+/// PRESERVES iteration order on both Collect paths — the partials-concat
+/// path because chunks are statically assigned and contiguous with no
+/// work-stealing, so worker order is iteration order; the tabulate path
+/// because each element is written straight into its final slot. The
+/// attribute is not a warning that your output will be scrambled. It is
+/// the user's promise that their output does not DEPEND on order, which
+/// is what reserves the freedom to reorder later (work-stealing deques
+/// are an open option in `runtime/src/scheduler.rs`) without silently
+/// breaking programs already in the field. Requiring it is also what
+/// keeps "auto-par never changes what your program prints" an
+/// unconditional invariant.
+///
+/// See `phase-7-codegen.md` collect-style reduction entry for the full
+/// design + slice plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionOp {
     Add,
@@ -811,7 +821,7 @@ pub struct LoopReduction {
     /// worker's chunk view and the push grow-path would free an interior
     /// pointer. See `collect_is_tabulate_shape`.
     pub collect_tabulate: bool,
-    /// SEQUENTIAL tabulate (no `#[par_unordered]`): the same
+    /// SEQUENTIAL tabulate (no `#[par_order_free]`): the same
     /// tabulate-shape guarantee, lowered inline — reserve the exact
     /// capacity once, store each element in place, bump `len` after the
     /// loop. No parallel dispatch, no reordering license needed; the
@@ -1922,9 +1932,9 @@ impl<'a> ConcurrencyChecker<'a> {
 
     /// Walk one block's statements for reduction-shaped loops, recursing
     /// into nested loop bodies and if-arms. Recursion (2026-07-15) is what
-    /// lets a `#[par_unordered]` collect loop nested inside an outer
+    /// lets a `#[par_order_free]` collect loop nested inside an outer
     /// sequential loop fan out — the LBM-substep shape (`while s < steps {
-    /// … #[par_unordered] while c < n { out.push(f(grid[c])) } … }`),
+    /// … #[par_order_free] while c < n { out.push(f(grid[c])) } … }`),
     /// which the previous top-level-only walk silently left sequential.
     /// A `LoopReduction`'s `stmt_index` is the loop's index within ITS OWN
     /// block; codegen's lookup disambiguates by (stmt_index, loop_line),
@@ -2014,7 +2024,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     collect_tabulate,
                     seq: false,
                 });
-            } else if !attributes.iter().any(|a| a.is_bare("par_unordered")) {
+            } else if !attributes.iter().any(|a| a.is_par_order_free()) {
                 // No reduction classified and no par opt-in: try the
                 // SEQUENTIAL collect-tabulate shape. Unlike the par
                 // classifier, other loop-carried writes (a scalar
@@ -2180,13 +2190,31 @@ impl<'a> ConcurrencyChecker<'a> {
     /// whose span lies inside the body block), NOT an AST walk: a walk
     /// has to enumerate every `ExprKind` and a missed variant silently
     /// reopens the soundness hole, while the sweep is shape-blind and
-    /// stays exhaustive as the language grows. Deliberately conservative
-    /// in two ways: a body-local FRESH `shared` object (thread-local for
-    /// its whole life, so technically race-free) still declines, and a
-    /// body expression with no `expr_types` entry contributes nothing
-    /// (the racing values — reads of outer bindings and their
-    /// projections — are bread-and-butter typed expressions). The cost
-    /// of a false decline is a sequential loop, never a miscompile.
+    /// stays exhaustive as the language grows. A body expression with no
+    /// `expr_types` entry contributes nothing (the racing values — reads
+    /// of outer bindings and their projections — are bread-and-butter
+    /// typed expressions). The cost of a false decline is a sequential
+    /// loop, never a miscompile.
+    ///
+    /// B-2026-07-30-1 PRECISION PASS. The sweep alone also declines the
+    /// case where the `shared` value is ALLOCATED and fully consumed
+    /// inside ONE iteration — thread-local for its whole life, so its
+    /// non-atomic header is only ever touched by the thread that made
+    /// it. That shape is common (any loop that builds a linked list /
+    /// tree per iteration and folds it; katas #23 and #86 got 1.00x /
+    /// 1.02x from it while peers reached 2.0–2.9x), so an escape
+    /// analysis — [`crate::iter_local`] — now runs alongside the sweep.
+    /// It supplies the spans of expressions that provably cannot alias
+    /// an object from outside the iteration, and the decline stands only
+    /// for unsafe-typed spans OUTSIDE that whitelist.
+    ///
+    /// The whitelist is fail-CLOSED: it is built from positive evidence
+    /// of freshness only, so an `ExprKind` it does not model — today's
+    /// or tomorrow's — is simply absent from it and the sweep's decline
+    /// holds. It never clears a span the sweep flagged on its own
+    /// authority; it only exempts spans it can prove fresh. The type
+    /// gate stays the fallback for everything else — do NOT weaken it,
+    /// B-2026-07-16-6 documents the use-after-free it prevents.
     ///
     /// Without type info (`self.types` is `None` — the untyped
     /// `concurrency_analyze` convenience entry used by analysis-only
@@ -2198,16 +2226,28 @@ impl<'a> ConcurrencyChecker<'a> {
         };
         let lo = body.span.offset;
         let hi = body.span.offset + body.span.length;
+        let mut unsafe_spans: Vec<SpanKey> = Vec::new();
         for (key, ty) in &tc.expr_types {
             let SpanKey(offset, length) = *key;
             if offset >= lo
                 && offset + length <= hi
                 && crate::cross_task_safe::is_cross_task_safe(ty, tc).is_err()
             {
-                return false;
+                unsafe_spans.push(*key);
             }
         }
-        true
+        if unsafe_spans.is_empty() {
+            return true;
+        }
+        // Opt-out for the precision pass alone; `=0` restores the
+        // pure type gate.
+        if std::env::var("KARAC_PAR_ITER_LOCAL_SHARED").as_deref() == Ok("0") {
+            return false;
+        }
+        let Some(local) = crate::iter_local::iteration_local_spans(body, tc) else {
+            return false;
+        };
+        unsafe_spans.iter().all(|key| local.contains(key))
     }
 
     /// Classify a loop body as a reduction over a single outer-scope
@@ -2223,11 +2263,11 @@ impl<'a> ConcurrencyChecker<'a> {
         body: &Block,
         attributes: &[Attribute],
     ) -> Option<(String, ReductionOp)> {
-        // `#[par_unordered]` opts into the collect-shape recognizer
+        // `#[par_order_free]` opts into the collect-shape recognizer
         // (`acc.push(x)` and `if cond { acc.push(x); }`). Other loops
         // see only the scalar-reduction shapes. See
         // `phase-7-codegen.md` collect-style follow-on for the design.
-        let par_unordered = attributes.iter().any(|a| a.is_bare("par_unordered"));
+        let par_order_free = attributes.iter().any(|a| a.is_par_order_free());
         // Names freshly introduced inside the loop body. Writes to these
         // are body-scoped and not loop-carried.
         let mut let_introduced: HashSet<String> = HashSet::new();
@@ -2349,19 +2389,23 @@ impl<'a> ConcurrencyChecker<'a> {
                         continue;
                     }
                     // Collect-style recognition (Phase 2 — gated on
-                    // `#[par_unordered]`). Two shapes:
+                    // `#[par_order_free]`). Two shapes:
                     //   acc.push(EXPR)                                  (bare)
                     //   if cond { acc.push(EXPR); }                     (conditional)
                     // The combine model is per-worker partial Vecs
-                    // concat'd in worker-order, so the output ordering
-                    // differs from iteration-order — the attribute is
-                    // the user's explicit opt-in to that property. Push
-                    // arg expressions are accepted as-is (no acc-read
-                    // restriction inside them is needed for correctness:
-                    // the arg is per-iter data, evaluated within the
-                    // worker's slice, never folded with sibling workers'
-                    // partials before final concat).
-                    if par_unordered {
+                    // concat'd in worker-order. With statically assigned
+                    // contiguous chunks and no work-stealing, worker
+                    // order IS iteration order, so this path preserves
+                    // ordering today (B-2026-07-29-30 measured it with a
+                    // position-sensitive digest); the attribute is the
+                    // user's promise that they do not depend on that,
+                    // which is what leaves reordering available later.
+                    // Push arg expressions are accepted as-is (no
+                    // acc-read restriction inside them is needed for
+                    // correctness: the arg is per-iter data, evaluated
+                    // within the worker's slice, never folded with
+                    // sibling workers' partials before final concat).
+                    if par_order_free {
                         if let Some(name) = collect_push_shape(expr) {
                             if let_introduced.contains(&name) {
                                 continue;
@@ -2445,7 +2489,7 @@ impl<'a> ConcurrencyChecker<'a> {
                         }
                     }
                 }
-            } else if par_unordered {
+            } else if par_order_free {
                 // Mirror of the StmtKind::Expr collect-shape arm above.
                 // Trailing-expression position (no semicolon on the last
                 // collect step) — analogous to `conditional_minmax_shape`

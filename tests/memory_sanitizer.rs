@@ -16865,6 +16865,65 @@ fn main() {
         );
     }
 
+    // ── B-2026-07-30-1: iteration-local `shared` under reduction fan-out ──
+    //
+    // THE load-bearing memory test for the `iter_local` precision pass.
+    // Before it, the B-2026-07-16-6 type gate declined any reduction whose
+    // body touched a `shared`-typed expression, so this shape never
+    // reached a worker thread at all. It does now, which puts a
+    // NON-ATOMIC refcount header inside a parallel region for the first
+    // time — the exact hazard B-2026-07-16-6 documents.
+    //
+    // The precision claim is that each iteration's list is allocated and
+    // dropped entirely within one worker, so no two threads ever touch
+    // one header. That claim is only worth the paper it is written on if
+    // a sanitizer agrees, and the failure mode if the escape analysis is
+    // wrong is precisely what LSan/ASAN catch: a lost rc-dec (leak) or a
+    // lost rc-inc (use-after-free / double-free).
+    //
+    // Geometry: 60_000 iterations × a 12-node `Option[Node]` chain built
+    // head-first and folded back down. The trip count clears
+    // `REDUCE_DISPATCH_THRESHOLD_UNITS` so the lowering actually fires
+    // rather than falling back to sequential codegen and passing
+    // vacuously. The `while cur.is_some()` walk avoids `break`, which
+    // `block_has_early_exit` rejects for unrelated reasons.
+    #[test]
+    fn asan_auto_par_reduction_iteration_local_shared_list_no_leak_no_uaf() {
+        assert_clean_asan_run_with_concurrency(
+            r#"
+shared struct Node {
+    val: i64,
+    next: Option[Node],
+}
+
+fn main() {
+    let mut sum = 0;
+    let mut k = 0;
+    while k < 60000 {
+        let mut head: Option[Node] = None;
+        let mut j = 0;
+        while j < 12 {
+            head = Some(Node { val: k + j, next: head });
+            j = j + 1;
+        }
+        let mut acc = 0;
+        let mut cur = head;
+        while cur.is_some() {
+            let n = cur.unwrap();
+            acc = acc + n.val;
+            cur = n.next;
+        }
+        sum = sum + acc;
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["21603600000"],
+            "auto_par_reduction_iteration_local_shared_list_no_leak_no_uaf",
+        );
+    }
+
     #[test]
     fn asan_auto_par_vec_char_return_freed_on_caller_scope_exit() {
         // Function returns a Vec[char] consumed by the caller. The

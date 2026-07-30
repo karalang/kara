@@ -2558,6 +2558,192 @@ fn test_reduction_kept_for_int_body_under_typed_analysis() {
     assert_eq!(scalar[0].accumulator, "total");
 }
 
+// ── B-2026-07-30-1: iteration-local `shared` precision pass ─────────────
+//
+// The four tests below pin the boundary of `src/iter_local.rs`. The first
+// is the shape the bug is about (must now be ACCEPTED); the other three
+// are the ways a handle can reach outside one iteration, and each must
+// still DECLINE. Keep them together — the accept test alone would pass
+// just as well against a gate that had been deleted outright, which is
+// exactly the regression the decline tests exist to catch.
+
+#[test]
+fn test_reduction_allowed_for_iteration_local_shared_alloc() {
+    // The body allocates a `shared` linked list, folds it, and drops it,
+    // all within one iteration. No handle can reach a second worker, so
+    // the non-atomic refcount is only ever touched by the thread that
+    // made it — the reduction is safe and must be recognized. Pre-fix
+    // (kata #23 / #86) this declined on the TYPE of `Option[Node]` alone
+    // and the par lanes ran at 1.00x / 1.02x.
+    let analysis = analyze_typed(
+        r#"
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn main() {
+            let mut sum = 0;
+            let mut k = 0;
+            while k < 100000 {
+                let mut head: Option[Node] = None;
+                let mut j = 0;
+                while j < 8 {
+                    head = Some(Node { val: k + j, next: head });
+                    j = j + 1;
+                }
+                let mut acc = 0;
+                let mut cur = head;
+                while cur.is_some() {
+                    let n = cur.unwrap();
+                    acc = acc + n.val;
+                    cur = n.next;
+                }
+                sum = sum + acc;
+                k = k + 1;
+            }
+            println(sum);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let scalar: Vec<_> = main_fc.loop_reductions.iter().filter(|r| !r.seq).collect();
+    assert_eq!(
+        scalar.len(),
+        1,
+        "iteration-local shared allocation must not block reduction \
+         recognition, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(scalar[0].accumulator, "sum");
+    assert_eq!(scalar[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_declined_for_shared_list_built_outside_loop() {
+    // INFLOW. Same fold, but the list is built BEFORE the loop, so every
+    // worker walks the same nodes and races their headers. The mention of
+    // the outer `head` is what must keep this declined.
+    let analysis = analyze_typed(
+        r#"
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn main() {
+            let mut head: Option[Node] = None;
+            let mut i = 0;
+            while i < 8 {
+                head = Some(Node { val: i, next: head });
+                i = i + 1;
+            }
+            let mut sum = 0;
+            let mut k = 0;
+            while k < 100000 {
+                let mut acc = 0;
+                let mut cur = head;
+                while cur.is_some() {
+                    let n = cur.unwrap();
+                    acc = acc + n.val + k;
+                    cur = n.next;
+                }
+                sum = sum + acc;
+                k = k + 1;
+            }
+            println(sum);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let scalar: Vec<_> = main_fc.loop_reductions.iter().filter(|r| !r.seq).collect();
+    assert!(
+        scalar.is_empty(),
+        "a shared list built outside the loop crosses workers and must \
+         decline, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_declined_for_shared_handle_escaping_to_outer_binding() {
+    // OUTFLOW. The allocation IS per-iteration, but the handle is stored
+    // into an outer binding, so it survives the iteration that made it and
+    // the next worker's rc-inc races the previous one's.
+    let analysis = analyze_typed(
+        r#"
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn main() {
+            let mut keep: Option[Node] = None;
+            let mut sum = 0;
+            let mut k = 0;
+            while k < 100000 {
+                let fresh = Node { val: k, next: keep };
+                keep = Some(fresh);
+                sum = sum + k;
+                k = k + 1;
+            }
+            println(sum);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let scalar: Vec<_> = main_fc.loop_reductions.iter().filter(|r| !r.seq).collect();
+    assert!(
+        scalar.is_empty(),
+        "a shared handle escaping into an outer binding must decline, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_declined_for_shared_list_arriving_as_param() {
+    // INFLOW through a PARAMETER rather than an outer local — the same
+    // hazard one scope up. A function parameter is not body-bound, so it
+    // never enters the provenance set and its mentions stay non-local.
+    let analysis = analyze_typed(
+        r#"
+        shared struct Node {
+            val: i64,
+            next: Option[Node],
+        }
+
+        fn fold(head: Option[Node], reps: i64) -> i64 {
+            let mut sum = 0;
+            let mut k = 0;
+            while k < reps {
+                let mut acc = 0;
+                let mut cur = head;
+                while cur.is_some() {
+                    let n = cur.unwrap();
+                    acc = acc + n.val;
+                    cur = n.next;
+                }
+                sum = sum + acc;
+                k = k + 1;
+            }
+            sum
+        }
+
+        fn main() {
+            let list = Some(Node { val: 3, next: None });
+            println(fold(list, 100000));
+        }
+        "#,
+    );
+    let fold_fc = get_function(&analysis, "fold");
+    let scalar: Vec<_> = fold_fc.loop_reductions.iter().filter(|r| !r.seq).collect();
+    assert!(
+        scalar.is_empty(),
+        "a shared list arriving as a parameter must decline, got {:?}",
+        fold_fc.loop_reductions
+    );
+}
+
 #[test]
 fn test_reduction_recognized_for_compound_add() {
     // `total += x` shape parses to CompoundAssign — must also be recognized.
@@ -3392,23 +3578,23 @@ fn test_reduction_rejects_conditional_acc_update_with_extra_stmt_in_then() {
 }
 
 // ── Collect-style reduction recognition (slice: par-unordered Phase 2, 2026-05-20) ──
-// `#[par_unordered] while ... { ...acc.push(x)... }` — the analyzer
+// `#[par_order_free] while ... { ...acc.push(x)... }` — the analyzer
 // recognizes `acc.push(x)` (bare) and `if cond { acc.push(x); }`
 // (conditional) shapes as `ReductionOp::Collect` only when the
-// enclosing loop carries the `#[par_unordered]` attribute. Without the
+// enclosing loop carries the `#[par_order_free]` attribute. Without the
 // opt-in, the same shape falls through to "no parallelization
 // opportunities detected" because per-worker partial-Vec concat
 // produces worker-order output, not iteration-order — a semantic
 // surprise the user must opt into explicitly.
 
 #[test]
-fn test_reduction_recognized_for_bare_push_when_par_unordered() {
+fn test_reduction_recognized_for_bare_push_when_par_order_free() {
     let analysis = analyze(
         r#"
         fn main() {
             let mut results: Vec[i64] = Vec.new();
             let mut k: i64 = 0i64;
-            #[par_unordered]
+            #[par_order_free]
             while k < 100i64 {
                 results.push(k);
                 k = k + 1i64;
@@ -3420,7 +3606,7 @@ fn test_reduction_recognized_for_bare_push_when_par_unordered() {
     assert_eq!(
         main_fc.loop_reductions.len(),
         1,
-        "bare push with par_unordered must be recognized, got {:?}",
+        "bare push with par_order_free must be recognized, got {:?}",
         main_fc.loop_reductions
     );
     let r = &main_fc.loop_reductions[0];
@@ -3429,13 +3615,13 @@ fn test_reduction_recognized_for_bare_push_when_par_unordered() {
 }
 
 #[test]
-fn test_reduction_recognized_for_conditional_push_when_par_unordered() {
+fn test_reduction_recognized_for_conditional_push_when_par_order_free() {
     let analysis = analyze(
         r#"
         fn main() {
             let mut results: Vec[i64] = Vec.new();
             let mut k: i64 = 0i64;
-            #[par_unordered]
+            #[par_order_free]
             while k < 100i64 {
                 if k > 5i64 {
                     results.push(k);
@@ -3449,7 +3635,7 @@ fn test_reduction_recognized_for_conditional_push_when_par_unordered() {
     assert_eq!(
         main_fc.loop_reductions.len(),
         1,
-        "conditional push with par_unordered must be recognized, got {:?}",
+        "conditional push with par_order_free must be recognized, got {:?}",
         main_fc.loop_reductions
     );
     let r = &main_fc.loop_reductions[0];
@@ -3467,7 +3653,7 @@ fn test_reduction_recognized_for_conditional_push_with_empty_else() {
         fn main() {
             let mut results: Vec[i64] = Vec.new();
             let mut k: i64 = 0i64;
-            #[par_unordered]
+            #[par_order_free]
             while k < 100i64 {
                 if k > 5i64 { results.push(k); } else { }
                 k = k + 1i64;
@@ -3482,7 +3668,7 @@ fn test_reduction_recognized_for_conditional_push_with_empty_else() {
 }
 
 #[test]
-fn test_reduction_rejects_bare_push_without_par_unordered() {
+fn test_reduction_rejects_bare_push_without_par_order_free() {
     // Same source as the bare-push-recognized test above but with the
     // attribute removed — the same `results.push(k)` body that
     // *would* be recognized under opt-in must fall through to "no
@@ -3509,7 +3695,7 @@ fn test_reduction_rejects_bare_push_without_par_unordered() {
     assert_eq!(
         main_fc.loop_reductions.len(),
         1,
-        "bare push without par_unordered should be recognized as seq tabulate only, got {:?}",
+        "bare push without par_order_free should be recognized as seq tabulate only, got {:?}",
         main_fc.loop_reductions
     );
     let r = &main_fc.loop_reductions[0];
@@ -3521,7 +3707,7 @@ fn test_reduction_rejects_bare_push_without_par_unordered() {
 }
 
 #[test]
-fn test_reduction_rejects_conditional_push_without_par_unordered() {
+fn test_reduction_rejects_conditional_push_without_par_order_free() {
     let analysis = analyze(
         r#"
         fn main() {
@@ -3537,7 +3723,7 @@ fn test_reduction_rejects_conditional_push_without_par_unordered() {
     let main_fc = get_function(&analysis, "main");
     assert!(
         main_fc.loop_reductions.is_empty(),
-        "conditional push without par_unordered must not be recognized, got {:?}",
+        "conditional push without par_order_free must not be recognized, got {:?}",
         main_fc.loop_reductions
     );
 }
@@ -3548,13 +3734,13 @@ fn test_reduction_rejects_push_on_let_introduced_acc() {
     // creates a body-local accumulator — pushing into it isn't loop-
     // carried; same shape that's already rejected for scalar
     // reductions (see `test_reduction_recognized_for_two_arm_acc_update_same_op`'s
-    // `let_introduced` guard). Even with the par_unordered opt-in,
+    // `let_introduced` guard). Even with the par_order_free opt-in,
     // body-local accumulators don't fan out across workers.
     let analysis = analyze(
         r#"
         fn main() {
             let mut k: i64 = 0i64;
-            #[par_unordered]
+            #[par_order_free]
             while k < 100i64 {
                 let mut local: Vec[i64] = Vec.new();
                 local.push(k);
@@ -3588,7 +3774,7 @@ fn test_reduction_rejects_mixed_push_and_scalar_accumulator() {
             let mut results: Vec[i64] = Vec.new();
             let mut total: i64 = 0i64;
             let mut k: i64 = 0i64;
-            #[par_unordered]
+            #[par_order_free]
             while k < 100i64 {
                 results.push(k);
                 total = total + k;

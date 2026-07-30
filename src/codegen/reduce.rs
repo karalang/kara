@@ -1469,14 +1469,18 @@ impl<'ctx> super::Codegen<'ctx> {
 
     // ── Collect-style reduction lowering (Phase 3, 2026-05-21) ─────────
     //
-    // `#[par_unordered] for k in 0..K { ... acc.push(EXPR); ... }` —
+    // `#[par_order_free] for k in 0..K { ... acc.push(EXPR); ... }` —
     // accumulator is a `Vec[T]`, slot is the 24-byte `{ptr, len, cap}`
     // struct, init writes an empty Vec, combine extends src into dst
     // (heap concat + src-buffer takeover). The recognizer at
     // `src/concurrency.rs::collect_push_shape` gates this on the explicit
-    // `#[par_unordered]` attribute since the worker-combine order is not
-    // input-order-preserving; the attribute is the user's "I tolerate
-    // any ordering" opt-in. v1 supports int element types (`Vec[i8]` …
+    // `#[par_order_free]` attribute. Worker-combine order happens to
+    // equal input order today (contiguous static chunks, no
+    // work-stealing — B-2026-07-29-30); the attribute is the user's
+    // "my output does not depend on order" promise, which is what keeps
+    // reordering available to a future scheduler rather than a claim
+    // about what this lowering does. v1 supports int element types
+    // (`Vec[i8]` …
     // `Vec[i64]`); String / nested-Vec / struct element types fall back
     // to sequential codegen until a workload surfaces them.
 
@@ -1512,7 +1516,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // with a Vec/String field would need per-element ownership
         // transfer bookkeeping this lowering doesn't do). Struct/float
         // elements were added for the LBM-substep workload shape
-        // (`#[par_unordered] while … { out.push(collide(grid[c])) }` over
+        // (`#[par_order_free] while … { out.push(collide(grid[c])) }` over
         // `Vec[Cell]`, 9×f32), which previously fell through to
         // sequential silently.
         let Some(acc_slot) = self.variables.get(&reduction.accumulator).copied() else {
@@ -1565,7 +1569,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        // Cost gates: `#[par_unordered]` is an explicit opt-in, so we
+        // Cost gates: `#[par_order_free]` is an explicit opt-in, so we
         // skip the memory-bound gate and emit a zero per-iter cost
         // sentinel (runtime treats 0 as "always dispatch"; see
         // `runtime/src/lib.rs` DISPATCH_OVERHEAD_PER_CALL_UNITS_RT).

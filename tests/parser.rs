@@ -604,26 +604,30 @@ fn test_for_loop_tuple_destructure() {
     }
 }
 
-// ── Loop attribute parsing (Phase 1 — par_unordered surface, 2026-05-20) ──
+// ── Loop attribute parsing (Phase 1 — par_order_free surface, 2026-05-20) ──
 //
-// `#[par_unordered] while/for/loop ...` parses with the attribute attached
+// `#[par_order_free] while/for/loop ...` parses with the attribute attached
 // to the loop AST node. Other attribute names on loops are rejected;
 // attribute-then-non-loop expressions are rejected. The attribute surface
 // stores the parsed `Attribute` set in `ExprKind::While::attributes` (and
 // peers) for the Phase 2 analyzer to consult; behaviour is otherwise
 // unchanged from the un-attributed loop.
+//
+// The attribute was named `#[par_unordered]` until B-2026-07-29-30; the old
+// spelling still parses and means the same thing, which
+// `test_par_unordered_deprecated_alias_still_parses` below pins.
 
 #[test]
-fn test_par_unordered_attr_parses_on_while() {
+fn test_par_order_free_attr_parses_on_while() {
     let prog = parse_ok(
-        "fn main() { let mut k: i64 = 0i64; #[par_unordered] while k < 10i64 { k = k + 1i64; } }",
+        "fn main() { let mut k: i64 = 0i64; #[par_order_free] while k < 10i64 { k = k + 1i64; } }",
     );
     if let Item::Function(f) = &prog.items[0] {
         // Body: [let, while]. The attributed while is index 1.
         if let StmtKind::Expr(expr) = &f.body.stmts[1].kind {
             if let ExprKind::While { attributes, .. } = &expr.kind {
                 assert_eq!(attributes.len(), 1);
-                assert!(attributes[0].is_bare("par_unordered"));
+                assert!(attributes[0].is_par_order_free());
             } else {
                 panic!("expected While, got {:?}", expr.kind);
             }
@@ -634,13 +638,13 @@ fn test_par_unordered_attr_parses_on_while() {
 }
 
 #[test]
-fn test_par_unordered_attr_parses_on_for() {
-    let prog = parse_ok("fn main() { #[par_unordered] for k in 0i64..10i64 { process(k); } }");
+fn test_par_order_free_attr_parses_on_for() {
+    let prog = parse_ok("fn main() { #[par_order_free] for k in 0i64..10i64 { process(k); } }");
     if let Item::Function(f) = &prog.items[0] {
         if let StmtKind::Expr(expr) = &f.body.stmts[0].kind {
             if let ExprKind::For { attributes, .. } = &expr.kind {
                 assert_eq!(attributes.len(), 1);
-                assert!(attributes[0].is_bare("par_unordered"));
+                assert!(attributes[0].is_par_order_free());
             } else {
                 panic!("expected For, got {:?}", expr.kind);
             }
@@ -649,17 +653,47 @@ fn test_par_unordered_attr_parses_on_for() {
 }
 
 #[test]
-fn test_par_unordered_attr_parses_on_loop() {
-    let prog = parse_ok("fn main() { #[par_unordered] loop { break; } }");
+fn test_par_order_free_attr_parses_on_loop() {
+    let prog = parse_ok("fn main() { #[par_order_free] loop { break; } }");
     if let Item::Function(f) = &prog.items[0] {
         if let StmtKind::Expr(expr) = &f.body.stmts[0].kind {
             if let ExprKind::Loop { attributes, .. } = &expr.kind {
                 assert_eq!(attributes.len(), 1);
-                assert!(attributes[0].is_bare("par_unordered"));
+                assert!(attributes[0].is_par_order_free());
             } else {
                 panic!("expected Loop, got {:?}", expr.kind);
             }
         }
+    }
+}
+
+#[test]
+fn test_par_unordered_deprecated_alias_still_parses() {
+    // B-2026-07-29-30 renamed the attribute to `#[par_order_free]`. The
+    // old spelling keeps parsing, with identical meaning, so sources
+    // outside this repo (the kara-katas #204 count-primes lane and its
+    // bench harness) survive the rename. `is_par_order_free` is the one
+    // predicate every consumer asks — a name-specific `is_bare` check
+    // anywhere downstream would silently drop the alias.
+    for src in [
+        "fn main() { let mut k: i64 = 0i64; #[par_unordered] while k < 10i64 { k = k + 1i64; } }",
+        "fn main() { let mut k: i64 = 0i64; #[par_order_free] while k < 10i64 { k = k + 1i64; } }",
+    ] {
+        let prog = parse_ok(src);
+        let Item::Function(f) = &prog.items[0] else {
+            panic!("expected a function item");
+        };
+        let StmtKind::Expr(expr) = &f.body.stmts[1].kind else {
+            panic!("expected expr-stmt at index 1");
+        };
+        let ExprKind::While { attributes, .. } = &expr.kind else {
+            panic!("expected While, got {:?}", expr.kind);
+        };
+        assert_eq!(attributes.len(), 1);
+        assert!(
+            attributes[0].is_par_order_free(),
+            "both spellings must satisfy is_par_order_free; failed on: {src}"
+        );
     }
 }
 
@@ -685,7 +719,7 @@ fn test_unknown_attribute_on_loop_rejected_with_focused_diagnostic() {
         errors.iter().any(|e| e
             .message
             .contains("`#[bogus_attr]` is not valid on a loop expression")
-            && e.message.contains("only `#[par_unordered]` is recognised")),
+            && e.message.contains("only `#[par_order_free]` is recognised")),
         "expected focused unknown-loop-attr diagnostic, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
@@ -693,10 +727,10 @@ fn test_unknown_attribute_on_loop_rejected_with_focused_diagnostic() {
 
 #[test]
 fn test_attribute_then_non_loop_expression_rejected() {
-    // `#[par_unordered]` before an if-expression is rejected — loop
+    // `#[par_order_free]` before an if-expression is rejected — loop
     // attributes don't apply to other expression kinds.
     let (_, errors) =
-        parse_with_errors("fn main() { #[par_unordered] if true { 1i64 } else { 2i64 }; }");
+        parse_with_errors("fn main() { #[par_order_free] if true { 1i64 } else { 2i64 }; }");
     assert!(
         errors.iter().any(|e| e
             .message

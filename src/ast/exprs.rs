@@ -153,7 +153,7 @@ pub enum ExprKind {
         label: Option<String>,
         condition: Box<Expr>,
         body: Block,
-        /// Outer attributes on the loop expression (`#[par_unordered]` etc.).
+        /// Outer attributes on the loop expression (`#[par_order_free]` etc.).
         /// Empty unless the parser saw one or more `#[...]` lines before the
         /// `while` keyword. The concurrency analyzer reads this set to gate
         /// shape-recognition that has unordered-output semantics.

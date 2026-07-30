@@ -62,7 +62,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Auto-par reduction lowering for NESTED blocks (2026-07-15).
             // `compile_function_body` attempts this for the fn's top-level
             // statements; nested blocks previously compiled every loop
-            // sequentially, so a `#[par_unordered]` collect loop inside an
+            // sequentially, so a `#[par_order_free]` collect loop inside an
             // outer loop (the LBM-substep shape) silently never fanned
             // out. The lookup keys on (stmt_index, line) so an index
             // collision with a sibling block can't cross-match; a miss is

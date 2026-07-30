@@ -727,18 +727,20 @@ impl super::Parser {
                 })
             }
 
-            // Attribute-prefixed loop expression — `#[par_unordered] while
-            // ... { }` / `#[par_unordered] for ... { }` / `#[par_unordered]
+            // Attribute-prefixed loop expression — `#[par_order_free] while
+            // ... { }` / `#[par_order_free] for ... { }` / `#[par_order_free]
             // loop { }`. At Phase 1 the only recognised attribute name is
-            // `par_unordered` (opt-in for the upcoming collect-style
+            // `par_order_free` (opt-in for the upcoming collect-style
             // reduction lowering, per docs/implementation_checklist/
             // phase-7-codegen.md "collect-style if-cond push reduction"
-            // follow-on). Other attribute names and non-loop expressions
-            // following the attribute block are rejected with a focused
-            // diagnostic. Labeled loops with attributes
-            // (`#[par_unordered] my_label: while ...`) are deferred to a
-            // follow-up slice — the unlabeled case is the only one the
-            // analyzer / codegen will recognise in Phase 2.
+            // follow-on), with `par_unordered` accepted as its deprecated
+            // pre-rename spelling (B-2026-07-29-30; see
+            // `Attribute::is_par_order_free`). Other attribute names and
+            // non-loop expressions following the attribute block are
+            // rejected with a focused diagnostic. Labeled loops with
+            // attributes (`#[par_order_free] my_label: while ...`) are
+            // deferred to a follow-up slice — the unlabeled case is the
+            // only one the analyzer / codegen will recognise in Phase 2.
             Token::Pound => {
                 let attr_start = self.current_span();
                 let attributes = self.parse_attributes();
@@ -767,12 +769,12 @@ impl super::Parser {
                             continue;
                         }
                     }
-                    if !attr.is_bare("par_unordered") {
+                    if !attr.is_par_order_free() {
                         let name = attr.path.join("::");
                         self.errors.push(ParseError {
                             message: format!(
                                 "attribute `#[{name}]` is not valid on a loop expression; \
-                                 only `#[par_unordered]` is recognised here at Phase 1. \
+                                 only `#[par_order_free]` is recognised here at Phase 1. \
                                  See `docs/implementation_checklist/phase-7-codegen.md` \
                                  collect-style reduction follow-on for the surface plan."
                             ),
@@ -805,7 +807,7 @@ impl super::Parser {
                             message: "expected `while`, `for`, or `loop` after attribute \
                                       block; loop attributes do not apply to other \
                                       expression kinds at Phase 1. Labeled-loop targets \
-                                      (`#[par_unordered] label: while ...`) are deferred \
+                                      (`#[par_order_free] label: while ...`) are deferred \
                                       to a follow-up slice."
                                 .to_string(),
                             span: self.span_from(&attr_start),

@@ -31,6 +31,37 @@ impl Attribute {
         self.path.len() == 1 && self.path[0] == name
     }
 
+    /// True for the loop attribute that opts a Collect-shaped loop into
+    /// parallel fan-out: canonical `#[par_order_free]`, or its
+    /// deprecated pre-rename spelling `#[par_unordered]`.
+    ///
+    /// B-2026-07-29-30 renamed it. The old name asserted a fact about
+    /// BEHAVIOUR — "the output ordering differs from iteration-order" —
+    /// that no shipped code path exhibits: with no work-stealing, chunks
+    /// are statically assigned and contiguous, so concatenating
+    /// per-worker partials in worker order IS iteration order, and the
+    /// tabulate specialization writes each element straight into its
+    /// final slot. Measured with a position-sensitive digest over
+    /// 200_000 elements, both Collect paths produce byte-identical
+    /// output under `KARAC_AUTO_PAR=1` and `=0`.
+    ///
+    /// The gate itself is correct and stays: requiring an opt-in is what
+    /// keeps "auto-par never changes what your program prints" an
+    /// unconditional invariant, and it reserves the freedom to ship
+    /// work-stealing later without silently reordering existing
+    /// programs. Only the NAME changed — from a claim about what the
+    /// compiler does to a promise the user makes ("my output does not
+    /// depend on order; reorder if it helps"). That is also the
+    /// vocabulary the other end of the pipe already uses:
+    /// `KARAC_PAR_ORDER_FREE_FLAG`, bit 63 of the descriptor's cost
+    /// field.
+    ///
+    /// The old spelling is still accepted, unchanged in meaning, so
+    /// out-of-tree sources keep compiling across the rename.
+    pub fn is_par_order_free(&self) -> bool {
+        self.is_bare("par_order_free") || self.is_bare("par_unordered")
+    }
+
     /// Return the display name (`"inline"`, `"inline(always)"`,
     /// `"inline(never)"`, `"cold"`) iff this attribute is one of the
     /// codegen-hint attributes (design.md § Codegen Hint Attributes),
