@@ -2046,11 +2046,20 @@ impl<'a> super::Interpreter<'a> {
                 _ => None,
             };
             let Some(tn) = type_name else { continue };
-            if !self.program.drop_method_keys.contains_key(&tn) {
-                continue;
-            }
-            if let Some(v) = arg_vals.get(i) {
+            let Some(v) = arg_vals.get(i) else { continue };
+            if self.program.drop_method_keys.contains_key(&tn) {
                 self.run_user_drop_body_on_value(&tn, v.clone());
+            } else if self.value_runs_user_drop(v) {
+                // B-2026-07-30-11 SHAPE 2 — the temp's OWN type declares no
+                // `Drop`, but it carries a Drop-bearing FIELD, so a body still
+                // has to run when it dies (`struct Holder { r: Res }` passed as
+                // `consume(Holder { r: Res { .. } })` / `consume(make())`). The
+                // `drop_method_keys` gate alone skipped the whole temp, so the
+                // field's resource leaked once per call. Bodies only: the
+                // interpreter's value model releases the memory when the
+                // `Value` is dropped, exactly as on the working `let`-bound
+                // path (`invoke_user_drop_if_applicable`'s no-own-Drop arm).
+                self.drop_user_drop_fields_of_value(v);
             }
         }
     }

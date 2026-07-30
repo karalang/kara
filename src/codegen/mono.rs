@@ -887,10 +887,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // which swaps `scope_cleanup_actions`).
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
-            if !self.call_arg_flows_into_return(name, i)
-                || self.arg_is_entry_copied_heap_struct(&a.value)
-            {
-                self.track_inline_owned_aggregate_arg(val, &a.value);
+            let flows_into_return = self.call_arg_flows_into_return(name, i);
+            if !flows_into_return || self.arg_is_entry_copied_heap_struct(&a.value) {
+                self.track_inline_owned_aggregate_arg(val, &a.value, flows_into_return);
             }
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
             // (`dup(mk())`, `passthru(mk())`, where `mk() -> String`) is

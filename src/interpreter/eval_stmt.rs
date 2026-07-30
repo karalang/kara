@@ -719,7 +719,7 @@ impl<'a> super::Interpreter<'a> {
     /// type-level `type_runs_user_drop`, so both backends disarm on the same
     /// condition. `Value::SharedStruct` is not walked — its drop is
     /// refcount-driven, never the holder's business.
-    fn value_runs_user_drop(&self, value: &Value) -> bool {
+    pub(crate) fn value_runs_user_drop(&self, value: &Value) -> bool {
         let Value::Struct { name, fields } = value else {
             return false;
         };
@@ -1190,6 +1190,13 @@ impl<'a> super::Interpreter<'a> {
                         if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                             if self.program.drop_method_keys.contains_key(&tn) {
                                 self.run_user_drop_body_on_value(&tn, discarded);
+                            } else if self.value_runs_user_drop(&discarded) {
+                                // B-2026-07-30-11 SHAPE 2, discard position —
+                                // the return type declares no `Drop` of its own
+                                // but carries a Drop-bearing field, so `make();`
+                                // leaked that field's resource. Bodies only, as
+                                // in the arg-temp twin.
+                                self.drop_user_drop_fields_of_value(&discarded);
                             }
                         }
                     }

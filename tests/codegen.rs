@@ -5455,6 +5455,59 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 SHAPE 2 — an owned aggregate TEMP runs its fields' user
+    /// `impl Drop`, in every position a temp can occupy.
+    ///
+    /// B-2026-07-29-39 (the test above) taught the `let`-path to walk an
+    /// aggregate's Drop-bearing fields and stopped there. Every owned-temp
+    /// registrar still gated on the type's OWN `drop_method_keys` entry, so a
+    /// holder that merely CONTAINS a Drop type ran nothing when the temp died:
+    /// `consume(H { .. })`, `consume(mk())` and `mk();` each leaked the field's
+    /// resource once per call, while the `let`-bound sibling worked. Three
+    /// separate arms, all three fixed here.
+    ///
+    /// The last case is the one that makes this safe rather than merely
+    /// present: on the RETURN-PASSTHROUGH path the body must NOT fire here.
+    /// `pass` entry-copies the struct and returns an independent copy, so the
+    /// caller temp's MEMORY does need freeing (B-2026-07-08-6) — but the VALUE
+    /// flows out to `p`, whose own drop runs the body. Firing both prints `dA4`
+    /// twice; an intermediate version of this fix did exactly that.
+    ///
+    /// Paired with `tests/interpreter.rs`'s
+    /// `test_owned_aggregate_temp_runs_field_user_drop` on the same source and
+    /// the same expected string — the pair IS the run/build parity contract.
+    #[test]
+    fn e2e_owned_aggregate_temp_runs_field_user_drop() {
+        let Some(out) = run_program(
+            "struct A { t: i64 }\n\
+             impl Drop for A { fn drop(mut ref self) { println(f\"dA{self.t}\"); } }\n\
+             struct H { a: A }\n\
+             fn consume(h: H) { println(\"c\"); }\n\
+             fn mk(t: i64) -> H { H { a: A { t: t } } }\n\
+             fn pass(h: H) -> H { h }\n\
+             fn main() {\n\
+             \x20   consume(H { a: A { t: 1 } });\n\
+             \x20   println(\"-\");\n\
+             \x20   consume(mk(2));\n\
+             \x20   println(\"-\");\n\
+             \x20   mk(3);\n\
+             \x20   println(\"-\");\n\
+             \x20   let p = pass(H { a: A { t: 4 } });\n\
+             \x20   println(f\"{p.a.t}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            // Each temp drops at the `;` that ends its statement — after the
+            // callee returns, before the next statement. `dA4` appears ONCE,
+            // at `p`'s live-range end, not also at the call that produced it.
+            "c\ndA1\n-\nc\ndA2\n-\ndA3\n-\n4\ndA4\nend\n"
+        );
+    }
+
     /// Spawn a built kara test binary and capture stdout+stderr, with a
     /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
     /// in `tests/common/mod.rs` — see the module doc there for the full

@@ -33821,4 +33821,70 @@ fn main() {
             "aggregate_field_user_drop_fires_once",
         );
     }
+
+    // B-2026-07-30-11 SHAPE 2 — the same glue for an owned aggregate TEMP
+    // (`consume(H { .. })`, and the return-passthrough `pass(H { .. })`).
+    //
+    // What this gate is for, stated precisely, because it is NOT the original
+    // bug: SHAPE 2 was a leak of a resource held in a field, and the fix is
+    // bodies-only — it emits no free and moves none, so LSan cannot see the
+    // fix land. Its job is the OPPOSITE direction. Adding drop-body calls on
+    // the temp path risks OVER-firing, and an intermediate version of the fix
+    // did exactly that: it ran the body on both the caller's temp and the
+    // passthrough result. For a body that touches heap, twice is a
+    // use-after-free. So the passthrough arm is here as the disarm case, the
+    // way `MovedOut` is in the test above.
+    //
+    // NON-VACUITY, deliberately engineered (B-2026-07-30-12's lesson: an ASAN
+    // test whose allocations LLVM elides passes while proving nothing). With
+    // `self.buf.clear()` as the only body, BOTH shapes optimize down to a
+    // single 4 KiB stdio buffer — 1 alloc, nothing exercised. The `self.buf[0]`
+    // read is what keeps them: it observes the BYTES, so the malloc cannot be
+    // deleted. Measured: 601 allocs / 601 frees, 400 real Vec buffers driven
+    // through the drop path. The guard is never true (every pushed value is
+    // `i >= 0`), so the `println` is dead at runtime but not to the optimizer.
+    #[test]
+    fn asan_owned_aggregate_temp_field_drop_fires_once() {
+        assert_clean_asan_run(
+            r#"
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        self.buf.clear();
+    }
+}
+struct Holder { label: String, r: Res }
+
+fn consume(h: Holder) -> i64 { h.r.tag + h.label.len() }
+fn pass(h: Holder) -> Holder { h }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Inline struct-literal arg: the caller temp owns the body AND the
+        // buffer, so this arm has to fire exactly once and free exactly once.
+        let mut b1: Vec[i64] = Vec.new();
+        b1.push(i);
+        n = n + consume(Holder { label: "lit", r: Res { tag: 1, buf: b1 } });
+
+        // Return passthrough: the callee entry-copies and returns an
+        // independent copy, so the caller temp's MEMORY is freed here but its
+        // BODY belongs to `p`. Firing both is the use-after-free this catches.
+        let mut b2: Vec[i64] = Vec.new();
+        b2.push(i);
+        let p = pass(Holder { label: "pt", r: Res { tag: 1, buf: b2 } });
+        n = n + p.r.tag;
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // Per iteration: 1 + 3 ("lit") from `consume`, plus 1 from `p.r.tag`
+            // = 5. ×200 = 1000.
+            &["1000"],
+            "owned_aggregate_temp_field_drop_fires_once",
+        );
+    }
 }

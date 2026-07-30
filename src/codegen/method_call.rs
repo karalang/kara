@@ -5320,7 +5320,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // struct literal) — the lexer's `self.make_spanned(Token.V(…))`
                     // reaches here, not the free-fn `compile_call` path. Shared
                     // helper keeps both arg loops in lockstep.
-                    self.track_inline_owned_aggregate_arg(val, &a.value);
+                    // No passthrough guard on this path (a method that returns
+                    // its own by-value param is not a shape this arm models), so
+                    // the arg never flows into the result here.
+                    self.track_inline_owned_aggregate_arg(val, &a.value, false);
                     // Fresh-heap by-value arg materialization — the method-call
                     // sibling of the #20 arm in `compile_call` (call_dispatch.rs).
                     // A `String`/`Vec` produced by a Call/MethodCall (or a block /

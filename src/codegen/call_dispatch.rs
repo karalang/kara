@@ -1697,10 +1697,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // arg buffer; a String param (no entry-copy) and a true-forward
             // passthrough are unaffected (`arg_is_entry_copied_heap_struct`
             // matches only copy-supported heap structs).
-            if !self.call_arg_flows_into_return(&name, i)
-                || self.arg_is_entry_copied_heap_struct(&a.value)
-            {
-                self.track_inline_owned_aggregate_arg(val, &a.value);
+            let flows_into_return = self.call_arg_flows_into_return(&name, i);
+            if !flows_into_return || self.arg_is_entry_copied_heap_struct(&a.value) {
+                self.track_inline_owned_aggregate_arg(val, &a.value, flows_into_return);
             }
             // B-2026-07-10-4 residual — an inline-heap `Option[String]`/
             // `Option[Vec]` binding MOVED by value into a user function that
@@ -1914,11 +1913,28 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_deref()
             .map(|p| p.drop_method_keys.contains_key(&ret_ty_name))
             .unwrap_or(false);
-        if !has_user_drop || self.shared_types.contains_key(&ret_ty_name) {
+        if self.shared_types.contains_key(&ret_ty_name) {
+            return;
+        }
+        // B-2026-07-30-11 SHAPE 2 (discard position) — the return type declares
+        // no `Drop` of its own but CONTAINS a Drop-bearing field, so `make();`
+        // ran nothing and leaked that field's resource. There is no
+        // `karac_drop_<T>` wrapper to hang the body off (none is built for a
+        // type with no `Drop`), so register the field-body walk directly, the
+        // same substitution the `let`-path makes (`stmts.rs`,
+        // `has_field_user_drop`). Bodies only — the memory side is the discard
+        // path's own business and is untouched here.
+        let field_bodies_only = !has_user_drop;
+        if field_bodies_only && !self.type_runs_user_drop(&ret_ty_name, &mut Vec::new()) {
             return;
         }
         let is_enum = self.enum_layouts.contains_key(&ret_ty_name);
         if !is_enum && !self.struct_types.contains_key(&ret_ty_name) {
+            return;
+        }
+        // The field-body walk is struct-shaped (it GEPs the parent's fields);
+        // an enum payload is SHAPE 1 and stays out of scope.
+        if field_bodies_only && is_enum {
             return;
         }
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
@@ -1927,12 +1943,60 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(cur_fn) = self.current_fn else {
             return;
         };
+        let bodies_fn = if field_bodies_only {
+            match self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
+                Some(f) => Some(f),
+                None => return,
+            }
+        } else {
+            None
+        };
         let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
         self.builder.build_store(slot, val).unwrap();
-        self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot);
+        match bodies_fn {
+            Some(f) => self.track_user_drop_var_with_fn(&ret_ty_name, "__owned_agg_tmp", slot, f),
+            None => self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot),
+        }
         if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
             self.track_enum_var(&ret_ty_name, slot);
         }
+    }
+
+    /// B-2026-07-30-11 SHAPE 2 — the `__karac_dropbodies_<T>` walk for an owned
+    /// AGGREGATE TEMP of a type that declares no `Drop` of its own but carries a
+    /// Drop-bearing field, or `None` when `T` is not that shape.
+    ///
+    /// Every owned-temp registrar in this file gated on `drop_method_keys`
+    /// alone, so `struct Holder { r: Res }` (where only `Res` implements `Drop`)
+    /// ran nothing when the temp died: `consume(Holder { .. })`,
+    /// `consume(make())` and `make();` each leaked the field's resource once per
+    /// call, while the `let`-bound sibling (`let h = Holder { .. }; consume(h)`)
+    /// worked — B-2026-07-29-39 taught the let-path this walk and stopped there.
+    /// This is the temp-side half of that same substitution: a type with no
+    /// `Drop` has no `karac_drop_<T>` wrapper to hang a body off, so the
+    /// field-body fn goes on the `UserDrop` channel directly.
+    ///
+    /// BODIES ONLY, deliberately — the caller keeps whatever memory
+    /// registration it already made. `emit_user_drop_field_bodies_fn` never
+    /// frees (its own doc-comment explains why: the parent's memory drop already
+    /// reaches those fields as `NestedStruct`), so this is purely additive and
+    /// cannot double-free.
+    ///
+    /// Struct-shaped only. The walk GEPs the parent's fields, so an enum
+    /// variant's Drop-bearing payload is not reachable through it — that is
+    /// SHAPE 1 of the same ledger entry, which needs the walk hung off
+    /// `emit_enum_drop_switch` instead and is still open.
+    ///
+    /// The generic substitution is empty, matching `emit_user_drop_wrapper`'s
+    /// call: a temp has no binding name, so there is no recorded instantiation
+    /// to derive one from. A generic parent therefore gets the base-layout walk.
+    fn field_bodies_fn_for_owned_temp(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
+        if !self.struct_types.contains_key(type_name)
+            || !self.type_runs_user_drop(type_name, &mut Vec::new())
+        {
+            return None;
+        }
+        self.emit_user_drop_field_bodies_fn(type_name, &std::collections::HashMap::new())
     }
 
     /// Register the caller-side drop for an inline owned-**aggregate** call
@@ -1966,6 +2030,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         val: BasicValueEnum<'ctx>,
         arg: &Expr,
+        arg_flows_into_return: bool,
     ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
@@ -2009,6 +2074,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
                                 self.track_enum_var(&ret_ty_name, slot);
                             }
+                            return;
+                        }
+                    }
+                    // B-2026-07-30-11 SHAPE 2, fn-call arm — the return type
+                    // declares no `Drop` of its own but CONTAINS a Drop-bearing
+                    // field (`consume(make())` where `make() -> Holder` and
+                    // `Holder { r: Res }`), so the arm above skipped the temp
+                    // entirely and the field's resource leaked once per call.
+                    // Register the field-body walk on the same UserDrop channel
+                    // the struct-literal sibling below uses. Struct-shaped only:
+                    // the walk GEPs the parent's fields, and an enum payload is
+                    // SHAPE 1 (out of scope, still leaks).
+                    if !has_user_drop
+                        && !arg_flows_into_return
+                        && self.struct_types.contains_key(&ret_ty_name)
+                    {
+                        if let Some(bodies_fn) = self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
+                            let slot =
+                                self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                            self.builder.build_store(slot, val).unwrap();
+                            self.track_user_drop_var_with_fn(
+                                &ret_ty_name,
+                                "__owned_agg_tmp",
+                                slot,
+                                bodies_fn,
+                            );
                             return;
                         }
                     }
@@ -2144,6 +2235,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.track_user_drop_var(&name, "__owned_agg_tmp", slot);
                     return;
                 }
+                // B-2026-07-30-11 SHAPE 2 — `name` declares no `Drop` of its own
+                // but CONTAINS a Drop-bearing field, so nothing above fires and
+                // the field's resource leaked once per call
+                // (`consume(Holder { r: Res { .. } })` where only `Res: Drop`).
+                // The field-body walk is ADDITIVE to the memory registration
+                // below, exactly as on the `let`-path (`stmts.rs`,
+                // `has_field_user_drop`): bodies on the `UserDrop` channel, the
+                // ordinary struct drop unchanged. Both target the same slot, so
+                // it is materialized once here and reused.
+                //
+                // NOT on the passthrough path, and that asymmetry is the point.
+                // We only reach this helper with `arg_flows_into_return` when
+                // `arg_is_entry_copied_heap_struct` overrode the guard
+                // (B-2026-07-08-6) — the callee entry-COPIES the struct and
+                // returns an independent copy, so the caller's original buffer
+                // is orphaned and its MEMORY does need freeing here. Its user
+                // body does not: the value flows out to the result's consumer,
+                // whose own drop runs it. Registering both would print the body
+                // twice for `let p = pass(Holder { .. })`. Memory follows the
+                // buffer; bodies follow the value.
+                let field_bodies_fn = if arg_flows_into_return {
+                    None
+                } else {
+                    self.field_bodies_fn_for_owned_temp(&name)
+                };
                 let llvm_heap = self.aggregate_has_heap_field(agg_ty);
                 let src_heap_copyable = !llvm_heap
                     && self.aggregate_param_copy_supported_struct(&name, &mut Vec::new())
@@ -2180,10 +2296,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 let src_shared_owning = !llvm_heap
                     && !src_heap_copyable
                     && self.struct_owns_shared_field(&name, &mut Vec::new());
-                if llvm_heap || src_heap_copyable || src_shared_owning {
+                let needs_memory_drop = llvm_heap || src_heap_copyable || src_shared_owning;
+                if needs_memory_drop || field_bodies_fn.is_some() {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
-                    self.track_struct_var(&name, slot);
+                    // ORDER IS LOAD-BEARING and inverted from the `let`-path.
+                    // The frame drains LIFO (`drain_top_frame_with_emit`), so the
+                    // memory drop must be pushed FIRST for the body to run
+                    // BEFORE the fields it reads are freed — `karac_drop_<T>`'s
+                    // own body-then-fields order, reproduced across two actions.
+                    // The `let`-path registers the bodies first because there
+                    // `fire_due_user_drops` lifts them out at the binding's NLL
+                    // point, ahead of the scope-exit drain entirely; a temp has
+                    // no last-use entry, so both actions drain together here and
+                    // only the push order separates them. Reversed, the body
+                    // reads a freed `String` and prints garbage.
+                    if needs_memory_drop {
+                        self.track_struct_var(&name, slot);
+                    }
+                    if let Some(bodies_fn) = field_bodies_fn {
+                        self.track_user_drop_var_with_fn(&name, "__owned_agg_tmp", slot, bodies_fn);
+                    }
                 }
             }
         }

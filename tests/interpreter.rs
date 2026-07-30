@@ -25590,3 +25590,43 @@ fn test_aggregate_runs_field_user_drop() {
         "2\ndA2\ndA1\n4\ndA5\ndA4\n7\ndA7\nend\n"
     );
 }
+
+/// B-2026-07-30-11 SHAPE 2 — the interpreter half: an owned aggregate TEMP runs
+/// its fields' user `impl Drop` in every position a temp can occupy (inline
+/// struct-literal argument, fn-call argument, discarded fn result).
+///
+/// -39 taught the `let`-path this walk; every temp registrar still gated on the
+/// type's OWN `drop_method_keys` entry, so `consume(H { .. })` / `consume(mk())`
+/// / `mk();` each held the field's resource for the program's lifetime while
+/// `let h = H { .. }; consume(h)` worked.
+///
+/// The passthrough case pins the disarm: `pass` returns its param, so the value
+/// flows out to `p` and only `p`'s drop may run the body — `dA4` exactly once.
+///
+/// Same source and same expected string as `tests/codegen.rs`'s
+/// `e2e_owned_aggregate_temp_runs_field_user_drop`; the pair IS the parity
+/// contract, which is the whole reason a leak fix on one backend cannot land
+/// without its twin.
+#[test]
+fn test_owned_aggregate_temp_runs_field_user_drop() {
+    assert_eq!(
+        run("struct A { t: i64 }\n\
+             impl Drop for A { fn drop(mut ref self) { println(f\"dA{self.t}\"); } }\n\
+             struct H { a: A }\n\
+             fn consume(h: H) { println(\"c\"); }\n\
+             fn mk(t: i64) -> H { H { a: A { t: t } } }\n\
+             fn pass(h: H) -> H { h }\n\
+             fn main() {\n\
+                 consume(H { a: A { t: 1 } });\n\
+                 println(\"-\");\n\
+                 consume(mk(2));\n\
+                 println(\"-\");\n\
+                 mk(3);\n\
+                 println(\"-\");\n\
+                 let p = pass(H { a: A { t: 4 } });\n\
+                 println(f\"{p.a.t}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "c\ndA1\n-\nc\ndA2\n-\ndA3\n-\n4\ndA4\nend\n"
+    );
+}
