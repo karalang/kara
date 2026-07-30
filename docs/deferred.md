@@ -1824,6 +1824,56 @@ impl[T] CircularBuffer[T] {
 
 ---
 
+### Auto-Parallel Loops over Provably-Disjoint Indexed Writes
+
+**Decision:** Extend compute fan-out to cover a loop whose body writes a collection at a computed index, when the compiler can *prove* that no two iterations write the same slot. **No new syntax, no annotation** — the ordinary sequential `for` is the surface. **Promoted from P2 § `par for` — Data-Parallel Loop Syntax on 2026-07-29** (see the superseded entry in P2 for the history and for why the `par for` keyword itself is declined).
+
+```kara
+// Today this runs on one core. Under this entry it fans out, unchanged.
+let mut out: Vec[u8] = Vec.filled(dw * dh * 4, 0);
+for dy in 0..dh {
+    let mut dx: i64 = 0;
+    while dx < dw {
+        // ... writes out[(dy * dw + dx) * 4 + c] for dx in 0..dw, c in 0..4
+        dx = dx + 1;
+    }
+}
+```
+
+**Why this is P1 and not a post-v1 convenience.** This is the headline claim, not an optimization. `README.md` leads with *"the compiler runs independent work in parallel for you — no `async`/`await`, no colored functions, no thread plumbing,"* and the kata parallel lane's result is stated as *"from single-threaded source, zero parallel code."* Today that is true only for statement groups and associative reductions (`design.md § 8876`). The single most common data-parallel shape in real programs — write element `i` of an output buffer — is **not** covered, so it must be hand-written with `TaskGroup`. The two live, public, user-facing Kāra artifacts both do exactly that.
+
+**The motivating workload is shipped and public.** `karac.dev/prism` and `karac.dev/veil` (source: `kara-katas/apps/prism`, `apps/veil`) hand-roll band fan-out in every image kernel: a chosen band count with no principled basis (`let bands: i64 = 8`), hand ceil-div, tail-band clamping, a `Vec[TaskHandle[Vec[u8]]]`, and a manual in-order concat loop with offset tracking. The cost is larger than the fan-out block itself — `bilinear_band` exists **only** to serve the banding, so its `y0`/`y1` parameters and the `(dy - y0)` term in its index expression are pure plumbing artifacts that vanish when the loop is written naturally. Three kernels in Prism plus Veil's carry this. A visitor reading `prism.kara` — the only Kāra source most people will ever read — sees thread plumbing, and correctly concludes the program could have been written the same way in Rust or Go.
+
+This satisfies **re-evaluation trigger 1** of the superseded P2 entry verbatim: *"A realistic Kāra program (Game of Life step, matrix multiply, **batch transform**) would be materially cleaner… and the independence check is straightforward for that class of loop."* Image resampling is a batch transform; the programs are built, live, and measurable.
+
+**Scope — deliberately narrower than dependence analysis.** Do **not** build polyhedral or general affine dependence machinery. The required property is one shape:
+
+> Parallelize the **outer** loop when each iteration's write footprint is a provably **disjoint contiguous range**.
+
+Prism's natural form writes `out[(dy*dw + dx)*4 + c]` for `dx in 0..dw`, `c in 0..4`, so iteration `dy` touches exactly `[dy*dw*4, (dy+1)*dw*4)`. Disjointness follows from the loop bounds and the stride being loop-invariant — no dependence solver needed. That same shape covers Game of Life steps, row-wise matrix multiply, and every image kernel. Anything outside it (indirect indexing `out[idx[i]]`, overlapping windows, reductions into a shared slot) is **out of scope and must decline**, falling back to sequential execution plus a queryable reason.
+
+**Hard prerequisite: the fan-out decision must be queryable first.** Silent parallelization is only trustworthy if a developer can ask whether it happened. Without that, the failure mode is "maybe it fanned out, maybe the proof failed, and nothing says which" — strictly worse than an annotation, because an annotation is at least visible in the source. **`B-2026-07-29-29` must be fixed before this ships**, and its output is the acceptance surface:
+
+```bash
+$ karac query concurrency prism.kara.resize_bilinear
+{"loop_reductions":[{"loop_line":118,"fanned_out":true,
+  "reason":"iteration dy writes disjoint contiguous range [dy*dw*4, (dy+1)*dw*4)"}]}
+```
+
+A declined loop must report *why* it declined, in the same surface. That diagnostic is what replaces the `par for` keyword: the answer to "why isn't my loop parallel" is a compiler explanation, not an override.
+
+**Hard gate: differential harness before broad enablement.** Wrong disjointness on indexed writes is a **silent miscompile**, never a perf regression — the same failure class `phase-7-codegen.md`'s noalias entry warns about at length, citing rustc's multi-year `-Zmutable-noalias` saga. The same gate applies here and is part of this slice, not a follow-up: fan-out-on must be observationally identical to fan-out-off across a fuzzed corpus, with an order-sensitive oracle (a position-folded digest over the whole output, not a single element — a spot-check passes under reordering). `KARAC_AUTO_PAR=0` already provides the A/B lever.
+
+**Why non-breaking:** purely additive to what the compiler *chooses* to do. No syntax changes; `seq {}` remains the opt-out; programs that don't qualify are unaffected. Programs that do qualify get faster with byte-identical output — which the differential harness is what proves.
+
+**Spec update required when this lands.** `design.md § 8876` currently states compute fan-out is *"the path for parallel `let`-groups and associative reductions."* That enumeration becomes incomplete and must name this third shape.
+
+**Tracking:** [`implementation_checklist/phase-6-runtime.md`](implementation_checklist/phase-6-runtime.md) — sits with the cost-model and independence-metadata entries that share its analysis substrate.
+
+**Cross-reference:** P2 § `par for` — Data-Parallel Loop Syntax (superseded; records why the keyword is declined); `B-2026-07-29-29` (queryability, hard prerequisite); `B-2026-07-29-30` (`#[par_unordered]` naming — the adjacent collect path); `design.md § 8876` (the enumeration this extends); `phase-7-codegen.md` § ILP/noalias (the miscompile-risk precedent and the harness pattern); `CLAUDE.md` § *no workarounds — fix the compiler* (the rule under which Prism's hand-rolled fan-out is a placeholder, not a design).
+
+---
+
 ## P2 — Important Post-v1 Language Features
 
 Important features deferred from v1; the language author or the community will build them post-v1. Each entry has a committed design or design shape; for items where the mechanism is genuinely uncertain, the entry names the conditions under which the design would solidify (the *promotion gates*) so the entry doesn't become indefinitely deferred. Distinct from P3, where the may-or-may-not question is open.
@@ -2740,7 +2790,25 @@ Substrates 1+2 enable value-level comptime computation and type-inspection diagn
 
 ### `par for` — Data-Parallel Loop Syntax
 
-Surface syntax for data-parallel iteration: `par for item in collection { body }`. The compiler verifies that each iteration's effect set is independent from its siblings (no write-write or read-write conflicts across iterations) before emitting parallel code.
+> **SUPERSEDED 2026-07-29 — split into a promotion and a declination.**
+>
+> - The **capability** (fan-out over a loop with provably-independent iterations) was **promoted to P1** as [§ Auto-Parallel Loops over Provably-Disjoint Indexed Writes](#auto-parallel-loops-over-provably-disjoint-indexed-writes), with **no surface syntax**: the ordinary sequential `for` is the surface. Trigger 1 below had fired — Prism and Veil are shipped, live, public image batch transforms hand-rolling `TaskGroup` band fan-out in every kernel.
+> - The **`par for` keyword itself is DECLINED**, not deferred. See *Why the keyword is declined* below.
+>
+> This entry is retained as the design history and as the record of the declination. Do not re-propose the keyword without new evidence of the residual case named at the end.
+
+**Why the keyword is declined.** Once the independence proof exists, `par for` splits into two variants and both fail:
+
+1. **A `par for` that overrides the proof** ("trust me, these indices don't collide") contradicts a principle already committed to in `design.md § Explicit Concurrency`: *"`par {}` is not an escape hatch from effect safety — `seq {}` is the opt-out from parallelism, not `par {}` as an opt-in past safety."* It also reintroduces exactly the silent-miscompile class `phase-7-codegen.md`'s noalias entry warns about.
+2. **A `par for` that respects the proof** adds nothing over silent auto-par — same analysis, same decision, one extra keyword.
+
+Three further reasons: the escape hatch **already exists** (`TaskGroup` is shipped, and its verbosity is appropriate for code whose safety could not be proven automatically); this entry's own text concedes `par for` is *"syntactic sugar with an independence check, not a new capability"*, so the check was always the feature; and keyword economy — `par {}`, `seq {}`, `par struct`, `par enum`, and `#[par_unordered]` already exist, so a fifth `par` spelling carrying no new capability is permanent surface area in every tutorial.
+
+**The one residual, not currently tracked as work.** A loop-level **cost-model override** — "fan this out even though the profitability estimate declines it" — is legitimate and would mirror what `par {}` already does for statement groups per `design.md` (*"`par {}` is a programmer assertion that 'these branches are worth parallelizing' — the compiler always forks them (subject to effect constraints)"*). It is not built because it is speculative until the P1 analysis ships and real loops are found that the cost model wrongly declines. Adding a keyword later is cheaper than removing one. If that evidence appears, file it as a new entry scoped explicitly as a cost-model override that **still cannot bypass the disjointness proof**.
+
+---
+
+**Original design shape (retained for history).** Surface syntax for data-parallel iteration: `par for item in collection { body }`. The compiler verifies that each iteration's effect set is independent from its siblings (no write-write or read-write conflicts across iterations) before emitting parallel code.
 
 **Current workaround.** The same pattern is expressible today via `TaskGroup`:
 
@@ -2754,7 +2822,7 @@ for item in collection {
 
 This is correct but requires wrapping each iteration as a closure, which is verbose for pure computational loops.
 
-**Current lean:** not in v1. The `TaskGroup` workaround is available; `par for` is syntactic sugar with an independence check, not a new capability.
+**Current lean (as written, 2026; now superseded):** not in v1. The `TaskGroup` workaround is available; `par for` is syntactic sugar with an independence check, not a new capability. — *This lean is what inverted the priorities: it treated the syntax as the feature and the independence check as an obstacle. For Kāra's thesis the check **is** the feature, which is why the capability was promoted to P1 and the syntax declined.*
 
 **Why deferred (not rejected):**
 
@@ -2766,8 +2834,8 @@ This is correct but requires wrapping each iteration as a closure, which is verb
 
 **Re-evaluation triggers (any one of):**
 
-1. A realistic Kāra program (Game of Life step, matrix multiply, batch transform) would be materially cleaner with `par for` than with the `TaskGroup` workaround — and the independence check is straightforward for that class of loop.
-2. `parallel_map` ships and reveals that purely-functional data parallelism covers only a fraction of the real-world cases, making `par for` necessary for the mutable case.
+1. ✅ **FIRED 2026-07-29.** A realistic Kāra program (Game of Life step, matrix multiply, batch transform) would be materially cleaner with `par for` than with the `TaskGroup` workaround — and the independence check is straightforward for that class of loop. — *Satisfied by Prism and Veil: shipped, live at karac.dev, image batch transforms, hand-rolling band fan-out in every kernel. This is what drove the P1 promotion.*
+2. `parallel_map` ships and reveals that purely-functional data parallelism covers only a fraction of the real-world cases, making `par for` necessary for the mutable case. — *Moot for the capability (now P1 and broader than `parallel_map`). Retained only as a possible signal for the cost-model-override residual.*
 
 **Cross-reference:** `design.md § Explicit Concurrency: par {} and spawn()` — v1 parallel primitives; `design.md § Auto-Concurrency` — the independence-analysis infrastructure this would reuse.
 
