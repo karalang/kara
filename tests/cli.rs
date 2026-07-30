@@ -1854,6 +1854,87 @@ fn test_stdin_lines_run_and_build_parity() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Standing run-vs-build gate for user `impl Drop` on AGGREGATE FIELDS
+/// (B-2026-07-29-39's prerequisite).
+///
+/// `drop_differential` is NOT the gate for this class, despite being the obvious
+/// candidate: it compares codegen's emitted drops against the ownership
+/// ORACLE's schedule, and the oracle models *heap* ownership (String/Vec/Map
+/// buffers) — neither it nor `drop_differential` references
+/// `drop_method_keys`, so a user `impl Drop` body is invisible to it. The
+/// observable signal for user drops is program OUTPUT, so parity between
+/// `karac run` and `karac build` is what actually constrains this class.
+///
+/// Why this gate is needed: while fixing B-2026-07-29-38, the aggregate-field
+/// drop was implemented in the interpreter only. Both backends were wrong
+/// beforehand in the SAME way (neither dropped the field), so nothing was red;
+/// the one-sided fix then made them disagree and `drop_differential` still
+/// passed 13/13. This test is what turns that divergence red.
+///
+/// It deliberately asserts PARITY separately from CORRECTNESS so the two
+/// failure modes are distinguishable: a one-sided fix breaks parity, and a
+/// missing field drop breaks the count.
+#[cfg(feature = "llvm")]
+#[test]
+// KNOWN-FAILING until B-2026-07-29-39 lands: parity holds (both backends agree)
+// but the field's drop never fires, so the correctness assertion is red. Landed
+// ignored, ahead of the fix, so the gate exists and the fix has something to
+// turn green — un-ignore as part of that slice, NOT separately.
+#[ignore = "B-2026-07-29-39: aggregates do not yet drop their Drop-implementing fields"]
+fn test_user_drop_on_aggregate_field_run_build_parity() {
+    let tmp = scratch_project("aggregate-field-drop-parity");
+    // `Holder` itself has NO `impl Drop` — that is the whole point. The field
+    // does, so a correct implementation must synthesize field drop glue for a
+    // type that declares none of its own.
+    let src = "struct Res { tag: i64 }\n               impl Drop for Res {\n               \x20   fn drop(mut ref self) { println(99); }\n               }\n               struct Holder { r: Res }\n               fn main() {\n               \x20   let h = Holder { r: Res { tag: 7 } };\n               \x20   println(h.r.tag);\n               \x20   println(1);\n               }\n";
+    write(&tmp.join("agg.kara"), src);
+
+    let run_out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "agg.kara"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+
+    let build = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "agg.kara"])
+        .output();
+    let exe = tmp.join("agg");
+    let build_out = if build.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(r), Some(b)) = (run_out, build_out) else {
+        eprintln!("skip: could not produce both interp and compiled output (no runtime archive?)");
+        return;
+    };
+
+    // (1) PARITY — the constraint a one-sided fix violates.
+    assert_eq!(
+        r, b,
+        "run/build parity for a user `impl Drop` held in a struct field: the \
+         interpreter and codegen must agree on whether (and when) the field's \
+         drop body fires"
+    );
+
+    // (2) CORRECTNESS — the field's drop must fire exactly once. `Holder`
+    // declares no Drop of its own, so this only passes once field drop glue is
+    // synthesized for Drop-containing aggregates (B-2026-07-29-39).
+    let fires = r.lines().filter(|l| l.trim() == "99").count();
+    assert_eq!(
+        fires, 1,
+        "the field's drop body must fire exactly once when the holder dies; \
+         got {fires} in {r:?}"
+    );
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_build_project_rejects_panic_unwind() {
