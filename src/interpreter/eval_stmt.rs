@@ -759,27 +759,46 @@ impl<'a> super::Interpreter<'a> {
     /// when the source type isn't user-Drop — non-user-Drop bindings
     /// keep their existing drop_trace records.
     fn suppress_let_rebind_user_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
-        let source_name = match &stmt.kind {
-            StmtKind::Let { value, .. } => match &value.kind {
-                ExprKind::Identifier(n) => n.clone(),
-                _ => return,
-            },
-            _ => return,
-        };
-        // Only suppress when the source's value has a user impl Drop.
-        let type_name = match self.env.get(&source_name) {
-            Some(Value::Struct { name, .. }) => name.clone(),
-            // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
-            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
-            _ => return,
-        };
-        if !self.program.drop_method_keys.contains_key(&type_name) {
+        let StmtKind::Let { value, .. } = &stmt.kind else {
             return;
+        };
+        // B-2026-07-29-38: an AGGREGATE-LITERAL field initializer is a move
+        // position too (`ownership_oracle`'s `Role::Move` lists
+        // "aggregate-literal field" alongside the direct rebind), so
+        // `let h = Holder { r: r };` transfers `r` into `h` exactly as
+        // `let g = f;` does. Only the bare-rebind arm existed, so the source
+        // kept its Drop slot and the NLL last-use placement fired it AT THE
+        // MOVE — for a `TcpListener` field that closes the fd before the
+        // listener is ever used. `spread` (`..base`) is deliberately NOT
+        // treated as a move source: it copies remaining fields from a base
+        // that stays live and owns its own drop.
+        let source_names: Vec<String> = match &value.kind {
+            ExprKind::Identifier(n) => vec![n.clone()],
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .filter_map(|f| match &f.value.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => return,
+        };
+        for source_name in source_names {
+            // Only suppress when the source's value has a user impl Drop.
+            let type_name = match self.env.get(&source_name) {
+                Some(Value::Struct { name, .. }) => name.clone(),
+                // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
+                Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
+                _ => continue,
+            };
+            if !self.program.drop_method_keys.contains_key(&type_name) {
+                continue;
+            }
+            cleanup.retain(|action| match action {
+                CleanupAction::Drop { name } => name != &source_name,
+                _ => true,
+            });
         }
-        cleanup.retain(|action| match action {
-            CleanupAction::Drop { name } => name != &source_name,
-            _ => true,
-        });
     }
 
     /// Move-suppression for `forget(x);` statements (design.md § Exported

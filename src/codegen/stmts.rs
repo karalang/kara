@@ -5246,6 +5246,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `self` binding exactly like the tail-return site
                         // (13eda85); the helper's own inline-struct-slot gate
                         // keeps `ref self` (a pointer slot) out.
+                        // B-2026-07-29-38: an AGGREGATE-LITERAL field
+                        // initializer is a move position too — the
+                        // `ownership_oracle` `Role::Move` set lists
+                        // "aggregate-literal field" next to the direct
+                        // rebind, and the ownership checker already reports
+                        // `value 'r' moved here` for it. Only the bare-rebind
+                        // arm was handled, so `let h = Holder { r: r };` left
+                        // `r`'s UserDrop slot in place and the NLL last-use
+                        // placement fired it AT THE MOVE. For a
+                        // `TcpListener` field that runs the synthesized drop
+                        // (`karac_runtime_tcp_close`) and closes the fd before
+                        // the listener is used — the cause of the
+                        // `coro_e2e::coroutine_method_handler_services_connection`
+                        // hang. `spread` (`..base`) is NOT a move source: it
+                        // copies from a base that stays live and keeps its own
+                        // drop.
+                        let mut struct_lit_sources: Vec<&str> = Vec::new();
+                        if let ExprKind::StructLiteral { fields, .. } = &value.kind {
+                            for f in fields {
+                                if let ExprKind::Identifier(n) = &f.value.kind {
+                                    struct_lit_sources.push(n.as_str());
+                                }
+                            }
+                        }
+                        for source_name in struct_lit_sources {
+                            self.suppress_user_drop_for_var(source_name);
+                        }
                         let move_source_name = match &value.kind {
                             ExprKind::Identifier(n) => Some(n.as_str()),
                             ExprKind::SelfValue => Some("self"),

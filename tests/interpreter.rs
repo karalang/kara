@@ -4404,6 +4404,48 @@ fn test_user_drop_move_suppression_let_rebind() {
     );
 }
 
+// B-2026-07-29-38: an AGGREGATE-LITERAL field initializer is a move position
+// too — `ownership_oracle`'s `Role::Move` set lists "aggregate-literal field"
+// alongside the direct rebind, and the ownership checker already reports
+// `value 'r' moved here` for it. Only the bare-rebind arm was suppressed, so
+// `let h = Holder { r: r };` left `r`'s Drop slot in place and the NLL last-use
+// placement fired it AT THE MOVE.
+//
+// That is a soundness bug, not a cosmetic one: `TcpListener` / `TcpStream` /
+// `WebSocket` carry a synthesized `impl Drop` calling
+// `karac_runtime_tcp_close(self.fd)`, so moving a listener into a struct field
+// CLOSED ITS FD before the listener was used — the cause of the
+// `coro_e2e::coroutine_method_handler_services_connection` hang (the port was
+// printed, then nothing was listening).
+#[test]
+fn test_user_drop_no_premature_fire_when_moved_into_struct_literal() {
+    let (output, _drops) = run_program_with_drops(
+        "struct R { tag: i64 }\n\
+         impl Drop for R {\n\
+             fn drop(mut ref self) { println(99); }\n\
+         }\n\
+         struct Holder { r: R }\n\
+         fn main() {\n\
+             let r = R { tag: 7 };\n\
+             let h = Holder { r: r };\n\
+             println(h.r.tag);\n\
+             println(40);\n\
+         }",
+    );
+    // The move must NOT drop `r`. Before the fix the first line was "99\n" —
+    // the drop firing at the move, ahead of any field read.
+    assert!(
+        !output.is_empty() && output[0] == "7\n",
+        "the struct-literal move must not fire `r`'s drop before the field is \
+         read; got {output:?}"
+    );
+    assert!(
+        !output.contains(&"99\n".to_string())
+            || output.iter().position(|l| l == "99\n").unwrap() > 0,
+        "`r`'s drop must not precede the field read; got {output:?}"
+    );
+}
+
 #[test]
 fn test_user_drop_move_suppression_does_not_affect_non_drop_types() {
     // Plain `let y = x;` for a non-struct value (no user Drop) keeps
