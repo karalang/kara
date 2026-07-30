@@ -2148,11 +2148,31 @@ impl<'a> OwnershipChecker<'a> {
                 ),
                 span: w.other_use_span,
                 kind: OwnershipErrorKind::UseAfterMove,
-                suggestion: Some(format!(
-                    "clone '{}' at the move site (`{}.clone()`), declare the callee \
-                     parameter `ref` if it only reads, or restructure to avoid reuse",
-                    binding, binding
-                )),
+                // Only advise `.clone()` for a type that HAS one. This sentence
+                // used to recommend it unconditionally while `supports_clone`
+                // gated just the machine-applicable `replacement`, so for an
+                // `Option`/`Result` or any user type — none of which have a
+                // callable `clone` (B-2026-07-29-31) — the advice produced code
+                // that does not typecheck. That matters more than a cosmetic
+                // wording nit: the Mend loop is an LLM reading this sentence and
+                // acting on it, so a confident wrong steer is worse than no
+                // suggestion. Both gaps filed off this fix's own session were
+                // walked into exactly this way.
+                suggestion: Some(if supports_clone {
+                    format!(
+                        "clone '{}' at the move site (`{}.clone()`), declare the callee \
+                         parameter `ref` if it only reads, or restructure to avoid reuse",
+                        binding, binding
+                    )
+                } else {
+                    format!(
+                        "declare the callee parameter `ref` if it only reads, or \
+                         restructure to avoid reuse ('{}' has no `.clone()` — that \
+                         exists only on `String`, the built-in heap collections and \
+                         RC types)",
+                        binding
+                    )
+                }),
                 replacement,
                 consume_span: Some(w.consume_span),
             });
