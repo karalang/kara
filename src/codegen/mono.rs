@@ -367,6 +367,88 @@ impl<'ctx> super::Codegen<'ctx> {
     /// set at the let/param binding), and for each position where the declared
     /// arg is a bare type param of `func` and the concrete arg is a heap
     /// collection (`Vec`/`VecDeque`/`String`), record the element-aware
+    /// B-2026-07-29-35: bind a CONTAINER param's element type param by NAME and
+    /// `TypeExpr` — `fn f[T](s: Slice[T])` called with a `Vec[String]`.
+    ///
+    /// `augment_subst_from_arg_elem_types` already binds the LLVM *type* for this
+    /// exact shape (B-2026-07-03-22), which is why the mono's signature and
+    /// return type are correct. The NAME maps were left unbound, so every
+    /// consumer that reasons about `T` symbolically fell back to the literal
+    /// string `"T"`. The visible cost was the per-type clone helper: `s[0]`
+    /// emitted `call @karac_clone_T` — a clone fn for a type that does not exist
+    /// — instead of `@karac_clone_String`, so a heap element was never
+    /// deep-cloned and the returned value shallow-aliased the container's
+    /// buffer. An inline `f"{first(vs)}"` therefore printed EMPTY under
+    /// `karac build` while the interpreter was correct, with no diagnostic.
+    ///
+    /// A `Vec` of string LITERALS masked it for a long time: those elements are
+    /// static globals with `cap 0`, so the container's drop frees nothing and the
+    /// shallow alias stays readable by luck. Only genuinely heap-OWNED elements
+    /// (`push("a" + "b")`, a `.clone()`) expose it.
+    ///
+    /// `or_insert` throughout, so a binding the typechecker or an earlier
+    /// resolver already recorded is never overwritten. Reads live var
+    /// side-tables, so it MUST run before `take_var_side_tables`.
+    fn resolve_container_param_elem_substs(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+        subst_names: &mut HashMap<String, String>,
+        subst_type_exprs: &mut HashMap<String, TypeExpr>,
+    ) {
+        let Some(gp) = &func.generic_params else {
+            return;
+        };
+        let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let ExprKind::Identifier(arg_name) = &arg.value.kind else {
+                continue;
+            };
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(path) = &peeled.kind else {
+                continue;
+            };
+            if !matches!(
+                path.segments.last().map(|s| s.as_str()),
+                Some("Slice") | Some("Vec") | Some("VecDeque")
+            ) {
+                continue;
+            }
+            // The element must be written as a BARE type param of `func` —
+            // `Slice[T]`, not `Slice[String]` (nothing to bind) and not
+            // `Slice[Vec[T]]` (the nested case is not this resolver's business).
+            let Some(gargs) = path.generic_args.as_ref() else {
+                continue;
+            };
+            let Some(GenericArg::Type(te)) = gargs.first() else {
+                continue;
+            };
+            let TypeKind::Path(ep) = &te.kind else {
+                continue;
+            };
+            if !(ep.segments.len() == 1 && ep.generic_args.is_none() && is_param(&ep.segments[0])) {
+                continue;
+            }
+            let pname = &ep.segments[0];
+            // The caller's registered element TypeExpr for the argument — the
+            // same source `vec_index_elem_type_expr` reads.
+            let Some(elem_te) = self.var_elem_type_exprs.get(arg_name.as_str()).cloned() else {
+                continue;
+            };
+            let TypeKind::Path(elem_path) = &elem_te.kind else {
+                continue;
+            };
+            let Some(head) = elem_path.segments.last().cloned() else {
+                continue;
+            };
+            subst_names.entry(pname.clone()).or_insert(head);
+            subst_type_exprs.entry(pname.clone()).or_insert(elem_te);
+        }
+    }
+
     /// `subst_type_exprs` (+ head-name `subst_names`). Without this the mono
     /// entry-copy (`deep_copy_struct_heap_fields_in_place_mono`) sees a bare
     /// `Vec` with no element, skips the field copy, and the struct's Vec field
@@ -884,6 +966,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // subst, so the mono entry-copy can deep-copy the Vec field (else it
         // aliases the caller's buffer and both free it — a double-free).
         self.resolve_generic_struct_param_substs(
+            &generic_fn,
+            args,
+            &mut subst_names,
+            &mut subst_type_exprs,
+        );
+        // B-2026-07-29-35: the two resolvers above cover a param that IS a bare
+        // `T` and one nested inside a user generic struct. Neither covers the
+        // plainest shape of all — a CONTAINER param whose element is the type
+        // param, `fn f[T](s: Slice[T])`. Its LLVM type was already bound by
+        // `augment_subst_from_arg_elem_types`, so only the name/TypeExpr maps
+        // were missing, and the gap surfaced as `karac_clone_T`.
+        self.resolve_container_param_elem_substs(
             &generic_fn,
             args,
             &mut subst_names,

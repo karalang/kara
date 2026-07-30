@@ -10783,6 +10783,49 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-29-35): a generic `fn f[T](s: Slice[T]) -> T` over a
+    /// HEAP-OWNED element returned an empty String under `karac build` while the
+    /// interpreter was correct — silent wrong output, no diagnostic.
+    ///
+    /// `augment_subst_from_arg_elem_types` bound `T`'s LLVM *type* (so the mono's
+    /// signature and 3-word return were right), but nothing bound `T` by NAME, so
+    /// the element clone emitted `call @karac_clone_T` — a helper for a type that
+    /// does not exist — instead of `@karac_clone_String`. The element was never
+    /// deep-cloned, so the returned value shallow-aliased the container's buffer.
+    ///
+    /// The elements here are built with `push("on" + "e")` ON PURPOSE. The sibling
+    /// test above uses a `Vec` of string LITERALS, whose elements are static
+    /// globals with `cap 0` — the container's drop frees nothing, so the shallow
+    /// alias stayed readable and the bug was invisible for exactly that shape.
+    /// Only genuinely heap-owned elements expose it, and the result must be used
+    /// INLINE: binding it to a `let` first was also correct pre-fix.
+    ///
+    /// Each call gets its OWN Vec because a bare `Slice[T]` param consumes its
+    /// argument (B-2026-07-01-10), so reusing one Vec across two calls is a real
+    /// use-after-move — the ownership gate rejected the first draft of this test,
+    /// correctly, and only sees it at all because of B-2026-07-29-28.
+    #[test]
+    fn e2e_generic_slice_heap_elem_return_is_deep_cloned() {
+        if let Some(out) = run_program(
+            "fn first[T](s: Slice[T]) -> T { s[0] }\n\
+             fn second[T](s: Slice[T]) -> T { s[1] }\n\
+             fn main() {\n\
+             \x20   let mut a: Vec[String] = Vec.new();\n\
+             \x20   a.push(\"heap-owned-\" + \"alpha\");\n\
+             \x20   println(f\"[{first(a)}]\");\n\
+             \x20   let mut b: Vec[String] = Vec.new();\n\
+             \x20   b.push(\"filler\" + \"-0\");\n\
+             \x20   b.push(\"heap-owned-\" + \"beta\");\n\
+             \x20   println(f\"[{second(b)}]\");\n\
+             \x20   let mut ns: Vec[i64] = Vec.new();\n\
+             \x20   ns.push(41i64 + 1i64);\n\
+             \x20   println(f\"[{first(ns)}]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "[heap-owned-alpha]\n[heap-owned-beta]\n[42]\n");
+        }
+    }
+
     /// B-2026-07-03-7 (codegen side): `Vec[Struct].sort()` and
     /// `Vec[Enum].sort()` for a `#[derive(Ord)]` user type. Pre-fix codegen
     /// errored "Vec.sort() in codegen supports integer, String, float, tuple,
