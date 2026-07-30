@@ -9,7 +9,7 @@
 //   enums produce a compile error or silently become shared.
 //   For this example we keep the AST flat (no nesting) to sidestep the issue.
 
-#[derive(Clone)]
+#[derive(Clone, Eq)]
 pub shared enum Value {
     Int(i64),
     Text(String),
