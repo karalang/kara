@@ -2848,6 +2848,88 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-8 — a `break` that targets a loop NESTED INSIDE the
+    /// reduction body cannot leave the body, so the early-exit gate must not
+    /// decline the reduction on its account. The idiomatic inner-loop walk
+    /// (`loop { … if … break … }`) accumulates into a local, then folds that
+    /// into the reduction variable. Pre-fix the shape-blind gate counted the
+    /// inner `break` as a body escape and declined; now the reduction fires.
+    #[test]
+    fn test_ir_reduction_fires_with_break_in_nested_loop() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100000i64 {
+        let mut acc: i64 = 0i64;
+        let mut j: i64 = 0i64;
+        loop {
+            if j >= 8i64 { break }
+            acc = acc + k * j;
+            j = j + 1i64;
+        }
+        sum = sum + acc;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "nested-loop `break` should not block reduction lowering; got:\n{ir}"
+        );
+    }
+
+    /// B-2026-07-30-8 control: a `break` DIRECTLY in the reduction body targets
+    /// the reduction loop itself — a genuine body escape that would emit `ret`
+    /// inside a void worker fn. The gate must STILL decline it (the fix is a
+    /// precision gain for nested breaks only, not a blanket "always fire").
+    #[test]
+    fn test_ir_reduction_declined_for_direct_break_in_body() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100000i64 {
+        if k > 90000i64 { break }
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "a break targeting the reduction loop must decline lowering; got:\n{ir}"
+        );
+    }
+
     /// B-2026-07-23-20 (HIGH soundness): a reduction whose body passes a
     /// LOOP-INVARIANT shared `mut ref` scratch buffer to a helper must NOT be
     /// parallelized — every iteration writes the same buffer inside the callee,

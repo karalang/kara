@@ -4136,15 +4136,42 @@ fn collect_modulo_index_sites_in_expr(
 /// nested expression. Reductions whose body has an early exit are
 /// rejected at the lowering check, falling back to sequential codegen
 /// rather than emitting a `ret <T>` inside the void worker fn.
+// B-2026-07-30-8 — "early exit" here means control that leaves the REDUCTION
+// BODY (crossing the worker-fn boundary, which would emit `ret <T>` inside a
+// void worker fn → invalid IR). A `break`/`continue` that targets a loop NESTED
+// INSIDE the body does not leave it, so the analysis is control-flow-aware:
+//
+//   * `Return`                         — always an escape (leaves the fn).
+//   * unlabeled `break`/`continue`     — escapes iff NOT inside a nested loop
+//                                        (`depth == 0`), i.e. it targets the
+//                                        reduction loop itself.
+//   * labeled  `break`/`continue`      — escapes iff its label is NOT bound by a
+//                                        nested loop within the body (so a
+//                                        `break 'reduction` from inside a nested
+//                                        loop still escapes).
+//
+// `depth` counts enclosing loops WITHIN the body; `labels` are the labels those
+// nested loops bind. The old shape-blind version counted every `break`/
+// `continue` as an escape, so the idiomatic `loop { match cur { … None => break
+// } }` list walk — whose `break` targets the inner loop — wrongly declined the
+// reduction. Purely a precision gain: a labeled break the analysis cannot place
+// still falls to "escapes", and the failure mode it guards (invalid IR) is loud.
 fn block_has_early_exit(block: &Block) -> bool {
-    block.stmts.iter().any(stmt_has_early_exit)
+    block_has_early_exit_ctx(block, 0, &[])
+}
+
+fn block_has_early_exit_ctx(block: &Block, depth: usize, labels: &[&str]) -> bool {
+    block
+        .stmts
+        .iter()
+        .any(|s| stmt_has_early_exit_ctx(s, depth, labels))
         || block
             .final_expr
             .as_ref()
-            .is_some_and(|e| expr_has_early_exit(e))
+            .is_some_and(|e| expr_has_early_exit_ctx(e, depth, labels))
 }
 
-fn stmt_has_early_exit(stmt: &Stmt) -> bool {
+fn stmt_has_early_exit_ctx(stmt: &Stmt, depth: usize, labels: &[&str]) -> bool {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
             "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
@@ -4152,27 +4179,58 @@ fn stmt_has_early_exit(stmt: &Stmt) -> bool {
         StmtKind::Let { value, .. }
         | StmtKind::Assign { value, .. }
         | StmtKind::CompoundAssign { value, .. }
-        | StmtKind::Expr(value) => expr_has_early_exit(value),
+        | StmtKind::Expr(value) => expr_has_early_exit_ctx(value, depth, labels),
         StmtKind::LetElse {
             value, else_block, ..
-        } => expr_has_early_exit(value) || block_has_early_exit(else_block),
-        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => block_has_early_exit(body),
+        } => {
+            expr_has_early_exit_ctx(value, depth, labels)
+                || block_has_early_exit_ctx(else_block, depth, labels)
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            block_has_early_exit_ctx(body, depth, labels)
+        }
         StmtKind::LetUninit { .. } => false,
     }
 }
 
-fn expr_has_early_exit(expr: &Expr) -> bool {
+fn expr_has_early_exit_ctx(expr: &Expr, depth: usize, labels: &[&str]) -> bool {
+    // A `break`/`continue` label leaves the body iff it is NOT one bound by a
+    // loop nested within the body.
+    let targets_outside = |label: &Option<String>| match label {
+        None => depth == 0,
+        Some(l) => !labels.contains(&l.as_str()),
+    };
+    // Descend into a nested loop body: one deeper, and its own label (if any) is
+    // now an in-body target.
+    let descend_loop = |body: &Block, label: &Option<String>| {
+        let mut inner = labels.to_vec();
+        if let Some(l) = label {
+            inner.push(l.as_str());
+        }
+        block_has_early_exit_ctx(body, depth + 1, &inner)
+    };
     match &expr.kind {
-        ExprKind::Return(_) | ExprKind::Break { .. } | ExprKind::Continue { .. } => true,
-        ExprKind::Block(b) => block_has_early_exit(b),
+        ExprKind::Return(_) => true,
+        // The break VALUE is evaluated at the current level, so a `return` inside
+        // it still escapes even when the break itself targets a nested loop.
+        ExprKind::Break { label, value, .. } => {
+            targets_outside(label)
+                || value
+                    .as_ref()
+                    .is_some_and(|v| expr_has_early_exit_ctx(v, depth, labels))
+        }
+        ExprKind::Continue { label, .. } => targets_outside(label),
+        ExprKind::Block(b) => block_has_early_exit_ctx(b, depth, labels),
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            expr_has_early_exit(condition)
-                || block_has_early_exit(then_block)
-                || else_branch.as_ref().is_some_and(|e| expr_has_early_exit(e))
+            expr_has_early_exit_ctx(condition, depth, labels)
+                || block_has_early_exit_ctx(then_block, depth, labels)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| expr_has_early_exit_ctx(e, depth, labels))
         }
         ExprKind::IfLet {
             value,
@@ -4180,37 +4238,61 @@ fn expr_has_early_exit(expr: &Expr) -> bool {
             else_branch,
             ..
         } => {
-            expr_has_early_exit(value)
-                || block_has_early_exit(then_block)
-                || else_branch.as_ref().is_some_and(|e| expr_has_early_exit(e))
+            expr_has_early_exit_ctx(value, depth, labels)
+                || block_has_early_exit_ctx(then_block, depth, labels)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| expr_has_early_exit_ctx(e, depth, labels))
         }
         ExprKind::Match { scrutinee, arms } => {
-            expr_has_early_exit(scrutinee) || arms.iter().any(|a| expr_has_early_exit(&a.body))
+            expr_has_early_exit_ctx(scrutinee, depth, labels)
+                || arms
+                    .iter()
+                    .any(|a| expr_has_early_exit_ctx(&a.body, depth, labels))
         }
+        // Loop headers (`condition`/`iterable`) evaluate in the ENCLOSING context
+        // — a `break` there targets the outer loop — so they check at `depth`;
+        // only the body descends.
         ExprKind::While {
-            condition, body, ..
-        } => expr_has_early_exit(condition) || block_has_early_exit(body),
-        ExprKind::For { iterable, body, .. } => {
-            expr_has_early_exit(iterable) || block_has_early_exit(body)
-        }
-        ExprKind::Loop { body, .. } => block_has_early_exit(body),
+            label,
+            condition,
+            body,
+            ..
+        } => expr_has_early_exit_ctx(condition, depth, labels) || descend_loop(body, label),
+        ExprKind::For {
+            label,
+            iterable,
+            body,
+            ..
+        } => expr_has_early_exit_ctx(iterable, depth, labels) || descend_loop(body, label),
+        ExprKind::Loop { label, body, .. } => descend_loop(body, label),
         ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
-            expr_has_early_exit(left) || expr_has_early_exit(right)
+            expr_has_early_exit_ctx(left, depth, labels)
+                || expr_has_early_exit_ctx(right, depth, labels)
         }
-        ExprKind::Unary { operand, .. } => expr_has_early_exit(operand),
+        ExprKind::Unary { operand, .. } => expr_has_early_exit_ctx(operand, depth, labels),
         ExprKind::Call { callee, args } => {
-            expr_has_early_exit(callee) || args.iter().any(|a| expr_has_early_exit(&a.value))
+            expr_has_early_exit_ctx(callee, depth, labels)
+                || args
+                    .iter()
+                    .any(|a| expr_has_early_exit_ctx(&a.value, depth, labels))
         }
         ExprKind::MethodCall { object, args, .. } => {
-            expr_has_early_exit(object) || args.iter().any(|a| expr_has_early_exit(&a.value))
+            expr_has_early_exit_ctx(object, depth, labels)
+                || args
+                    .iter()
+                    .any(|a| expr_has_early_exit_ctx(&a.value, depth, labels))
         }
         ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-            expr_has_early_exit(object)
+            expr_has_early_exit_ctx(object, depth, labels)
         }
         ExprKind::Index { object, index } => {
-            expr_has_early_exit(object) || expr_has_early_exit(index)
+            expr_has_early_exit_ctx(object, depth, labels)
+                || expr_has_early_exit_ctx(index, depth, labels)
         }
-        ExprKind::Tuple(elems) => elems.iter().any(expr_has_early_exit),
+        ExprKind::Tuple(elems) => elems
+            .iter()
+            .any(|e| expr_has_early_exit_ctx(e, depth, labels)),
         _ => false,
     }
 }
