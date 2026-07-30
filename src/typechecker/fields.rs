@@ -22,6 +22,28 @@ use super::{
     shared_struct_mut_field_names, TypeErrorKind,
 };
 
+/// Project a refinement-typed field-access receiver to its base, peeling
+/// *through* one borrow layer (`ref Adult` → `ref Person`) so the
+/// borrow-aware arms of `infer_field_access` keep working unchanged. Every
+/// other `Type` — including a borrow of a non-refinement — passes through
+/// untouched. Takes the receiver by value so the common (non-refinement)
+/// path costs no clone. See the call site for why the projection is
+/// unconditional (B-2026-07-29-26).
+fn project_refinement_receiver(ty: Type) -> Type {
+    match ty {
+        Type::Refinement { base, .. } => *base,
+        Type::Ref(inner) => match *inner {
+            Type::Refinement { base, .. } => Type::Ref(base),
+            other => Type::Ref(Box::new(other)),
+        },
+        Type::MutRef(inner) => match *inner {
+            Type::Refinement { base, .. } => Type::MutRef(base),
+            other => Type::MutRef(Box::new(other)),
+        },
+        other => other,
+    }
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// A field access (`x.field`) whose receiver is a type with no named
     /// fields — a primitive (`i64`/`f64`/`bool`/`char`), `String`, or any other
@@ -76,6 +98,23 @@ impl<'a> super::TypeChecker<'a> {
         if obj_ty == Type::Error {
             return Type::Error;
         }
+
+        // Refinement base-projection (B-2026-07-29-26). A refinement type
+        // (`type Adult = Person where self.age > 17`) keeps a *nominal*
+        // identity so construction sites stay gated (design.md § Refinement
+        // Types), but it declares no fields of its own — every field it has
+        // is the base's. Field access is a pure READ, so it projects
+        // straight through the wrapper, the same way method dispatch falls
+        // through to the base's methods when the refinement declares none
+        // (`expr_method_call.rs` § "Refinement base-deref"). The projection
+        // is unconditional rather than per-name because, unlike methods,
+        // there is no way to declare a field on a refinement for the
+        // refined identity to win with. Without it the receiver-name match
+        // below fell to `field_access_on_fieldless_type` and reported
+        // `no field 'name' on type 'Adult'`. Borrowed receivers project
+        // *inside* the borrow so the `Ref` / `MutRef` arms still see a
+        // `Named` inner and the field keeps its by-value declared type.
+        let obj_ty = project_refinement_receiver(obj_ty);
 
         // Slice 1b: opaque foreign types (`unsafe extern { type Foo; }`)
         // have no fields visible to Kāra — the C side owns the layout, so

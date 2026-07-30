@@ -163,6 +163,19 @@ pub(super) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
                 }
             }
         }
+        // A GENERIC refinement alias (`type NonEmpty[T] = Vec[T] where
+        // self.len() > 0`) lowers to `Refinement { name, base: Vec<T> }`,
+        // so the use-site args live in the *base*, not in the wrapper. The
+        // nominal `name` is identity-only and never substituted; walking
+        // `base` is what carries `NonEmpty[Item]`'s `Item` into `Vec<T>`.
+        // Without this arm the wrapper fell to `_ => ty.clone()` and the
+        // element type stayed the unsubstituted `Vec<T>` — the generic half
+        // of B-2026-07-29-26 (the same alias with no `where` clause has no
+        // wrapper and substituted fine).
+        Type::Refinement { name, base } => Type::Refinement {
+            name: name.clone(),
+            base: Box::new(substitute_type_params(base, subs)),
+        },
         _ => ty.clone(),
     }
 }

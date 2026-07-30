@@ -2981,6 +2981,23 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
+        // `refined as T` where `T` is NOT a refinement — a cast *out* of a
+        // refinement. The nominal wrapper gates construction, not reads, so
+        // the source widens to its base first (design.md § Refinement Types'
+        // one-directional refined→base widening) and the pair is judged as
+        // `base as T`. This is the cast twin of the arithmetic-returns-base
+        // rule: if `q: PositiveQty` (base `i64`) may be written `q + 1`, it
+        // may equally be written `q as f64`. Deliberately placed AFTER the
+        // refinement-*target* arm above so that arm still compares the
+        // source in its refined form — `p as Positive` where `p: Positive`
+        // stays a no-op assertion, and the "source must have exactly the
+        // base type" rule keeps rejecting `i64 as (Special = i32 …)`.
+        // Without this, `r.qty as f64` fell through every accept arm to the
+        // generic "cannot cast 'PositiveQty' to 'f64'" (B-2026-07-29-26,
+        // the second error `examples/weave` hits once field access sees
+        // through the wrapper).
+        let from_ty = strip_refinement(from_ty);
+
         // Numeric → numeric: always accepted (existing rule).
         if is_numeric(from_ty) && is_numeric(to_ty) {
             return;

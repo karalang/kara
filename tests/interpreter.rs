@@ -19083,6 +19083,35 @@ fn main() {
     assert_eq!(output.trim(), "rejected-empty\nhi");
 }
 
+#[test]
+fn test_interp_generic_refinement_alias_iterates_and_reads_fields() {
+    // B-2026-07-29-26 end-to-end on the tree-walk lane: a generic
+    // refinement alias narrowed with `as`, then iterated, with a field
+    // read and a cast-out of a second refinement inside the loop — the
+    // three projection rules together, which is exactly the shape
+    // `examples/weave`'s `aggregate` uses. The typechecker rejected all
+    // three before the fix, so this never got to run.
+    let output = run_no_errors(
+        r#"
+type PositiveQty = i64 where self > 0;
+type NonEmpty[T] = Vec[T] where self.len() > 0;
+struct Item { price: f64, qty: PositiveQty }
+
+fn total(rows: NonEmpty[Item]) -> f64 {
+    let mut t = 0.0;
+    for r in rows { t = t + r.price * (r.qty as f64); }
+    t
+}
+
+fn main() {
+    let v = vec![Item { price: 1.5, qty: 2 }, Item { price: 0.25, qty: 4 }];
+    println(total(v as NonEmpty[Item]));
+}
+"#,
+    );
+    assert_eq!(output.trim(), "4");
+}
+
 // ── Contracts — requires / ensures runtime enforcement ─────────────
 //
 // design.md § Contracts: `requires` predicates are checked at function

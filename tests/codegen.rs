@@ -12267,6 +12267,61 @@ fn main() {
     }
 
     #[test]
+    fn e2e_generic_refinement_alias_projects_for_reads() {
+        // B-2026-07-29-26 — the AOT twin of the interpreter test of the
+        // same shape: a generic refinement alias narrowed with `as`, then
+        // iterated, reading a field and casting a second refinement out to
+        // its base inside the loop. Codegen already resolved refinement
+        // aliases through its own `refinement_base` maps, so this leg was
+        // *already* correct — the defect was the typechecker rejecting the
+        // program before `karac build` ever reached codegen. Pinned here so
+        // the two lanes stay in agreement, and because this harness runs
+        // codegen directly (it does not gate on typecheck errors), which is
+        // precisely why the divergence went unnoticed.
+        if let Some(out) = run_program(
+            "pub type PositiveQty = i64 where self > 0;\n\
+             pub type NonEmpty[T] = Vec[T] where self.len() > 0;\n\
+             pub struct Item { price: f64, qty: PositiveQty }\n\
+             pub fn total(rows: NonEmpty[Item]) -> f64 {\n\
+                 let mut t = 0.0;\n\
+                 for r in rows { t = t + r.price * (r.qty as f64); }\n\
+                 t\n\
+             }\n\
+             fn main() {\n\
+                 let mut xs: Vec[Item] = Vec.new();\n\
+                 xs.push(Item { price: 1.5, qty: 2 });\n\
+                 xs.push(Item { price: 0.25, qty: 4 });\n\
+                 println(total(xs as NonEmpty[Item]));\n\
+             }",
+        ) {
+            assert_eq!(out, "4\n");
+        }
+    }
+
+    #[test]
+    fn e2e_refinement_struct_field_read_and_cast_out() {
+        // The non-generic siblings of the projection rules: a refinement
+        // over a *struct* reads the base's fields, and a refinement over a
+        // numeric base casts out to another numeric type. Both were
+        // typecheck errors pre-fix ("no field 'name' on type 'Adult'",
+        // "cannot cast 'PositiveQty' to 'f64'").
+        if let Some(out) = run_program(
+            "pub type PositiveQty = i64 where self > 0;\n\
+             pub struct Person { name: String, age: i64 }\n\
+             pub type Adult = Person where self.age > 17;\n\
+             pub fn label(p: Adult) -> String { p.name }\n\
+             pub fn half(q: PositiveQty) -> f64 { (q as f64) / 2.0 }\n\
+             fn main() {\n\
+                 let p = Person { name: \"ada\", age: 36 };\n\
+                 println(label(p as Adult));\n\
+                 println(half(9 as PositiveQty));\n\
+             }",
+        ) {
+            assert_eq!(out, "ada\n4.5\n");
+        }
+    }
+
+    #[test]
     fn e2e_refinement_typed_struct_fields_layout() {
         // A struct whose fields name refinement aliases (`email: BoundedText`
         // where `BoundedText = String`, `price: PositivePrice` where `= f64`)

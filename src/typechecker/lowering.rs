@@ -1232,6 +1232,19 @@ impl<'a> super::TypeChecker<'a> {
                     Type::MutRef(Box::new(elem))
                 }
             }
+            // A refinement type (`type NonEmpty[T] = Vec[T] where
+            // self.len() > 0`) is iterated as its BASE. The nominal wrapper
+            // exists to gate *construction* (design.md § Refinement Types),
+            // not to hide the base's read operations — a refinement declares
+            // no `Item` binding of its own, and one over a non-collection
+            // base still has no `Item`, so projecting is never wrong here.
+            // Without this arm the wrapper fell to the `_ => ty.clone()`
+            // tail and `for r in rows` bound `r` to the whole `NonEmpty`,
+            // so `r.price` failed with `no field 'price' on type
+            // 'NonEmpty'` (B-2026-07-29-26). The borrowed forms reach this
+            // arm through the `Ref` / `MutRef` recursion above, so their
+            // element keeps the borrow wrapper as usual.
+            Type::Refinement { base, .. } => self.element_type_of(base),
             // Primitive borrowed views — element type is the inner type.
             Type::Array { element, .. } | Type::Slice { element, .. } => *element.clone(),
             Type::Named { name, args } => {

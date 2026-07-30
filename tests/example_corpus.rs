@@ -77,34 +77,24 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// Entry packages (`kara.toml` + an entry file) that do not currently
 /// type-check, each with the first error the package-level build reports.
 /// Pinned rather than dropped: a fix turns this test RED and forces promotion.
-const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[
-    (
-        "db_pipeline",
-        // Retargeted twice. The call-site `ref` this pin first named was fixed
-        // by B-2026-07-29-19; removing that parse error let resolution run and
-        // exposed 18 latent errors. Those have now been de-rotted too — the
-        // abandoned `Display::fmt`/`Formatter`/`write` in query.kara, a
-        // `Value` enum nested one level too deep, and two missing imports
-        // (`Value` into db.kara, `Db` into executor.kara).
-        //
-        // What remains is NOT example rot: 8 of the 12 errors are one compiler
-        // bug, filed off the back of this de-rot.
-        "6 errors, none of them example rot. B-2026-07-29-25 (imported type alias not \
+const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
+    "db_pipeline",
+    // Retargeted twice. The call-site `ref` this pin first named was fixed
+    // by B-2026-07-29-19; removing that parse error let resolution run and
+    // exposed 18 latent errors. Those have now been de-rotted too — the
+    // abandoned `Display::fmt`/`Formatter`/`write` in query.kara, a
+    // `Value` enum nested one level too deep, and two missing imports
+    // (`Value` into db.kara, `Db` into executor.kara).
+    //
+    // What remains is NOT example rot: 8 of the 12 errors are one compiler
+    // bug, filed off the back of this de-rot.
+    "6 errors, none of them example rot. B-2026-07-29-25 (imported type alias not \
          expanded) is FIXED, which cleared the whole `Row` class — 8 errors. What \
          is left: 1 is \
          B-2026-07-29-27 (`#[derive(Clone)]` synthesizes no callable `.clone()`, \
          executor.kara:118), and 3 are `Map.get` requiring an owned key so a \
          `ref String` cannot be looked up without cloning (db.kara:73/80/95).",
-    ),
-    (
-        "weave",
-        "src/main.kara:263 — E0200 no field 'usd_price' on type 'NonEmpty'. NOT example \
-         rot: B-2026-07-29-26 — a generic REFINEMENT alias (`NonEmpty[T] = Vec[T] \
-         where self.len() > 0`) is opaque to its base, so `for r in rows` binds \
-         `r` to `NonEmpty` rather than `EnrichedRow`. The same alias without the \
-         `where` clause iterates correctly.",
-    ),
-];
+)];
 
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[

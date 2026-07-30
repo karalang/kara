@@ -26759,6 +26759,150 @@ fn refinement_arithmetic_result_is_not_refined() {
     );
 }
 
+// ── Refinement base-projection for READ operations (B-2026-07-29-26) ──
+//
+// The nominal `Type::Refinement` wrapper gates *construction* (design.md
+// § Refinement Types) — it is deliberately NOT transparent. But nothing
+// used to see through it for reads, so field access and `for` iteration
+// treated a refinement as an opaque fieldless, non-iterable type. These
+// pin the projection rules (field / iteration / cast-out) alongside the
+// method base-deref that already existed, and the generic case where the
+// use-site type argument also has to reach the wrapped base.
+
+#[test]
+fn refinement_field_access_projects_to_base() {
+    // `p.name` on a refinement over a struct reads the BASE's field — a
+    // refinement declares no fields of its own. Pre-fix: "no field 'name'
+    // on type 'Adult'".
+    typecheck_ok(
+        "struct Person { name: String, age: i64 }
+         type Adult = Person where self.age > 17;
+         fn greet(p: Adult) -> String { p.name }",
+    );
+}
+
+#[test]
+fn refinement_field_access_through_borrow_projects_to_base() {
+    // The projection peels *inside* the borrow, so `ref Adult` resolves
+    // like `ref Person` and the field keeps its by-value declared type.
+    typecheck_ok(
+        "struct Person { name: String, age: i64 }
+         type Adult = Person where self.age > 17;
+         fn how_old(p: ref Adult) -> i64 { p.age }",
+    );
+}
+
+#[test]
+fn refinement_unknown_field_still_rejected_naming_the_base() {
+    // Projection must not turn every field access into a pass: an absent
+    // field is still an error, and after projection the diagnostic names
+    // the base struct (whose field list is the useful one to print).
+    let errors = typecheck_errors(
+        "struct Person { name: String, age: i64 }
+         type Adult = Person where self.age > 17;
+         fn bad(p: Adult) -> i64 { p.height }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("no field") && e.to_string().contains("Person")),
+        "expected a `no field ... Person` error naming the base struct, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn refinement_iteration_projects_to_base_element() {
+    // `for x in xs` over a refinement of `Vec[i64]` binds `x: i64`, so the
+    // arithmetic type-checks. Pre-fix the element was the whole refinement
+    // and `t + x` reported an `i64` / `Vec<i64>` mismatch.
+    typecheck_ok(
+        "type NonEmptyInts = Vec[i64] where self.len() > 0;
+         fn total(xs: NonEmptyInts) -> i64 {
+             let mut t = 0;
+             for x in xs { t = t + x; }
+             t
+         }",
+    );
+}
+
+#[test]
+fn generic_refinement_alias_carries_use_site_arg_into_base() {
+    // The headline shape: a GENERIC refinement alias. The use-site arg
+    // (`Item`) has to be substituted into the wrapped base `Vec[T]`, and
+    // iteration then has to project through the wrapper — so `r.price`
+    // resolves on `Item`. Pre-fix BOTH halves were lost: the element bound
+    // to `NonEmpty` (opaque wrapper) and the base stayed `Vec<T>`
+    // (unsubstituted). The `where`-free control below is what passed.
+    typecheck_ok(
+        "struct Item { price: f64 }
+         type NonEmpty[T] = Vec[T] where self.len() > 0;
+         fn total(rows: NonEmpty[Item]) -> f64 {
+             let mut t = 0.0;
+             for r in rows { t = t + r.price; }
+             t
+         }",
+    );
+}
+
+#[test]
+fn generic_plain_alias_iteration_control_still_works() {
+    // The control the bug report used to isolate the `where` clause: the
+    // same alias with no predicate has no nominal wrapper and always
+    // iterated correctly. Pinned so the projection work cannot regress the
+    // transparent-alias path it was separated from.
+    typecheck_ok(
+        "struct Item { price: f64 }
+         type Plain[T] = Vec[T];
+         fn total(rows: Plain[Item]) -> f64 {
+             let mut t = 0.0;
+             for r in rows { t = t + r.price; }
+             t
+         }",
+    );
+}
+
+#[test]
+fn refinement_as_cast_to_non_refinement_target_widens_source() {
+    // A cast OUT of a refinement widens the source to its base first, so
+    // `q as f64` is judged as `i64 as f64`. The cast twin of the
+    // arithmetic-returns-base rule: anything writable as `q + 1` is
+    // writable as `q as f64`. Pre-fix: "cannot cast 'PositiveQty' to
+    // 'f64'" — the second error `examples/weave` hit.
+    typecheck_ok(
+        "type PositiveQty = i64 where self > 0;
+         fn scale(q: PositiveQty) -> f64 { q as f64 }",
+    );
+}
+
+#[test]
+fn refinement_as_cast_from_refined_source_to_mismatched_base_rejected() {
+    // Source-widening must NOT weaken the refinement-*target* rule: it is
+    // applied only after that arm has judged the pair. `a: Wide` (base
+    // `i64`) asserted as `Narrow` (base `i32`) is still the two-step
+    // error, not a silently-folded numeric conversion plus predicate check.
+    let errors = typecheck_errors(
+        "type Wide = i64 where self > 0;
+         type Narrow = i32 where self > 0;
+         fn bad(a: Wide) -> Narrow { a as Narrow }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("E_REFINEMENT_CAST_SOURCE_MISMATCH")),
+        "expected E_REFINEMENT_CAST_SOURCE_MISMATCH, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
 // ── Refinement types (phase-9 line 37 — compile-time elision pass) ──
 //
 // The two elision rules (const-evaluable narrowing + type-identity) plus
