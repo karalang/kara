@@ -34428,3 +34428,69 @@ fn clone_still_rejected_without_derive_or_bound() {
         );
     }
 }
+
+/// B-2026-07-30-13 — an arithmetic mismatch whose wrong operand is a WRAPPER
+/// must not be reported as an integer/float mix.
+///
+/// The cross-domain arm was keyed on `left_is_int != right_is_int`, which does
+/// not mean "one int, one float": the enclosing block is entered whenever the
+/// LEFT operand is numeric, so the right one can be any type at all.
+/// `s + q.pop_front()` — the near-universal forgotten `.unwrap()` — was reported
+/// as "cannot mix integer and floating-point operands ('i64' and 'Option[i64]')",
+/// naming a floating-point type that appears nowhere in the program and
+/// pointing at a cast that would not have helped.
+#[test]
+fn test_arith_with_option_operand_is_not_reported_as_float_mix() {
+    let errs = typecheck_errors(
+        "fn main() { let mut q: VecDeque[i64] = VecDeque.new(); let s = 0i64 + q.pop_front(); }",
+    );
+    assert!(
+        !errs.iter().any(|e| e.message.contains("floating-point")),
+        "an Option operand is not a float; got: {errs:?}"
+    );
+    // Accurate, and it names the fix: the wrapper and its payload.
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("found 'Option<i64>'")
+                && e.message.contains("unwrap it first")),
+        "expected a wrapper-unwrap hint, got: {errs:?}"
+    );
+}
+
+/// B-2026-07-30-13 companion — the hint is gated on the payload actually being
+/// the compatible type, so it only ever appears where unwrapping is the fix.
+/// `i64 + Option[String]` is a real mismatch that `.unwrap()` would NOT repair,
+/// and a hint there would send the reader down a dead end.
+#[test]
+fn test_arith_wrapper_hint_absent_when_payload_still_mismatches() {
+    let errs = typecheck_errors(
+        "fn main() { let o: Option[String] = Option.Some(\"a\"); let s = 1i64 + o; }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("found 'Option<String>'")),
+        "expected the plain mismatch, got: {errs:?}"
+    );
+    assert!(
+        !errs.iter().any(|e| e.message.contains("unwrap it first")),
+        "unwrapping would not fix this mismatch, so no hint; got: {errs:?}"
+    );
+}
+
+/// B-2026-07-30-13 guard — a GENUINE integer/float mix keeps the cross-domain
+/// message. The fix narrows that arm; it must not empty it.
+#[test]
+fn test_genuine_int_float_mix_still_reported_as_domain_error() {
+    for src in [
+        "fn main() { let s = 1i64 + 2.5; }",
+        "fn main() { let s = 2.5 + 1i64; }",
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e
+                .message
+                .contains("cannot mix integer and floating-point operands")),
+            "expected the int/float domain error for {src}, got: {errs:?}"
+        );
+    }
+}

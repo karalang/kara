@@ -1538,8 +1538,24 @@ impl<'a> super::TypeChecker<'a> {
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
-                    } else if left_is_int != right_is_int {
+                    } else if (left_is_int && matches!(right_ty, Type::Float(_)))
+                        || (right_is_int && matches!(left_ty, Type::Float(_)))
+                    {
                         // Exactly one operand is an integer, the other a float.
+                        //
+                        // B-2026-07-30-13 — this arm used to be keyed on
+                        // `left_is_int != right_is_int`, which does NOT mean
+                        // "one int, one float": the block is entered whenever
+                        // the LEFT operand is numeric, so the other side can be
+                        // ANY type. `s + q.pop_front()` (an `Option[i64]`, from
+                        // the near-universal habit of forgetting `.unwrap()`)
+                        // was therefore reported as "cannot mix integer and
+                        // floating-point operands ('i64' and 'Option[i64]')" —
+                        // naming a floating-point type that is not in the
+                        // program and sending the reader to look for a cast that
+                        // would not help. Require the other side to actually be
+                        // a float; everything else falls to the mismatch arm
+                        // below, which now carries an unwrap hint.
                         let int_side = if left_is_int { &left_ty } else { &right_ty };
                         let float_side = if left_is_int { &right_ty } else { &left_ty };
                         self.type_error(
@@ -1558,9 +1574,10 @@ impl<'a> super::TypeChecker<'a> {
                     } else if !types_compatible(&left_ty, &right_ty) {
                         self.type_error(
                             format!(
-                                "expected '{}', found '{}'",
+                                "expected '{}', found '{}'{}",
                                 type_display(&left_ty),
-                                type_display(&right_ty)
+                                type_display(&right_ty),
+                                Self::arith_wrapper_unwrap_hint(&left_ty, &right_ty)
                             ),
                             right.span.clone(),
                             TypeErrorKind::TypeMismatch,
@@ -1780,6 +1797,33 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+    }
+
+    /// B-2026-07-30-13 — the trailing hint on an arithmetic type mismatch whose
+    /// wrong operand is an `Option`/`Result` WRAPPING a compatible payload, i.e.
+    /// a forgotten `.unwrap()`. Empty for every other mismatch.
+    ///
+    /// `q.pop_front()` / `v.pop()` / `m.get(k)` all yield `Option[T]`, so
+    /// `s = s + q.pop_front()` is the first thing most people write and the
+    /// error lands on the arithmetic, several steps from the cause. Naming the
+    /// wrapper and the payload turns "expected 'i64', found 'Option[i64]'" into
+    /// something that says what to do about it.
+    fn arith_wrapper_unwrap_hint(expected: &Type, found: &Type) -> String {
+        let Type::Named { name, args } = found else {
+            return String::new();
+        };
+        if !matches!(name.as_str(), "Option" | "Result") || args.is_empty() {
+            return String::new();
+        }
+        if !types_compatible(expected, &args[0]) {
+            return String::new();
+        }
+        format!(
+            " — `{}` wraps the '{}'; unwrap it first \
+             (`.unwrap()`, `.unwrap_or(<default>)`, or a `match`)",
+            name,
+            type_display(&args[0])
+        )
     }
 
     pub(super) fn infer_unary(&mut self, op: &UnaryOp, operand: &Expr, span: &Span) -> Type {
