@@ -735,6 +735,32 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
         let stream = self.stdio_stream(to_stderr);
+        // B-2026-07-30-9 — a trailing newline goes through the LINE wrapper, so
+        // payload+newline reach the OS as ONE write. Emitting them as two calls
+        // made `println` atomic only for its payload: the serializing lock
+        // (glibc's per-`FILE` lock inside `fwrite`) is released in between, so
+        // two `spawn`ed tasks printing concurrently produced payload-A,
+        // payload-B, newline-A, newline-B — `12\n\n` for a program that says
+        // `1\n2\n`. `print` (empty `nl`) keeps the single plain call below;
+        // there is nothing to fuse and no behaviour to change.
+        if !nl.is_empty() {
+            let nl_g = self.builder.build_global_string_ptr(nl, "fw.nl").unwrap();
+            let nl_len = size_t.const_int(nl.len() as u64, false);
+            self.builder
+                .build_call(
+                    self.write_console_line_fn,
+                    &[
+                        BasicMetadataValueEnum::from(data),
+                        BasicMetadataValueEnum::from(len_st),
+                        BasicMetadataValueEnum::from(nl_g.as_pointer_value()),
+                        BasicMetadataValueEnum::from(nl_len),
+                        BasicMetadataValueEnum::from(stream),
+                    ],
+                    "wcl",
+                )
+                .unwrap();
+            return;
+        }
         // Route through the runtime console chokepoint (auto-par ordered-
         // output): at the top level it `fwrite`s `len` bytes to `stream` (the
         // old inline behavior); inside a parallel branch it captures the bytes
@@ -751,22 +777,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 "wc",
             )
             .unwrap();
-        if !nl.is_empty() {
-            let nl_g = self.builder.build_global_string_ptr(nl, "fw.nl").unwrap();
-            let nl_len = size_t.const_int(nl.len() as u64, false);
-            let stream2 = self.stdio_stream(to_stderr);
-            self.builder
-                .build_call(
-                    self.write_console_fn,
-                    &[
-                        BasicMetadataValueEnum::from(nl_g.as_pointer_value()),
-                        BasicMetadataValueEnum::from(nl_len),
-                        BasicMetadataValueEnum::from(stream2),
-                    ],
-                    "wc.nl.call",
-                )
-                .unwrap();
-        }
     }
 
     /// Print a String value (`{data,len,cap}`) NUL-safely + the newline `nl`,

@@ -4437,6 +4437,61 @@ mod codegen_tests {
         assert!(ir.contains("smul.with.overflow"));
     }
 
+    /// B-2026-07-30-9 — `println` fuses its payload and newline into ONE
+    /// `write_console` call, so a line reaches the OS atomically.
+    ///
+    /// It used to emit two calls, and the lock that keeps a write intact —
+    /// glibc's per-`FILE` lock inside `fwrite` — is released between them. Two
+    /// `spawn`ed tasks printing concurrently interleaved as payload-A,
+    /// payload-B, newline-A, newline-B: `12\n\n` for a program that says
+    /// `1\n2\n`. Measured on a five-task fan-out: 10 garbled runs in 60 before,
+    /// 0 in 60 after.
+    ///
+    /// Asserted on the IR rather than by running the program because the bug is
+    /// a RACE — a passing run proves nothing, and the pre-fix program passes
+    /// most of the time. The call-shape is the invariant; the flake is a
+    /// symptom.
+    #[test]
+    fn test_ir_println_fuses_payload_and_newline_into_one_write() {
+        let ir = ir_for("fn main() { println(\"hi\"); }");
+        assert!(
+            ir.contains("call void @__karac_write_console_line("),
+            "println should route through the line-atomic wrapper:\n{ir}"
+        );
+        // The staging wrapper itself holds the only plain `write_console` calls
+        // for this program; `main` must contain none of its own.
+        let main_body = ir
+            .split("define i32 @main()")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .unwrap_or_default();
+        assert!(
+            !main_body.contains("call void @__karac_write_console("),
+            "println must not also emit a bare write_console in main:\n{main_body}"
+        );
+    }
+
+    /// B-2026-07-30-9 companion — `print` has no newline to fuse, so it keeps
+    /// the single plain `write_console` call. Pins that the fix is scoped to the
+    /// two-write shape and does not put every write through staging.
+    #[test]
+    fn test_ir_print_without_newline_keeps_plain_write() {
+        let ir = ir_for("fn main() { print(\"hi\"); }");
+        let main_body = ir
+            .split("define i32 @main()")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .unwrap_or_default();
+        assert!(
+            main_body.contains("call void @__karac_write_console("),
+            "print should emit a plain write_console:\n{main_body}"
+        );
+        assert!(
+            !main_body.contains("@__karac_write_console_line("),
+            "print has no newline to fuse and must not stage:\n{main_body}"
+        );
+    }
+
     #[test]
     fn test_ir_float_arithmetic() {
         let ir = ir_for("fn avg(a: f64, b: f64) -> f64 { (a + b) / 2.0 }");

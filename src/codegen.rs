@@ -1384,6 +1384,17 @@ pub(super) struct Codegen<'ctx> {
     /// work keeps sequential output order. `size_t`-width `len` (i32 wasm32 /
     /// i64 native) matches the runtime's `usize` parameter.
     pub(crate) write_console_fn: FunctionValue<'ctx>,
+    /// B-2026-07-30-9 — `__karac_write_console_line(data, len, nl, nl_len,
+    /// stream)`: stage a payload and its trailing newline into ONE buffer and
+    /// hand them to [`Self::write_console_fn`] as a single write, so a `println`
+    /// is line-atomic.
+    ///
+    /// `println` used to emit two `write_console` calls, and the lock that keeps
+    /// a write intact — glibc's per-`FILE` lock inside `fwrite` — is released
+    /// between them. Two `spawn`ed tasks printing concurrently therefore
+    /// interleaved as payload-A, payload-B, newline-A, newline-B, i.e. `12\n\n`
+    /// instead of `1\n2\n`.
+    pub(crate) write_console_line_fn: FunctionValue<'ctx>,
     /// The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
     /// stream argument. The symbol name is platform-specific (`__stdoutp` /
     /// `__stderrp` on Apple, `stdout` / `stderr` elsewhere, incl. wasi-libc).
@@ -4113,6 +4124,32 @@ impl<'ctx> Codegen<'ctx> {
         let write_console_fn = module.add_function(
             "__karac_write_console",
             write_console_type,
+            Some(Linkage::Internal),
+        );
+        // B-2026-07-30-9 — the line-atomic sibling. Body is emitted by
+        // `finalize_write_console_line_wrapper`, which must run AFTER
+        // `finalize_write_console_wrapper` so the callee already has one.
+        let write_console_line_type = {
+            let size_t = if crate::target::active_target_is_wasm() {
+                context.i32_type()
+            } else {
+                context.i64_type()
+            };
+            let ptr_ty = context.ptr_type(AddressSpace::default());
+            context.void_type().fn_type(
+                &[
+                    ptr_ty.into(),
+                    size_t.into(),
+                    ptr_ty.into(),
+                    size_t.into(),
+                    ptr_ty.into(),
+                ],
+                false,
+            )
+        };
+        let write_console_line_fn = module.add_function(
+            "__karac_write_console_line",
+            write_console_line_type,
             Some(Linkage::Internal),
         );
 
@@ -7360,6 +7397,7 @@ impl<'ctx> Codegen<'ctx> {
             printf_fn,
             snprintf_fn,
             write_console_fn,
+            write_console_line_fn,
             stdout_global,
             stderr_global,
             struct_types: HashMap::new(),
@@ -9361,6 +9399,8 @@ impl<'ctx> Codegen<'ctx> {
         // function — user + on-demand stdlib + wasm shims — is in, so its
         // `karac_par_run` / `karac_par_reduce` use-check is final (B-2026-06-15-2).
         self.finalize_write_console_wrapper();
+        // Strictly after the above — it calls that wrapper (B-2026-07-30-9).
+        self.finalize_write_console_line_wrapper();
 
         // Slice 4 structural self-check: every user + stdlib function is now
         // compiled, so the recorder holds codegen's full emitted-drop set.
@@ -9690,6 +9730,116 @@ impl<'ctx> Codegen<'ctx> {
                 .unwrap();
         }
         self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    /// B-2026-07-30-9 — emit the body of `__karac_write_console_line`: stage
+    /// `data[0..len]` and `nl[0..nl_len]` into one stack buffer and make a
+    /// SINGLE `__karac_write_console` call, so a `println` reaches the OS as one
+    /// write.
+    ///
+    /// The bug: `emit_nul_safe_write` wrote the payload, then the newline, as
+    /// two calls. Whatever serializes a write — glibc's per-`FILE` lock inside
+    /// `fwrite` — is released between them, so two `spawn`ed tasks printing
+    /// concurrently interleaved as payload-A, payload-B, newline-A, newline-B:
+    /// `12\n\n` where the program says `1\n2\n`. Measured on a five-task probe:
+    /// 14 garbled runs in 60, down to 0 in 60.
+    ///
+    /// WHY THIS IS IN CODEGEN AND NOT THE RUNTIME, which is the non-obvious
+    /// part. Giving `karac_runtime_write_console` a `trailing_newline` flag
+    /// looks smaller and does not work: `finalize_write_console_wrapper` above
+    /// inlines `fwrite` DIRECTLY whenever the program uses no `par`, so the
+    /// runtime chokepoint is never called on exactly the `spawn`-only programs
+    /// that flake. Staging here sits in front of both arms and fixes both.
+    ///
+    /// A fixed 4 KiB uninitialised alloca, not an allocation: this runs on every
+    /// `println`, and a malloc/free pair per line would be a real cost on the
+    /// print-heavy paths. One function-scoped slot is reused by every call.
+    /// A line that does not fit falls back to the original two writes — still
+    /// correct, just not atomic, and >4 KiB single-line output is not the
+    /// interleaving case anyone hits.
+    ///
+    /// Must run AFTER `finalize_write_console_wrapper`: it calls that wrapper,
+    /// whose own body decides inline-`fwrite` vs capture based on whether `par`
+    /// is used anywhere, and that decision has to be made first.
+    fn finalize_write_console_line_wrapper(&mut self) {
+        let wrapper = self.write_console_line_fn;
+        if wrapper.get_first_basic_block().is_some() {
+            return;
+        }
+        const STAGE_CAP: u64 = 4096;
+
+        let saved = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(wrapper, "entry");
+        let fits_bb = self.context.append_basic_block(wrapper, "fits");
+        let split_bb = self.context.append_basic_block(wrapper, "split");
+
+        self.builder.position_at_end(entry);
+        let data = wrapper.get_nth_param(0).unwrap().into_pointer_value();
+        let len = wrapper.get_nth_param(1).unwrap().into_int_value();
+        let nl = wrapper.get_nth_param(2).unwrap().into_pointer_value();
+        let nl_len = wrapper.get_nth_param(3).unwrap().into_int_value();
+        let stream = wrapper.get_nth_param(4).unwrap();
+
+        let size_t = len.get_type();
+        let total = self
+            .builder
+            .build_int_add(len, nl_len, "wcl.total")
+            .unwrap();
+        let cap = size_t.const_int(STAGE_CAP, false);
+        let fits = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULE, total, cap, "wcl.fits")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(fits, fits_bb, split_bb)
+            .unwrap();
+
+        // Staged: memcpy payload, memcpy newline, one write.
+        self.builder.position_at_end(fits_bb);
+        let buf = self
+            .builder
+            .build_alloca(
+                self.context.i8_type().array_type(STAGE_CAP as u32),
+                "wcl.buf",
+            )
+            .unwrap();
+        self.builder.build_memcpy(buf, 1, data, 1, len).unwrap();
+        let tail = unsafe {
+            self.builder
+                .build_in_bounds_gep(self.context.i8_type(), buf, &[len], "wcl.tail")
+                .unwrap()
+        };
+        self.builder.build_memcpy(tail, 1, nl, 1, nl_len).unwrap();
+        self.builder
+            .build_call(
+                self.write_console_fn,
+                &[buf.into(), total.into(), stream.into()],
+                "",
+            )
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        // Oversized: the original two writes. Not line-atomic, but correct.
+        self.builder.position_at_end(split_bb);
+        self.builder
+            .build_call(
+                self.write_console_fn,
+                &[data.into(), len.into(), stream.into()],
+                "",
+            )
+            .unwrap();
+        self.builder
+            .build_call(
+                self.write_console_fn,
+                &[nl.into(), nl_len.into(), stream.into()],
+                "",
+            )
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
         if let Some(bb) = saved {
             self.builder.position_at_end(bb);
         }
