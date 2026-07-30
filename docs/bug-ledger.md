@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 101 | 1 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
-| missing-feature | 68 | 1 |
+| missing-feature | 68 | 0 |
 | false-positive | 50 | 0 |
 | run-vs-build | 46 | 0 |
 | perf | 39 | 3 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 552 | 5 |
-| typecheck | 97 | 1 |
+| codegen | 552 | 4 |
+| typecheck | 97 | 0 |
 | interp | 78 | 1 |
 | ownership | 33 | 0 |
 | autopar | 24 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **763 surfaced · 6 open · 749 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **763 surfaced · 5 open · 750 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,12 +134,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **763 surfaced 
 | B-2026-07-30-5 | 2026-07-30 | codegen | high | VecDeque.pop_front is O(n) (memmove per pop), making every queue drain O(n^2) — root cause of B-2026-07-30-4 | — |
 | B-2026-07-30-8 | 2026-07-30 | autopar | low | Auto-par's early-exit gate declines a reduction for a `break`/`continue` that targets a NESTED loop and therefore cannot exit the reduction body at all -- the idiomatic `loop { match cur { Some(n) => ..., None => break } }` list walk never fans out | src/codegen/reduce.rs (expr_has_early_exit / block_has_early_exit) |
 | B-2026-07-30-9 | 2026-07-30 | codegen | low | `println` is not line-atomic across tasks: it emits TWO separate `write_console` calls (payload, then the newline), so two spawned tasks printing concurrently interleave into `12\n\n` instead of `1\n2\n` -- makes tests/spawn_e2e.rs::test_spawn_fan_out_five_tasks_all_join flaky (~1 in 3 on a 4-core container) | src/codegen/control_flow.rs (emit_nul_safe_write: the trailing-newline second write_console call) |
-| B-2026-07-30-10 | 2026-07-30 | typecheck+codegen | low | `Result[T, E].clone()` is still rejected at typecheck (`no method 'clone' on type 'Result'`) after B-2026-07-29-31 gave `Option[T]` a callable one — codegen has no in-place deep-copy helper for Result's inline payload, so admitting it would emit a SHALLOW copy that aliases the source buffer. | src/codegen/clone_drop.rs (emit_option_value_clone_fn), src/typechecker/derives.rs (clone_receiver_self_type) |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | medium | The aggregate field drop glue B-2026-07-29-39 added covers STRUCT FIELDS only: an enum variant's Drop-bearing PAYLOAD, and a by-value aggregate param whose own type declares no Drop, still run no field drop body — so a resource carried in either shape leaks for the program's lifetime. | src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value) |
 
-### Fixed (749)
+### Fixed (750)
 
-<details><summary>749 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>750 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -892,6 +891,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **763 surfaced 
 | B-2026-07-30-3 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` argument passed to a GENERIC `ref Slice[T]` parameter builds and then aborts — SIGTRAP (133) with literal elem… | f0395667 |
 | B-2026-07-30-6 | codegen | high | CRASH (run-vs-build): an `Array[T, N]` REF PARAM forwarded to a `Slice[T]` parameter segfaults under `karac build` while the interpreter is correct | f0395667 |
 | B-2026-07-30-7 | codegen | high | A PLAIN type alias whose base is not `i64`-shaped, used as a parameter or return type, lowers to the `i64` unknown-name fall-through in codegen: `typ… | b528fa2 |
+| B-2026-07-30-10 | typecheck+codegen | low | `Result[T, E].clone()` is still rejected at typecheck (`no method 'clone' on type 'Result'`) after B-2026-07-29-31 gave `Option[T]` a callable one —… | 4b5f811 |
 
 </details>
 
