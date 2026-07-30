@@ -62640,14 +62640,22 @@ fn main() {
         }
     }
 
-    // ── Lean large-N sort (runtime path) ────────────────────────────
+    // ── Large-N sort ────────────────────────────────────────────────
     //
-    // N > 64 routes `sort_by` to the runtime `karac_vec_sort_by`, now a
-    // hand-rolled stable, panic-free merge sort (replaced `slice::sort_by`
-    // to drop the ~262 KiB DWARF symbolizer floor). These exercise that
-    // path for correctness (asc/desc, multiple elem sizes) and stability.
-    // See docs/implementation_checklist/phase-7-codegen.md "Lean large-N
-    // sort entry".
+    // The runtime `karac_vec_sort_by` is a hand-rolled stable, panic-free
+    // merge sort (replaced `slice::sort_by` to drop the ~262 KiB DWARF
+    // symbolizer floor). It is still the path for comparator shapes the
+    // mono gate declines — a capturing closure, a named function, a
+    // closure-typed local, or a non-eligible element type.
+    //
+    // It is NO LONGER selected by length. Until B-2026-07-30-2 a runtime
+    // `len > 64` check sent larger sorts here because the mono path was an
+    // O(N²) insertion sort; the mono path is now a stable O(N log N) merge
+    // sort, so an inline non-capturing comparator inlines at every N. These
+    // cases still exercise the runtime path for correctness (asc/desc,
+    // multiple elem sizes) and stability. See
+    // docs/implementation_checklist/phase-7-codegen.md "Lean large-N sort
+    // entry".
 
     #[test]
     fn test_e2e_large_n_sort_by_ascending() {
@@ -62675,6 +62683,135 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "0");
+        }
+    }
+
+    /// B-2026-07-30-2: an inline non-capturing comparator must monomorphize
+    /// at EVERY length. Before the fix a `len > 64` check sent larger sorts
+    /// to `karac_vec_sort_by`, whose comparator is a function pointer — an
+    /// indirect call per probe that cannot be inlined into the merge. That
+    /// is structurally what C's `qsort` does, and it measured that way:
+    /// kata #1665 at parity with C (17.9 vs 18.4 ms) and ~2x behind Rust
+    /// (9.1 ms), which monomorphizes the comparator into the sort.
+    ///
+    /// Asserts on the IR rather than on timing: for an N well past the old
+    /// threshold, no call to the runtime helper survives.
+    #[test]
+    fn large_n_inline_comparator_emits_no_runtime_sort_call() {
+        let src = r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5000 {
+        v.push((i * 37 + 11) % 5000);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    println(v[0]);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ir = karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect("codegen");
+        let runtime_sort_calls = ir
+            .lines()
+            .filter(|l| l.contains("@karac_vec_sort_by(") && l.contains(" call "))
+            .count();
+        assert_eq!(
+            runtime_sort_calls, 0,
+            "an inline non-capturing comparator must not reach the \
+             function-pointer runtime sort at any N"
+        );
+    }
+
+    /// The mono merge sort must be STABLE — design.md requires an in-place
+    /// stable sort (which is also why heapsort/introsort are not options),
+    /// and the runtime path it replaces takes the left run on a tie. Sorts
+    /// `(key, original_index)` pairs by KEY ONLY; a stable sort leaves the
+    /// original indices ascending inside every equal-key group.
+    ///
+    /// Sizes straddle the insertion-sort base run (32) and the old dispatch
+    /// threshold (64), since those are the boundaries the merge passes and
+    /// the removed length check turned on.
+    #[test]
+    fn test_e2e_mono_sort_by_is_stable_across_the_run_boundaries() {
+        let out = run_program(
+            r#"
+fn stable_violations(n: i64) -> i64 {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        v.push((i % 8, i));
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    let mut bad: i64 = 0;
+    let mut j: i64 = 1;
+    while j < v.len() {
+        if v[j - 1].0 == v[j].0 {
+            if v[j - 1].1 > v[j].1 { bad = bad + 1; }
+        }
+        j = j + 1;
+    }
+    bad
+}
+
+fn main() {
+    println(stable_violations(31));
+    println(stable_violations(32));
+    println(stable_violations(33));
+    println(stable_violations(64));
+    println(stable_violations(65));
+    println(stable_violations(1000));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "0", "0", "0", "0", "0"]);
+        }
+    }
+
+    /// Sortedness at the same boundaries, including the degenerate lengths
+    /// the merge sort short-circuits (0 and 1 never allocate scratch).
+    #[test]
+    fn test_e2e_mono_sort_by_sorted_at_every_boundary() {
+        let out = run_program(
+            r#"
+fn inversions(n: i64) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        v.push((i * 7919) % 1000);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    let mut bad: i64 = 0;
+    let mut j: i64 = 1;
+    while j < v.len() {
+        if v[j - 1] > v[j] { bad = bad + 1; }
+        j = j + 1;
+    }
+    bad
+}
+
+fn main() {
+    println(inversions(0));
+    println(inversions(1));
+    println(inversions(2));
+    println(inversions(33));
+    println(inversions(65));
+    println(inversions(2000));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "0", "0", "0", "0", "0"]);
         }
     }
 

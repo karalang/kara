@@ -5434,22 +5434,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 TypeKind::Path(p) => p.segments.last().cloned(),
                                 _ => None,
                             });
-                        // Emit BOTH the mono fast path AND the runtime
-                        // fallback path. Insertion sort is O(N²), which
-                        // beats the runtime callback's per-compare
-                        // indirect-call cost up to ~N=32–64 but loses
-                        // hard above that (surfaced 2026-05-29 by kata
-                        // 1665's N=50000 workload regressing from 3.2 ms
-                        // to 1.1 s under a strawman mono-only dispatch).
-                        // Runtime length check picks the right path per
-                        // call.
+                        // The mono path is a stable O(N log N) merge sort
+                        // (B-2026-07-30-2), so it is now the ONLY path for
+                        // eligible shapes — no runtime callback, no length
+                        // split. The previous dispatch emitted both and
+                        // branched on `len > 64` because the mono sort was
+                        // insertion sort: correct below the threshold, but
+                        // above it every comparison went through
+                        // `karac_vec_sort_by`'s function pointer, which is
+                        // what put #1665 at parity with C's qsort and ~2x
+                        // behind Rust.
                         let mono_fn = self.emit_sort_by_mono(
-                            params,
-                            body,
-                            elem_ty,
-                            elem_type_name.as_deref(),
-                        )?;
-                        let (thunk_fn, ctx_alloca) = self.emit_sort_by_inline_thunk(
                             params,
                             body,
                             elem_ty,
@@ -5473,35 +5468,6 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_load(i64_t, len_ptr, "len")
                             .unwrap()
                             .into_int_value();
-                        let elem_size = elem_ty.size_of().unwrap();
-
-                        // Threshold: 64 (power of 2; insertion sort
-                        // competitive against the runtime callback's
-                        // ~10 ns/compare overhead up to roughly this N).
-                        // Above 64 the asymptotic O(N²) of insertion sort
-                        // wins by tens of milliseconds even on small
-                        // workloads.
-                        let outer_fn = self.current_fn.unwrap();
-                        let mono_call_bb =
-                            self.context.append_basic_block(outer_fn, "sort_by.mono");
-                        let runtime_call_bb =
-                            self.context.append_basic_block(outer_fn, "sort_by.runtime");
-                        let join_bb = self.context.append_basic_block(outer_fn, "sort_by.join");
-                        let threshold = i64_t.const_int(64, false);
-                        let use_runtime = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::SGT,
-                                len,
-                                threshold,
-                                "sort_by.use_runtime",
-                            )
-                            .unwrap();
-                        self.builder
-                            .build_conditional_branch(use_runtime, runtime_call_bb, mono_call_bb)
-                            .unwrap();
-
-                        self.builder.position_at_end(mono_call_bb);
                         self.builder
                             .build_call(
                                 mono_fn,
@@ -5512,47 +5478,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                 "",
                             )
                             .unwrap();
-                        self.builder.build_unconditional_branch(join_bb).unwrap();
-
-                        self.builder.position_at_end(runtime_call_bb);
-                        let runtime_fn = self
-                            .module
-                            .get_function("karac_vec_sort_by")
-                            .unwrap_or_else(|| {
-                                let void_t = self.context.void_type();
-                                let fn_ty = void_t.fn_type(
-                                    &[
-                                        ptr_ty.into(),
-                                        i64_t.into(),
-                                        i64_t.into(),
-                                        ptr_ty.into(),
-                                        ptr_ty.into(),
-                                    ],
-                                    false,
-                                );
-                                self.module.add_function(
-                                    "karac_vec_sort_by",
-                                    fn_ty,
-                                    Some(Linkage::External),
-                                )
-                            });
-                        let thunk_ptr = thunk_fn.as_global_value().as_pointer_value();
-                        self.builder
-                            .build_call(
-                                runtime_fn,
-                                &[
-                                    BasicMetadataValueEnum::from(data),
-                                    BasicMetadataValueEnum::from(len),
-                                    BasicMetadataValueEnum::from(elem_size),
-                                    BasicMetadataValueEnum::from(thunk_ptr),
-                                    BasicMetadataValueEnum::from(ctx_alloca),
-                                ],
-                                "",
-                            )
-                            .unwrap();
-                        self.builder.build_unconditional_branch(join_bb).unwrap();
-
-                        self.builder.position_at_end(join_bb);
                         return Ok(self.context.i64_type().const_int(0, false).into());
                     }
                 }
@@ -8453,213 +8378,27 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Per-call-site monomorphized sort function for
-    /// `Vec[T].sort_by(inline_closure)`. Signature:
-    /// `void __vec_<elem_mangle>_sort_by_mono_<id>(data: *mut T, len: i64)`
-    /// (Internal linkage). The function body is an insertion sort with the
-    /// user's comparator inlined at the inner compare — no `karac_vec_sort_by`
-    /// callback, LLVM has direct visibility into both the sort algorithm and
-    /// the comparator, so the compare-and-shift loop optimises end-to-end
-    /// (branchless compares, hoisted loads, fused arithmetic).
+    /// Bind the comparator closure's two params to `a_val` / `b_val`, compile
+    /// its body inline, and return the signed `-1 / 0 / +1` comparison.
     ///
-    /// **Element type parameterisation.** `elem_ty` flows through every
-    /// load/store/GEP that touches the data buffer or the closure-param
-    /// slots — Slice 6.1 hardcoded `i64`; Slice 6.4 parameterised over
-    /// any shape `should_use_mono_vec_sort_by_for` accepts (i64 plus
-    /// LLVM struct types whose fields are all integers, i.e. integer
-    /// tuples and `#[derive(Ord)]` integer-field structs). For struct
-    /// elems the loads/stores treat the value as opaque-sized
-    /// `BasicValueEnum`; the closure body's `.0` / `.field_name` access
-    /// goes through `compile_expr`'s existing tuple-/struct-extract path
-    /// when the per-call-site comparator references it.
-    ///
-    /// **Algorithm choice — insertion sort.** Simple (~30 lines of IR
-    /// builder), validated by the kata-16 README's inline-insertion-sort
-    /// A/B experiment that closed 76% of the gap to Rust (96.8 → 70.6 ms at
-    /// N=16). O(N²) is fine for the current corpus (kata 15 / 16 / 56 / 1665
-    /// all run N ≤ 50). A future slice can swap in a PDQ small-sort network
-    /// or call out to a typed `karac_vec_sort_<T>_*` runtime helper when a
-    /// larger-N workload pulls — the gate predicate above is the chokepoint.
-    ///
-    /// **Captures unsupported in this slice.** The caller's free-vars check
-    /// gates entry on `collect_closure_free_vars` returning empty. Closures
-    /// that capture outer scope (e.g. `s.sort_by(|a, b| (a - pivot).cmp(b - pivot))`
-    /// referencing `pivot`) fall through to the existing thunk path. Future
-    /// slice threads captures as extra params or via an env struct mirror.
-    ///
-    /// **Ordering result handling** mirrors `emit_sort_by_inline_thunk` —
-    /// the closure body returns either an `Ordering` struct `{ i64 tag }`
-    /// (for `a.cmp(b)` shapes) or a bare `i64` (for hand-rolled `if a < b
-    /// { -1i64 } else if ...` shapes); we extract the tag in the struct
-    /// case and subtract 1 to get the `-1 / 0 / +1` signed comparator
-    /// value. We then test `> 0` (meaning `a > b`) to decide whether to
-    /// shift `data[jj]` rightward — i.e. the closure controls the sort
-    /// ORDER, not just the value extraction.
-    #[allow(clippy::too_many_lines)]
-    pub(super) fn emit_sort_by_mono(
+    /// The body returns either an `Ordering` struct `{ i64 tag }` (for
+    /// `a.cmp(b)` shapes) or a bare `i64` (hand-rolled `if a < b { -1i64 }
+    /// ...`); we extract the tag in the struct case and subtract 1, since
+    /// `Less / Equal / Greater` tags are assigned in declaration order (see
+    /// `declare_enums`). Factored out of `emit_sort_by_mono` because the
+    /// merge sort compares in two places (the insertion base case and the
+    /// merge) and the two must not drift.
+    fn emit_sort_by_inline_compare(
         &mut self,
+        host_fn: FunctionValue<'ctx>,
         params: &[ClosureParam],
         body: &Expr,
-        elem_ty: BasicTypeEnum<'ctx>,
         elem_type_name: Option<&str>,
-    ) -> Result<FunctionValue<'ctx>, String> {
+        a_val: BasicValueEnum<'ctx>,
+        b_val: BasicValueEnum<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
-        let void_t = self.context.void_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-
-        // 1. Declare per-call-site mono fn. Internal linkage — each call
-        //    site emits a fresh copy (closure body varies per call site, so
-        //    LinkOnceODR would risk silent body-mismatch across TUs sharing
-        //    a counter id). The elem-type token in the name keeps mono
-        //    symbols across different sort_by call sites textually distinct
-        //    when their counter ids overlap across TUs.
-        let id = self.closure_counter;
-        self.closure_counter += 1;
-        let elem_mangle = self.llvm_type_to_mangle_str(elem_ty);
-        let name = format!("__vec_{}_sort_by_mono_{}", elem_mangle, id);
-        let fn_ty = void_t.fn_type(&[ptr_ty.into(), i64_t.into()], false);
-        let sort_fn = self
-            .module
-            .add_function(&name, fn_ty, Some(Linkage::Internal));
-
-        // 2. Save outer codegen state — we're about to compile into a new fn.
-        //    Same save/restore dance as `emit_sort_by_inline_thunk`.
-        let saved_bb = self.builder.get_insert_block();
-        let saved_fn = self.current_fn;
-        let saved_vars = std::mem::take(&mut self.variables);
-        let saved_var_types = std::mem::take(&mut self.var_type_names);
-        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
-        let saved_subst = std::mem::take(&mut self.type_subst);
-        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
-        let saved_pct = self.pending_closure_fn_type.take();
-        // Clear the par-branch cancel pointer for the mono sort body
-        // (B-2026-06-18-10): the comparison call this routine inlines must not
-        // load the enclosing par-branch's `cancel_flag` arg — `%1` here is the
-        // i64 length, not a cancel pointer.
-        let saved_cancel_ptr = self.branch_cancel_ptr.take();
-
-        self.current_fn = Some(sort_fn);
-
-        let data = sort_fn.get_nth_param(0).unwrap().into_pointer_value();
-        let len = sort_fn.get_nth_param(1).unwrap().into_int_value();
-
-        // 3. BB scaffold for insertion sort:
-        //
-        //     entry        → ii = 1; goto outer_chk
-        //     outer_chk    → if ii < len then outer_body else exit
-        //     outer_body   → key = data[ii]; jj = ii - 1; goto inner_chk
-        //     inner_chk    → if jj >= 0 then inner_cmp else inner_done
-        //     inner_cmp    → load data[jj]; compile closure body with
-        //                    a = data[jj], b = key; tag - 1 > 0 ?
-        //                    inner_shift : inner_done
-        //     inner_shift  → data[jj+1] = data[jj]; jj -= 1; goto inner_chk
-        //     inner_done   → data[jj+1] = key; ii += 1; goto outer_chk
-        //     exit         → ret void
-        let entry = self.context.append_basic_block(sort_fn, "entry");
-        let outer_chk = self.context.append_basic_block(sort_fn, "outer.chk");
-        let outer_body = self.context.append_basic_block(sort_fn, "outer.body");
-        let inner_chk = self.context.append_basic_block(sort_fn, "inner.chk");
-        let inner_cmp = self.context.append_basic_block(sort_fn, "inner.cmp");
-        let inner_shift = self.context.append_basic_block(sort_fn, "inner.shift");
-        let inner_done = self.context.append_basic_block(sort_fn, "inner.done");
-        let exit = self.context.append_basic_block(sort_fn, "exit");
-
-        self.builder.position_at_end(entry);
-        let ii_alloca = self.create_entry_alloca(sort_fn, "ii", i64_t.into());
-        let jj_alloca = self.create_entry_alloca(sort_fn, "jj", i64_t.into());
-        // `key` holds an elem-typed value (i64 in Slice 6.1, tuple/struct
-        // in Slice 6.4+) — same stride as the data buffer.
-        let key_alloca = self.create_entry_alloca(sort_fn, "key", elem_ty);
-        let one = i64_t.const_int(1, false);
-        let zero = i64_t.const_zero();
-        self.builder.build_store(ii_alloca, one).unwrap();
-        self.builder.build_unconditional_branch(outer_chk).unwrap();
-
-        // outer_chk: ii < len ?
-        self.builder.position_at_end(outer_chk);
-        let ii_v = self
-            .builder
-            .build_load(i64_t, ii_alloca, "ii.load")
-            .unwrap()
-            .into_int_value();
-        let outer_cond = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, ii_v, len, "outer.cond")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(outer_cond, outer_body, exit)
-            .unwrap();
-
-        // outer_body: key = data[ii]; jj = ii - 1
-        self.builder.position_at_end(outer_body);
-        let ii_v2 = self
-            .builder
-            .build_load(i64_t, ii_alloca, "ii.load2")
-            .unwrap()
-            .into_int_value();
-        // GEP stride is `elem_ty` — for `(i64, i64)` that's 16 bytes per
-        // step, so `data[ii]` lands at the right offset for the elem layout.
-        let key_addr = unsafe {
-            self.builder
-                .build_in_bounds_gep(elem_ty, data, &[ii_v2], "key.addr")
-                .unwrap()
-        };
-        let key_v = self
-            .builder
-            .build_load(elem_ty, key_addr, "key.load")
-            .unwrap();
-        self.builder.build_store(key_alloca, key_v).unwrap();
-        let jj_init = self.builder.build_int_sub(ii_v2, one, "jj.init").unwrap();
-        self.builder.build_store(jj_alloca, jj_init).unwrap();
-        self.builder.build_unconditional_branch(inner_chk).unwrap();
-
-        // inner_chk: jj >= 0 ?
-        self.builder.position_at_end(inner_chk);
-        let jj_v = self
-            .builder
-            .build_load(i64_t, jj_alloca, "jj.load")
-            .unwrap()
-            .into_int_value();
-        let jj_ge_0 = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SGE, jj_v, zero, "jj.ge.0")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(jj_ge_0, inner_cmp, inner_done)
-            .unwrap();
-
-        // inner_cmp: load data[jj]; bind closure params (a = data[jj],
-        // b = key); compile closure body; tag - 1 > 0 means "a > b" →
-        // shift; otherwise done.
-        self.builder.position_at_end(inner_cmp);
-        let jj_v2 = self
-            .builder
-            .build_load(i64_t, jj_alloca, "jj.load2")
-            .unwrap()
-            .into_int_value();
-        let dj_addr = unsafe {
-            self.builder
-                .build_in_bounds_gep(elem_ty, data, &[jj_v2], "dj.addr")
-                .unwrap()
-        };
-        let dj_v = self
-            .builder
-            .build_load(elem_ty, dj_addr, "dj.load")
-            .unwrap();
-        let key_v2 = self
-            .builder
-            .build_load(elem_ty, key_alloca, "key.load2")
-            .unwrap();
-
-        // Bind closure params. param[0] = data[jj] (the "left" side, swept
-        // back through the sorted prefix); param[1] = key (the "right" side,
-        // the freshly-chosen unsorted element being inserted). When the
-        // elem is a named struct, also register `var_type_names` so the
-        // closure body's `.field_name` lookups resolve through the named-
-        // field path (mirrors `emit_sort_by_key_inline_thunk`'s fix at
-        // commit `079f5d7f`; for anonymous tuples elem_type_name is None
-        // and `.0`/`.1` indexing doesn't need the map).
-        let param_vals = [dj_v, key_v2];
+        let param_vals = [a_val, b_val];
         for (i, cp) in params.iter().enumerate().take(2) {
             let val = param_vals[i];
             let param_name = match &cp.pattern.kind {
@@ -8667,7 +8406,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => format!("_cp{}", i),
             };
             let ty = val.get_type();
-            let alloca = self.create_entry_alloca(sort_fn, &param_name, ty);
+            let alloca = self.create_entry_alloca(host_fn, &param_name, ty);
             self.builder.build_store(alloca, val).unwrap();
             self.variables
                 .insert(param_name.clone(), VarSlot { ptr: alloca, ty });
@@ -8675,9 +8414,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.record_var_type_name(param_name, name.to_string());
             }
         }
-
-        // Compile closure body; extract Ordering tag if struct-typed;
-        // compute cmp = tag - 1 (yields -1 / 0 / +1).
         let result = self.compile_expr(body)?;
         let tag = if result.is_struct_value() {
             self.builder
@@ -8687,70 +8423,689 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             result.into_int_value()
         };
-        let cmp_value = self.builder.build_int_sub(tag, one, "cmp").unwrap();
-        let cmp_gt_0 = self
+        Ok(self
             .builder
-            .build_int_compare(inkwell::IntPredicate::SGT, cmp_value, zero, "cmp.gt.0")
+            .build_int_sub(tag, i64_t.const_int(1, false), "cmp")
+            .unwrap())
+    }
+
+    /// Per-call-site monomorphized sort function for
+    /// `Vec[T].sort_by(inline_closure)`. Signature:
+    /// `void __vec_<elem_mangle>_sort_by_mono_<id>(data: *mut T, len: i64)`
+    /// (internal linkage). The user's comparator is inlined at every compare
+    /// — no `karac_vec_sort_by` callback — so LLVM sees through both the sort
+    /// algorithm and the comparison and can optimise them together.
+    ///
+    /// **Algorithm — stable bottom-up merge sort** (B-2026-07-30-2), an IR
+    /// mirror of the runtime's `sort_fixed_width` so both backends order
+    /// equal elements identically: insertion-sort each 32-element run in
+    /// place, then merge adjacent runs of doubling width, ping-ponging
+    /// between the data buffer and one scratch allocation, copying back at
+    /// the end only if an odd number of passes left the live data in
+    /// scratch. The merge takes the LEFT run on a tie (`cmp <= 0`), which is
+    /// what makes it stable — required by design.md ("In-place stable
+    /// sort"), which is also why heapsort/introsort are not options here.
+    ///
+    /// This replaces the Slice 6.1 insertion sort, which was O(N²) and so
+    /// had to be gated behind a runtime `len > 64` check that sent larger
+    /// sorts to the function-pointer runtime path. That gate is what
+    /// B-2026-07-30-2 measured: #1665 at parity with C's `qsort` (17.9 vs
+    /// 18.4 ms) and ~2x behind Rust (9.1 ms), because Rust monomorphizes the
+    /// comparator into the sort and Kāra and C both dispatched indirectly.
+    /// With an O(N log N) mono path the gate is gone and every eligible
+    /// `sort_by` inlines its comparator at all N.
+    ///
+    /// **Element type parameterisation.** `elem_ty` flows through every
+    /// load/store/GEP that touches the data or scratch buffer — i64 plus any
+    /// LLVM struct whose fields are all integers (integer tuples and
+    /// `#[derive(Ord)]` integer-field structs), per
+    /// `should_use_mono_vec_sort_by_for`. Struct elems are moved as opaque
+    /// `BasicValueEnum` loads/stores; the closure body's `.0` /
+    /// `.field_name` access goes through `compile_expr`'s existing extract
+    /// path, which is why `elem_type_name` is threaded in.
+    ///
+    /// **Allocation failure is a no-op sort**, matching the runtime helper:
+    /// a null scratch returns with the buffer untouched rather than
+    /// panicking, keeping this path free of any reachable panic so the
+    /// ~262 KiB DWARF symbolizer stays dead-strippable.
+    ///
+    /// **Captures unsupported.** The caller gates entry on
+    /// `collect_closure_free_vars` being empty; capturing comparators fall
+    /// through to the thunk path.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn emit_sort_by_mono(
+        &mut self,
+        params: &[ClosureParam],
+        body: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_type_name: Option<&str>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        /// Insertion-sort base run length. Matches the runtime's
+        /// `sort_fixed_width::RUN` so the two backends do the same work.
+        const RUN: u64 = 32;
+
+        let i64_t = self.context.i64_type();
+        let void_t = self.context.void_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // Declare per-call-site mono fn. Internal linkage — each call site
+        // emits a fresh copy (the closure body varies per site, so
+        // LinkOnceODR would risk silent body-mismatch across TUs sharing a
+        // counter id). The elem-type token keeps mono symbols textually
+        // distinct when counter ids collide across TUs.
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let elem_mangle = self.llvm_type_to_mangle_str(elem_ty);
+        let name = format!("__vec_{}_sort_by_mono_{}", elem_mangle, id);
+        let fn_ty = void_t.fn_type(&[ptr_ty.into(), i64_t.into()], false);
+        let sort_fn = self
+            .module
+            .add_function(&name, fn_ty, Some(Linkage::Internal));
+
+        // Save outer codegen state — we're about to compile into a new fn.
+        // Same save/restore dance as `emit_sort_by_inline_thunk`.
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        let saved_pct = self.pending_closure_fn_type.take();
+        // Clear the par-branch cancel pointer for the mono sort body
+        // (B-2026-06-18-10): the comparison this routine inlines must not
+        // load the enclosing par-branch's `cancel_flag` arg — `%1` here is
+        // the i64 length, not a cancel pointer.
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+
+        self.current_fn = Some(sort_fn);
+
+        let data = sort_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let len = sort_fn.get_nth_param(1).unwrap().into_int_value();
+
+        let zero = i64_t.const_zero();
+        let one = i64_t.const_int(1, false);
+        let two = i64_t.const_int(2, false);
+        let run_c = i64_t.const_int(RUN, false);
+
+        let entry = self.context.append_basic_block(sort_fn, "entry");
+        let alloc_ok = self.context.append_basic_block(sort_fn, "alloc.ok");
+        // Phase 1 — insertion sort per run.
+        let p1_run_chk = self.context.append_basic_block(sort_fn, "p1.run.chk");
+        let p1_run_body = self.context.append_basic_block(sort_fn, "p1.run.body");
+        let p1_i_chk = self.context.append_basic_block(sort_fn, "p1.i.chk");
+        let p1_i_body = self.context.append_basic_block(sort_fn, "p1.i.body");
+        let p1_j_chk = self.context.append_basic_block(sort_fn, "p1.j.chk");
+        let p1_j_cmp = self.context.append_basic_block(sort_fn, "p1.j.cmp");
+        let p1_j_shift = self.context.append_basic_block(sort_fn, "p1.j.shift");
+        let p1_j_done = self.context.append_basic_block(sort_fn, "p1.j.done");
+        let p1_run_next = self.context.append_basic_block(sort_fn, "p1.run.next");
+        let p1_done = self.context.append_basic_block(sort_fn, "p1.done");
+        // Phase 2 — bottom-up merge.
+        let p2_w_chk = self.context.append_basic_block(sort_fn, "p2.w.chk");
+        let p2_lo_init = self.context.append_basic_block(sort_fn, "p2.lo.init");
+        let p2_lo_chk = self.context.append_basic_block(sort_fn, "p2.lo.chk");
+        let p2_lo_body = self.context.append_basic_block(sort_fn, "p2.lo.body");
+        let p2_m_chk_a = self.context.append_basic_block(sort_fn, "p2.m.chk.a");
+        let p2_m_chk_b = self.context.append_basic_block(sort_fn, "p2.m.chk.b");
+        let p2_m_cmp = self.context.append_basic_block(sort_fn, "p2.m.cmp");
+        let p2_m_take_a = self.context.append_basic_block(sort_fn, "p2.m.take.a");
+        let p2_m_take_b = self.context.append_basic_block(sort_fn, "p2.m.take.b");
+        let p2_da_chk = self.context.append_basic_block(sort_fn, "p2.da.chk");
+        let p2_da_body = self.context.append_basic_block(sort_fn, "p2.da.body");
+        let p2_db_chk = self.context.append_basic_block(sort_fn, "p2.db.chk");
+        let p2_db_body = self.context.append_basic_block(sort_fn, "p2.db.body");
+        let p2_lo_next = self.context.append_basic_block(sort_fn, "p2.lo.next");
+        let p2_w_next = self.context.append_basic_block(sort_fn, "p2.w.next");
+        let p2_done = self.context.append_basic_block(sort_fn, "p2.done");
+        let copy_back = self.context.append_basic_block(sort_fn, "copy.back");
+        let fini = self.context.append_basic_block(sort_fn, "fini");
+        let exit = self.context.append_basic_block(sort_fn, "exit");
+
+        // ── entry: bail on len < 2, allocate the merge scratch buffer ──────
+        self.builder.position_at_end(entry);
+        let start_a = self.create_entry_alloca(sort_fn, "start", i64_t.into());
+        let end_a = self.create_entry_alloca(sort_fn, "end", i64_t.into());
+        let ii_a = self.create_entry_alloca(sort_fn, "ii", i64_t.into());
+        let jj_a = self.create_entry_alloca(sort_fn, "jj", i64_t.into());
+        let hold_a = self.create_entry_alloca(sort_fn, "hold", elem_ty);
+        let width_a = self.create_entry_alloca(sort_fn, "width", i64_t.into());
+        let lo_a = self.create_entry_alloca(sort_fn, "lo", i64_t.into());
+        let mid_a = self.create_entry_alloca(sort_fn, "mid", i64_t.into());
+        let hi_a = self.create_entry_alloca(sort_fn, "hi", i64_t.into());
+        let aa_a = self.create_entry_alloca(sort_fn, "a", i64_t.into());
+        let bb_a = self.create_entry_alloca(sort_fn, "b", i64_t.into());
+        let kk_a = self.create_entry_alloca(sort_fn, "k", i64_t.into());
+        let src_a = self.create_entry_alloca(sort_fn, "src", ptr_ty.into());
+        let dst_a = self.create_entry_alloca(sort_fn, "dst", ptr_ty.into());
+
+        let len_lt_2 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, len, two, "len.lt2")
+            .unwrap();
+        let elem_size = elem_ty.size_of().unwrap();
+        let total_bytes = self
+            .builder
+            .build_int_mul(len, elem_size, "total.bytes")
+            .unwrap();
+        let malloc_fn = {
+            let sym = crate::codegen::driver::c_malloc_symbol();
+            self.module.get_function(sym).unwrap_or_else(|| {
+                let mty = ptr_ty.fn_type(&[i64_t.into()], false);
+                self.module.add_function(sym, mty, Some(Linkage::External))
+            })
+        };
+        // Guard the malloc behind the len check so a zero-length sort never
+        // asks for 0 bytes.
+        let do_alloc = self.context.append_basic_block(sort_fn, "do.alloc");
+        self.builder
+            .build_conditional_branch(len_lt_2, exit, do_alloc)
+            .unwrap();
+        self.builder.position_at_end(do_alloc);
+        let scratch = self
+            .builder
+            .build_call(malloc_fn, &[total_bytes.into()], "scratch")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let scratch_null = self.builder.build_is_null(scratch, "scratch.null").unwrap();
+        // Allocation failure sorts nothing rather than panicking — mirrors
+        // the runtime helper, and keeps this path panic-free.
+        self.builder
+            .build_conditional_branch(scratch_null, exit, alloc_ok)
+            .unwrap();
+
+        self.builder.position_at_end(alloc_ok);
+        self.builder.build_store(start_a, zero).unwrap();
+        self.builder.build_unconditional_branch(p1_run_chk).unwrap();
+
+        // ── Phase 1: insertion-sort each RUN-sized run in place ────────────
+        self.builder.position_at_end(p1_run_chk);
+        let start_v = self
+            .builder
+            .build_load(i64_t, start_a, "start.v")
+            .unwrap()
+            .into_int_value();
+        let run_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, start_v, len, "p1.run.cond")
             .unwrap();
         self.builder
-            .build_conditional_branch(cmp_gt_0, inner_shift, inner_done)
+            .build_conditional_branch(run_cond, p1_run_body, p1_done)
             .unwrap();
 
-        // inner_shift: data[jj+1] = data[jj]; jj -= 1; goto inner_chk
-        self.builder.position_at_end(inner_shift);
+        self.builder.position_at_end(p1_run_body);
+        let start_v1 = self
+            .builder
+            .build_load(i64_t, start_a, "start.v1")
+            .unwrap()
+            .into_int_value();
+        let start_plus_run = self
+            .builder
+            .build_int_add(start_v1, run_c, "start.p.run")
+            .unwrap();
+        let run_fits = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, start_plus_run, len, "run.fits")
+            .unwrap();
+        let end_v = self
+            .builder
+            .build_select(run_fits, start_plus_run, len, "end.v")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(end_a, end_v).unwrap();
+        let ii_init = self
+            .builder
+            .build_int_add(start_v1, one, "ii.init")
+            .unwrap();
+        self.builder.build_store(ii_a, ii_init).unwrap();
+        self.builder.build_unconditional_branch(p1_i_chk).unwrap();
+
+        self.builder.position_at_end(p1_i_chk);
+        let ii_v = self
+            .builder
+            .build_load(i64_t, ii_a, "ii.v")
+            .unwrap()
+            .into_int_value();
+        let end_v1 = self
+            .builder
+            .build_load(i64_t, end_a, "end.v1")
+            .unwrap()
+            .into_int_value();
+        let i_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, ii_v, end_v1, "p1.i.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(i_cond, p1_i_body, p1_run_next)
+            .unwrap();
+
+        // hold = data[ii]; jj = ii
+        self.builder.position_at_end(p1_i_body);
+        let ii_v1 = self
+            .builder
+            .build_load(i64_t, ii_a, "ii.v1")
+            .unwrap()
+            .into_int_value();
+        let hold_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[ii_v1], "hold.addr")
+                .unwrap()
+        };
+        let hold_v = self
+            .builder
+            .build_load(elem_ty, hold_addr, "hold.load")
+            .unwrap();
+        self.builder.build_store(hold_a, hold_v).unwrap();
+        self.builder.build_store(jj_a, ii_v1).unwrap();
+        self.builder.build_unconditional_branch(p1_j_chk).unwrap();
+
+        // jj > start ?
+        self.builder.position_at_end(p1_j_chk);
+        let jj_v = self
+            .builder
+            .build_load(i64_t, jj_a, "jj.v")
+            .unwrap()
+            .into_int_value();
+        let start_v2 = self
+            .builder
+            .build_load(i64_t, start_a, "start.v2")
+            .unwrap()
+            .into_int_value();
+        let j_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, jj_v, start_v2, "p1.j.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(j_cond, p1_j_cmp, p1_j_done)
+            .unwrap();
+
+        // cmp(data[jj-1], hold) > 0 → shift
+        self.builder.position_at_end(p1_j_cmp);
+        let jj_v1 = self
+            .builder
+            .build_load(i64_t, jj_a, "jj.v1")
+            .unwrap()
+            .into_int_value();
+        let jm1 = self.builder.build_int_sub(jj_v1, one, "jj.m1").unwrap();
+        let prev_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[jm1], "prev.addr")
+                .unwrap()
+        };
+        let prev_v = self
+            .builder
+            .build_load(elem_ty, prev_addr, "prev.load")
+            .unwrap();
+        let hold_v1 = self.builder.build_load(elem_ty, hold_a, "hold.v1").unwrap();
+        let c1 = self.emit_sort_by_inline_compare(
+            sort_fn,
+            params,
+            body,
+            elem_type_name,
+            prev_v,
+            hold_v1,
+        )?;
+        let c1_gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, c1, zero, "p1.cmp.gt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(c1_gt, p1_j_shift, p1_j_done)
+            .unwrap();
+
+        // data[jj] = data[jj-1]; jj -= 1
+        self.builder.position_at_end(p1_j_shift);
+        let jj_v2 = self
+            .builder
+            .build_load(i64_t, jj_a, "jj.v2")
+            .unwrap()
+            .into_int_value();
+        let jm1b = self.builder.build_int_sub(jj_v2, one, "jj.m1b").unwrap();
+        let src_e = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[jm1b], "shift.src")
+                .unwrap()
+        };
+        let src_v = self
+            .builder
+            .build_load(elem_ty, src_e, "shift.load")
+            .unwrap();
+        let dst_e = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, data, &[jj_v2], "shift.dst")
+                .unwrap()
+        };
+        self.builder.build_store(dst_e, src_v).unwrap();
+        self.builder.build_store(jj_a, jm1b).unwrap();
+        self.builder.build_unconditional_branch(p1_j_chk).unwrap();
+
+        // data[jj] = hold; ii += 1
+        self.builder.position_at_end(p1_j_done);
         let jj_v3 = self
             .builder
-            .build_load(i64_t, jj_alloca, "jj.load3")
+            .build_load(i64_t, jj_a, "jj.v3")
             .unwrap()
             .into_int_value();
-        let dj_addr2 = unsafe {
+        let hold_v2 = self.builder.build_load(elem_ty, hold_a, "hold.v2").unwrap();
+        let land = unsafe {
             self.builder
-                .build_in_bounds_gep(elem_ty, data, &[jj_v3], "dj.addr2")
+                .build_in_bounds_gep(elem_ty, data, &[jj_v3], "hold.dst")
                 .unwrap()
         };
-        let dj_v2 = self
+        self.builder.build_store(land, hold_v2).unwrap();
+        let ii_v2 = self
             .builder
-            .build_load(elem_ty, dj_addr2, "dj.load2")
-            .unwrap();
-        let jj_p1 = self.builder.build_int_add(jj_v3, one, "jj.p1").unwrap();
-        let dst_addr = unsafe {
-            self.builder
-                .build_in_bounds_gep(elem_ty, data, &[jj_p1], "dst.addr")
-                .unwrap()
-        };
-        self.builder.build_store(dst_addr, dj_v2).unwrap();
-        let jj_m1 = self.builder.build_int_sub(jj_v3, one, "jj.m1").unwrap();
-        self.builder.build_store(jj_alloca, jj_m1).unwrap();
-        self.builder.build_unconditional_branch(inner_chk).unwrap();
+            .build_load(i64_t, ii_a, "ii.v2")
+            .unwrap()
+            .into_int_value();
+        let ii_next = self.builder.build_int_add(ii_v2, one, "ii.next").unwrap();
+        self.builder.build_store(ii_a, ii_next).unwrap();
+        self.builder.build_unconditional_branch(p1_i_chk).unwrap();
 
-        // inner_done: data[jj+1] = key; ii += 1; goto outer_chk
-        self.builder.position_at_end(inner_done);
-        let jj_v4 = self
+        self.builder.position_at_end(p1_run_next);
+        let end_v2 = self
             .builder
-            .build_load(i64_t, jj_alloca, "jj.load4")
+            .build_load(i64_t, end_a, "end.v2")
             .unwrap()
             .into_int_value();
-        let key_v3 = self
+        self.builder.build_store(start_a, end_v2).unwrap();
+        self.builder.build_unconditional_branch(p1_run_chk).unwrap();
+
+        // ── Phase 2: bottom-up merge, ping-ponging data <-> scratch ────────
+        self.builder.position_at_end(p1_done);
+        self.builder.build_store(src_a, data).unwrap();
+        self.builder.build_store(dst_a, scratch).unwrap();
+        self.builder.build_store(width_a, run_c).unwrap();
+        self.builder.build_unconditional_branch(p2_w_chk).unwrap();
+
+        self.builder.position_at_end(p2_w_chk);
+        let w_v = self
             .builder
-            .build_load(elem_ty, key_alloca, "key.load3")
+            .build_load(i64_t, width_a, "w.v")
+            .unwrap()
+            .into_int_value();
+        let w_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, w_v, len, "p2.w.cond")
             .unwrap();
-        let dst2_idx = self.builder.build_int_add(jj_v4, one, "dst2.idx").unwrap();
-        let dst2_addr = unsafe {
+        self.builder
+            .build_conditional_branch(w_cond, p2_lo_init, p2_done)
+            .unwrap();
+
+        self.builder.position_at_end(p2_lo_init);
+        self.builder.build_store(lo_a, zero).unwrap();
+        self.builder.build_unconditional_branch(p2_lo_chk).unwrap();
+
+        self.builder.position_at_end(p2_lo_chk);
+        let lo_v = self
+            .builder
+            .build_load(i64_t, lo_a, "lo.v")
+            .unwrap()
+            .into_int_value();
+        let lo_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, lo_v, len, "p2.lo.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(lo_cond, p2_lo_body, p2_w_next)
+            .unwrap();
+
+        // mid = min(lo + width, len); hi = min(lo + 2*width, len)
+        self.builder.position_at_end(p2_lo_body);
+        let lo_v1 = self
+            .builder
+            .build_load(i64_t, lo_a, "lo.v1")
+            .unwrap()
+            .into_int_value();
+        let w_v1 = self
+            .builder
+            .build_load(i64_t, width_a, "w.v1")
+            .unwrap()
+            .into_int_value();
+        let lo_w = self.builder.build_int_add(lo_v1, w_v1, "lo.w").unwrap();
+        let mid_fits = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, lo_w, len, "mid.fits")
+            .unwrap();
+        let mid_v = self
+            .builder
+            .build_select(mid_fits, lo_w, len, "mid.v")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(mid_a, mid_v).unwrap();
+        let w2 = self.builder.build_int_mul(w_v1, two, "w2").unwrap();
+        let lo_w2 = self.builder.build_int_add(lo_v1, w2, "lo.w2").unwrap();
+        let hi_fits = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, lo_w2, len, "hi.fits")
+            .unwrap();
+        let hi_v = self
+            .builder
+            .build_select(hi_fits, lo_w2, len, "hi.v")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(hi_a, hi_v).unwrap();
+        self.builder.build_store(aa_a, lo_v1).unwrap();
+        self.builder.build_store(bb_a, mid_v).unwrap();
+        self.builder.build_store(kk_a, lo_v1).unwrap();
+        self.builder.build_unconditional_branch(p2_m_chk_a).unwrap();
+
+        // while a < mid && b < hi  (short-circuit via two blocks)
+        self.builder.position_at_end(p2_m_chk_a);
+        let a_v = self
+            .builder
+            .build_load(i64_t, aa_a, "a.v")
+            .unwrap()
+            .into_int_value();
+        let mid_v1 = self
+            .builder
+            .build_load(i64_t, mid_a, "mid.v1")
+            .unwrap()
+            .into_int_value();
+        let a_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, a_v, mid_v1, "a.lt.mid")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(a_lt, p2_m_chk_b, p2_da_chk)
+            .unwrap();
+
+        self.builder.position_at_end(p2_m_chk_b);
+        let b_v = self
+            .builder
+            .build_load(i64_t, bb_a, "b.v")
+            .unwrap()
+            .into_int_value();
+        let hi_v1 = self
+            .builder
+            .build_load(i64_t, hi_a, "hi.v1")
+            .unwrap()
+            .into_int_value();
+        let b_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, b_v, hi_v1, "b.lt.hi")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(b_lt, p2_m_cmp, p2_da_chk)
+            .unwrap();
+
+        // `cmp(src[a], src[b]) <= 0` keeps the left run first on a tie —
+        // this is the stability guarantee.
+        self.builder.position_at_end(p2_m_cmp);
+        let src_p = self
+            .builder
+            .build_load(ptr_ty, src_a, "src.p")
+            .unwrap()
+            .into_pointer_value();
+        let a_v1 = self
+            .builder
+            .build_load(i64_t, aa_a, "a.v1")
+            .unwrap()
+            .into_int_value();
+        let b_v1 = self
+            .builder
+            .build_load(i64_t, bb_a, "b.v1")
+            .unwrap()
+            .into_int_value();
+        let ea_addr = unsafe {
             self.builder
-                .build_in_bounds_gep(elem_ty, data, &[dst2_idx], "dst2.addr")
+                .build_in_bounds_gep(elem_ty, src_p, &[a_v1], "ea.addr")
                 .unwrap()
         };
-        self.builder.build_store(dst2_addr, key_v3).unwrap();
-        let ii_v3 = self
+        let eb_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, src_p, &[b_v1], "eb.addr")
+                .unwrap()
+        };
+        let ea_v = self.builder.build_load(elem_ty, ea_addr, "ea").unwrap();
+        let eb_v = self.builder.build_load(elem_ty, eb_addr, "eb").unwrap();
+        let c2 =
+            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, ea_v, eb_v)?;
+        let take_a = self
             .builder
-            .build_load(i64_t, ii_alloca, "ii.load3")
+            .build_int_compare(inkwell::IntPredicate::SLE, c2, zero, "take.a")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(take_a, p2_m_take_a, p2_m_take_b)
+            .unwrap();
+
+        self.builder.position_at_end(p2_m_take_a);
+        self.emit_merge_take(elem_ty, src_a, dst_a, aa_a, kk_a, ptr_ty, i64_t, one);
+        self.builder.build_unconditional_branch(p2_m_chk_a).unwrap();
+
+        self.builder.position_at_end(p2_m_take_b);
+        self.emit_merge_take(elem_ty, src_a, dst_a, bb_a, kk_a, ptr_ty, i64_t, one);
+        self.builder.build_unconditional_branch(p2_m_chk_a).unwrap();
+
+        // Drain the left run, then the right run.
+        self.builder.position_at_end(p2_da_chk);
+        let a_v2 = self
+            .builder
+            .build_load(i64_t, aa_a, "a.v2")
             .unwrap()
             .into_int_value();
-        let ii_new = self.builder.build_int_add(ii_v3, one, "ii.new").unwrap();
-        self.builder.build_store(ii_alloca, ii_new).unwrap();
-        self.builder.build_unconditional_branch(outer_chk).unwrap();
+        let mid_v2 = self
+            .builder
+            .build_load(i64_t, mid_a, "mid.v2")
+            .unwrap()
+            .into_int_value();
+        let da_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, a_v2, mid_v2, "da.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(da_cond, p2_da_body, p2_db_chk)
+            .unwrap();
 
-        // exit
+        self.builder.position_at_end(p2_da_body);
+        self.emit_merge_take(elem_ty, src_a, dst_a, aa_a, kk_a, ptr_ty, i64_t, one);
+        self.builder.build_unconditional_branch(p2_da_chk).unwrap();
+
+        self.builder.position_at_end(p2_db_chk);
+        let b_v2 = self
+            .builder
+            .build_load(i64_t, bb_a, "b.v2")
+            .unwrap()
+            .into_int_value();
+        let hi_v2 = self
+            .builder
+            .build_load(i64_t, hi_a, "hi.v2")
+            .unwrap()
+            .into_int_value();
+        let db_cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, b_v2, hi_v2, "db.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(db_cond, p2_db_body, p2_lo_next)
+            .unwrap();
+
+        self.builder.position_at_end(p2_db_body);
+        self.emit_merge_take(elem_ty, src_a, dst_a, bb_a, kk_a, ptr_ty, i64_t, one);
+        self.builder.build_unconditional_branch(p2_db_chk).unwrap();
+
+        // lo += 2 * width
+        self.builder.position_at_end(p2_lo_next);
+        let lo_v2 = self
+            .builder
+            .build_load(i64_t, lo_a, "lo.v2")
+            .unwrap()
+            .into_int_value();
+        let w_v2 = self
+            .builder
+            .build_load(i64_t, width_a, "w.v2")
+            .unwrap()
+            .into_int_value();
+        let w2b = self.builder.build_int_mul(w_v2, two, "w2b").unwrap();
+        let lo_next = self.builder.build_int_add(lo_v2, w2b, "lo.next").unwrap();
+        self.builder.build_store(lo_a, lo_next).unwrap();
+        self.builder.build_unconditional_branch(p2_lo_chk).unwrap();
+
+        // swap(src, dst); width *= 2
+        self.builder.position_at_end(p2_w_next);
+        let s_old = self
+            .builder
+            .build_load(ptr_ty, src_a, "s.old")
+            .unwrap()
+            .into_pointer_value();
+        let d_old = self
+            .builder
+            .build_load(ptr_ty, dst_a, "d.old")
+            .unwrap()
+            .into_pointer_value();
+        self.builder.build_store(src_a, d_old).unwrap();
+        self.builder.build_store(dst_a, s_old).unwrap();
+        let w_v3 = self
+            .builder
+            .build_load(i64_t, width_a, "w.v3")
+            .unwrap()
+            .into_int_value();
+        let w_next = self.builder.build_int_mul(w_v3, two, "w.next").unwrap();
+        self.builder.build_store(width_a, w_next).unwrap();
+        self.builder.build_unconditional_branch(p2_w_chk).unwrap();
+
+        // ── An odd number of passes leaves the live data in scratch ────────
+        self.builder.position_at_end(p2_done);
+        let final_src = self
+            .builder
+            .build_load(ptr_ty, src_a, "final.src")
+            .unwrap()
+            .into_pointer_value();
+        let fs_int = self
+            .builder
+            .build_ptr_to_int(final_src, i64_t, "fs.int")
+            .unwrap();
+        let data_int = self
+            .builder
+            .build_ptr_to_int(data, i64_t, "data.int")
+            .unwrap();
+        let needs_copy = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, fs_int, data_int, "needs.copy")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(needs_copy, copy_back, fini)
+            .unwrap();
+
+        self.builder.position_at_end(copy_back);
+        self.builder
+            .build_memcpy(data, 8, final_src, 8, total_bytes)
+            .unwrap();
+        self.builder.build_unconditional_branch(fini).unwrap();
+
+        self.builder.position_at_end(fini);
+        let free_fn = self.module.get_function("free").unwrap_or_else(|| {
+            let free_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function("free", free_ty, Some(Linkage::External))
+        });
+        self.builder
+            .build_call(free_fn, &[scratch.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(exit).unwrap();
+
         self.builder.position_at_end(exit);
         self.builder.build_return(None).unwrap();
 
@@ -8768,6 +9123,58 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Ok(sort_fn)
+    }
+
+    /// One merge step: `dst[k] = src[idx]; idx += 1; k += 1`. Shared by the
+    /// merge proper and both drain loops so the four copy sites cannot drift.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_merge_take(
+        &mut self,
+        elem_ty: BasicTypeEnum<'ctx>,
+        src_a: PointerValue<'ctx>,
+        dst_a: PointerValue<'ctx>,
+        idx_a: PointerValue<'ctx>,
+        k_a: PointerValue<'ctx>,
+        ptr_ty: inkwell::types::PointerType<'ctx>,
+        i64_t: inkwell::types::IntType<'ctx>,
+        one: inkwell::values::IntValue<'ctx>,
+    ) {
+        let src_p = self
+            .builder
+            .build_load(ptr_ty, src_a, "mt.src")
+            .unwrap()
+            .into_pointer_value();
+        let dst_p = self
+            .builder
+            .build_load(ptr_ty, dst_a, "mt.dst")
+            .unwrap()
+            .into_pointer_value();
+        let idx = self
+            .builder
+            .build_load(i64_t, idx_a, "mt.idx")
+            .unwrap()
+            .into_int_value();
+        let k = self
+            .builder
+            .build_load(i64_t, k_a, "mt.k")
+            .unwrap()
+            .into_int_value();
+        let from = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, src_p, &[idx], "mt.from")
+                .unwrap()
+        };
+        let val = self.builder.build_load(elem_ty, from, "mt.val").unwrap();
+        let to = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, dst_p, &[k], "mt.to")
+                .unwrap()
+        };
+        self.builder.build_store(to, val).unwrap();
+        let idx_n = self.builder.build_int_add(idx, one, "mt.idx.n").unwrap();
+        let k_n = self.builder.build_int_add(k, one, "mt.k.n").unwrap();
+        self.builder.build_store(idx_a, idx_n).unwrap();
+        self.builder.build_store(k_a, k_n).unwrap();
     }
 
     /// Emit a per-call-site bridge thunk for `Vec.sort_by`. Signature:
