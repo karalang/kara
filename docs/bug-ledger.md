@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 44 | 0 |
 | perf | 33 | 0 |
 | crash | 30 | 0 |
-| soundness | 26 | 0 |
+| soundness | 27 | 1 |
 | diagnostics | 19 | 0 |
 | use-after-free | 11 | 0 |
 | other | 6 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 536 | 0 |
+| codegen | 537 | 1 |
 | typecheck | 95 | 2 |
 | interp | 75 | 0 |
-| ownership | 29 | 0 |
+| ownership | 30 | 1 |
 | other | 21 | 0 |
 | autopar | 19 | 0 |
 | runtime | 15 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **740 surfaced · 2 open · 731 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **741 surfaced · 3 open · 731 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-29-26 | 2026-07-29 | typecheck | medium | A GENERIC REFINEMENT alias is opaque to its base's operations: `type NonEmpty[T] = Vec[T] where self.len() > 0;` then `for r in rows` binds `r` to `NonEmpty`, so `r.price` fails with `no field 'price' on type 'NonEmpty'`. The same alias WITHOUT the `where` clause iterates correctly. | — |
 | B-2026-07-29-27 | 2026-07-29 | typecheck | high | `#[derive(Clone)]` synthesizes NO callable `.clone()` method: `s.clone()` on a derived struct or enum fails with `no method 'clone' on type 'S'`, while the very same derive DOES satisfy a `T: Clone` bound. Silently accepted, so the attribute reads as working. | — |
+| B-2026-07-29-28 | 2026-07-29 | ownership+codegen | medium | A call's PARAMETER MODES change with syntactic position: a bare (owning) param is CONSUMED in statement position but only BORROWED inside an f-string interpolation. `fn consume(t: Tracked)` (no `ref`, so it owns `t`) called as `let n = consume(t);` runs Tracked's `impl Drop` INSIDE the callee before it returns; written as `let a = f"{consume(t)}";` it does not consume `t` at all — two such calls on one value are accepted by `karac check` and the destructor runs ONCE, at `t`'s last use in the CALLER. So the ownership pass does not enforce the callee's declared mode in that position, and a value the callee declared ownership of outlives it. NOT memory unsafety: exactly one drop, no double-free, nothing poisoned reading the payload under MallocScribble=1 MallocPreScribble=1, and --interp / JIT / `karac build` all agree — the checker and codegen are self-consistent, both treating it as a borrow. The USER-VISIBLE defect is release TIMING: for a value whose purpose is release-on-consume (a lock guard, a file handle, a `Secret`), writing the consuming call inside an f-string silently defers the release from inside the callee to the caller's last-use point, and `karac check` accepts reuse the declared signature forbids. RULED OUT BY PROBE, each of which looked likely first: (1) NOT the print-borrow rule of B-2026-07-02-21 — that gave the print family `ref` argument modes for println's OWN argument and does not reach a nested call's params; the control `println(consume(t)); println(consume(t));` (no f-string) is correctly REJECTED with `value 't' moved here, used again here`, so the interpolation is the entire difference. (2) NOT `Slice` semantics — bare `Slice[T]`/`Vec[T]` params consuming their argument is deliberate design settled in B-2026-07-01-10 (which chose `ref Slice[f64]` on stats.kara over giving `Slice[T]` borrow mode by default); the repro uses a plain user struct, no `Slice` involved. (3) NOT run-vs-build — all three surfaces agree. CALL-FORM MATRIX: of `stmt` (`let _ = f(o);`), `bare` (`f(o);`), `arith` (`f(o) + f(o)`) and `fstring` (`f"{f(o)}"`), only `fstring` is accepted; the callee's return type is irrelevant, and `Array[i64, N]` escapes only because it is `Copy`. ROOT-CAUSE HYPOTHESIS: design.md L4667 (§ String Interpolation) specifies `{expr}` desugars to `expr.to_string()` with `Display.to_string(ref self)` BORROWING the receiver, so 'the same value can appear in multiple {} slots without being consumed' — correct and intended for the interpolated VALUE (`f"{t}"` must not consume `t`). The behaviour here looks like that borrow applied one level too deep: the ownership pass appears to treat the whole interpolated expression as a borrow context rather than borrowing only its result, so it never descends into a nested call's arguments to classify them against the callee's declared modes. | docs/design.md L4667 (§ String Interpolation) |
 
 ### Fixed (731)
 
