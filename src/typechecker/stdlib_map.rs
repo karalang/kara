@@ -26,7 +26,31 @@ impl<'a> super::TypeChecker<'a> {
     /// element type (`expr_method_call.rs`). Resolving `slot` after
     /// unification keeps the assignability check from comparing the
     /// now-stale typevar against the (just-pinned) argument type.
+    /// Key-slot check for the LOOKUP methods — `get`, `get_or`, `contains_key`,
+    /// `remove`. These only COMPARE the key against what the map already holds;
+    /// they never store it. That is not a guess: passing an OWNED key to
+    /// `m.get(k)` leaves `k` live afterwards today, so the borrow is already
+    /// the runtime semantics and only the type check demanded ownership.
+    ///
+    /// So a `ref K` is a legitimate lookup key, and rejecting it forced a
+    /// pointless clone at every call site holding a borrow — `examples/db_pipeline`
+    /// has five, all of the shape `fn f(table: ref String)` then
+    /// `self.tables.get(table)`, which could not be written at all.
+    ///
+    /// `insert` and `entry` deliberately keep [`Self::check_map_slot_arg`]:
+    /// those STORE the key, so they genuinely need ownership.
+    fn check_map_lookup_key_arg(&mut self, slot: &Type, arg: &CallArg) {
+        self.check_map_slot_arg_inner(slot, arg, true);
+    }
+
     fn check_map_slot_arg(&mut self, slot: &Type, arg: &CallArg) {
+        self.check_map_slot_arg_inner(slot, arg, false);
+    }
+
+    /// `allow_borrowed` peels ONE `ref` / `mut ref` level off the argument
+    /// before unification. With it `false` this is byte-identical to the
+    /// original helper, so every value slot behaves exactly as before.
+    fn check_map_slot_arg_inner(&mut self, slot: &Type, arg: &CallArg, allow_borrowed: bool) {
         // Two directions, chosen by whether the slot is already concrete:
         //  * CONCRETE slot (`Map[K, Vec[i64]]` → slot `Vec[i64]`): push it as
         //    the EXPECTED type via `check_expr` so a type-inferred constructor
@@ -39,10 +63,22 @@ impl<'a> super::TypeChecker<'a> {
         //    arg plainly and let the `unify_types` back-propagation below pin the
         //    slot from the arg (this helper's original job).
         let pre_slot = resolve_type_var_top(slot, &self.env.substitutions);
-        let arg_ty = if matches!(pre_slot, Type::TypeVar(_) | Type::TypeParam(_)) {
+        // A borrowed key cannot be pushed through `check_expr` against the
+        // concrete slot — that is precisely the check that rejects `ref String`
+        // against `String` — so infer it plainly and peel below.
+        let arg_ty = if allow_borrowed || matches!(pre_slot, Type::TypeVar(_) | Type::TypeParam(_))
+        {
             self.infer_expr(&arg.value)
         } else {
             self.check_expr(&arg.value, &pre_slot)
+        };
+        let arg_ty = if allow_borrowed {
+            match &arg_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                _ => arg_ty,
+            }
+        } else {
+            arg_ty
         };
         unify_types(
             slot,
@@ -128,13 +164,13 @@ impl<'a> super::TypeChecker<'a> {
             }
             "contains_key" => {
                 for arg in args {
-                    self.check_map_slot_arg(&k, arg);
+                    self.check_map_lookup_key_arg(&k, arg);
                 }
                 Type::Bool
             }
             "get" => {
                 for arg in args {
-                    self.check_map_slot_arg(&k, arg);
+                    self.check_map_lookup_key_arg(&k, arg);
                 }
                 // Re-read V through the substitutions: a sibling `insert`
                 // may have pinned it, and even a lone `get(k)` on a fresh
@@ -147,7 +183,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "get_or" => {
                 if let Some(key_arg) = args.first() {
-                    self.check_map_slot_arg(&k, key_arg);
+                    self.check_map_lookup_key_arg(&k, key_arg);
                 }
                 if let Some(default_arg) = args.get(1) {
                     self.check_map_slot_arg(&v, default_arg);
@@ -169,7 +205,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "remove" => {
                 for arg in args {
-                    self.check_map_slot_arg(&k, arg);
+                    self.check_map_lookup_key_arg(&k, arg);
                 }
                 let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
                 Type::Named {
@@ -567,13 +603,13 @@ impl<'a> super::TypeChecker<'a> {
             }
             "contains_key" => {
                 for arg in args {
-                    self.check_map_slot_arg(&k, arg);
+                    self.check_map_lookup_key_arg(&k, arg);
                 }
                 Type::Bool
             }
             "get" => {
                 for arg in args {
-                    self.check_map_slot_arg(&k, arg);
+                    self.check_map_lookup_key_arg(&k, arg);
                 }
                 // Re-read V through the substitutions: a sibling `insert`
                 // may have pinned it, and even a lone `get(k)` on a fresh
@@ -586,7 +622,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "get_or" => {
                 if let Some(key_arg) = args.first() {
-                    self.check_map_slot_arg(&k, key_arg);
+                    self.check_map_lookup_key_arg(&k, key_arg);
                 }
                 if let Some(default_arg) = args.get(1) {
                     self.check_map_slot_arg(&v, default_arg);
@@ -608,7 +644,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "remove" => {
                 for arg in args {
-                    self.check_map_slot_arg(&k, arg);
+                    self.check_map_lookup_key_arg(&k, arg);
                 }
                 let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
                 Type::Named {

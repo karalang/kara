@@ -34525,3 +34525,63 @@ fn map_literal_types_as_map_not_hashmap() {
          let _ = take(Map[\"k\": 1]); }",
     );
 }
+
+// ── map lookup by borrowed key ──────────────────────────────────
+
+/// `get` / `get_or` / `contains_key` / `remove` only COMPARE the key against
+/// what the map holds — they never store it. Passing an owned key to `m.get(k)`
+/// already leaves `k` live afterwards, so the borrow was the runtime semantics
+/// all along and only the type check demanded ownership. Rejecting a `ref K`
+/// forced a pointless clone at every call site holding a borrow.
+#[test]
+fn map_lookup_accepts_a_borrowed_key() {
+    typecheck_ok(
+        "fn lookup(m: ref Map[String, i64], key: ref String) -> i64 { \
+             if m.contains_key(key) { \
+                 match m.get(key) { Some(v) => v, None => -1 } \
+             } else { m.get_or(key, -2) } \
+         } \
+         fn main() { let mut m: Map[String, i64] = Map.new(); \
+             m.insert(\"a\".to_string(), 7); let k = \"a\".to_string(); \
+             let _ = lookup(m, k); }",
+    );
+    // `remove` is a lookup too — it takes the key to find the entry, not to keep.
+    typecheck_ok(
+        "fn drop_key(m: mut ref Map[String, i64], key: ref String) { m.remove(key); } \
+         fn main() { let mut m: Map[String, i64] = Map.new(); \
+             m.insert(\"a\".to_string(), 1); let k = \"a\".to_string(); \
+             drop_key(mut m, k); }",
+    );
+}
+
+/// An OWNED key must keep working everywhere — the relaxation adds a spelling,
+/// it does not replace one.
+#[test]
+fn map_lookup_still_accepts_an_owned_key() {
+    typecheck_ok(
+        "fn main() { let mut m: Map[String, i64] = Map.new(); \
+             m.insert(\"a\".to_string(), 1); \
+             let k = \"a\".to_string(); \
+             let _ = m.get(k); \
+             let k2 = \"a\".to_string(); \
+             let _ = m.contains_key(k2); }",
+    );
+}
+
+/// `insert` STORES the key, so it must still require ownership. This is the
+/// guard that keeps the relaxation scoped to lookup: if it ever widened to
+/// every key slot, a map could end up holding a borrow.
+#[test]
+fn map_insert_still_requires_an_owned_key() {
+    let errs = typecheck_errors(
+        "fn store(m: mut ref Map[String, i64], key: ref String) { m.insert(key, 1); } \
+         fn main() { let mut m: Map[String, i64] = Map.new(); \
+             let k = \"a\".to_string(); store(mut m, k); }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("expected 'String', found 'ref String'")),
+        "insert must reject a borrowed key, got: {:?}",
+        errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+    );
+}
