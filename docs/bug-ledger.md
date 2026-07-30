@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 102 | 1 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
-| missing-feature | 68 | 0 |
+| missing-feature | 69 | 0 |
 | false-positive | 50 | 0 |
 | run-vs-build | 46 | 0 |
 | perf | 39 | 2 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 553 | 3 |
-| typecheck | 98 | 0 |
+| typecheck | 99 | 0 |
 | interp | 78 | 1 |
 | ownership | 33 | 0 |
 | autopar | 24 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **765 surfaced · 3 open · 754 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **766 surfaced · 3 open · 755 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **765 surfaced 
 | B-2026-07-30-5 | 2026-07-30 | codegen | medium | VecDeque.pop_front is O(n) (memmove per pop), making a DEEP queue drain O(n^2) — real, but NOT the cause of B-2026-07-30-4 | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. SHAPE 2 (owned aggregate temp) fixed in d794aad; Vec/VecDeque ELEMENTS fixed in b55743b, which also taught the NLL channel to carry container bindings at all. Still silent: Map values, tuple elements, Option/Result payloads, enum payloads. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 
-### Fixed (754)
+### Fixed (755)
 
-<details><summary>754 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>755 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -894,6 +894,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **765 surfaced 
 | B-2026-07-30-10 | typecheck+codegen | low | `Result[T, E].clone()` is still rejected at typecheck (`no method 'clone' on type 'Result'`) after B-2026-07-29-31 gave `Option[T]` a callable one —… | 4b5f811 |
 | B-2026-07-30-12 | codegen | medium | A by-value owned-struct arg that the callee RETURNS mishandled its caller temp TWO ways: a fn-call arg (`pass(mk())`) leaked the orphaned buffer, and… | 3ee768a |
 | B-2026-07-30-13 | typecheck | low | An arithmetic mismatch whose wrong operand is an Option/Result was reported as an integer/floating-point mix, naming a float type that appears nowher… | 3981fef |
+| B-2026-07-30-14 | typecheck | high | A MAP LITERAL typed as `HashMap<K, V>` — a name Kāra source cannot write — so it matched no annotation: `let m: Map[String, i64] = Map["x": 1];` fail… | b9995ce |
 
 </details>
 
