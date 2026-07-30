@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 67 | 3 |
 | false-positive | 50 | 0 |
 | run-vs-build | 45 | 0 |
-| perf | 35 | 1 |
+| perf | 36 | 2 |
 | crash | 30 | 0 |
 | soundness | 29 | 2 |
 | diagnostics | 23 | 1 |
@@ -110,23 +110,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 543 | 3 |
+| codegen | 544 | 4 |
 | typecheck | 96 | 3 |
 | interp | 77 | 2 |
 | ownership | 33 | 2 |
 | autopar | 23 | 2 |
 | other | 21 | 0 |
 | cli | 18 | 0 |
-| runtime | 15 | 0 |
+| runtime | 16 | 1 |
 | resolver | 13 | 0 |
 | parser | 6 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **753 surfaced · 8 open · 738 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **754 surfaced · 9 open · 738 fixed** (2026-05-20 → 2026-07-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **753 surfaced 
 | B-2026-07-29-38 | 2026-07-29 | ownership+interp+codegen | high | PREMATURE DROP on move-out: a binding moved into an aggregate literal is dropped AT THE MOVE POINT, because the shared NLL last-use analysis is a purely syntactic free-identifier walk that cannot tell a move from a read. For `TcpListener` this closes the fd before `accept`, hanging the process. | — |
 | B-2026-07-29-39 | 2026-07-29 | ownership+interp+codegen | high | An aggregate NEVER runs its fields' user `impl Drop` when it dies: a struct holding a Drop-implementing value drops nothing at scope exit, so any resource stored in a struct field leaks (fd, handle, buffer) for the program's lifetime. | — |
 | B-2026-07-30-1 | 2026-07-30 | autopar | medium | Auto-par's cross-task-safety gate is TYPE-based, so it declines a reduction whose body allocates an iteration-LOCAL shared value (kata #23, #86 par lanes get zero speedup) | — |
+| B-2026-07-30-2 | 2026-07-30 | codegen+runtime | medium | Vec.sort_by calls the comparator through a function pointer, so sort-bound katas track C's qsort instead of Rust's monomorphized sort (~2x) | — |
 
 ### Fixed (738)
 
