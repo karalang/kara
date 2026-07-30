@@ -1298,21 +1298,113 @@ fn test_query_concurrency_reports_loop_reduction_lowering() {
             stdout.contains(expected),
             "{stem}: expected {expected} in query output; got: {stdout}",
         );
-        // A sequential tabulate must never be labelled parallel, and a
-        // parallel fan-out must declare that codegen still gates it.
+        // A sequential tabulate must never be labelled parallel, and it has no
+        // dispatch to gate.
         if expected.contains("sequential_tabulate") {
             assert!(
                 !stdout.contains("\"lowering\":\"parallel_fanout\""),
                 "{stem}: sequential tabulate reported as parallel; got: {stdout}",
             );
+            assert!(stdout.contains("\"fanned_out\":false"));
             assert!(stdout.contains("\"cost_gate\":\"n/a\""));
         }
+        // B-2026-07-29-33 superseded the `"deferred_to_codegen"` disclaimer this
+        // test originally pinned: `cost_gate` now carries codegen's real verdict
+        // (`fanout` or the declining gate's name), so the only thing to assert
+        // here is that the disclaimer is gone and a definitive answer is
+        // present. The verdict values themselves are pinned by
+        // `test_query_concurrency_reports_fanout_verdict_and_declining_gate`.
         if expected.contains("parallel_fanout") {
             assert!(
-                stdout.contains("\"cost_gate\":\"deferred_to_codegen\""),
-                "{stem}: parallel fan-out must state that codegen gates emission; got: {stdout}",
+                !stdout.contains("\"cost_gate\":\"deferred_to_codegen\""),
+                "{stem}: cost_gate must be a real verdict, not the old disclaimer; got: {stdout}",
+            );
+            assert!(
+                stdout.contains("\"fanned_out\":"),
+                "{stem}: parallel fan-out must report a definitive fanned_out; got: {stdout}",
             );
         }
+    }
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// B-2026-07-29-33: `loop_reductions` reports codegen's ACTUAL fan-out
+/// verdict, not just what the analyzer recognized. The verdict comes from
+/// `par_cost::fanout_verdict` — the same function codegen calls — so the
+/// query cannot drift from the emitted binary.
+///
+/// Pins the two declining gates by name, because "recognized as a reduction"
+/// and "actually fans out" are different answers and conflating them was the
+/// original defect. Both cases below ARE recognized reductions whose binaries
+/// are byte-identical under `KARAC_AUTO_PAR` (verified out-of-band), so a
+/// query claiming `fanned_out: true` for either would be confidently wrong.
+#[test]
+fn test_query_concurrency_reports_fanout_verdict_and_declining_gate() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-fanout-verdict-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // (stem, source, expected fanned_out, expected cost_gate)
+    let cases: [(&str, &str, &str, &str); 3] = [
+        (
+            // Large trip count, substantial body: clears every gate.
+            "fanout",
+            "fn work(v: i64) -> i64 {\n             \x20   let mut a: i64 = v; let mut j: i64 = 0i64;\n             \x20   while j < 40i64 { a = (a * 31i64 + j) % 1000003i64; j = j + 1i64; }\n             \x20   a\n             }\n             fn main() {\n             \x20   let mut sum: i64 = 0i64; let mut k: i64 = 0i64;\n             \x20   while k < 100000i64 { sum = sum + work(k); k = k + 1i64; }\n             \x20   println(sum);\n             }\n",
+            "\"fanned_out\":true",
+            "\"cost_gate\":\"fanout\"",
+        ),
+        (
+            // Trip count 10: total work is far below the dispatch threshold.
+            "small_k",
+            "fn main() {\n             \x20   let mut sum: i64 = 0i64; let mut k: i64 = 0i64;\n             \x20   while k < 10i64 { sum = sum + k * 3i64; k = k + 1i64; }\n             \x20   println(sum);\n             }\n",
+            "\"fanned_out\":false",
+            "\"cost_gate\":\"declined_below_cost_threshold\"",
+        ),
+        (
+            // Index read, no substantial call: memory-bandwidth-bound, so
+            // splitting pays dispatch cost without reducing wall time.
+            "memory_bound",
+            "fn main() {\n             \x20   let n: i64 = 4000000i64;\n             \x20   let mut nums: Vec[i64] = Vec.filled(n, 0i64);\n             \x20   let mut i: i64 = 0i64;\n             \x20   while i < n { nums[i] = (i * 7i64 + 11i64) % 977i64; i = i + 1i64; }\n             \x20   let mut m: i64 = nums[0i64];\n             \x20   let mut j: i64 = 1i64;\n             \x20   while j < n { let x = nums[j]; if x < m { m = x; } j = j + 1i64; }\n             \x20   println(m);\n             }\n",
+            "\"fanned_out\":false",
+            "\"cost_gate\":\"declined_memory_bound\"",
+        ),
+    ];
+
+    for (stem, src, expect_fanned, expect_gate) in cases {
+        let path = tmp.join(format!("{stem}.kara"));
+        std::fs::write(&path, src).unwrap();
+        let target = format!("{}.main", path.to_str().unwrap());
+        let out = karac_bin()
+            .args(["query", "concurrency", &target])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "query failed for {stem}: {}",
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(expect_fanned),
+            "{stem}: expected {expect_fanned}; got: {stdout}",
+        );
+        assert!(
+            stdout.contains(expect_gate),
+            "{stem}: expected {expect_gate}; got: {stdout}",
+        );
+        // The verdict must never be the "could not recover the shape" fallback
+        // for these shapes — that would silently mask a plumbing regression.
+        assert!(
+            !stdout.contains("\"cost_gate\":\"unknown\""),
+            "{stem}: loop shape was not recoverable, so the verdict is a guess; got: {stdout}",
+        );
     }
 
     std::fs::remove_dir_all(&tmp).ok();
@@ -22497,10 +22589,37 @@ fn test_build_debug_info_keeps_symbols_and_dwarf() {
         eprintln!("nm unavailable — skipping");
         return;
     }
+    // B-2026-07-29-34: the fixture must be big enough to LEAVE local symbols
+    // after optimization. The original `fn helper(a, b) { a * b + 1 }` called
+    // as `helper(6, 7)` is inlined and constant-folded at every
+    // `KARAC_OPT_LEVEL >= 1`, so the whole program collapses to a `println` of
+    // a literal and there is no local symbol left for the strip carve-out to
+    // preserve — the assertion below failed against a *correctly working*
+    // compiler. Measured on the old fixture: 53 local `t` symbols at
+    // `KARAC_OPT_LEVEL=0`, **0** at 1/2/3. Do not "simplify" this program back
+    // to a one-liner; the point is that it survives the optimizer at the
+    // default level, which is the level anyone profiling actually uses.
     let path = write_run_temp(
         "debuginfo-symbols",
-        "fn helper(a: i64, b: i64) -> i64 { a * b + 1 }\n\
-         fn main() { println(helper(6, 7)); }\n",
+        "fn collatz_len(start: i64) -> i64 {\n\
+         \x20   let mut n: i64 = start;\n\
+         \x20   let mut steps: i64 = 0i64;\n\
+         \x20   while n > 1i64 {\n\
+         \x20       if n % 2i64 == 0i64 { n = n / 2i64; } else { n = 3i64 * n + 1i64; }\n\
+         \x20       steps = steps + 1i64;\n\
+         \x20   }\n\
+         \x20   steps\n\
+         }\n\
+         fn main() {\n\
+         \x20   let mut best: i64 = 0i64;\n\
+         \x20   let mut i: i64 = 1i64;\n\
+         \x20   while i < 5000i64 {\n\
+         \x20       let s = collatz_len(i);\n\
+         \x20       if s > best { best = s; }\n\
+         \x20       i = i + 1i64;\n\
+         \x20   }\n\
+         \x20   println(best);\n\
+         }\n",
     );
     let dir = path.parent().unwrap();
     let exe = dir.join("prog");
@@ -22516,14 +22635,33 @@ fn test_build_debug_info_keeps_symbols_and_dwarf() {
             })
             .count()
     };
+    // B-2026-07-29-34: the DWARF check must be per-object-format, because the
+    // two formats put debug info in different FILES, not just different
+    // sections.
+    //
+    // ELF: `.debug_*` sections live in the linked executable, so scanning the
+    // file for the section-name string works.
+    //
+    // Mach-O: they do NOT. `ld` leaves DWARF in the `.o` files and writes a
+    // **debug map** into the executable — `N_OSO` stab entries naming each
+    // object — which is how lldb and `dsymutil` find it. `__debug_info`
+    // appears in the executable only after `dsymutil` bundles a `.dSYM`, which
+    // `karac build` does not run. So the original scan-for-`__debug_info`
+    // predicate could never pass on macOS, against a compiler that was
+    // emitting debug info correctly (verified: `nm -pa` shows 2 `OSO` entries
+    // with `KARAC_DEBUG_INFO=1` and 0 without).
     let has_dwarf = |p: &std::path::Path| -> bool {
-        // `nm` does not report sections; read the file and look for the DWARF
-        // section-name strings, which live in the section header string table
-        // on both ELF and Mach-O. Crude but toolchain-independent.
-        let bytes = std::fs::read(p).unwrap_or_default();
-        bytes
-            .windows(11)
-            .any(|w| w == b"debug_info\0" || w == b"__debug_info")
+        if cfg!(target_os = "macos") {
+            let out = Command::new("nm").arg("-pa").arg(p).output().expect("nm");
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|l| l.contains(" OSO "))
+        } else {
+            let bytes = std::fs::read(p).unwrap_or_default();
+            bytes
+                .windows(11)
+                .any(|w| w == b"debug_info\0" || w == b"__debug_info")
+        }
     };
 
     // Default build: stripped — no local symbols, no DWARF.
@@ -22547,7 +22685,7 @@ fn test_build_debug_info_keeps_symbols_and_dwarf() {
     );
     assert!(
         !has_dwarf(&exe),
-        "a DEFAULT build must carry no DWARF (binary-size floor)"
+        "a DEFAULT build must carry no DWARF / debug map (binary-size floor)"
     );
 
     // Debug-info build: symbols and DWARF survive the link.
@@ -22570,7 +22708,7 @@ fn test_build_debug_info_keeps_symbols_and_dwarf() {
     );
     assert!(
         has_dwarf(&exe),
-        "KARAC_DEBUG_INFO=1 must keep the DWARF `.debug_*` sections"
+        "KARAC_DEBUG_INFO=1 must keep DWARF: `.debug_*` sections on ELF, the `N_OSO` debug map on Mach-O"
     );
     let _ = std::fs::remove_dir_all(dir);
 }

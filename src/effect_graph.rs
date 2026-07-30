@@ -17,6 +17,7 @@
 
 use std::fmt::Write as _;
 
+use crate::ast::{Block, Expr, ExprKind, Function, Program, StmtKind};
 use crate::call_graph::CallGraph;
 use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency, SerializationCause};
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectSet};
@@ -218,39 +219,225 @@ pub(crate) fn reorder_opportunities_json(fc: &FunctionConcurrency) -> String {
 ///   rewrite, which is *not* parallel). `LoopReduction::seq` is the
 ///   discriminator; conflating the two is what made a recognized-but-
 ///   sequential loop read as parallelized.
-/// - `cost_gate` — `"deferred_to_codegen"` on a `parallel_fanout` entry.
-///   Recognition and emission are different questions: codegen applies
-///   further memory-bound and cost-model gates (`src/codegen/reduce.rs`)
-///   that can still decline a recognized reduction, and those gates are
-///   not evaluable from the analysis result alone. Reporting recognition
-///   as though it were emission is precisely the misleading answer
-///   B-2026-07-29-29 warns against, so the field says which question was
-///   answered. `"n/a"` on a sequential entry — no dispatch to gate.
+/// - `fanned_out` — the question a caller actually has: does this loop
+///   dispatch across the worker pool in the *emitted binary*? Recognition and
+///   emission are different answers, and reporting the first as the second was
+///   the original defect.
+/// - `cost_gate` — which gate decided. `"fanout"` when the loop dispatches, the
+///   declining gate's name when it does not (`declined_memory_bound`,
+///   `declined_below_cost_threshold`, `declined_variable_k_param_bound`), and
+///   `"n/a"` on a sequential-tabulate entry, which has no dispatch to gate.
+/// - `reason` — the same decision in prose.
 /// - `collect_tabulate` — the exactly-one-unconditional-push shape that
 ///   licenses in-place slot writes (order-preserving).
-pub(crate) fn loop_reductions_json(fc: &FunctionConcurrency) -> String {
+///
+/// The verdict comes from [`crate::par_cost::fanout_verdict`] — the SAME
+/// function codegen calls (B-2026-07-29-33) — so the query cannot drift from
+/// the binary. Before that extraction the gates lived in llvm-gated codegen
+/// and this surface could only disclaim them (`"deferred_to_codegen"`).
+///
+/// When the enclosing function's AST is unavailable, or the loop's shape
+/// cannot be recovered, `cost_gate` is `"unknown"` and `fanned_out` is `false`
+/// rather than a guess.
+///
+/// ## `fanned_out` is a COMPILE-TIME fact, not a runtime one
+///
+/// It means codegen emitted a fan-out dispatch for this loop. It does **not**
+/// promise the loop runs on multiple threads at runtime, and the gap is real
+/// for nested reductions: the runtime caps fan-out depth per thread chain at
+/// `KARAC_PAR_MAX_FORK_DEPTH` (default 1, `karac_par_reduce`), so when an
+/// outer and an inner reduction both clear the gates, both report
+/// `fanned_out: true` while only the OUTERMOST actually forks — every deeper
+/// level runs sequentially inline. That cap is what keeps a recursive
+/// backtracking search from nesting a parallel region per level and
+/// exhausting the stack (B-2026-07-03-14).
+///
+/// So read this field as "the compiler decided to parallelize here", which is
+/// the question the query is for. Whether a *given execution* forks depends on
+/// the depth cap and the runtime's own cost gate, neither of which is a
+/// compile-time property.
+pub(crate) fn loop_reductions_json(
+    fc: &FunctionConcurrency,
+    func: Option<&Function>,
+    program: Option<&Program>,
+) -> String {
     let entries: Vec<String> = fc
         .loop_reductions
         .iter()
         .map(|r| {
-            let (lowering, cost_gate) = if r.seq {
-                ("sequential_tabulate", "n/a")
+            // A `seq` entry is the single-threaded push->in-place-store
+            // rewrite: no dispatch exists, so no gate applies.
+            let (lowering, fanned_out, gate, reason) = if r.seq {
+                ("sequential_tabulate", false, "n/a", "lowered inline, single-threaded")
             } else {
-                ("parallel_fanout", "deferred_to_codegen")
+                match func.and_then(|f| reduction_loop_verdict(f, program, r)) {
+                    Some(v) => (
+                        "parallel_fanout",
+                        v.is_fanout(),
+                        v.tag(),
+                        v.reason(),
+                    ),
+                    None => (
+                        "parallel_fanout",
+                        false,
+                        "unknown",
+                        "loop shape not recoverable from the AST at this site",
+                    ),
+                }
             };
             format!(
-                "{{\"statement\":{},\"loop_line\":{},\"accumulator\":{},\"op\":{},\"lowering\":{},\"collect_tabulate\":{},\"cost_gate\":{}}}",
+                "{{\"statement\":{},\"loop_line\":{},\"accumulator\":{},\"op\":{},\"lowering\":{},\"collect_tabulate\":{},\"fanned_out\":{},\"cost_gate\":{},\"reason\":{}}}",
                 r.stmt_index,
                 r.loop_line,
                 json_string(&r.accumulator),
                 json_string(r.op.symbol()),
                 json_string(lowering),
                 r.collect_tabulate,
-                json_string(cost_gate),
+                fanned_out,
+                json_string(gate),
+                json_string(reason),
             )
         })
         .collect();
     format!("[{}]", entries.join(","))
+}
+
+/// Find the AST of the function a concurrency decision is keyed under.
+///
+/// Mirrors `ConcurrencyChecker::collect_functions`' keying convention exactly:
+/// a free function is keyed by its bare name, an impl method by
+/// `Type.method`. Keeping the two in step matters — a mismatch here silently
+/// degrades the query to `cost_gate: "unknown"` rather than failing loudly.
+pub(crate) fn function_by_decision_key<'a>(
+    program: &'a Program,
+    key: &str,
+) -> Option<&'a Function> {
+    for item in &program.items {
+        match item {
+            crate::ast::Item::Function(f) if f.name == key => return Some(f),
+            crate::ast::Item::ImplBlock(imp) => {
+                let type_name = match &imp.target_type.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                };
+                let Some(type_name) = type_name else { continue };
+                for it in &imp.items {
+                    if let crate::ast::ImplItem::Method(m) = it {
+                        if format!("{type_name}.{}", m.name) == key {
+                            return Some(m);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Locate the loop this `LoopReduction` came from and run the real fan-out
+/// gates over it.
+///
+/// Loops are matched by SOURCE LINE, not by `stmt_index`: the analyzer
+/// recurses into nested blocks, so `stmt_index` is an index within the loop's
+/// own enclosing block and equal indices recur across sibling and nested
+/// blocks. `codegen` keys the same lookup on the `(stmt_index, loop_line)`
+/// pair for exactly this reason.
+fn reduction_loop_verdict(
+    func: &Function,
+    program: Option<&Program>,
+    r: &crate::concurrency::LoopReduction,
+) -> Option<crate::par_cost::FanoutVerdict> {
+    let (parent, idx, loop_expr) = find_loop_by_line(&func.body, r.loop_line)?;
+    let shape = crate::par_cost::extract_loop_shape(parent, idx, loop_expr)?;
+    // The variable-K floor only fires when the trip-count bound references a
+    // parameter of the ENCLOSING function — the reusable-helper shape.
+    let params: Vec<&str> = func.params.iter().filter_map(|p| p.name()).collect();
+    let refs_param = expr_mentions_any_name(&shape.end_expr, &params)
+        || shape
+            .lo_expr
+            .as_ref()
+            .is_some_and(|e| expr_mentions_any_name(e, &params));
+    Some(crate::par_cost::fanout_verdict(
+        &shape.body,
+        &shape.end_expr,
+        shape.lo_expr.as_ref(),
+        program,
+        refs_param,
+    ))
+}
+
+/// Depth-first search for a `for`/`while`/`loop` expression on `line`,
+/// returning its enclosing block and index within it (what
+/// `extract_loop_shape` needs to find a preceding `let mut k = lo;`).
+fn find_loop_by_line(block: &Block, line: usize) -> Option<(&Block, usize, &Expr)> {
+    for (i, stmt) in block.stmts.iter().enumerate() {
+        let StmtKind::Expr(e) = &stmt.kind else {
+            continue;
+        };
+        if matches!(
+            e.kind,
+            ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. }
+        ) {
+            if e.span.line == line {
+                return Some((block, i, e));
+            }
+            // Recurse into the loop body for nested reductions.
+            let inner = match &e.kind {
+                ExprKind::For { body, .. }
+                | ExprKind::While { body, .. }
+                | ExprKind::Loop { body, .. } => Some(body),
+                _ => None,
+            };
+            if let Some(b) = inner {
+                if let Some(hit) = find_loop_by_line(b, line) {
+                    return Some(hit);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether `expr` mentions any of `names` as a bare identifier.
+fn expr_mentions_any_name(expr: &Expr, names: &[&str]) -> bool {
+    let mut found = false;
+    walk_expr_idents(expr, &mut |n| {
+        if names.contains(&n) {
+            found = true;
+        }
+    });
+    found
+}
+
+fn walk_expr_idents(expr: &Expr, f: &mut impl FnMut(&str)) {
+    match &expr.kind {
+        ExprKind::Identifier(n) => f(n),
+        ExprKind::Binary { left, right, .. } => {
+            walk_expr_idents(left, f);
+            walk_expr_idents(right, f);
+        }
+        ExprKind::Unary { operand, .. } => walk_expr_idents(operand, f),
+        ExprKind::Call { callee, args } => {
+            walk_expr_idents(callee, f);
+            for a in args {
+                walk_expr_idents(&a.value, f);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            walk_expr_idents(object, f);
+            for a in args {
+                walk_expr_idents(&a.value, f);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } => walk_expr_idents(object, f),
+        ExprKind::Index { object, index } => {
+            walk_expr_idents(object, f);
+            walk_expr_idents(index, f);
+        }
+        ExprKind::Cast { expr: inner, .. } => walk_expr_idents(inner, f),
+        _ => {}
+    }
 }
 
 /// Build the whole-program effect-graph JSON envelope: effect-annotated
@@ -306,6 +493,7 @@ pub(crate) fn build_concurrency_graph_json(
     analysis: &ConcurrencyAnalysis,
     graph: &CallGraph,
     scope: &str,
+    program: Option<&Program>,
 ) -> String {
     let fn_entries: Vec<String> = graph
         .nodes
@@ -319,7 +507,11 @@ pub(crate) fn build_concurrency_graph_json(
                     fc.total_statements,
                     statement_spans_json(fc, scope),
                     parallel_groups_json(fc),
-                    loop_reductions_json(fc),
+                    loop_reductions_json(
+                        fc,
+                        program.and_then(|p| function_by_decision_key(p, key)),
+                        program,
+                    ),
                     serialization_points_json(fc),
                     reorder_opportunities_json(fc),
                 )
@@ -456,7 +648,12 @@ pub fn cartograph_json(source: &str, scope: &str) -> CartographResult {
     CartographResult {
         ok: true,
         effects_json: build_effect_graph_json(&effects, &graph, scope),
-        concurrency_json: build_concurrency_graph_json(&analysis, &graph, scope),
+        concurrency_json: build_concurrency_graph_json(
+            &analysis,
+            &graph,
+            scope,
+            Some(&parsed.program),
+        ),
         diagnostics,
     }
 }

@@ -10641,7 +10641,14 @@ fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
                 fc.total_statements,
                 crate::effect_graph::statement_spans_json(fc, filename),
                 crate::effect_graph::parallel_groups_json(fc),
-                crate::effect_graph::loop_reductions_json(fc),
+                crate::effect_graph::loop_reductions_json(
+                    fc,
+                    crate::effect_graph::function_by_decision_key(
+                        &pipeline.parsed.program,
+                        function,
+                    ),
+                    Some(&pipeline.parsed.program),
+                ),
                 crate::effect_graph::serialization_points_json(fc),
                 crate::effect_graph::reorder_opportunities_json(fc),
             );
@@ -10667,7 +10674,12 @@ fn query_concurrency_whole_program(
     let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
     println!(
         "{}",
-        crate::effect_graph::build_concurrency_graph_json(analysis, &graph, filename)
+        crate::effect_graph::build_concurrency_graph_json(
+            analysis,
+            &graph,
+            filename,
+            Some(&pipeline.parsed.program),
+        )
     );
 }
 
