@@ -34494,3 +34494,34 @@ fn test_genuine_int_float_mix_still_reported_as_domain_error() {
         );
     }
 }
+
+// ── map literal type identity ───────────────────────────────────
+
+/// A map literal must type as `Map[K, V]` — the name Kāra source can actually
+/// write. It produced `HashMap<K, V>`, which is the RUST representation
+/// (design.md's type-mapping table renders `Map[K, V]` as `HashMap<K, V>`) and
+/// NOT a user-writable type: `let m: HashMap[K, V]` is rejected with
+/// `undefined type 'HashMap'`. So a map literal had a type no annotation could
+/// match, and was usable only where nothing was expected of it.
+#[test]
+fn map_literal_types_as_map_not_hashmap() {
+    // Annotated let.
+    typecheck_ok("fn main() { let m: Map[String, i64] = Map[\"x\": 1]; }");
+    // Struct field — the shape that blocked examples/db_pipeline.
+    typecheck_ok(
+        "struct Holder { row: Map[String, i64] } \
+         fn main() { let h = Holder { row: Map[\"y\": 2] }; }",
+    );
+    // Parameter and return position.
+    typecheck_ok(
+        "fn take(m: Map[String, i64]) -> i64 { m.len() } \
+         fn make() -> Map[String, i64] { Map[\"z\": 3] } \
+         fn main() { let _ = take(make()); }",
+    );
+    // A literal and a `Map.new()` value must be interchangeable.
+    typecheck_ok(
+        "fn take(m: Map[String, i64]) -> i64 { m.len() } \
+         fn main() { let mut a: Map[String, i64] = Map.new(); let _ = take(a); \
+         let _ = take(Map[\"k\": 1]); }",
+    );
+}

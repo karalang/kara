@@ -3977,8 +3977,17 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_assignable(&key_ty, &kt, k.span.clone());
                     self.check_assignable(&val_ty, &vt, v.span.clone());
                 }
+                // `Map`, not `HashMap`. `HashMap` is the RUST representation
+                // (design.md § type mapping: `Map[K, V]` -> `HashMap<K, V>`),
+                // not a name Kāra source can write — `let m: HashMap[K, V]`
+                // is rejected with `undefined type 'HashMap'`. Producing it
+                // here gave a map literal a type no annotation could match, so
+                // `let m: Map[String, i64] = Map["x": 1];` and a literal in a
+                // `Map`-typed struct field both failed with `expected
+                // 'Map<String, i64>', found 'HashMap<String, i64>'`. Every
+                // downstream consumer already matches `"Map" | "HashMap"`.
                 Type::Named {
-                    name: "HashMap".to_string(),
+                    name: "Map".to_string(),
                     args: vec![key_ty, val_ty],
                 }
             }
