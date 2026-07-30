@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 186 | 0 |
+| miscompile | 187 | 1 |
 | leak | 100 | 0 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 34 | 1 |
 | crash | 30 | 0 |
 | soundness | 27 | 0 |
-| diagnostics | 22 | 2 |
+| diagnostics | 23 | 2 |
 | use-after-free | 11 | 0 |
 | other | 6 | 0 |
 
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 539 | 2 |
+| codegen | 540 | 3 |
 | typecheck | 96 | 3 |
 | interp | 75 | 0 |
-| ownership | 30 | 0 |
+| ownership | 31 | 0 |
 | autopar | 22 | 2 |
 | other | 21 | 0 |
 | cli | 18 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **747 surfaced · 7 open · 733 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **749 surfaced · 8 open · 734 fixed** (2026-05-20 → 2026-07-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,13 +134,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **747 surfaced 
 | B-2026-07-29-27 | 2026-07-29 | typecheck | high | `#[derive(Clone)]` synthesizes NO callable `.clone()` method: `s.clone()` on a derived struct or enum fails with `no method 'clone' on type 'S'`, while the very same derive DOES satisfy a `T: Clone` bound. Silently accepted, so the attribute reads as working. | — |
 | B-2026-07-29-30 | 2026-07-29 | autopar | low | `#[par_unordered]` asserts a behaviour that does not occur: it is the required opt-in for Collect loop fan-out, but BOTH Collect paths preserve iteration order exactly today, so the attribute name and its justifying comment describe a reordering hazard that no shipped code path exhibits — discouraging the fastest data-parallel idiom. | — |
 | B-2026-07-29-31 | 2026-07-29 | typecheck | medium | `.clone()` is callable ONLY on the built-in heap/RC types. It is missing on `Option`/`Result` and on EVERY user type — including ones carrying `#[derive(Clone)]` — rejected at TYPECHECK with `no method 'clone' on type '<T>'`. The sharp half: `#[derive(Clone)]` still DISCHARGES a `T: Clone` BOUND (typechecker/derives.rs consults `info.derived_traits.contains("Clone")` for both structs and enums), so a `T: Clone` bound can be REQUIRED and satisfied but never INVOKED — `fn dup[T: Clone](x: T) -> T { x }` type-checks with a `#[derive(Clone)]` struct argument, while changing the body to `x.clone()` is rejected `no method 'clone' on type 'T'`. The bound is decorative. MEASURED SURFACE (all via `karac check`, same verdict under --interp and build): WORKS — String, Vec, Map, Set, VecDeque, SortedMap, SortedSet, Rc/Arc/shared (the `type_supports_clone` allowlist in typechecker/exprs.rs, mirrored by `moved_type_supports_clone` in ownership.rs). REJECTED — `Option[String]`, `Option[i64]` (so not payload-heap-specific), `Result[String, i64]`, a user `struct` with `#[derive(Clone)]`, a user `enum` with `#[derive(Clone)]`, a user `enum` without it, and a `T: Clone`-bounded generic parameter inside the generic body. CONSEQUENCE — the ownership checker's own advice recommends this. A use-after-move diagnostic prints `suggestion: clone '<x>' at the move site (`<x>.clone()`), declare the callee parameter `ref` if it only reads, or restructure` REGARDLESS of whether the type has `clone`; following it on an `Option`/`Result` or a user type yields code that does not typecheck. The MACHINE-APPLICABLE half is safe — `moved_type_supports_clone` gates the `TextEdit` to the built-ins, so `karac fix` will not insert a broken `.clone()` — but the human/LLM-facing sentence is unconditional, which is exactly how this was hit (see detail). | src/typechecker/derives.rs:503, src/typechecker/exprs.rs (type_supports_clone) |
-| B-2026-07-29-32 | 2026-07-29 | codegen | medium | A FRESH-TEMP (non-`let`-bound) `Vec` argument passed to a `Slice[T]` parameter fails LLVM MODULE VERIFICATION under `karac build`, while the tree-walk interpreter runs it correctly — a run-vs-build divergence. `fn first[T](s: Slice[T]) -> T { s[0] }` called as `first(vs.clone())` or `first(make())` aborts with `Module verification failed: "Call parameter type does not match function signature!\n %clone.val = load { ptr, i64, i64 }, ptr %clone.dst, align 8\n { ptr, i64 } %call = call i64 @first({ ptr, i64, i64 } %clone.val)"` — the Vec's 3-word header {ptr, len, cap} is handed to a parameter whose lowered type is the 2-word Slice header {ptr, len}, i.e. the Vec->Slice COERCION that is applied to a place expression is NOT applied to a fresh rvalue. NARROWED (each a separate one-file probe; `karac check` passes on all of them, so this is loud only at build time): FAILS — `first(vs.clone())`, and `first(make())` where `fn make() -> Vec[String]`. PASSES — `let tmp = vs.clone(); first(tmp)` (binding the temp is the workaround), and plain `first(vs)`. IRRELEVANT AXES — element type (`Vec[i64]` fails identically, so not heap-element-specific) and genericity (a concrete `fn first(s: Slice[String]) -> String` fails identically, so it is not monomorphization). The trigger is purely that the argument is a fresh temp rather than a place. RELATED: B-2026-07-06-1 (fixed) was the same fresh-temp-Vec-argument class at a different callee — `Column.from_vec(<temporary Vec[String]>)` unsupported under `karac build`, where the fix was specific to that constructor. This looks like the same hole surviving at the generic Slice-coercion site; worth checking whether -06-1's fix generalizes before writing a new one. | src/codegen (Vec->Slice argument coercion for fresh rvalues) |
+| B-2026-07-29-32 | 2026-07-29 | codegen | medium | A FRESH-TEMP (non-`let`-bound) `Vec` argument passed to a `Slice[T]` parameter fails LLVM MODULE VERIFICATION under `karac build`, while the tree-walk interpreter runs it correctly — a run-vs-build divergence. `fn first[T](s: Slice[T]) -> T { s[0] }` called as `first(vs.clone())` or `first(make())` aborts with `Module verification failed: "Call parameter type does not match function signature!\n %clone.val = load { ptr, i64, i64 }, ptr %clone.dst, align 8\n { ptr, i64 } %call = call i64 @first({ ptr, i64, i64 } %clone.val)"` — the Vec's 3-word header {ptr, len, cap} is handed to a parameter whose lowered type is the 2-word Slice header {ptr, len}, i.e. the Vec->Slice COERCION that is applied to a place expression is NOT applied to a fresh rvalue. NARROWED (each a separate one-file probe; `karac check` passes on all of them, so this is loud only at build time): FAILS — `first(vs.clone())`, and `first(make())` where `fn make() -> Vec[String]`. PASSES — `let tmp = vs.clone(); first(tmp)` (binding the temp is the workaround), and plain `first(vs)`. IRRELEVANT AXES — element type (`Vec[i64]` fails identically, so not heap-element-specific) and genericity (a concrete `fn first(s: Slice[String]) -> String` fails identically, so it is not monomorphization). The trigger is purely that the argument is a fresh temp rather than a place. RELATED: B-2026-07-06-1 (fixed) was the same fresh-temp-Vec-argument class at a different callee — `Column.from_vec(<temporary Vec[String]>)` unsupported under `karac build`, where the fix was specific to that constructor. This looks like the same hole surviving at the generic Slice-coercion site; worth checking whether -06-1's fix generalizes before writing a new one. CORRECTION 2026-07-29 — THE WORKAROUND ABOVE IS NOT SAFE FOR EVERY SHAPE. `let`-binding the temp does dodge THIS bug, but for a GENERIC `fn f[T](s: Slice[T]) -> T` over a HEAP element it lands on B-2026-07-29-35, which returns an EMPTY/garbage value under `karac build` with no diagnostic while the interpreter is correct. So the advice is sound only for a CONCRETE `Slice[<T>]` parameter or a scalar element; for the generic heap case there is currently no safe spelling. FIX PROTOTYPED AND WITHHELD: a `fresh_vec_rvalue_slice_parts` arm in `coerce_to_slice` (src/codegen/expr_ops.rs), modelled on the existing `collection_literal_slice_parts` literal path and reusing `materialize_owned_temp` for the caller-scope free, closes this cleanly for a concrete param (`f(vs.clone())` -> correct) and for scalar elements (`Vec[i64]` -> correct). It was NOT landed: for the generic heap shape it turns this bug's LOUD module-verification abort into B-2026-07-29-35's SILENT wrong answer, and `coerce_to_slice` cannot see the outer callee's return type, so there is no clean place to bail for just that shape. Landing it would trade a failure nobody can ship for one nobody can see. FIX -35 FIRST, then this arm should go in as-is. The gate must stay enumerated (`Call` to a declared-`Vec`-returning named fn, and `<vec>.clone()`) rather than 'any rvalue that compiles to a Vec struct': the slice only borrows, so the path queues a free, and queueing it for a value we do not own (a field read, an index, a `ref`-returning accessor) would be a double-free. | src/codegen (Vec->Slice argument coercion for fresh rvalues) |
 | B-2026-07-29-33 | 2026-07-29 | autopar+cli | low | `query concurrency`'s `loop_reductions` reports the ANALYSIS decision, not codegen's final verdict: a recognized `parallel_fanout` loop can still be declined by codegen's memory-bound and cost-model gates, so the query cannot answer "did this loop actually fan out". | — |
 | B-2026-07-29-34 | 2026-07-29 | codegen+cli | medium | REGRESSION SURFACE: `test_build_debug_info_keeps_symbols_and_dwarf` — the test pinning B-2026-07-27-4 (profiling attribution, marked FIXED at f569aac) is RED on main; cause not yet classified between a code regression and host-toolchain sensitivity. | — |
+| B-2026-07-29-35 | 2026-07-29 | codegen | high | SILENT WRONG OUTPUT (run-vs-build): a GENERIC `fn f[T](s: Slice[T]) -> T` returning a HEAP element yields an EMPTY/garbage value under `karac build` while the tree-walk interpreter is correct — no diagnostic, no crash, just the wrong answer. `fn first[T](s: Slice[T]) -> T { s[0] }` with `let vs: Vec[String] = ["one", "two"]; let tmp: Vec[String] = vs.clone(); println(f"[{first(tmp)}]")` prints `[one]` under --interp and `[]` under build. NARROWED — the axis is the RETURN TYPE being a generic parameter bound to a heap element, combined with how the Vec reached the call: CONCRETE param is always correct (`fn first(s: Slice[String]) -> String` prints `one` for a plain local, a `let`-bound `.clone()`, and an annotated `let`); GENERIC param with a SCALAR element is correct (`Vec[i64]` -> `10`); GENERIC param with a heap element is correct when the argument is the ORIGINAL local (`first(vs)` -> `one`) but WRONG when the argument is a `let` bound to a `.clone()` (`first(tmp)` -> empty), with or without a type annotation on that `let`. NOT the clone: `Vec[String].clone()` and a `Vec[String]`-returning fn are both correct on their own (len and elements read back fine) — the corruption appears only on the way into the `Slice[T]` parameter. RELATED: B-2026-07-03-22 (fixed) was 'a generic `-> T` return whose T is bound from a Slice/container ELEMENT is not resolved to its concrete type'. This looks like a surviving residual of that, for heap elements, on the non-original-local argument path. BLOCKS B-2026-07-29-32: see that entry — a fresh-temp Vec->Slice coercion was prototyped, works for concrete params and scalar elements, and was WITHHELD because for this shape it converts -32's loud build failure into silently wrong output. -32 should not be closed before this is. | src/codegen (generic Slice[T] -> T return, heap element) |
 
-### Fixed (733)
+### Fixed (734)
 
-<details><summary>733 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>734 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -877,6 +878,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **747 surfaced 
 | B-2026-07-29-25 | typecheck | high | An IMPORTED type alias is not expanded to its underlying type: `import types.Row;` where `pub type Row = Map[String, i64]` leaves `Row` nominal, so `… | 0a23cf8+6de8b3b |
 | B-2026-07-29-28 | ownership+codegen | medium | A call's PARAMETER MODES change with syntactic position: a bare (owning) param is CONSUMED in statement position but only BORROWED inside an f-string… | c8bce5d3 |
 | B-2026-07-29-29 | autopar+cli | medium | `karac query concurrency` reports statement-level parallel groups but NOT loop-reduction fan-out, so the Tier-2 decision the entire kata parallel lan… | 6936f1ab |
+| B-2026-07-29-36 | ownership | low | The use-after-move suggestion advised `.clone()` for EVERY type: 'clone 'x' at the move site (`x.clone()`), declare the callee parameter `ref` if it… | 697e6de8 |
 
 </details>
 
