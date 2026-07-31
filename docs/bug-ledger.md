@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 191 | 0 |
-| leak | 104 | 2 |
+| leak | 104 | 1 |
 | codegen-gap | 87 | 1 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 564 | 6 |
+| codegen | 564 | 5 |
 | typecheck | 104 | 0 |
 | interp | 81 | 1 |
 | ownership | 33 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **782 surfaced · 6 open · 768 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **782 surfaced · 5 open · 769 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,11 +135,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **782 surfaced 
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site. Still silent: Map values, Option/Result payloads, non-let tuple positions. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-31-10 | 2026-07-31 | codegen | medium | `body_is_memory_bound` classifies a 7-tap vector CONVOLUTION as memory-bound — it keys on "has an index read and no substantial CALL" and cannot see that the body's work is a runtime-bounded nested LOOP. Narrowly worked around for the indexed-write fan-out (measured 21% of wall time on Prism's Lanczos); the REDUCTION path still carries it. | src/par_cost.rs (body_is_memory_bound / MemoryBoundDetector) |
 | B-2026-07-31-11 | 2026-07-31 | codegen | medium | An early `return` out of a provider body — `with_provider`'s closure OR the `providers { } in { }` block — cannot be compiled: the `karac_provider_pop` is emitted after the body, so a terminator inside the body makes it unreachable. `with_provider` fails with a raw LLVM "Terminator found in the middle of a basic block"; the block form refuses with a diagnostic. Both mean the shape is uncompilable, while `--interp` runs it. | src/codegen/provider.rs (compile_providers_block, compile_with_provider) |
-| B-2026-07-31-12 | 2026-07-31 | codegen | medium | `Json.parse` of a STRING / ARRAY / OBJECT leaks the lifted Kāra-side tree's heap payloads under codegen — one tree per parse, even when the payload is never used. Scalars are clean; the interpreter is clean. A service parsing request bodies accumulates this per request. | src/codegen/json.rs (lift walker allocations), src/codegen/declarations.rs (Json seed drop kinds), match payload binding registration |
 
-### Fixed (768)
+### Fixed (769)
 
-<details><summary>768 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>769 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -911,6 +910,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **782 surfaced 
 | B-2026-07-31-7 | codegen | medium | An UNANNOTATED `let` of an `Option`/`Result` whose payload is heap-BOXED registered no cleanup at all and leaked the whole box, payload heap included… | d5f45d6 |
 | B-2026-07-31-8 | codegen | high | An INVERTED loop range (`for y in 5..3`) makes auto-par's `iter_total` negative, and the descriptor field is `u64` — so a loop that runs ZERO iterati… | db59de2 |
 | B-2026-07-31-9 | codegen | medium | The `providers { R => v } in { body }` BLOCK form emits NOTHING under codegen/JIT — even a read-only `R.get()` — while the interpreter runs it correc… | 74d2b387 |
+| B-2026-07-31-12 | codegen | medium | `Json.parse` of a STRING / ARRAY / OBJECT leaks the lifted Kāra-side tree's heap payloads under codegen — one tree per parse, even when the payload i… | PENDING |
 
 </details>
 

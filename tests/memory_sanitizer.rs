@@ -34143,4 +34143,67 @@ fn main() {
             "ASAN reported a problem in a disjoint-write fan-out worker:\n{out}"
         );
     }
+
+    // B-2026-07-31-12 — `Json.parse` of a string/array/object leaked the
+    // lifted Kāra-side tree: the match-bound `Ok(j)` payload had no drop
+    // registration (the consuming arm zeroes the SOURCE, so `j` was sole
+    // owner and nobody freed it), and `__karac_drop_Json` freed only the
+    // OUTER buffer of an Array/Object anyway. Fixed by (a) the inline-optres
+    // ENUM payload registration in `bind_pattern_values` (the enum sibling of
+    // the B-2026-07-10-3 struct arm) and (b) a recursive `__karac_drop_Json`
+    // walker (json.rs). Unlike the bodies-only Drop tests above, LSan
+    // witnesses this leak DIRECTLY — real malloc'd buffers — so this test is
+    // the permanent gate on both halves, and it equally guards the unsafe
+    // direction: an over-eager registration (double-free of a moved-out
+    // payload) or a walker recursing into a cap-zeroed node trips ASAN, not
+    // just LSan.
+    #[test]
+    fn asan_json_parse_tree_freed_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Deep-nested object: pair keys, element strings, child array,
+        // child object — everything below the first level.
+        match Json.parse("{\"list\":[\"alpha-string-long-enough\",{\"k\":\"nested-value-string\"},[1,2,3]],\"name\":\"outer-name-string-payload\"}") {
+            Result.Ok(j) => {
+                let s = j.stringify();
+                n = n + s.len();
+            }
+            Result.Err(e) => { n = n + 100000; }
+        }
+        // Destructure MOVE-OUT: the arm takes the Vec; the source's walker
+        // must skip the wiped node (no double-free), and the bound Vec's own
+        // cleanup frees the buffer once.
+        match Json.parse("[10, 20]") {
+            Result.Ok(j) => {
+                match j {
+                    Json.Array(xs) => { n = n + xs.len(); }
+                    Json.Null => { n = n + 7; }
+                    Json.Bool(b) => { n = n + 7; }
+                    Json.Number(f) => { n = n + 7; }
+                    Json.Int(v) => { n = n + 7; }
+                    Json.String(s2) => { n = n + s2.len(); }
+                    Json.Object(kv) => { n = n + kv.len(); }
+                }
+            }
+            Result.Err(e) => { n = n + 100000; }
+        }
+        // Unused payload — the registration alone must free it.
+        match Json.parse("\"disposable-string-payload\"") {
+            Result.Ok(j) => { n = n + 1; }
+            Result.Err(e) => { n = n + 100000; }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 108 stringify bytes + 2 + 1 per iteration x 200 = 22200.
+            &["22200"],
+            "json_parse_tree_freed_once",
+        );
+    }
 }

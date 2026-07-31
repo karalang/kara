@@ -819,6 +819,37 @@ impl<'ctx> super::Codegen<'ctx> {
                             {
                                 self.track_struct_var(tn, alloca);
                             }
+                            // B-2026-07-31-12 — the ENUM sibling of the
+                            // B-2026-07-10-3 struct arm above: an
+                            // `Option`/`Result` scrutinee whose INLINE payload
+                            // is a value ENUM bound whole (`match Json.parse(s)
+                            // { Ok(j) => … }`). The consuming-arm suppressor
+                            // zeroes the source's payload words (a `Some(j)` /
+                            // `Ok(j)` binding counts as consuming), so `j` is
+                            // the SOLE owner of the enum's heap — and with no
+                            // registration here nobody freed it: every parse of
+                            // a string/array/object leaked its lifted Kāra tree,
+                            // even unused. `track_enum_var` puts `j` on exactly
+                            // the channel a `let`-bound enum uses, so the whole
+                            // existing move-out suppression set (destructure
+                            // cap-zeroing, tail-return, callee-copy convention)
+                            // composes unchanged. Same word-count gate as the
+                            // struct arm: a heap-BOXED wide payload is owned by
+                            // the box drop and must stay untouched.
+                            let is_inline_optres_enum_payload = self
+                                .pattern_binding_scrutinee_is_option_result
+                                && !self.pattern_binding_scrutinee_is_shared_enum
+                                && !self.struct_types.contains_key(tn)
+                                && self.enum_layouts.get(tn).is_some_and(|l| !l.is_shared)
+                                && !matches!(tn, "Option" | "Result")
+                                && self.enum_layouts.get(tn).is_some_and(|l| {
+                                    Self::llvm_type_word_count(l.llvm_type.into())
+                                        <= self.pattern_binding_scrutinee_optres_area
+                                });
+                            if is_inline_optres_enum_payload {
+                                let tn = tn.to_string();
+                                self.track_enum_var(&tn, alloca);
+                            }
                         }
                     }
                 }

@@ -66,6 +66,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(f) = self.enum_drop_fns.get(enum_name) {
             return Some(*f);
         }
+        // B-2026-07-31-12 — `Json` is SELF-RECURSIVE (an Array payload holds
+        // more Json nodes), which this generic per-variant synthesis cannot
+        // express: its `VecOrString` arm frees only the outer buffer, leaking
+        // everything below the first level. Route to the dedicated recursive
+        // walker (emitted under the same `__karac_drop_Json` name, so every
+        // caller that resolves through here — the `EnumDrop` drain, the
+        // inline-Result payload cleanup, struct enum-field drops — gets it).
+        if enum_name == "Json" {
+            let f = self.emit_json_recursive_drop_fn();
+            self.enum_drop_fns.insert(enum_name.to_string(), f);
+            return Some(f);
+        }
         // Snapshot what we need before mutably borrowing `self.module`
         // / `self.builder`. The layout is reconstituted from
         // `enum_layouts`; we clone the relevant pieces so the loop body

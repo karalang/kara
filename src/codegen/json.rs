@@ -1956,4 +1956,285 @@ impl<'ctx> super::Codegen<'ctx> {
         ]);
         Ok(phi.as_basic_value())
     }
+
+    /// B-2026-07-31-12 — the RECURSIVE Kāra-side drop for `Json`, emitted
+    /// under the standard `__karac_drop_Json` name so every existing caller
+    /// (the `EnumDrop` scope-exit drain, the inline-`Result` payload cleanup,
+    /// struct enum-field drops) picks it up through `emit_enum_drop_switch`'s
+    /// Json special case.
+    ///
+    /// The generic tag-switch synthesis frees only the OUTER buffer of an
+    /// Array / Object payload (`EnumDropKind::VecOrString`), so everything
+    /// below the first level — element Strings, child arrays, pair keys and
+    /// values — leaked: one lifted tree per `Json.parse` of an object, per
+    /// request in a service. `Json` is self-recursive, which the generic
+    /// emitter cannot express; this walker recurses via a direct self-call,
+    /// mirroring `__karac_json_kara_to_ffi`'s element walk (same 32-byte
+    /// `Vec[Json]` stride and 56-byte `(String, Json)` pair stride).
+    ///
+    /// Every free is `cap > 0`-guarded, so a move-out path's cap-zeroing
+    /// (the destructure suppressors write zero over the payload words)
+    /// disarms this walker exactly as it disarmed the generic one — a wiped
+    /// node walks nothing and frees nothing.
+    pub(super) fn emit_json_recursive_drop_fn(&mut self) -> FunctionValue<'ctx> {
+        const FN_NAME: &str = "__karac_drop_Json";
+        if let Some(f) = self.module.get_function(FN_NAME) {
+            return f;
+        }
+        let ctx = self.context;
+        let i8_ty = ctx.i8_type();
+        let i64_ty = ctx.i64_type();
+        let ptr_ty = ctx.ptr_type(AddressSpace::default());
+        // { i64 tag, i64 w0, i64 w1, i64 w2 } — the seeded Json layout.
+        let json_ty = ctx.struct_type(
+            &[i64_ty.into(), i64_ty.into(), i64_ty.into(), i64_ty.into()],
+            false,
+        );
+        let saved_bb = self.builder.get_insert_block();
+
+        let fn_ty = ctx.void_type().fn_type(&[ptr_ty.into()], false);
+        let func = self
+            .module
+            .add_function(FN_NAME, fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = ctx.append_basic_block(func, "entry");
+        let string_bb = ctx.append_basic_block(func, "jd.string");
+        let array_bb = ctx.append_basic_block(func, "jd.array");
+        let arr_head_bb = ctx.append_basic_block(func, "jd.arr.head");
+        let arr_body_bb = ctx.append_basic_block(func, "jd.arr.body");
+        let arr_free_bb = ctx.append_basic_block(func, "jd.arr.free");
+        let object_bb = ctx.append_basic_block(func, "jd.object");
+        let obj_head_bb = ctx.append_basic_block(func, "jd.obj.head");
+        let obj_body_bb = ctx.append_basic_block(func, "jd.obj.body");
+        let obj_key_free_bb = ctx.append_basic_block(func, "jd.obj.key.free");
+        let obj_val_bb = ctx.append_basic_block(func, "jd.obj.val");
+        let obj_free_bb = ctx.append_basic_block(func, "jd.obj.free");
+        let exit_bb = ctx.append_basic_block(func, "jd.exit");
+
+        let p = func.get_nth_param(0).unwrap().into_pointer_value();
+
+        // Shared field loads: w0 = data ptr (as i64), w1 = len, w2 = cap.
+        self.builder.position_at_end(entry_bb);
+        let tag = {
+            let gep = self
+                .builder
+                .build_struct_gep(json_ty, p, 0, "jd.tag.p")
+                .unwrap();
+            self.builder
+                .build_load(i64_ty, gep, "jd.tag")
+                .unwrap()
+                .into_int_value()
+        };
+        let w0 = {
+            let gep = self
+                .builder
+                .build_struct_gep(json_ty, p, 1, "jd.w0.p")
+                .unwrap();
+            self.builder
+                .build_load(i64_ty, gep, "jd.w0")
+                .unwrap()
+                .into_int_value()
+        };
+        let w1 = {
+            let gep = self
+                .builder
+                .build_struct_gep(json_ty, p, 2, "jd.w1.p")
+                .unwrap();
+            self.builder
+                .build_load(i64_ty, gep, "jd.w1")
+                .unwrap()
+                .into_int_value()
+        };
+        let w2 = {
+            let gep = self
+                .builder
+                .build_struct_gep(json_ty, p, 3, "jd.w2.p")
+                .unwrap();
+            self.builder
+                .build_load(i64_ty, gep, "jd.w2")
+                .unwrap()
+                .into_int_value()
+        };
+        let data_ptr = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "jd.data.p")
+            .unwrap();
+        // Owned-heap gate shared by all three heap arms: signed `cap > 0`
+        // (SSO / static / wiped-by-suppressor all read `cap <= 0` and skip).
+        let cap_pos = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, w2, i64_ty.const_zero(), "jd.cap.pos")
+            .unwrap();
+        self.builder
+            .build_switch(
+                tag,
+                exit_bb,
+                &[
+                    (i64_ty.const_int(JSON_TAG_STRING, false), string_bb),
+                    (i64_ty.const_int(JSON_TAG_ARRAY, false), array_bb),
+                    (i64_ty.const_int(JSON_TAG_OBJECT, false), object_bb),
+                ],
+            )
+            .unwrap();
+
+        // ── String: free the byte buffer. ──────────────────────────
+        self.builder.position_at_end(string_bb);
+        let str_free_bb = ctx.append_basic_block(func, "jd.str.free");
+        self.builder
+            .build_conditional_branch(cap_pos, str_free_bb, exit_bb)
+            .unwrap();
+        self.builder.position_at_end(str_free_bb);
+        self.emit_free_buf_call(data_ptr, w2, 1);
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        // ── Array: recurse into each 32-byte element, then free. ───
+        self.builder.position_at_end(array_bb);
+        let idx = self.builder.build_alloca(i64_ty, "jd.arr.i").unwrap();
+        self.builder.build_store(idx, i64_ty.const_zero()).unwrap();
+        self.builder
+            .build_conditional_branch(cap_pos, arr_head_bb, exit_bb)
+            .unwrap();
+        self.builder.position_at_end(arr_head_bb);
+        let i = self
+            .builder
+            .build_load(i64_ty, idx, "jd.arr.i.v")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, i, w1, "jd.arr.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, arr_body_bb, arr_free_bb)
+            .unwrap();
+        self.builder.position_at_end(arr_body_bb);
+        let byte_off = self
+            .builder
+            .build_int_mul(
+                i,
+                i64_ty.const_int(JSON_ELEM_STRIDE_BYTES, false),
+                "jd.arr.off",
+            )
+            .unwrap();
+        let elem_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, data_ptr, &[byte_off], "jd.arr.elem")
+                .unwrap()
+        };
+        self.builder.build_call(func, &[elem_p.into()], "").unwrap();
+        let next = self
+            .builder
+            .build_int_add(i, i64_ty.const_int(1, false), "jd.arr.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder
+            .build_unconditional_branch(arr_head_bb)
+            .unwrap();
+        self.builder.position_at_end(arr_free_bb);
+        self.emit_free_buf_call(data_ptr, w2, JSON_ELEM_STRIDE_BYTES);
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        // ── Object: per 56-byte pair, free the key String's buffer and
+        //    recurse into the value Json, then free the pair buffer. ─
+        self.builder.position_at_end(object_bb);
+        let oidx = self.builder.build_alloca(i64_ty, "jd.obj.i").unwrap();
+        self.builder.build_store(oidx, i64_ty.const_zero()).unwrap();
+        self.builder
+            .build_conditional_branch(cap_pos, obj_head_bb, exit_bb)
+            .unwrap();
+        self.builder.position_at_end(obj_head_bb);
+        let oi = self
+            .builder
+            .build_load(i64_ty, oidx, "jd.obj.i.v")
+            .unwrap()
+            .into_int_value();
+        let omore = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, oi, w1, "jd.obj.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(omore, obj_body_bb, obj_free_bb)
+            .unwrap();
+        self.builder.position_at_end(obj_body_bb);
+        let pair_off = self
+            .builder
+            .build_int_mul(
+                oi,
+                i64_ty.const_int(JSON_OBJECT_PAIR_STRIDE_BYTES, false),
+                "jd.obj.off",
+            )
+            .unwrap();
+        let pair_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, data_ptr, &[pair_off], "jd.obj.pair")
+                .unwrap()
+        };
+        // Key String occupies pair bytes 0..24 as {ptr@0, len@8, cap@16}.
+        let key_cap_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_ty,
+                    pair_p,
+                    &[i64_ty.const_int(16, false)],
+                    "jd.obj.key.cap.p",
+                )
+                .unwrap()
+        };
+        let key_cap = self
+            .builder
+            .build_load(i64_ty, key_cap_p, "jd.obj.key.cap")
+            .unwrap()
+            .into_int_value();
+        let key_cap_pos = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SGT,
+                key_cap,
+                i64_ty.const_zero(),
+                "jd.obj.key.pos",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(key_cap_pos, obj_key_free_bb, obj_val_bb)
+            .unwrap();
+        self.builder.position_at_end(obj_key_free_bb);
+        let key_data = self
+            .builder
+            .build_load(ptr_ty, pair_p, "jd.obj.key.data")
+            .unwrap()
+            .into_pointer_value();
+        self.emit_free_buf_call(key_data, key_cap, 1);
+        self.builder.build_unconditional_branch(obj_val_bb).unwrap();
+        self.builder.position_at_end(obj_val_bb);
+        // Value Json at pair offset 24 — recurse.
+        let val_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_ty,
+                    pair_p,
+                    &[i64_ty.const_int(24, false)],
+                    "jd.obj.val.p",
+                )
+                .unwrap()
+        };
+        self.builder.build_call(func, &[val_p.into()], "").unwrap();
+        let onext = self
+            .builder
+            .build_int_add(oi, i64_ty.const_int(1, false), "jd.obj.next")
+            .unwrap();
+        self.builder.build_store(oidx, onext).unwrap();
+        self.builder
+            .build_unconditional_branch(obj_head_bb)
+            .unwrap();
+        self.builder.position_at_end(obj_free_bb);
+        self.emit_free_buf_call(data_ptr, w2, JSON_OBJECT_PAIR_STRIDE_BYTES);
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        func
+    }
 }
