@@ -489,6 +489,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // free would otherwise double-free against the binding.
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
+                    // B-2026-07-30-11 (Option/Result leg): bodies retraction
+                    // beside the memory suppressions — see the fn's doc.
+                    self.suppress_optres_payload_bodies_for_match(scrutinee, &arm.pattern);
                     // Fresh-temp inline `Result` scrutinee (B-2026-07-12-2 gap
                     // 2): suppress the source's payload free on a CONSUMING arm so
                     // the binding / consumer owns the buffer — UNLESS the arm only
@@ -5601,6 +5604,45 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self
             .builder
             .build_store(slot.ptr, layout.llvm_type.const_zero());
+    }
+
+    /// B-2026-07-30-11 (Option/Result leg) — retract a named `Option`/`Result`
+    /// binding's payload-BODIES action (`__karac_dropelems_opt_*` /
+    /// `__karac_dropelems_res_*`) when a `match`/`if let` arm binds the
+    /// payload out. The arm's binding owns the resource from then on; without
+    /// the retraction the source's walk runs the body a second time — over
+    /// data the memory-side tag-zero/cap-zero suppressors have already
+    /// cleared. SHAPE-gated only (a `Some`/`Ok`/`Err` pattern whose payload
+    /// position consumes): the retraction is a no-op for a binding that
+    /// registered no walker, and the interpreter's twin
+    /// (`pattern_consumes_user_drop_payload`'s Option/Result arm) uses the
+    /// identical shape rule, so the two backends disarm the same cases.
+    /// Static like every compile-time retraction here: one consuming arm
+    /// disarms every path, and a non-taken arm's residual is a leak — the
+    /// safe side.
+    pub(super) fn suppress_optres_payload_bodies_for_match(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let name = match &scrutinee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if !matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        ) {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        self.suppress_container_elem_bodies_for_var(&name);
     }
 
     /// `Option[Map]`/`Option[Set]` sibling of

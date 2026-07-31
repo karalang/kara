@@ -5557,6 +5557,202 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-07-30-11 (Option/Result leg) — `__karac_dropelems_opt_<T>` /
+    /// `__karac_dropelems_res_<O>_<E>`: a tag-guarded BODY-ONLY walk over a
+    /// let-bound `Option[P]` / `Result[O, E]`'s live payload. `Option` and
+    /// `Result` never go through `enum_layouts`-driven `__karac_drop_<E>`
+    /// synthesis, so the enum-leg walker above cannot reach them; their
+    /// payload memory is owned by the untouched `FreeInlineOptionPayload` /
+    /// `FreeInlineResultPayload` / `BoxedEnumDrop` actions and this fn frees
+    /// NOTHING — it calls `<P>.drop` + the field-bodies walk and returns,
+    /// so it cannot double-free by construction.
+    ///
+    /// Addressing mirrors `emit_option_drop_fn` / `emit_result_drop_fn`
+    /// exactly: tag at field 0, payload area at field 1, and a payload wider
+    /// than the inline area (> 3 words for Option, > 5 for Result — the
+    /// `coerce_to_payload_words` spill thresholds) is heap-BOXED with the box
+    /// pointer in w0, null-guarded like the `BoxedEnumDrop` arm.
+    ///
+    /// The gate is name-resolution-driven on BOTH backends, which is what
+    /// makes it mirrorable (the open design question in the ledger entry): a
+    /// payload whose head is a bare generic param resolves to no struct here
+    /// and to no `StructDef` in the interpreter, so both sides skip it and
+    /// the erased-generic residual is a shared leak — the safe direction.
+    pub(super) fn emit_optres_payload_user_drop_bodies_fn(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let head = p.segments.last()?.as_str();
+        let args = p.generic_args.as_ref()?;
+        // (tag, payload te, boxing threshold) per Drop-carrying payload arm.
+        let (fn_name, layout_key, arms): (String, &str, Vec<(u64, TypeExpr, usize)>) = match head {
+            "Option" => {
+                let crate::ast::GenericArg::Type(pt) = args.first()? else {
+                    return None;
+                };
+                let layout = self.enum_layouts.get("Option")?;
+                let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+                (
+                    format!("__karac_dropelems_opt_{}", Self::display_mangle_te(pt)),
+                    "Option",
+                    vec![(some_tag, pt.clone(), 3)],
+                )
+            }
+            "Result" => {
+                let mut it = args.iter();
+                let crate::ast::GenericArg::Type(ok_te) = it.next()? else {
+                    return None;
+                };
+                let crate::ast::GenericArg::Type(err_te) = it.next()? else {
+                    return None;
+                };
+                let layout = self.enum_layouts.get("Result")?;
+                let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+                let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+                (
+                    format!(
+                        "__karac_dropelems_res_{}_{}",
+                        Self::display_mangle_te(ok_te),
+                        Self::display_mangle_te(err_te)
+                    ),
+                    "Result",
+                    vec![(ok_tag, ok_te.clone(), 5), (err_tag, err_te.clone(), 5)],
+                )
+            }
+            _ => return None,
+        };
+        // Keep only payload arms whose type is a non-shared user struct that
+        // runs a user drop (own body or a Drop-bearing field).
+        let targets: Vec<(u64, String, TypeExpr, usize)> = arms
+            .into_iter()
+            .filter_map(|(tag, pte, thresh)| {
+                let TypeKind::Path(pp) = &pte.kind else {
+                    return None;
+                };
+                let sname = pp.segments.first()?.clone();
+                if self.shared_types.contains_key(&sname)
+                    || !self.struct_types.contains_key(&sname)
+                    || !self.type_runs_user_drop(&sname, &mut Vec::new())
+                {
+                    return None;
+                }
+                Some((tag, sname, pte, thresh))
+            })
+            .collect();
+        if targets.is_empty() {
+            return None;
+        }
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let layout_ty = self.enum_layouts.get(layout_key)?.llvm_type;
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let saved = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        let exit = self.context.append_basic_block(walker, "exit");
+        self.builder.position_at_end(entry);
+        let p_arg = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(layout_ty, p_arg, 0, "or.tag.p")
+            .unwrap();
+        let tag_val = self
+            .builder
+            .build_load(i64_t, tag_ptr, "or.tag")
+            .unwrap()
+            .into_int_value();
+
+        let mut switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let case_bbs: Vec<(BasicBlock<'ctx>, String, TypeExpr, usize)> = targets
+            .into_iter()
+            .map(|(tag, sname, pte, thresh)| {
+                let bb = self
+                    .context
+                    .append_basic_block(walker, &format!("or.t{tag}"));
+                switch_cases.push((i64_t.const_int(tag, false), bb));
+                (bb, sname, pte, thresh)
+            })
+            .collect();
+        self.builder
+            .build_switch(tag_val, exit, &switch_cases)
+            .unwrap();
+
+        for (bb, sname, pte, thresh) in case_bbs {
+            self.builder.position_at_end(bb);
+            let payload_base = self
+                .builder
+                .build_struct_gep(layout_ty, p_arg, 1, "or.payload.p")
+                .unwrap();
+            let words = Self::llvm_type_word_count(self.llvm_type_for_type_expr(&pte));
+            let target_ptr = if words > thresh {
+                // Boxed payload: w0 is the box pointer; a null box (payload
+                // already moved out / never packed) runs nothing.
+                let w0 = self
+                    .builder
+                    .build_load(i64_t, payload_base, "or.box.w0")
+                    .unwrap()
+                    .into_int_value();
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, "or.box.p")
+                    .unwrap();
+                let is_null = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        box_ptr,
+                        ptr_ty.const_null(),
+                        "or.box.isnull",
+                    )
+                    .unwrap();
+                let body_bb = self.context.append_basic_block(walker, "or.box.body");
+                self.builder
+                    .build_conditional_branch(is_null, exit, body_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                box_ptr
+            } else {
+                payload_base
+            };
+            let owns_body = self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(&sname));
+            if owns_body {
+                if let Some(f) = self.module.get_function(&format!("{sname}.drop")) {
+                    self.builder
+                        .build_call(f, &[target_ptr.into()], "")
+                        .unwrap();
+                }
+            }
+            if let Some(f) =
+                self.emit_user_drop_field_bodies_fn(&sname, &std::collections::HashMap::new())
+            {
+                self.builder
+                    .build_call(f, &[target_ptr.into()], "")
+                    .unwrap();
+            }
+            self.builder.build_unconditional_branch(exit).unwrap();
+        }
+
+        self.builder.position_at_end(exit);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
         if let Some(f) = self.user_drop_wrapper_fns.get(type_name) {
             return Some(*f);

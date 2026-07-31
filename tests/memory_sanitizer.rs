@@ -33979,6 +33979,79 @@ fn main() {
         );
     }
 
+    // B-2026-07-30-11 (Option/Result leg) — payload bodies for let-bound
+    // `Option`/`Result` bindings, plus the match / consuming-combinator /
+    // ctor-arg disarms.
+    //
+    // Same unsafe-direction guard as the enum leg: the bodies walk frees
+    // nothing (payload memory stays with `FreeInline*` / `BoxedEnumDrop`), so
+    // LSan cannot witness the fix landing — what this catches is an
+    // OVER-fire (the body reading a moved-out payload's wiped words, or the
+    // boxed case reading through a freed box) and any DOUBLE-free the walk
+    // could introduce beside the existing frees. The BOXED shape is the
+    // load-bearing one here: `Full { name, buf }` exceeds the inline word
+    // budget, so the walk goes through the box pointer, null-guarded — a
+    // stale box would be a use-after-free ASAN aborts on. The `self.buf[0]`
+    // read keeps the element allocations live (the Vec-leg vacuity lesson).
+    #[test]
+    fn asan_optres_payload_user_drop_bodies_fire_once() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+impl Drop for Full {
+    fn drop(mut ref self) {
+        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        self.buf.clear();
+    }
+}
+
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+
+fn opt(i: i64) -> Option[Full] {
+    return Option.Some(mk(i));
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Boxed payload held to the binding's end — the body fires through
+        // the box at the NLL point; the box + payload heap free exactly once.
+        let a = opt(i);
+        n = n + 1i64;
+
+        // Result Ok side, annotated ctor let.
+        let b: Result[Full, i64] = Ok(mk(i));
+        n = n + 1i64;
+
+        // Payload moved out by a match arm — the source walk must not read
+        // the moved-from slot.
+        let c = opt(i);
+        match c {
+            Some(r) => { n = n + 1i64; }
+            None => { n = n + 100i64; }
+        }
+
+        // Consuming combinator — the result binding owns the payload; the
+        // source walk must not fire over the moved-from slot.
+        let d = opt(i);
+        let r2 = d.unwrap();
+        n = n + 1i64;
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 4 per iteration x 200 = 800.
+            &["800"],
+            "optres_payload_user_drop_bodies_fire_once",
+        );
+    }
+
     // B-2026-07-31-7 — an UNANNOTATED `let` of an `Option`/`Result` whose
     // payload is heap-BOXED registered no cleanup at all and leaked the whole
     // box, payload heap included.

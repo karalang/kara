@@ -2386,6 +2386,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "or_else"
                 | "filter"
         ) {
+            // B-2026-07-30-11 (Option/Result leg) — a CONSUMING combinator on
+            // a named Option/Result binding moves the payload out (`let r =
+            // a.unwrap();`): the result's owner runs the payload's Drop body,
+            // so the source binding's `__karac_dropelems_*` walk must be
+            // retracted or the body prints twice. Prefix-keyed, so a binding
+            // that registered no walk is a no-op; the `is_*` probes are
+            // excluded (reads, not moves), as is `get_or_insert` (in-place
+            // mutation — the receiver retains ownership). Interp twin: the
+            // same method list in `try_eval_option_result_method`.
+            if !matches!(
+                method,
+                "is_some" | "is_none" | "is_ok" | "is_err" | "get_or_insert"
+            ) {
+                if let ExprKind::Identifier(recv) = &object.kind {
+                    let recv = recv.clone();
+                    self.suppress_container_elem_bodies_for_var(&recv);
+                }
+            }
             if let Some(value) = self.try_compile_option_result_method(
                 object,
                 method,

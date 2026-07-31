@@ -44,6 +44,43 @@ impl<'a> super::Interpreter<'a> {
                 return None;
             }
         }
+        // B-2026-07-30-11 (Option/Result leg) — a CONSUMING combinator on a
+        // named Option/Result binding moves the payload out; silence the
+        // source's payload-bodies walk (the result's owner runs the body).
+        // Same method list as codegen's twin at the `try_compile_option_
+        // result_method` dispatch: the `is_*` probes and `get_or_insert`
+        // (in-place) are excluded.
+        if matches!(
+            obj,
+            Value::EnumVariant { enum_name, .. } if enum_name == "Option" || enum_name == "Result"
+        ) && matches!(
+            method,
+            "unwrap"
+                | "expect"
+                | "unwrap_or"
+                | "unwrap_err"
+                | "expect_err"
+                | "map"
+                | "ok"
+                | "err"
+                | "or"
+                | "and"
+                | "ok_or"
+                | "flatten"
+                | "take"
+                | "unwrap_or_else"
+                | "map_or"
+                | "map_or_else"
+                | "map_err"
+                | "and_then"
+                | "or_else"
+                | "filter"
+        ) {
+            if let ExprKind::Identifier(recv) = &object.kind {
+                self.moved_out_container_bodies_bindings
+                    .insert(recv.clone());
+            }
+        }
         match method {
             "unwrap" => {
                 return Some(match obj {

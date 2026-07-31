@@ -1806,6 +1806,34 @@ impl<'ctx> super::Codegen<'ctx> {
     #[allow(dead_code)]
     pub(super) fn emit_drop_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
         let type_name = Self::display_mangle_te(te);
+        // B-2026-07-30-11 (Option/Result leg) — a bare user STRUCT with its
+        // own `impl Drop` must resolve to the MEMORY-ONLY synthesis here,
+        // never through the module-name lookup below: the user-drop WRAPPER
+        // is named exactly `karac_drop_<T>` too, so once any binding of `T`
+        // emitted it, this resolver — which every memory-side channel
+        // (`FreeInlineResultPayload`'s struct-drop arm, boxed-payload inner
+        // drops, element drains) funnels through — silently returned
+        // body + fields + memory instead of memory, and the user body ran a
+        // second time at scope exit over the moved-from slot. Bodies live on
+        // the NLL `UserDrop` channel; this family frees memory.
+        if let TypeKind::Path(p) = &te.kind {
+            if let [single] = p.segments.as_slice() {
+                if p.generic_args.is_none()
+                    && !self.shared_types.contains_key(single.as_str())
+                    && self.struct_types.contains_key(single.as_str())
+                    && self
+                        .program_snapshot
+                        .as_deref()
+                        .is_some_and(|prog| prog.drop_method_keys.contains_key(single.as_str()))
+                {
+                    let single = single.clone();
+                    if let Some(f) = self.emit_struct_drop_synthesis(&single) {
+                        return f;
+                    }
+                    return self.emit_primitive_drop_fn(&type_name);
+                }
+            }
+        }
         if let Some(&f) = self.drop_fn_cache.get(&type_name) {
             return f;
         }

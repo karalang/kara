@@ -3018,6 +3018,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // `cap` so its scope-exit `FreeVecBuffer` becomes a no-op.
             // The new enum binding owns the buffer.
             self.suppress_source_vec_cleanup_for_arg(&arg.value);
+            // B-2026-07-30-11 (Option/Result leg) — a bare-identifier payload
+            // arg (`Ok(h)`, `Slot.Held(r)`) moves the WHOLE binding into the
+            // variant, so its user-Drop body belongs to the enum's eventual
+            // owner. Retract every `UserDrop` for the source (own-body
+            // wrapper and container-bodies walks alike) — leaving them armed
+            // ran the body a second time over the moved-from slot. Interp
+            // twin: the ctor arm of `record_ctor_arg_moves` inserting into
+            // `moved_out_user_drop_bindings`.
+            if let ExprKind::Identifier(n) = &arg.value.kind {
+                let n = n.clone();
+                self.suppress_user_drop_for_var(&n);
+            }
             // Boxed / inline-heap `Option`/`Result` binding moved whole into
             // this non-shared tuple-variant payload — see the shared-enum
             // branch above and the struct-literal field-init paths.

@@ -5624,6 +5624,76 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (Option/Result leg) — a let-bound `Option[P]` /
+    /// `Result[O, E]` runs its live payload's user `impl Drop` body at the
+    /// binding's NLL point, on both backends, resolved through ONE shared
+    /// static chain (annotation -> span-keyed instantiation -> callee return
+    /// -> source-var record). `Option` and `Result` never had the enum leg's
+    /// walk: they are built-in (no `EnumDef`) and their declared payload is
+    /// the bare generic param, so the payload gate here is instantiation-
+    /// driven — which is what makes it mirrorable, since a payload head that
+    /// names no user struct fails on both backends identically.
+    ///
+    /// Shapes: inline ctor let, `Err` side, BOXED payload from an
+    /// unannotated call (`mk(3)` — the >3-word spill; the body reads the
+    /// box, not the box pointer as struct bytes), `None` (nothing), match
+    /// move-out (source disarmed; the arm binding's silence is the known
+    /// non-let residual), a NON-consuming `Some(_)` arm (source stays
+    /// armed — 96 fires), `unwrap` (consuming-combinator disarm; the result
+    /// binding's own drop fires instead), and a ctor-arg move
+    /// (`Option.Some(h)` — h's own drop is silenced, s's walk owns the body).
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_optres_payload_runs_user_drop_bodies` on identical source and
+    /// expected output — the pair is the parity contract.
+    #[test]
+    fn e2e_optres_payload_runs_user_drop_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }\n\
+             struct HeapRes { name: String, id: i64 }\n\
+             impl Drop for HeapRes { fn drop(mut ref self) { println(80 + self.id); } }\n\
+             fn mk(i: i64) -> Option[HeapRes] {\n\
+             \x20   return Option.Some(HeapRes { name: \"payload-string-data\", id: i });\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a = Option.Some(Res { id: 1 });\n\
+             \x20   println(1);\n\
+             \x20   let b: Result[i64, Res] = Err(Res { id: 2 });\n\
+             \x20   println(2);\n\
+             \x20   let c = mk(3);\n\
+             \x20   println(3);\n\
+             \x20   let d: Option[Res] = Option.None;\n\
+             \x20   println(4);\n\
+             \x20   let e = Option.Some(Res { id: 5 });\n\
+             \x20   match e {\n\
+             \x20       Some(r) => { println(20 + r.id); }\n\
+             \x20       None => { println(0); }\n\
+             \x20   }\n\
+             \x20   println(5);\n\
+             \x20   let f = Option.Some(Res { id: 6 });\n\
+             \x20   match f {\n\
+             \x20       Some(_) => { println(40); }\n\
+             \x20       None => { println(0); }\n\
+             \x20   }\n\
+             \x20   println(6);\n\
+             \x20   let g = Option.Some(Res { id: 7 });\n\
+             \x20   let r7 = g.unwrap();\n\
+             \x20   println(10 + r7.id);\n\
+             \x20   println(7);\n\
+             \x20   let h = Res { id: 8 };\n\
+             \x20   let s = Option.Some(h);\n\
+             \x20   println(8);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "91\n1\n92\n2\n83\n3\n4\n25\n5\n40\n96\n6\n17\n97\n7\n98\n8\n"
+        );
+    }
+
     /// B-2026-07-30-11 (Vec leg) — a `Vec[T]`'s ELEMENTS run their user
     /// `impl Drop` bodies when the Vec dies.
     ///
@@ -5665,10 +5735,11 @@ fn main() {
         ) else {
             return;
         };
-        // No `dA4`: the popped element left through the Option, which does not
-        // yet run payload bodies (the Option leg of this entry is still open).
-        // What matters here is that the Vec does not drop it a second time.
-        assert_eq!(out, "2\ndA1\ndA2\n1\ndA3\n0\nend\n");
+        // `dA4` fires exactly ONCE, via the popped Option binding's payload
+        // walk (the Option/Result leg of this entry, landed) — with the LIVE
+        // element data, not zeroes. What the pop case pins is that the Vec
+        // does not drop it a second time.
+        assert_eq!(out, "2\ndA1\ndA2\n1\ndA3\ndA4\n0\nend\n");
     }
 
     /// B-2026-07-30-11 (tuple leg) — a tuple's ELEMENTS run their user
@@ -5846,10 +5917,13 @@ fn main() {
         ) else {
             return;
         };
-        // No `D 0` line: the box's own drop is memory-only (running the payload
-        // BODY through the box is the still-open Option/Result half of
-        // B-2026-07-30-11), and the interpreter prints nothing here either.
-        assert_eq!(out, "d\nend\n");
+        // Exactly one `D 1` line, with the REAL buf length — the payload body
+        // now runs through the box via the Option/Result payload walk
+        // (B-2026-07-30-11, landed), at the binding's NLL point on both
+        // backends. What this test still pins is the -31-6 defect: no `D 0`
+        // from the inline overlay reading the box POINTER as struct bytes,
+        // and no second body line of any kind.
+        assert_eq!(out, "D 1\nd\nend\n");
     }
 
     /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS

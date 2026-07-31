@@ -5340,6 +5340,63 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-07-30-11 (Option/Result leg) — the live payload's
+                    // user `impl Drop` BODIES, on the `UserDrop` (NLL)
+                    // channel. Registered AFTER every memory registration for
+                    // this binding (the inline/boxed trackers above), and
+                    // deliberately OUTSIDE the Call/fresh gate: a bare rebind
+                    // (`let o2 = o;`) must re-register for the destination
+                    // after the whole-value-move disarm retracts the
+                    // source's — that is what the `optres_var_payload_tes`
+                    // fallback in the resolution chain is for. The te chain
+                    // (annotation → span-keyed instantiation → callee return
+                    // → source var record) is mirrored verbatim by the
+                    // interpreter's `record_optres_payload_te`; the two must
+                    // stay identical or the backends print different things.
+                    {
+                        // Borrow-returning accessors are EXCLUDED: `v.get(i)` /
+                        // `.first()` / `.last()` yield an Option whose payload
+                        // ALIASES the container's element — the container's own
+                        // element walk runs the body, so a walk here would run
+                        // it twice. Same exclusion the memory-side
+                        // `FreeInlineOptionPayload` registration makes, and the
+                        // interpreter's `record_optres_payload_te` mirrors it.
+                        let rhs_is_borrow_accessor = matches!(
+                            &value.kind,
+                            ExprKind::MethodCall { method, .. }
+                                if matches!(method.as_str(), "get" | "first" | "last")
+                        );
+                        let opt_te = if rhs_is_borrow_accessor {
+                            None
+                        } else {
+                            ty.clone()
+                                .or_else(|| {
+                                    self.enum_inst_type_exprs
+                                        .get(&(value.span.offset, value.span.length))
+                                        .cloned()
+                                })
+                                .or_else(|| self.untyped_let_boxed_enum_te(value))
+                                .or_else(|| match &value.kind {
+                                    ExprKind::Identifier(n) => {
+                                        self.optres_var_payload_tes.get(n.as_str()).cloned()
+                                    }
+                                    _ => None,
+                                })
+                        };
+                        if let Some(te) = opt_te {
+                            if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                                if let Some(bodies) =
+                                    self.emit_optres_payload_user_drop_bodies_fn(&te)
+                                {
+                                    self.optres_var_payload_tes
+                                        .insert(var_name.clone(), te.clone());
+                                    self.track_user_drop_var_with_fn(
+                                        "", var_name, slot.ptr, bodies,
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
                 // B-2026-07-21-16 (let leg): `let x = <ownedplace>.optresfield;`
                 // is a true field MOVE — register x's own inline-payload

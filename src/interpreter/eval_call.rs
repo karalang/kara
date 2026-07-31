@@ -1448,6 +1448,8 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Unit
                     };
+                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                    self.record_ctor_arg_moves(args);
                     return Value::EnumVariant {
                         enum_name: "Option".to_string(),
                         variant: "Some".to_string(),
@@ -1460,6 +1462,8 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Unit
                     };
+                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                    self.record_ctor_arg_moves(args);
                     return Value::EnumVariant {
                         enum_name: "Result".to_string(),
                         variant: "Ok".to_string(),
@@ -1472,6 +1476,8 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Unit
                     };
+                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                    self.record_ctor_arg_moves(args);
                     return Value::EnumVariant {
                         enum_name: "Result".to_string(),
                         variant: "Err".to_string(),
@@ -1607,6 +1613,8 @@ impl<'a> super::Interpreter<'a> {
         if let ExprKind::Identifier(name) = &callee.kind {
             if self.env.get(name).is_none() {
                 if let Some(enum_name) = self.find_enum_for_variant(name) {
+                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                    self.record_ctor_arg_moves(args);
                     return Value::EnumVariant {
                         enum_name,
                         variant: name.clone(),
@@ -1655,6 +1663,8 @@ impl<'a> super::Interpreter<'a> {
                     let data = if is_unit {
                         EnumData::Unit
                     } else {
+                        // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                        self.record_ctor_arg_moves(args);
                         EnumData::Tuple(arg_vals)
                     };
                     return Value::EnumVariant {
@@ -1966,6 +1976,8 @@ impl<'a> super::Interpreter<'a> {
                     _ => String::new(),
                 };
                 if let Some(enum_name) = self.find_enum_for_variant(&variant_name) {
+                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                    self.record_ctor_arg_moves(args);
                     return Value::EnumVariant {
                         enum_name,
                         variant: variant_name,

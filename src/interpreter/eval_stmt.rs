@@ -659,6 +659,13 @@ impl<'a> super::Interpreter<'a> {
     }
 
     fn invoke_user_drop_if_applicable(&mut self, name: &str) {
+        // A binding whose whole value moved into a variant constructor runs
+        // NOTHING — own body or walks — the enum's owner does (B-2026-07-30-11
+        // Option/Result leg; codegen twin: `suppress_user_drop_for_var` at
+        // the ctor arg loop).
+        if self.moved_out_user_drop_bindings.contains(name) {
+            return;
+        }
         // B-2026-07-30-11 — a container binding never resolved through
         // `drop_target`, so its elements' bodies never ran. Checked first: an
         // array is not one of the shapes that function reports on at all.
@@ -783,6 +790,17 @@ impl<'a> super::Interpreter<'a> {
         else {
             return;
         };
+        // B-2026-07-30-11 (Option/Result leg): `Option`/`Result` are built-in
+        // — no source-level `EnumDef`, and their declared payload is the bare
+        // generic param, so the declared-type walk below can never fire for
+        // them. Their gate is INSTANTIATION-driven instead, off the te the
+        // Let arm recorded through codegen's exact resolution chain.
+        if enum_name == "Option" || enum_name == "Result" {
+            let variant = variant.clone();
+            let data = data.clone();
+            self.run_optres_payload_user_drops(name, &variant, &data);
+            return;
+        }
         let Some(decls) = self.variant_payload_decls(enum_name, variant) else {
             return;
         };
@@ -1262,6 +1280,152 @@ impl<'a> super::Interpreter<'a> {
         self.moved_out_container_bodies_bindings.remove(name);
         self.moved_out_drop_field_bindings.remove(name);
         self.moved_out_enum_payload_bindings.remove(name);
+        self.moved_out_user_drop_bindings.remove(name);
+    }
+
+    /// B-2026-07-30-11 (Option/Result leg) — a bare-identifier payload arg of
+    /// a VARIANT CONSTRUCTOR (`Ok(h)`, `Some(h)`, `Slot.Held(r)`) moves the
+    /// whole binding into the variant: silence every drop the source binding
+    /// would run (own body and container walks alike) — the enum's owner runs
+    /// them now. Codegen's twin is the `suppress_user_drop_for_var` call in
+    /// `try_compile_enum_variant`'s arg loop. Deliberately NOT applied to
+    /// ordinary fn-call args: those follow the caller-drops convention on
+    /// both backends (`run_fresh_temp_arg_drops` excludes identifier args for
+    /// the same reason).
+    pub(crate) fn record_ctor_arg_moves(&mut self, args: &[crate::ast::CallArg]) {
+        for arg in args {
+            if let ExprKind::Identifier(n) = &arg.value.kind {
+                let runs = match self.env.get(n) {
+                    Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),
+                    Some(Value::EnumVariant { .. } | Value::Array(_) | Value::Tuple(_)) => true,
+                    _ => false,
+                };
+                if runs {
+                    self.moved_out_user_drop_bindings.insert(n.clone());
+                }
+            }
+        }
+    }
+
+    /// B-2026-07-30-11 (Option/Result leg) — record the binding's resolved
+    /// `Option[P]` / `Result[O, E]` instantiation for the payload-bodies
+    /// walk. The resolution chain MIRRORS codegen's registration verbatim
+    /// (annotation → span-keyed `enum_inst_type_exprs` → callee's declared
+    /// return type → the source var's record for a bare rebind); a te whose
+    /// payload head names no user struct — including a bare generic param in
+    /// an unmonomorphized body — fails the gate on BOTH backends, so the
+    /// erased-generic residual is a shared leak rather than a divergence.
+    /// A let that does NOT qualify removes any stale record for the name.
+    fn record_optres_payload_te(&mut self, name: &str, ty: &Option<TypeExpr>, value: &Expr) {
+        // Borrow-returning accessors are EXCLUDED — `v.get(i)` / `.first()` /
+        // `.last()` yield an Option whose payload aliases the container's
+        // element, whose own walk runs the body. Mirrors codegen's skip at
+        // the let-site registration.
+        if matches!(
+            &value.kind,
+            ExprKind::MethodCall { method, .. }
+                if matches!(method.as_str(), "get" | "first" | "last")
+        ) {
+            self.optres_payload_bodies_tes.remove(name);
+            return;
+        }
+        let te = ty
+            .clone()
+            .or_else(|| {
+                self.program
+                    .enum_inst_type_exprs
+                    .get(&(value.span.offset, value.span.length))
+                    .cloned()
+            })
+            .or_else(|| match &value.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(f) => {
+                        self.program.items.iter().find_map(|item| match item {
+                            Item::Function(func) if func.name == *f => func.return_type.clone(),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .or_else(|| match &value.kind {
+                ExprKind::Identifier(n) => self.optres_payload_bodies_tes.get(n).cloned(),
+                _ => None,
+            });
+        let qualifies = te.as_ref().is_some_and(|te| {
+            let TypeKind::Path(p) = &te.kind else {
+                return false;
+            };
+            let head = p.segments.last().map(String::as_str);
+            let Some(args) = p.generic_args.as_ref() else {
+                return false;
+            };
+            let payload_tes: Vec<&TypeExpr> = args
+                .iter()
+                .filter_map(|a| match a {
+                    crate::ast::GenericArg::Type(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            match head {
+                Some("Option") | Some("Result") => payload_tes
+                    .iter()
+                    .any(|pt| self.type_expr_runs_user_drop(pt)),
+                _ => false,
+            }
+        });
+        if qualifies {
+            self.optres_payload_bodies_tes
+                .insert(name.to_string(), te.expect("qualifies implies Some"));
+        } else {
+            self.optres_payload_bodies_tes.remove(name);
+        }
+    }
+
+    /// The walk half of [`Self::record_optres_payload_te`]: run the live
+    /// payload's user `impl Drop` body (and its field bodies) for a dying
+    /// `Option`/`Result` binding. BODY ONLY — the interpreter's value model
+    /// owns the memory. Declared-head-vs-runtime-name gated exactly like the
+    /// struct-field walk, so a payload whose static type was erased at the
+    /// point codegen emitted its walker is skipped here too.
+    fn run_optres_payload_user_drops(&mut self, name: &str, variant: &str, data: &EnumData) {
+        let Some(te) = self.optres_payload_bodies_tes.get(name).cloned() else {
+            return;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return;
+        };
+        let payload_pos = match (p.segments.last().map(String::as_str), variant) {
+            (Some("Option"), "Some") | (Some("Result"), "Ok") => 0usize,
+            (Some("Result"), "Err") => 1usize,
+            _ => return,
+        };
+        let Some(crate::ast::GenericArg::Type(payload_te)) = args.get(payload_pos) else {
+            return;
+        };
+        let declared_head = Self::declared_field_type_head(payload_te);
+        let EnumData::Tuple(items) = data else {
+            return;
+        };
+        let Some(payload) = items.first() else {
+            return;
+        };
+        let Value::Struct { name: tn, .. } = payload else {
+            return;
+        };
+        if declared_head.as_deref() != Some(tn.as_str()) {
+            return;
+        }
+        let tn = tn.clone();
+        let payload = payload.clone();
+        if self.program.drop_method_keys.contains_key(&tn) {
+            self.run_user_drop_body_only(&tn, payload.clone());
+        }
+        self.drop_user_drop_fields_of_value(&payload);
     }
 
     #[allow(clippy::result_large_err)]
@@ -1348,6 +1512,13 @@ impl<'a> super::Interpreter<'a> {
                 self.bind_pattern(pattern, val);
                 for bound in pattern.binding_names() {
                     self.rearm_container_bodies_for_name(&bound);
+                }
+                // B-2026-07-30-11 (Option/Result leg): record (or clear) the
+                // binding's payload-bodies te — the registration moment,
+                // mirroring codegen's let-site walker registration.
+                if let crate::ast::PatternKind::Binding(bname) = &pattern.kind {
+                    let bname = bname.clone();
+                    self.record_optres_payload_te(&bname, ty, value);
                 }
             }
             StmtKind::LetUninit { name, .. } => {

@@ -432,6 +432,23 @@ pub struct Interpreter<'a> {
     /// assign) of the same name re-arms it — see the removal in the Let/
     /// Assign arms.
     pub(crate) moved_out_container_bodies_bindings: HashSet<String>,
+    /// B-2026-07-30-11 (Option/Result leg) — the resolved `Option[P]` /
+    /// `Result[O, E]` instantiation per let-bound variable, recorded by the
+    /// Let arm through the SAME static resolution chain codegen's
+    /// registration uses (annotation → span-keyed `enum_inst_type_exprs` →
+    /// callee's declared return → source-var record for a bare rebind). The
+    /// payload-bodies walk (`run_optres_payload_user_drops`) consults it at
+    /// drop time; a name absent here runs nothing, which is exactly the
+    /// binding codegen registered no walker for — the mirrored chain is what
+    /// keeps the two backends firing on the same set of bindings.
+    pub(crate) optres_payload_bodies_tes: HashMap<String, TypeExpr>,
+    /// Bindings whose WHOLE value moved into a variant constructor
+    /// (`Ok(h)`, `Some(h)`, `Slot.Held(r)`). Every drop the source would run
+    /// — own `impl Drop` body and container walks — is silenced; the enum's
+    /// eventual owner runs them. Codegen twin: `suppress_user_drop_for_var`
+    /// at `try_compile_enum_variant`'s arg loop. Re-armed on a fresh
+    /// `let`/assign of the name like the other moved-out sets.
+    pub(crate) moved_out_user_drop_bindings: HashSet<String>,
     /// REPL value-snapshot output channel. Populated by the Let arm of
     /// `eval_stmt_cf` whenever the binding name is in
     /// `let_snapshot_watch`. The REPL reads this after `run()` returns;
@@ -707,6 +724,8 @@ impl<'a> Interpreter<'a> {
             moved_out_drop_field_bindings: HashSet::new(),
             moved_out_enum_payload_bindings: HashSet::new(),
             moved_out_container_bodies_bindings: HashSet::new(),
+            optres_payload_bodies_tes: HashMap::new(),
+            moved_out_user_drop_bindings: HashSet::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,
             timed_out: false,

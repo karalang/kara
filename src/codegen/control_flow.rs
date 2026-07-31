@@ -181,6 +181,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // the binding's. No-op for temp / non-inline scrutinees.
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
+        // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
+        // retracted alongside the memory suppressions above — same shape
+        // gate, interp twin in `pattern_consumes_user_drop_payload`.
+        self.suppress_optres_payload_bodies_for_match(value, pattern);
         // B-2026-07-21-16: `if let Some(s) = a.opt { … }` over an OWNED place
         // — zero the source field in the then-arm (the binding owns the
         // payload); the miss edge leaves it for the struct drop.
@@ -448,6 +452,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // suppression (see `compile_if_let`). No-op for temp / non-inline.
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
+        // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
+        // retracted alongside the memory suppressions above — same shape
+        // gate, interp twin in `pattern_consumes_user_drop_payload`.
+        self.suppress_optres_payload_bodies_for_match(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         // B-2026-07-03-31: skip disarming the source payload drop when the
         // loop body ONLY BORROWS the bound payload (not moved out) — the source
@@ -613,6 +621,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // so zero x's source `cap` to avoid a double-free at that scope's exit.
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
+        // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
+        // retracted alongside the memory suppressions above — same shape
+        // gate, interp twin in `pattern_consumes_user_drop_payload`.
+        self.suppress_optres_payload_bodies_for_match(value, pattern);
         // B-2026-07-21-16: `let Some(s) = a.opt else { … }` over an OWNED
         // place — zero the source field on the match edge (the escaped
         // binding owns the payload); the divergent else edge leaves it for

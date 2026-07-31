@@ -186,6 +186,23 @@ impl<'a> super::Interpreter<'a> {
             }
             _ => return false,
         };
+        // B-2026-07-30-11 (Option/Result leg): no `EnumDef` to consult and
+        // the declared payload is a bare generic param, so the gate here is
+        // SHAPE-only — a `Some`/`Ok`/`Err` pattern whose payload position
+        // claims ownership. Over-approximate on purpose: the move-out set
+        // this feeds is a no-op for a binding whose walk never registered
+        // (no te record), and codegen's twin retraction is equally a no-op
+        // when no `__karac_dropelems_*` action exists — so both backends
+        // agree on every case, disarmed or not.
+        if enum_name == "Option" || enum_name == "Result" {
+            return match &pattern.kind {
+                PatternKind::TupleVariant { patterns, .. } => {
+                    matches!(variant.as_str(), "Some" | "Ok" | "Err")
+                        && patterns.iter().any(Self::pattern_claims_ownership)
+                }
+                _ => false,
+            };
+        }
         let Some(decls) = self.variant_payload_decls(enum_name, &variant) else {
             return false;
         };
@@ -250,7 +267,7 @@ impl<'a> super::Interpreter<'a> {
 
     /// Does the head type of `te` name a struct that runs a user `impl Drop`
     /// body, directly or through a field?
-    fn type_expr_runs_user_drop(&self, te: &TypeExpr) -> bool {
+    pub(crate) fn type_expr_runs_user_drop(&self, te: &TypeExpr) -> bool {
         let TypeKind::Path(p) = &te.kind else {
             return false;
         };

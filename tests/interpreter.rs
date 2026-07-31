@@ -26122,6 +26122,56 @@ fn test_container_bodies_whole_value_move_single_fire() {
     );
 }
 
+/// B-2026-07-30-11 (Option/Result leg) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_optres_payload_runs_user_drop_bodies`, same
+/// source and expected string. The walk keys on the te the Let arm records
+/// through codegen's exact resolution chain (`record_optres_payload_te`), so
+/// both backends fire for the same set of bindings; the moved-out sets
+/// mirror codegen's compile-time retractions at the match/combinator/ctor
+/// sites.
+#[test]
+fn test_optres_payload_runs_user_drop_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }\n\
+             struct HeapRes { name: String, id: i64 }\n\
+             impl Drop for HeapRes { fn drop(mut ref self) { println(80 + self.id); } }\n\
+             fn mk(i: i64) -> Option[HeapRes] {\n\
+                 return Option.Some(HeapRes { name: \"payload-string-data\", id: i });\n\
+             }\n\
+             fn main() {\n\
+                 let a = Option.Some(Res { id: 1 });\n\
+                 println(1);\n\
+                 let b: Result[i64, Res] = Err(Res { id: 2 });\n\
+                 println(2);\n\
+                 let c = mk(3);\n\
+                 println(3);\n\
+                 let d: Option[Res] = Option.None;\n\
+                 println(4);\n\
+                 let e = Option.Some(Res { id: 5 });\n\
+                 match e {\n\
+                     Some(r) => { println(20 + r.id); }\n\
+                     None => { println(0); }\n\
+                 }\n\
+                 println(5);\n\
+                 let f = Option.Some(Res { id: 6 });\n\
+                 match f {\n\
+                     Some(_) => { println(40); }\n\
+                     None => { println(0); }\n\
+                 }\n\
+                 println(6);\n\
+                 let g = Option.Some(Res { id: 7 });\n\
+                 let r7 = g.unwrap();\n\
+                 println(10 + r7.id);\n\
+                 println(7);\n\
+                 let h = Res { id: 8 };\n\
+                 let s = Option.Some(h);\n\
+                 println(8);\n\
+             }\n"),
+        "91\n1\n92\n2\n83\n3\n4\n25\n5\n40\n96\n6\n17\n97\n7\n98\n8\n"
+    );
+}
+
 /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS runs
 /// its `Drop` body exactly once.
 ///
@@ -26175,7 +26225,7 @@ fn test_vec_elements_run_user_drop_bodies() {
                  { let mut p: Vec[A] = [A { t: 4 }]; let g = p.pop(); println(f\"{p.len()}\"); }\n\
                  println(\"end\");\n\
              }\n"),
-        "2\ndA1\ndA2\n1\ndA3\n0\nend\n"
+        "2\ndA1\ndA2\n1\ndA3\ndA4\n0\nend\n"
     );
 }
 
