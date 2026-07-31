@@ -2020,6 +2020,22 @@ impl<'a> super::Interpreter<'a> {
             }) {
                 continue;
             }
+            // B-2026-07-30-11 (param-tuple leg, the A shape): a tuple
+            // LITERAL arg (`take_tuple((Res { id: 41 }, 10))`) moved into
+            // the callee's tuple param never ran its Drop-carrying
+            // elements' bodies — the per-arg type resolution below has no
+            // tuple shape. Reuse the discard walk, under the same
+            // all-fresh-or-scalar element gate as `let _ = (…)`: a PLACE
+            // element (`take_tuple((g, 1))`) keeps its own binding's slot
+            // armed, so firing the walk too would double its body.
+            if let ExprKind::Tuple(elems) = &arg.value.kind {
+                if let Some(Value::Tuple(items)) = arg_vals.get(i) {
+                    if self.discard_tuple_all_elems_safe(elems, items) {
+                        self.run_discarded_value_user_drops(Value::Tuple(items.clone()));
+                    }
+                }
+                continue;
+            }
             let type_name: Option<String> = match &arg.value.kind {
                 ExprKind::StructLiteral { path, .. } => {
                     let n = path.last().cloned();

@@ -2368,10 +2368,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .clone();
                 self.scope_cleanup_actions.push(Vec::new());
                 let val = self.compile_expr(value)?;
+                // Struct-literal tails: the UserDrop wrapper / field-bodies
+                // + memory registration. Tuple tails: the memory drop AND
+                // the element bodies walk — the registrar's tuple arm
+                // gained the bodies leg in the param-tuple (A-shape) fix,
+                // so it is the single owner for both call-arg and discard
+                // positions (registering bodies here too double-fired).
                 self.track_inline_owned_aggregate_arg(val, &tail, false);
-                if let ExprKind::Tuple(elems) = &tail.kind {
-                    self.track_discarded_tuple_elem_bodies(elems, val);
-                }
                 self.drain_top_frame_with_emit();
                 Ok(())
             }
@@ -9063,8 +9066,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
         };
-        let elem_tes: Vec<crate::ast::TypeExpr> =
-            elems.iter().map(|e| self.infer_arg_elem_te(e)).collect();
+        let elem_tes: Vec<crate::ast::TypeExpr> = elems
+            .iter()
+            .map(|e| self.infer_discard_elem_te(e))
+            .collect();
         let Some(bodies) = self.emit_discarded_tuple_elem_bodies_fn(agg_ty, &elem_tes) else {
             return;
         };
@@ -9078,6 +9083,38 @@ impl<'ctx> super::Codegen<'ctx> {
         let slot = self.create_entry_alloca(cur_fn, "__disc_tup_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
         self.track_user_drop_var_with_fn("", "__disc_tup_tmp", slot, bodies);
+    }
+
+    /// Element-`TypeExpr` derivation for the discarded-tuple bodies walk:
+    /// `infer_arg_elem_te` plus a fn-return fallback — `(mk(45), 30)` has a
+    /// bare-identifier Call element whose type only the callee's declared
+    /// return `TypeExpr` knows (`type_name_of` resolves bindings, not call
+    /// results, so the arg-position derivation yields an empty path and the
+    /// element's body was silently skipped). Borrow-returning callees are
+    /// excluded — their result aliases the borrow source, and a body/free
+    /// registered on an alias double-fires against the real owner.
+    fn infer_discard_elem_te(&self, e: &Expr) -> crate::ast::TypeExpr {
+        if let ExprKind::Tuple(inner) = &e.kind {
+            return crate::ast::TypeExpr {
+                kind: crate::ast::TypeKind::Tuple(
+                    inner
+                        .iter()
+                        .map(|x| self.infer_discard_elem_te(x))
+                        .collect(),
+                ),
+                span: e.span.clone(),
+            };
+        }
+        if let ExprKind::Call { callee, .. } = &e.kind {
+            if let ExprKind::Identifier(n) = &callee.kind {
+                if self.enum_name_of_expr(e).is_none() && !self.is_borrow_returning_call_expr(e) {
+                    if let Some(te) = self.fn_return_type_exprs.get(n.as_str()) {
+                        return te.clone();
+                    }
+                }
+            }
+        }
+        self.infer_arg_elem_te(e)
     }
 
     /// The `__karac_dropbodies_tuple_te_<sig>` walker backing
@@ -9219,7 +9256,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// heap/Drop-carrying place element (`(r, 1)`, `(v, 1)`) keeps its own
     /// binding's cleanup armed, so registering the temp would double both
     /// body and frees — those shapes disqualify the whole literal.
-    fn discard_tuple_elem_is_fresh_expr(&self, e: &Expr) -> bool {
+    pub(super) fn discard_tuple_elem_is_fresh_expr(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Integer(..)
             | ExprKind::Float(..)

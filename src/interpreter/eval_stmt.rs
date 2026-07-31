@@ -1279,7 +1279,7 @@ impl<'a> super::Interpreter<'a> {
     /// (`discard_tuple_elem_is_fresh`), a scalar copy (Int/Float/Bool/
     /// Char/Unit — no cleanup can alias it), or a nested tuple that
     /// satisfies the same rule.
-    fn discard_tuple_all_elems_safe(&self, elems: &[Expr], items: &[Value]) -> bool {
+    pub(super) fn discard_tuple_all_elems_safe(&self, elems: &[Expr], items: &[Value]) -> bool {
         if elems.len() != items.len() {
             return false;
         }
@@ -1334,7 +1334,7 @@ impl<'a> super::Interpreter<'a> {
     /// Option / Result temp's own body (when declared) and its payloads.
     /// Value-shape recursion mirrors the container-element loop in
     /// `run_array_element_user_drops`.
-    fn run_discarded_value_user_drops(&mut self, val: Value) {
+    pub(super) fn run_discarded_value_user_drops(&mut self, val: Value) {
         match val {
             Value::Struct { ref name, .. } => {
                 if self.program.drop_method_keys.contains_key(name) {

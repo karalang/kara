@@ -2188,6 +2188,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(slot, val).unwrap();
                 self.track_tuple_var(slot, agg_ty);
             }
+            // B-2026-07-30-11 (param-tuple leg, the A shape): the memory
+            // registrations above run no user Drop BODIES, so
+            // `take_tuple((Res { id: 41 }, 10))` never fired the element's
+            // body on this backend. Register the bodies walk on the same
+            // frame, AFTER the memory push — the drain is LIFO, so bodies
+            // run before the frees that invalidate what they read. Gated to
+            // all-fresh-or-scalar elements exactly like the wildcard-let
+            // discard (a place element's body belongs to its own binding),
+            // and off the passthrough path (a returned tuple's bodies belong
+            // to the result's consumer). Interp twin:
+            // `run_fresh_temp_arg_drops`' tuple arm.
+            if !arg_flows_into_return
+                && tuple_elems
+                    .iter()
+                    .all(|e| self.discard_tuple_elem_is_fresh_expr(e))
+            {
+                self.track_discarded_tuple_elem_bodies(tuple_elems, val);
+            }
         } else if let ExprKind::StructLiteral { path, .. } = &arg.kind {
             if let Some(name) = path
                 .last()

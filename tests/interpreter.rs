@@ -26415,6 +26415,48 @@ fn test_wildcard_let_discard_place_shapes_single_fire() {
     );
 }
 
+/// B-2026-07-30-11 (param-tuple leg, the A shape) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_param_tuple_elements_run_drop_bodies`, same
+/// source and expected string.
+#[test]
+fn test_param_tuple_elements_run_drop_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+                 Res { id: n }\n\
+             }\n\
+             fn take_tuple(t: (Res, i64)) {\n\
+                 println(f\"callee sees {t.1}\")\n\
+             }\n\
+             fn take_res(r: Res) {\n\
+                 println(f\"callee sees res {r.id}\")\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 take_tuple((Res { id: 41 }, 10));\n\
+                 println(\"b\");\n\
+                 take_res(Res { id: 42 });\n\
+                 println(\"c\");\n\
+                 let g = Res { id: 43 };\n\
+                 take_res(g);\n\
+                 println(\"d\");\n\
+                 let h = Res { id: 44 };\n\
+                 take_tuple((h, 20));\n\
+                 println(\"e\");\n\
+                 take_tuple((mk(45), 30));\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ncallee sees 10\ndrop 41\nb\ncallee sees res 42\ndrop 42\nc\n\
+         callee sees res 43\ndrop 43\nd\ncallee sees 20\ndrop 44\ne\n\
+         callee sees 30\ndrop 45\nend\n"
+    );
+}
+
 /// B-2026-07-31-37 (heap face) — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_assign_move_heap_body_once`, same source and expected string.
 /// The interpreter's pre-fix behavior was `D7 D7 x` (double body, right
