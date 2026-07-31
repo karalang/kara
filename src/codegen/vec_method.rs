@@ -556,6 +556,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // see `annotate_len_load_range` for the soundness argument
                 // (B-2026-07-10-5).
                 self.annotate_len_load_range(len, Some(elem_ty));
+                // Head-index deque (B-2026-07-30-5): the `len` field is the END
+                // index of the live range, so the user-visible count is
+                // `len - head`. The range annotation above still holds — the
+                // difference is non-negative and no larger than the field.
+                if let Some(head_slot) = self.deque_head_slot(var_name) {
+                    let head = self
+                        .builder
+                        .build_load(i64_t, head_slot, "deque.head")
+                        .unwrap()
+                        .into_int_value();
+                    let count = self
+                        .builder
+                        .build_int_sub(len.into_int_value(), head, "deque.count")
+                        .unwrap();
+                    return Ok(count.into());
+                }
                 Ok(len)
             }
             // `Vec[T].as_ptr()` / `.as_mut_ptr()` — raw element-0 pointer of
@@ -3563,9 +3579,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     .append_basic_block(fn_val, &format!("{method}.merge"));
 
                 let zero = i64_t.const_int(0, false);
+                // For a head-index deque `len` is the END index, so emptiness
+                // is `len == head`, not `len == 0`.
+                let head_slot = if is_front {
+                    self.deque_head_slot(var_name)
+                } else {
+                    None
+                };
+                let head_val = head_slot.map(|hs| {
+                    self.builder
+                        .build_load(i64_t, hs, "pop.head")
+                        .unwrap()
+                        .into_int_value()
+                });
                 let is_empty = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "pop.is_empty")
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        len,
+                        head_val.unwrap_or(zero),
+                        "pop.is_empty",
+                    )
                     .unwrap();
                 self.builder
                     .build_conditional_branch(is_empty, empty_bb, some_bb)
@@ -3580,7 +3614,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(some_bb);
                 let one = i64_t.const_int(1, false);
                 let read_idx = if is_front {
-                    zero
+                    head_val.unwrap_or(zero)
                 } else {
                     self.builder
                         .build_int_sub(len, one, "pop.last_idx")
@@ -3595,28 +3629,109 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(elem_ty, elem_ptr, "pop.elem")
                     .unwrap();
-                if is_front {
-                    // memmove(data, data + 1, (len - 1) * sizeof(elem))
-                    let tail_count = self
+                if let (Some(head_slot), Some(head)) = (head_slot, head_val) {
+                    // Head-index deque (B-2026-07-30-5). `len` is the END
+                    // index here, so popping the front just advances `head`:
+                    // no memmove, and `len` is left alone. That is the whole
+                    // fix — this pop is O(1) where the memmove was O(n).
+                    let new_head = self
                         .builder
-                        .build_int_sub(len, one, "pop.tail_count")
+                        .build_int_add(head, one, "pop.new_head")
+                        .unwrap();
+
+                    // Amortized compaction. Once the dead prefix is at least
+                    // half the occupied span (and non-trivial), slide the live
+                    // range back to 0. Moving `live <= new_head` elements after
+                    // `new_head` pops keeps this O(1) amortized, and it is what
+                    // bounds the buffer by the LIVE depth instead of by total
+                    // enqueues — without it a long-running queue would grow
+                    // without bound, trading a quadratic for a leak.
+                    let compact_bb = self.context.append_basic_block(fn_val, "pop_front.compact");
+                    let keep_bb = self.context.append_basic_block(fn_val, "pop_front.keep");
+                    let done_bb = self.context.append_basic_block(fn_val, "pop_front.done");
+
+                    let min_dead = i64_t.const_int(16, false);
+                    let big_enough = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::UGE,
+                            new_head,
+                            min_dead,
+                            "pop.compact.big",
+                        )
+                        .unwrap();
+                    let doubled = self
+                        .builder
+                        .build_int_mul(new_head, i64_t.const_int(2, false), "pop.compact.2h")
+                        .unwrap();
+                    let mostly_dead = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::UGE,
+                            doubled,
+                            len,
+                            "pop.compact.half",
+                        )
+                        .unwrap();
+                    let should_compact = self
+                        .builder
+                        .build_and(big_enough, mostly_dead, "pop.compact.cond")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(should_compact, compact_bb, keep_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(compact_bb);
+                    let live = self
+                        .builder
+                        .build_int_sub(len, new_head, "pop.compact.live")
                         .unwrap();
                     let elem_size = elem_ty.size_of().unwrap();
-                    let tail_bytes = self
+                    let live_bytes = self
                         .builder
-                        .build_int_mul(tail_count, elem_size, "pop.tail_bytes")
+                        .build_int_mul(live, elem_size, "pop.compact.bytes")
                         .unwrap();
                     let src = unsafe {
                         self.builder
-                            .build_gep(elem_ty, data, &[one], "pop.shift.src")
+                            .build_gep(elem_ty, data, &[new_head], "pop.compact.src")
                             .unwrap()
                     };
                     self.builder
-                        .build_memmove(data, 8, src, 8, tail_bytes)
+                        .build_memmove(data, 8, src, 8, live_bytes)
                         .unwrap();
+                    self.builder.build_store(len_ptr, live).unwrap();
+                    self.builder.build_store(head_slot, zero).unwrap();
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(keep_bb);
+                    self.builder.build_store(head_slot, new_head).unwrap();
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(done_bb);
+                } else {
+                    if is_front {
+                        // memmove(data, data + 1, (len - 1) * sizeof(elem))
+                        let tail_count = self
+                            .builder
+                            .build_int_sub(len, one, "pop.tail_count")
+                            .unwrap();
+                        let elem_size = elem_ty.size_of().unwrap();
+                        let tail_bytes = self
+                            .builder
+                            .build_int_mul(tail_count, elem_size, "pop.tail_bytes")
+                            .unwrap();
+                        let src = unsafe {
+                            self.builder
+                                .build_gep(elem_ty, data, &[one], "pop.shift.src")
+                                .unwrap()
+                        };
+                        self.builder
+                            .build_memmove(data, 8, src, 8, tail_bytes)
+                            .unwrap();
+                    }
+                    let new_len = self.builder.build_int_sub(len, one, "pop.new_len").unwrap();
+                    self.builder.build_store(len_ptr, new_len).unwrap();
                 }
-                let new_len = self.builder.build_int_sub(len, one, "pop.new_len").unwrap();
-                self.builder.build_store(len_ptr, new_len).unwrap();
                 let some_payload_words = self.coerce_to_payload_words(elem_val, 3)?;
                 let some_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -4803,9 +4918,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
                 let zero = i64_t.const_int(0, false);
+                // Head-index deque: empty is `len == head` (see the `len` arm).
+                let empty_mark = match self.deque_head_slot(var_name) {
+                    Some(head_slot) => self
+                        .builder
+                        .build_load(i64_t, head_slot, "deque.head")
+                        .unwrap()
+                        .into_int_value(),
+                    None => zero,
+                };
                 let is_empty = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "is_empty")
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, empty_mark, "is_empty")
                     .unwrap();
                 Ok(is_empty.into())
             }

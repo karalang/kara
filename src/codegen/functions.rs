@@ -1242,6 +1242,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.ref_params.clear();
         self.signature_ref_params.clear();
         self.entry_slot_ref_vars.clear();
+        // Head-index deque slots are per-function (B-2026-07-30-5). Cleared
+        // here for the same name-collision reason as `variables`: the table is
+        // keyed by bare binding name, so a `queue` in one function must not
+        // hand its head alloca to a `queue` in the next.
+        self.deque_head_slots.clear();
         self.owned_vecstr_params.clear();
         // Record every (simple-binding) parameter name for the auto-par
         // reduction cost gate's param-bounded-helper check (B-2026-07-23-25).
@@ -1428,6 +1433,25 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
+
+        // Materialize the `head` counter for every deque local this function's
+        // eligibility analysis cleared (B-2026-07-30-5). Entry-block alloca,
+        // zeroed once: the analysis only admits `let mut q: VecDeque[POD] =
+        // VecDeque.new()` declared directly in the function body, so `head = 0`
+        // on entry is correct and no re-zeroing is needed. An eligible deque's
+        // `len` field then means the END INDEX (live range `data[head..len]`),
+        // which is what lets `push_back` keep its existing lowering verbatim.
+        if let Some(names) = self.deque_head_locals.get(&func.name).cloned() {
+            let i64_t = self.context.i64_type();
+            for name in names {
+                let slot = self
+                    .builder
+                    .build_alloca(i64_t, &format!("{name}.deque.head"))
+                    .unwrap();
+                self.builder.build_store(slot, i64_t.const_zero()).unwrap();
+                self.deque_head_slots.insert(name, slot);
+            }
+        }
 
         // Level 2 crash diagnostics — Part 2: open this function's DWARF
         // `DISubprogram` and make it the active scope (no-op unless debug info

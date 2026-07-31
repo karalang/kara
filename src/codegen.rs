@@ -640,6 +640,7 @@ pub fn compile_to_ir_with_hot_swap(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
@@ -662,6 +663,7 @@ pub fn compile_to_ir_with_contracts_stripped(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_strip_contracts(true);
     cg.compile_program(program)?;
@@ -684,6 +686,7 @@ pub fn compile_to_ir_with_debug_info(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_source_filename(Some("debug.kara"));
     cg.force_debug_info();
@@ -704,6 +707,7 @@ pub fn compile_to_ir_with_error_trace_stripped(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_strip_error_trace(true);
     cg.compile_program(program)?;
@@ -739,6 +743,7 @@ pub fn compile_to_object_with_coro(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_coro_enabled(true);
     cg.compile_program(program)?;
@@ -770,6 +775,7 @@ pub fn compile_to_ir_with_coro_split(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_coro_enabled(true);
     cg.compile_program(program)?;
@@ -851,6 +857,7 @@ pub fn compile_to_object_with_hot_swap(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
@@ -905,6 +912,7 @@ pub fn compile_to_object_wasm_threaded(
     cg.module
         .set_data_layout(&target_machine.get_target_data().get_data_layout());
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
@@ -940,6 +948,7 @@ pub fn compile_to_ir_wasm_threaded(
     cg.module
         .set_data_layout(&target_machine.get_target_data().get_data_layout());
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_wasm_threaded_pass(true);
     cg.compile_program(program)?;
@@ -974,6 +983,7 @@ pub fn jit_run_main(
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
+    cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.compile_program(program)?;
 
@@ -3148,6 +3158,18 @@ pub(super) struct Codegen<'ctx> {
     /// instead of `RcDec` for these. Keyed by fn key (bare name /
     /// `Type.method`), matching `current_fn_name`.
     pub(crate) elided_bindings: HashMap<String, HashSet<String>>,
+    /// Per-function deque locals eligible for the O(1) `pop_front` head-index
+    /// lowering (`crate::deque_head`, B-2026-07-30-5). For a name in this set
+    /// the `{ptr, len, cap}` header is REINTERPRETED: `len` is the end index,
+    /// not the count, and the live range is `data[head..len]` where `head`
+    /// lives in `deque_head_slots`. The in-memory layout is unchanged, which
+    /// is what keeps every generic Vec path (drop, clone, par-copy) correct —
+    /// the analysis only admits locals no such path can reach.
+    pub(crate) deque_head_locals: HashMap<String, HashSet<String>>,
+    /// Entry-block `i64` alloca holding `head` for each eligible deque local of
+    /// the function being compiled. Cleared per function; a name present here
+    /// is one the head-aware method arms must use.
+    pub(crate) deque_head_slots: HashMap<String, PointerValue<'ctx>>,
     /// Phase B1 cluster roots: fn key → root binding → (member struct
     /// name, link user-field index). The let-site swaps the root's
     /// cleanup for `FreeClusterWalk`. Cursors and fresh nodes keep
@@ -7652,6 +7674,8 @@ impl<'ctx> Codegen<'ctx> {
             used_data_globals: Vec::new(),
             branch_cancel_ptr: None,
             rc_fallback_fns: HashMap::new(),
+            deque_head_locals: HashMap::new(),
+            deque_head_slots: HashMap::new(),
             vec_index_borrow_spans: HashSet::new(),
             elided_bindings: HashMap::new(),
             elided_cluster_roots: HashMap::new(),
@@ -7827,6 +7851,13 @@ impl<'ctx> Codegen<'ctx> {
     ///   identical for both — the heap shape is `{ refcount: i64, payload: T }`
     ///   regardless of flavor and the initial `refcount = 1` store happens
     ///   before the value is shared.
+    /// Load the head-index deque eligibility set (`crate::deque_head`).
+    /// Computed from the AST, plain data — no LLVM type crosses the boundary,
+    /// so codegen containment holds (CLAUDE.md § Codegen architecture).
+    fn load_deque_head_locals(&mut self, program: &crate::ast::Program) {
+        self.deque_head_locals = crate::deque_head::eligible_deque_locals(program);
+    }
+
     fn load_rc_fallback(&mut self, ownership: Option<&OwnershipCheckResult>) {
         let Some(ow) = ownership else { return };
         for (fn_name, rc_map) in &ow.rc_values {
@@ -8091,6 +8122,30 @@ impl<'ctx> Codegen<'ctx> {
         self.elided_bindings
             .get(&self.current_fn_name)
             .is_some_and(|set| set.contains(name))
+    }
+
+    /// True iff `name` is a deque local of the current function that the
+    /// eligibility analysis cleared for the head-index lowering AND whose head
+    /// alloca has been materialized. Both halves matter: the analysis runs over
+    /// top-level functions only, so a closure or par-branch compile can carry
+    /// the same binding name without an entry in `deque_head_slots`, and the
+    /// method arms must fall back to the memmove lowering there.
+    pub(super) fn is_head_index_deque(&self, name: &str) -> bool {
+        self.deque_head_slots.contains_key(name)
+            && self
+                .deque_head_locals
+                .get(&self.current_fn_name)
+                .is_some_and(|set| set.contains(name))
+    }
+
+    /// The `head` alloca for an eligible deque local, or `None` when the
+    /// binding is not on the head-index path.
+    pub(super) fn deque_head_slot(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        if self.is_head_index_deque(name) {
+            self.deque_head_slots.get(name).copied()
+        } else {
+            None
+        }
     }
 
     /// Phase-B1 cluster-root lookup for the current function: returns
