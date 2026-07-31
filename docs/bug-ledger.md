@@ -913,7 +913,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **787 surfaced 
 | B-2026-07-31-8 | codegen | high | An INVERTED loop range (`for y in 5..3`) makes auto-par's `iter_total` negative, and the descriptor field is `u64` — so a loop that runs ZERO iterati… | db59de2 |
 | B-2026-07-31-9 | codegen | medium | The `providers { R => v } in { body }` BLOCK form emits NOTHING under codegen/JIT — even a read-only `R.get()` — while the interpreter runs it correc… | 74d2b387 |
 | B-2026-07-31-10 | codegen | medium | `body_is_memory_bound` classifies a 7-tap vector CONVOLUTION as memory-bound — it keys on "has an index read and no substantial CALL" and cannot see… | f068f0e (indexed-write path) + 269d9ce (reduction path) |
-| B-2026-07-31-11 | codegen | medium | An early `return` out of a provider body — `with_provider`'s closure OR the `providers { } in { }` block — cannot be compiled: the `karac_provider_po… | — |
+| B-2026-07-31-11 | codegen | medium | An early `return` out of a provider body — `with_provider`'s closure OR the `providers { } in { }` block — cannot be compiled: the `karac_provider_po… | 9cfd715 |
 | B-2026-07-31-12 | codegen | medium | `Json.parse` of a STRING / ARRAY / OBJECT leaks the lifted Kāra-side tree's heap payloads under codegen — one tree per parse, even when the payload i… | 66ec99f |
 | B-2026-07-31-13 | autopar+cli | medium | `codegen/reduce.rs` open-coded its own copy of the fan-out gate sequence instead of calling `par_cost::fanout_verdict` — the exact drift `par_cost` w… | 269d9ce |
 
