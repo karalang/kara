@@ -16192,6 +16192,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_sha256_example() {
+        // examples/sha256.kara — SHA-256 + HMAC-SHA256 in pure Kāra, checked
+        // against the published NIST FIPS 180-4 and RFC 4231 vectors. This is
+        // the strongest oracle in the example set: the digests are bit-exact
+        // published constants, so any divergence in 32-bit modular addition,
+        // rotate/shift mixing, big-endian packing, or the 64-round state
+        // rotation shows up as a mismatched hash rather than a plausible wrong
+        // answer. Covers the empty-input padding path, a single block, the
+        // two-block 56-byte case where the length field no longer fits, a
+        // 16-block message, and HMAC's short-key zero-pad and
+        // longer-than-block key-is-hashed-first paths.
+        //
+        // Words are carried in u64 with an explicit 32-bit mask after every
+        // add, because `wrapping_add` is deferred on narrow widths — so this
+        // also pins that the u64 bit surface (`&` `|` `^` `<<` `>>`, hex
+        // literals, `as u8` truncation) agrees between codegen and the
+        // interpreter across 64 rounds per block.
+        if let Some(out) = run_program(include_str!("../examples/sha256.kara")) {
+            assert_eq!(out, include_str!("../examples/sha256.expected"));
+        }
+    }
+
+    #[test]
     fn test_e2e_heap_example() {
         // examples/heap.kara — a generic binary MIN-heap `Heap[T: Ord]` +
         // heapsort. Validates the GENERIC-MONOMORPHIZATION surface end to end,

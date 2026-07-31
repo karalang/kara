@@ -1,0 +1,8 @@
+sha256-empty ok
+sha256-abc ok
+sha256-448bit ok
+sha256-1000a ok
+hmac-rfc4231-1 ok
+hmac-rfc4231-2 ok
+hmac-rfc4231-3 ok
+hmac-rfc4231-6 ok

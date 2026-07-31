@@ -1,0 +1,342 @@
+// sha256.kara — SHA-256 and HMAC-SHA256 in pure Kāra, checked against the
+// published NIST / RFC 4231 test vectors.
+//
+// Why this exists: every route to a cloud data store goes through a request
+// signature, and AWS SigV4 is an HMAC-SHA256 chain over a SHA-256 payload
+// hash. The runtime exposes no hashing primitive at all, so the choice was to
+// add one in Rust or to write it in Kāra. Writing it in Kāra makes it a
+// dogfood with a REAL oracle: these vectors are bit-exact published answers,
+// so "it compiled" and even "it produced 64 hex characters" are not enough —
+// the digest either matches the standard or it does not.
+//
+// It exercises the integer/bit surface harder than any container kata does:
+// 32-bit modular addition, three-way rotate/shift mixing, big-endian byte
+// packing and unpacking, and 64 rounds of state rotation per block, all
+// index-driven over `Vec` state.
+//
+// THE u32 WORKAROUND. SHA-256 is defined on u32 with wrapping addition, but
+// `wrapping_add` is deferred on narrow widths — `let a: i32 = 1;
+// a.wrapping_add(2)` does not typecheck (pinned by the compiler's own
+// `wrapping_arith_rejects_narrow_width`). So every 32-bit word is carried in
+// a `u64` and reduced with `m32` after each add; `x ^ 0xFFFFFFFF` stands in
+// for a 32-bit bitwise NOT. That is the standard way to host u32 arithmetic
+// in a wider type and costs only the extra mask — the vectors below prove it
+// is exact.
+//
+//   karac run examples/sha256.kara      # JIT (--interp for the tree-walk lane)
+//   karac build examples/sha256.kara    # native binary — output byte-identical
+//
+// Expected output: examples/sha256.expected.
+
+// ── 32-bit helpers ──────────────────────────────────────────────────────
+
+// Reduce to 32 bits. Applied after every add so the u64 carrier never
+// accumulates high bits.
+fn m32(x: u64) -> u64 {
+    x & 4294967295u64
+}
+
+// Rotate right within 32 bits. The mask before the shift matters: a stray
+// high bit would rotate into the low word and corrupt every later round.
+fn rotr32(x: u64, n: u64) -> u64 {
+    let lo = m32(x);
+    m32((lo >> n) | (lo << (32u64 - n)))
+}
+
+fn shr32(x: u64, n: u64) -> u64 {
+    m32(x) >> n
+}
+
+// 32-bit bitwise NOT, as `x XOR all-ones`. Used for the `ch` function's
+// `(NOT e) AND g` term.
+fn not32(x: u64) -> u64 {
+    m32(x) ^ 4294967295u64
+}
+
+// ── Round constants ─────────────────────────────────────────────────────
+
+// The first 32 bits of the fractional parts of the cube roots of the first
+// 64 primes (FIPS 180-4 §4.2.2).
+fn sha256_k() -> Vec[u64] {
+    let mut k: Vec[u64] = Vec.new();
+    k.push(0x428a2f98u64); k.push(0x71374491u64); k.push(0xb5c0fbcfu64); k.push(0xe9b5dba5u64);
+    k.push(0x3956c25bu64); k.push(0x59f111f1u64); k.push(0x923f82a4u64); k.push(0xab1c5ed5u64);
+    k.push(0xd807aa98u64); k.push(0x12835b01u64); k.push(0x243185beu64); k.push(0x550c7dc3u64);
+    k.push(0x72be5d74u64); k.push(0x80deb1feu64); k.push(0x9bdc06a7u64); k.push(0xc19bf174u64);
+    k.push(0xe49b69c1u64); k.push(0xefbe4786u64); k.push(0x0fc19dc6u64); k.push(0x240ca1ccu64);
+    k.push(0x2de92c6fu64); k.push(0x4a7484aau64); k.push(0x5cb0a9dcu64); k.push(0x76f988dau64);
+    k.push(0x983e5152u64); k.push(0xa831c66du64); k.push(0xb00327c8u64); k.push(0xbf597fc7u64);
+    k.push(0xc6e00bf3u64); k.push(0xd5a79147u64); k.push(0x06ca6351u64); k.push(0x14292967u64);
+    k.push(0x27b70a85u64); k.push(0x2e1b2138u64); k.push(0x4d2c6dfcu64); k.push(0x53380d13u64);
+    k.push(0x650a7354u64); k.push(0x766a0abbu64); k.push(0x81c2c92eu64); k.push(0x92722c85u64);
+    k.push(0xa2bfe8a1u64); k.push(0xa81a664bu64); k.push(0xc24b8b70u64); k.push(0xc76c51a3u64);
+    k.push(0xd192e819u64); k.push(0xd6990624u64); k.push(0xf40e3585u64); k.push(0x106aa070u64);
+    k.push(0x19a4c116u64); k.push(0x1e376c08u64); k.push(0x2748774cu64); k.push(0x34b0bcb5u64);
+    k.push(0x391c0cb3u64); k.push(0x4ed8aa4au64); k.push(0x5b9cca4fu64); k.push(0x682e6ff3u64);
+    k.push(0x748f82eeu64); k.push(0x78a5636fu64); k.push(0x84c87814u64); k.push(0x8cc70208u64);
+    k.push(0x90befffau64); k.push(0xa4506cebu64); k.push(0xbef9a3f7u64); k.push(0xc67178f2u64);
+    k
+}
+
+// ── SHA-256 ─────────────────────────────────────────────────────────────
+
+// Digest of `msg`, returned as the 32 raw bytes.
+fn sha256(msg: Vec[u8]) -> Vec[u8] {
+    let msg_len: i64 = msg.len();
+    let bitlen: u64 = (msg_len as u64) * 8u64;
+
+    // Pad: 0x80, then zeros to 56 mod 64, then the length in bits as 8
+    // big-endian bytes.
+    let mut data: Vec[u8] = Vec.new();
+    for b in msg {
+        data.push(b);
+    }
+    data.push(128u8);
+    while (data.len() % 64) != 56 {
+        data.push(0u8);
+    }
+    let mut i: i64 = 7;
+    while i >= 0 {
+        data.push(((bitlen >> ((i as u64) * 8u64)) & 255u64) as u8);
+        i = i - 1;
+    }
+
+    // Initial state: first 32 bits of the fractional parts of the square
+    // roots of the first 8 primes.
+    let mut h: Vec[u64] = Vec.new();
+    h.push(0x6a09e667u64); h.push(0xbb67ae85u64); h.push(0x3c6ef372u64); h.push(0xa54ff53au64);
+    h.push(0x510e527fu64); h.push(0x9b05688cu64); h.push(0x1f83d9abu64); h.push(0x5be0cd19u64);
+
+    let k = sha256_k();
+    let total: i64 = data.len();
+    let mut pos: i64 = 0;
+    while pos < total {
+        // Message schedule: 16 words straight from the block, 48 derived.
+        let mut w: Vec[u64] = Vec.new();
+        let mut t: i64 = 0;
+        while t < 16 {
+            let o = pos + t * 4;
+            let b0 = (data[o] as u64) << 24u64;
+            let b1 = (data[o + 1] as u64) << 16u64;
+            let b2 = (data[o + 2] as u64) << 8u64;
+            let b3 = data[o + 3] as u64;
+            w.push(b0 | b1 | b2 | b3);
+            t = t + 1;
+        }
+        while t < 64 {
+            let x15 = w[t - 15];
+            let x2 = w[t - 2];
+            let s0 = rotr32(x15, 7u64) ^ rotr32(x15, 18u64) ^ shr32(x15, 3u64);
+            let s1 = rotr32(x2, 17u64) ^ rotr32(x2, 19u64) ^ shr32(x2, 10u64);
+            w.push(m32(w[t - 16] + s0 + w[t - 7] + s1));
+            t = t + 1;
+        }
+
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+
+        let mut r: i64 = 0;
+        while r < 64 {
+            let sig1 = rotr32(e, 6u64) ^ rotr32(e, 11u64) ^ rotr32(e, 25u64);
+            let ch = (e & f) ^ (not32(e) & g);
+            let temp1 = m32(hh + sig1 + ch + k[r] + w[r]);
+            let sig0 = rotr32(a, 2u64) ^ rotr32(a, 13u64) ^ rotr32(a, 22u64);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = m32(sig0 + maj);
+            hh = g;
+            g = f;
+            f = e;
+            e = m32(d + temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = m32(temp1 + temp2);
+            r = r + 1;
+        }
+
+        h[0] = m32(h[0] + a);
+        h[1] = m32(h[1] + b);
+        h[2] = m32(h[2] + c);
+        h[3] = m32(h[3] + d);
+        h[4] = m32(h[4] + e);
+        h[5] = m32(h[5] + f);
+        h[6] = m32(h[6] + g);
+        h[7] = m32(h[7] + hh);
+        pos = pos + 64;
+    }
+
+    // Serialize the eight words big-endian.
+    let mut out: Vec[u8] = Vec.new();
+    let mut j: i64 = 0;
+    while j < 8 {
+        let word = h[j];
+        out.push(((word >> 24u64) & 255u64) as u8);
+        out.push(((word >> 16u64) & 255u64) as u8);
+        out.push(((word >> 8u64) & 255u64) as u8);
+        out.push((word & 255u64) as u8);
+        j = j + 1;
+    }
+    out
+}
+
+// ── HMAC-SHA256 (RFC 2104) ──────────────────────────────────────────────
+
+// HMAC = H((K XOR opad) || H((K XOR ipad) || msg)), with the key reduced by
+// H when it exceeds the 64-byte block size and zero-padded when shorter.
+//
+// The `allow` covers two B-2026-07-31-28 reports in this function. The first
+// is `key`: consumed on exactly one of two MUTUALLY EXCLUSIVE branches of the
+// `normalized` binding below, so no RC is needed, but the analysis joins the
+// branches and calls it a re-use. Restructuring does not help — the
+// single-expression `if` below is already minimal and still trips it. The
+// second is `inner`, reported as "consume at the `sha256(inner)` line, other
+// use at the earlier `inner.push(b)` line" — i.e. the flagged re-use precedes
+// the consume in source order. That one did not reduce to a small repro (a
+// vec built across two loops and then consumed is clean on its own), so it is
+// recorded as observed-in-context rather than explained.
+#[allow(rc_fallback)]
+fn hmac_sha256(key: Vec[u8], msg: Vec[u8]) -> Vec[u8] {
+    // A key longer than the block is replaced by its own digest — the path
+    // RFC 4231 test case 6 exists to exercise. Normalizing to one binding
+    // first keeps `key` on a single ownership path: consumed by `sha256` on
+    // one branch, moved out on the other, never both.
+    let normalized = if key.len() > 64 { sha256(key) } else { key };
+    let mut block_key: Vec[u8] = Vec.new();
+    for b in normalized {
+        block_key.push(b);
+    }
+    while block_key.len() < 64 {
+        block_key.push(0u8);
+    }
+
+    let mut inner: Vec[u8] = Vec.new();
+    let mut outer: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 64 {
+        let kb = block_key[i] as u64;
+        inner.push((kb ^ 54u64) as u8);
+        outer.push((kb ^ 92u64) as u8);
+        i = i + 1;
+    }
+    for b in msg {
+        inner.push(b);
+    }
+
+    let inner_digest = sha256(inner);
+    for b in inner_digest {
+        outer.push(b);
+    }
+    sha256(outer)
+}
+
+// ── Helpers for the vectors ─────────────────────────────────────────────
+
+fn to_hex(bytes: Vec[u8]) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut s = String.new();
+    for b in bytes {
+        let v = b as i64;
+        s.push(digits[v / 16] as char);
+        s.push(digits[v % 16] as char);
+    }
+    s
+}
+
+fn bytes_of(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+// `n` copies of one byte — builds the fixed-pattern keys and payloads the
+// RFC 4231 cases specify.
+fn repeat_byte(b: u8, n: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        v.push(b);
+        i = i + 1;
+    }
+    v
+}
+
+// Same B-2026-07-31-28 shape: `label` is consumed on exactly one of the two
+// arms, so the RC the analysis inserts is never needed at runtime.
+#[allow(rc_fallback)]
+fn check(label: String, got: String, want: String) {
+    if got == want {
+        println(label + " ok");
+    } else {
+        println(label + " FAIL got=" + got + " want=" + want);
+    }
+}
+
+fn main() {
+    // ── SHA-256, FIPS 180-4 / NIST examples ──
+    // Empty input exercises the pure-padding path: no message bytes at all,
+    // one full block of padding.
+    check(
+        "sha256-empty",
+        to_hex(sha256(bytes_of(""))),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    );
+    check(
+        "sha256-abc",
+        to_hex(sha256(bytes_of("abc"))),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+    // 56 bytes: the length field no longer fits beside the message in one
+    // block, so this is the two-block case.
+    check(
+        "sha256-448bit",
+        to_hex(sha256(bytes_of(
+            "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+        ))),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+    );
+    // 1000 'a' — 16 blocks, so a schedule bug that only shows up after the
+    // first couple of blocks has somewhere to surface.
+    check(
+        "sha256-1000a",
+        to_hex(sha256(repeat_byte(97u8, 1000))),
+        "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3",
+    );
+
+    // ── HMAC-SHA256, RFC 4231 ──
+    check(
+        "hmac-rfc4231-1",
+        to_hex(hmac_sha256(repeat_byte(11u8, 20), bytes_of("Hi There"))),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+    );
+    // Short key (4 bytes) — the zero-pad path.
+    check(
+        "hmac-rfc4231-2",
+        to_hex(hmac_sha256(
+            bytes_of("Jefe"),
+            bytes_of("what do ya want for nothing?"),
+        )),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+    );
+    check(
+        "hmac-rfc4231-3",
+        to_hex(hmac_sha256(repeat_byte(170u8, 20), repeat_byte(221u8, 50))),
+        "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe",
+    );
+    // 131-byte key — longer than the block, so the key is hashed first.
+    check(
+        "hmac-rfc4231-6",
+        to_hex(hmac_sha256(
+            repeat_byte(170u8, 131),
+            bytes_of("Test Using Larger Than Block-Size Key - Hash Key First"),
+        )),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
+    );
+}
