@@ -83,6 +83,12 @@ const POD_SCALARS: &[&str] = &[
 /// (`rc_fallback_fns`, `elided_bindings`, …).
 pub fn eligible_deque_locals(program: &Program) -> HashMap<String, HashSet<String>> {
     let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    // Escape hatch, mirroring `KARAC_RC_ELIDE_REF_PARAMS`. Setting this to `0`
+    // restores the memmove lowering everywhere, which is what makes a clean
+    // A/B of the optimization possible on one compiler build.
+    if std::env::var("KARAC_DEQUE_HEAD_INDEX").is_ok_and(|v| v == "0") {
+        return out;
+    }
     for item in &program.items {
         let Item::Function(f) = item else { continue };
         let eligible = analyze_fn(&f.body);
