@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 72 | 0 |
 | false-positive | 53 | 0 |
 | run-vs-build | 50 | 0 |
-| perf | 40 | 2 |
+| perf | 41 | 3 |
 | crash | 32 | 0 |
 | soundness | 31 | 0 |
 | diagnostics | 26 | 0 |
@@ -117,22 +117,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 26 | 0 |
 | other | 21 | 0 |
 | cli | 20 | 0 |
-| runtime | 16 | 0 |
+| runtime | 17 | 1 |
 | resolver | 13 | 0 |
 | parser | 6 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **790 surfaced · 3 open · 779 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **791 surfaced · 4 open · 779 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane -- the corpus's largest genuine deficit. Cause is quantitatively CONSISTENT with B-2026-07-30-5 (VecDeque.pop_front O(n)): at the measured 3.61 G elem-moves/s, an average queue depth of ~21k-23.5k of n=50k accounts for the whole gap. Confirming it needs one number -- the kata's average queue depth. | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | medium | VecDeque.pop_front is O(n) (memmove per pop), making a DEEP queue drain O(n^2) — real, but NOT the cause of B-2026-07-30-4 | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site. Still silent: Map values, Option/Result payloads, non-let tuple positions. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
+| B-2026-07-31-21 | 2026-07-31 | runtime | high | Map/Set capacity grows linearly with TOTAL removals, not live size -- a sliding-window map leaks memory without bound (297 MB where Rust holds 2.4 MB) | — |
 
 ### Fixed (779)
 
