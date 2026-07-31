@@ -26457,6 +26457,55 @@ fn test_param_tuple_elements_run_drop_bodies() {
     );
 }
 
+/// B-2026-07-30-11 (if-let leg) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_if_let_moved_payload_runs_drop_body`, same source and expected
+/// string.
+#[test]
+fn test_if_let_moved_payload_runs_drop_body() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn mkbox(n: i64) -> Box2 {\n\
+                 Box2.Full(Res { id: n })\n\
+             }\n\
+             fn take_res(r: Res) {\n\
+                 println(f\"consumed {r.id}\")\n\
+             }\n\
+             fn main() {\n\
+                 let b = Box2.Full(Res { id: 33 });\n\
+                 println(\"a\");\n\
+                 if let Box2.Full(r) = b {\n\
+                     println(f\"arm sees {r.id}\");\n\
+                 }\n\
+                 println(\"b\");\n\
+                 if let Box2.Full(r) = mkbox(34) {\n\
+                     println(f\"arm sees {r.id}\");\n\
+                 }\n\
+                 println(\"c\");\n\
+                 let e = Box2.Empty;\n\
+                 if let Box2.Full(r) = e {\n\
+                     println(f\"arm sees {r.id}\");\n\
+                 } else {\n\
+                     println(\"empty\");\n\
+                 }\n\
+                 println(\"d\");\n\
+                 let c = Box2.Full(Res { id: 35 });\n\
+                 if let Box2.Full(r) = c {\n\
+                     take_res(r);\n\
+                     println(\"after move\");\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\narm sees 33\ndrop 33\nb\narm sees 34\ndrop 34\nc\nempty\nd\n\
+         consumed 35\nafter move\ndrop 35\nend\n"
+    );
+}
+
 /// B-2026-07-31-37 (heap face) — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_assign_move_heap_body_once`, same source and expected string.
 /// The interpreter's pre-fix behavior was `D7 D7 x` (double body, right
@@ -26761,7 +26810,7 @@ fn test_enum_payload_move_out_disarms_source_drop() {
                    if let Slot.Full(q) = u { println(q.id) } }\n\
                  println(999);\n\
              }\n"),
-        "31\n31\n100\n32\n33\n999\n"
+        "31\n31\n100\n32\n33\n33\n999\n"
     );
 }
 

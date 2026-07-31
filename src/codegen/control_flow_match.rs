@@ -1203,7 +1203,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// position (inside a `TupleVariant` / `Struct` pattern), skipping a
     /// top-level whole-scrutinee binding (`other => …`). `in_payload` becomes
     /// true once a variant/struct sub-pattern is entered.
-    fn collect_variant_payload_binding_names(
+    pub(super) fn collect_variant_payload_binding_names(
         pattern: &Pattern,
         in_payload: bool,
         out: &mut Vec<String>,

@@ -240,7 +240,7 @@ impl<'a> super::Interpreter<'a> {
     /// payload positions only; a bare `Tuple` pattern is deliberately not a
     /// collector (a tuple scrutinee's element walk stays armed and fires, the
     /// shape-B behavior pinned by `b3011_nonlet1`).
-    fn arm_moved_user_drop_payload_bindings(
+    pub(super) fn arm_moved_user_drop_payload_bindings(
         &self,
         enum_name: &str,
         pattern: &Pattern,

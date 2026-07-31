@@ -142,7 +142,21 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value);
-        self.bind_pattern_values(pattern, val)?;
+        // B-2026-07-30-11 (if-let leg): record which of this pattern's
+        // binding names sit in a VARIANT payload position so
+        // `bind_pattern_values` routes a Drop-declaring payload struct to
+        // the UserDrop channel — the exact mirror of the match-arm site
+        // (`control_flow_match.rs`); without it `if let Full(r) = b { … }`
+        // never ran r's body while the same `match` arm did.
+        self.current_variant_payload_bindings.clear();
+        {
+            let mut vp_names: Vec<String> = Vec::new();
+            Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
+            self.current_variant_payload_bindings.extend(vp_names);
+        }
+        let bind_res = self.bind_pattern_values(pattern, val);
+        self.current_variant_payload_bindings.clear();
+        bind_res?;
         // Slice 3s (B-2026-07-01-12): clone an ESCAPING borrow-mode payload
         // binding — the then-block moving `x` out must own an independent
         // copy (the map retains its stored value).

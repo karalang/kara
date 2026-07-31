@@ -6145,6 +6145,63 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (if-let leg) — an `if let` arm binding that receives
+    /// a MOVED Drop-bearing enum payload runs the payload's Drop body at
+    /// arm end, exactly like the equivalent `match` arm: owned-binding and
+    /// fresh-temp scrutinees, a miss edge that fires nothing, and a body
+    /// that moves the binding out still fires exactly once. Twin of
+    /// `tests/interpreter.rs`'s `test_if_let_moved_payload_runs_drop_body`.
+    #[test]
+    fn e2e_if_let_moved_payload_runs_drop_body() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn mkbox(n: i64) -> Box2 {\n\
+             \x20   Box2.Full(Res { id: n })\n\
+             }\n\
+             fn take_res(r: Res) {\n\
+             \x20   println(f\"consumed {r.id}\")\n\
+             }\n\
+             fn main() {\n\
+             \x20   let b = Box2.Full(Res { id: 33 });\n\
+             \x20   println(\"a\");\n\
+             \x20   if let Box2.Full(r) = b {\n\
+             \x20       println(f\"arm sees {r.id}\");\n\
+             \x20   }\n\
+             \x20   println(\"b\");\n\
+             \x20   if let Box2.Full(r) = mkbox(34) {\n\
+             \x20       println(f\"arm sees {r.id}\");\n\
+             \x20   }\n\
+             \x20   println(\"c\");\n\
+             \x20   let e = Box2.Empty;\n\
+             \x20   if let Box2.Full(r) = e {\n\
+             \x20       println(f\"arm sees {r.id}\");\n\
+             \x20   } else {\n\
+             \x20       println(\"empty\");\n\
+             \x20   }\n\
+             \x20   println(\"d\");\n\
+             \x20   let c = Box2.Full(Res { id: 35 });\n\
+             \x20   if let Box2.Full(r) = c {\n\
+             \x20       take_res(r);\n\
+             \x20       println(\"after move\");\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\narm sees 33\ndrop 33\nb\narm sees 34\ndrop 34\nc\nempty\nd\n\
+             consumed 35\nafter move\ndrop 35\nend\n"
+        );
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///
@@ -6400,10 +6457,11 @@ fn main() {
         // 31: bound out — the source runs nothing, and since the match-arm
         // leg (B-2026-07-30-11) the ARM BINDING runs the body at its NLL end
         // (the second 31; it was a residual leak before). 32: `_` binds
-        // nothing, so the source still fires. 33: `if let` payload bindings
-        // are NOT yet on the arm-drop channel on either backend — the
-        // remaining residual, silent by parity.
-        assert_eq!(out, "31\n31\n100\n32\n33\n999\n");
+        // nothing, so the source still fires. 33: since the if-let leg the
+        // `if let` payload binding rides the same arm-drop channel, so the
+        // second 33 fires exactly like the match arm's second 31 (it was
+        // the remaining silent-by-parity residual before).
+        assert_eq!(out, "31\n31\n100\n32\n33\n33\n999\n");
     }
 
     /// B-2026-07-31-5 — a value enum's OWN `impl Drop` body fires at the

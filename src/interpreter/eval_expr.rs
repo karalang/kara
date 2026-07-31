@@ -754,8 +754,45 @@ impl<'a> super::Interpreter<'a> {
                 // codegen's retraction at `control_flow.rs`'s owned-variable arm.
                 self.disarm_moved_out_enum_payload_one(value, &val, pattern);
                 let result = if self.try_match_pattern(pattern, &val) {
+                    // B-2026-07-30-11 (if-let leg): a consuming scrutinee's
+                    // moved-out Drop-bearing payload bindings get REAL Drop
+                    // slots, exactly like the match-arm site (`eval_match`'s
+                    // stash): the then-block's executor adopts them at entry,
+                    // so NLL placement and every move hook apply. Consuming =
+                    // an EnumVariant value from an identifier/`self` place
+                    // (whose walk the disarm above retracted) or a fresh
+                    // temp; a projection place is a view whose owner still
+                    // walks.
+                    let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
+                        && matches!(
+                            &value.kind,
+                            ExprKind::Identifier(_)
+                                | ExprKind::SelfValue
+                                | ExprKind::Call { .. }
+                                | ExprKind::MethodCall { .. }
+                        );
+                    let stash_names: Vec<String> = if consuming_scrutinee {
+                        if let Value::EnumVariant { ref enum_name, .. } = val {
+                            self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    };
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
+                    for n in stash_names {
+                        let is_drop_struct = match self.env.get(&n) {
+                            Some(Value::Struct { name: tn, .. }) => {
+                                self.program.drop_method_keys.contains_key(&tn)
+                            }
+                            _ => false,
+                        };
+                        if is_drop_struct {
+                            self.pending_arm_drop_bindings.push(n);
+                        }
+                    }
                     let result = self.eval_block_inner(then_block);
                     self.env.pop_scope();
                     match result {
