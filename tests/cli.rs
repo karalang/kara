@@ -23541,3 +23541,40 @@ fn fix_applies_bang_to_not_and_string_slice_edits() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn fix_reports_no_progress_on_unfixable_naming_diagnostic() {
+    // B-2026-07-31-32 — the liveness half. `let mut M` carried a no-op rename
+    // edit, so `karac fix` printed "applied 1 fix(es)" on every invocation
+    // while the file never changed and the error never cleared. A Mend driver
+    // that loops until "no fixes applied" spun forever on it.
+    //
+    // Asserting byte-identity across repeated runs is the point: the failure
+    // was not a wrong edit but a truthless progress signal.
+    let (tmp, path) = ownership_gate_fixture(
+        "b32-noop",
+        "pub let M: i64 = 3;\nfn main() { println(M); }\n",
+    );
+    let before = std::fs::read_to_string(&path).unwrap();
+    for _ in 0..3 {
+        let out = karac_bin().arg("fix").arg(&path).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !stdout.contains("applied"),
+            "fix must not claim progress it cannot make; got: {stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            before,
+            "file must be untouched"
+        );
+    }
+    // Still reported — withholding the edit must not silence the diagnostic.
+    let check = karac_bin().arg("check").arg(&path).output().unwrap();
+    assert!(!check.status.success());
+    assert!(
+        String::from_utf8_lossy(&check.stderr).contains("E_MODULE_BINDING_NAMING"),
+        "diagnostic must survive"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

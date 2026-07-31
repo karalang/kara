@@ -1761,6 +1761,50 @@ pub fn suggest_const_name(name: &str) -> String {
         .join("_")
 }
 
+/// Suggest a rename of `name` into `target`'s class, but only when the
+/// suggestion is actually **usable** — i.e. it differs from `name` and really
+/// does classify as `target`. Returns `None` when the case transform cannot
+/// get there, so callers can drop the "consider renaming to `X`" clause rather
+/// than emit advice that changes nothing.
+///
+/// B-2026-07-31-32. The raw `suggest_*_name` functions are pure case
+/// transforms with no idea whether their output satisfies the rule that
+/// prompted the diagnostic. For a name with exactly ONE letter that is
+/// uppercase — `M`, `M2`, `M_2` — `suggest_const_name` is the IDENTITY
+/// (uppercasing an already-uppercase letter), while `classify_ident` puts it
+/// in Type-class by rule CN-7 (so `T` / `K` / `V` read as type parameters).
+/// The result was `consider renaming to \`M\`` for a binding already named
+/// `M`, and — because the resolver hangs a machine-applicable rename off the
+/// same string — a NO-OP `karac fix` edit that reported "applied 1 fix(es)"
+/// forever without changing a byte.
+///
+/// Checking `classify_ident(&s) == target` rather than merely `s != name` is
+/// what makes this general: it also rejects a suggestion that changes the name
+/// but still violates the rule (`_M` -> `M` is a different string and still
+/// Type-class, which would have stalled one step later).
+pub fn suggest_name_for_class(name: &str, target: IdentClass) -> Option<String> {
+    let suggestion = match target {
+        IdentClass::Type => suggest_type_name(name),
+        IdentClass::Value => suggest_value_name(name),
+        IdentClass::Const => suggest_const_name(name),
+    };
+    if suggestion != name && classify_ident(&suggestion) == target {
+        Some(suggestion)
+    } else {
+        None
+    }
+}
+
+/// Whether `name` carries exactly one alphabetic character. Such a name is
+/// unconditionally Type-class per `classify_stripped`'s CN-7 arm, so no
+/// capitalization change can move it to Const- or Value-class — the fact a
+/// diagnostic needs in order to say something useful when
+/// [`suggest_name_for_class`] declines. Split out so the explanation stays
+/// pinned to the rule it describes.
+pub fn has_single_letter(name: &str) -> bool {
+    name.chars().filter(|c| c.is_ascii_alphabetic()).count() == 1
+}
+
 /// Split `name` into words on `_` boundaries and PascalCase transitions.
 fn split_words(name: &str) -> Vec<String> {
     let mut words: Vec<String> = Vec::new();

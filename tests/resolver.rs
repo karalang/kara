@@ -5315,3 +5315,84 @@ fn effect_resource_with_imported_provider_trait_resolves() {
          effect resource Thing: Provider;",
     );
 }
+
+// ── B-2026-07-31-32: no identity rename suggestions ─────────────
+
+#[test]
+fn module_binding_single_letter_name_withholds_identity_rename() {
+    // `let mut M = …` used to report "consider renaming to `M`" — the name it
+    // already had — and hang a machine-applicable edit off that same string.
+    // The edit was a NO-OP, so `karac fix` reported "applied 1 fix(es)" on
+    // every pass while the file stayed byte-identical and the error persisted:
+    // an automated Mend loop never terminated.
+    //
+    // `suggest_const_name` is the identity on a name whose only letter is
+    // already uppercase, while CN-7 classifies a single-letter name as
+    // Type-class regardless — so no case transform can reach Const-class here.
+    let src = "pub let M: i32 = 3;";
+    let errors = resolve_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("E_MODULE_BINDING_NAMING"))
+        .expect("single-letter module binding is still diagnosed");
+    assert!(
+        err.replacement.is_none(),
+        "must not carry a no-op edit, got {:?}",
+        err.replacement
+    );
+    assert!(
+        err.suggestion.is_none(),
+        "must not carry an identity rename suggestion, got {:?}",
+        err.suggestion
+    );
+    assert!(
+        !err.message.contains("renaming to `M`"),
+        "message must not suggest the name it already has: {}",
+        err.message
+    );
+    // Still actionable: it explains why, and what to do instead.
+    assert!(
+        err.message.contains("single letter") && err.message.contains("more than one letter"),
+        "message should explain the single-letter rule: {}",
+        err.message
+    );
+}
+
+#[test]
+fn module_binding_single_letter_with_digits_also_withholds_rename() {
+    // The guard is "the suggestion actually classifies as Const", not "the
+    // suggestion differs from the name" — so it also covers `M2` / `M_2`,
+    // which have one letter plus digits and are Type-class for the same
+    // reason. A `!=`-only guard would have let these through unchanged.
+    for name in ["M2", "M_2"] {
+        let src = format!("pub let {name}: i32 = 3;");
+        let errors = resolve_errors(&src);
+        let err = errors
+            .iter()
+            .find(|e| e.message.contains("E_MODULE_BINDING_NAMING"))
+            .unwrap_or_else(|| panic!("{name} should still be diagnosed"));
+        assert!(
+            err.replacement.is_none(),
+            "{name} must not carry an edit, got {:?}",
+            err.replacement
+        );
+    }
+}
+
+#[test]
+fn module_binding_multi_letter_rename_is_unaffected() {
+    // The guard must not cost the real fix: a name a case transform CAN move
+    // into Const-class keeps both the suggestion and the applicable edit.
+    let src = "pub let maxRetries: i32 = 3;";
+    let errors = resolve_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("E_MODULE_BINDING_NAMING"))
+        .expect("expected naming diagnostic");
+    let edit = err
+        .replacement
+        .as_ref()
+        .expect("a reachable rename must still be machine-applicable");
+    assert_eq!(edit.replacement, "MAX_RETRIES");
+    assert!(err.message.contains("consider renaming to `MAX_RETRIES`"));
+}

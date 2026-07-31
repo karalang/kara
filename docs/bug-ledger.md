@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 41 | 2 |
 | soundness | 32 | 0 |
 | crash | 32 | 0 |
-| diagnostics | 29 | 1 |
+| diagnostics | 30 | 1 |
 | use-after-free | 11 | 0 |
 | other | 7 | 0 |
 
@@ -115,16 +115,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 85 | 1 |
 | ownership | 35 | 1 |
 | autopar | 26 | 0 |
+| cli | 22 | 1 |
 | other | 21 | 0 |
-| cli | 21 | 0 |
 | runtime | 17 | 0 |
-| resolver | 14 | 1 |
-| parser | 7 | 0 |
+| resolver | 15 | 1 |
+| parser | 8 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **802 surfaced · 5 open · 789 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **803 surfaced · 5 open · 790 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -134,11 +134,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **802 surfaced 
 | B-2026-07-30-5 | 2026-07-30 | codegen | medium | VecDeque.pop_front is O(n) (memmove per pop), making a DEEP queue drain O(n^2) — real, but NOT the cause of B-2026-07-30-4 | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-31-28 | 2026-07-31 | ownership | medium | RC-fallback analysis is not path-sensitive across a branch JOIN: a value consumed exactly once on each of two MUTUALLY EXCLUSIVE `if`/`else` (or `match`) arms is reported as a re-use and gets a real RC inserted, even though only one arm can run. The same mutual exclusion expressed with an early `return` is analyzed correctly. | — |
-| B-2026-07-31-32 | 2026-07-31 | resolver | low | E_MODULE_BINDING_NAMING suggests renaming a single-uppercase-letter binding to itself | — |
+| B-2026-07-31-33 | 2026-07-31 | resolver+cli | medium | `karac fix` renames a module binding's DECLARATION only, breaking every use site | src/resolver/collect.rs (E_MODULE_BINDING_NAMING replacement), src/resolver.rs (ResolveError::replacement), tests/cli.rs::test_fix_applies_module_binding_const_rename |
 
-### Fixed (789)
+### Fixed (790)
 
-<details><summary>789 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>790 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -931,6 +931,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **802 surfaced 
 | B-2026-07-31-29 | ownership+cli | high | `karac build` and `karac run` DO NOT GATE on ownership errors: a use-after-move that `karac check` reports as `error[ownership]` (exit 1) still compi… | ef7e209 |
 | B-2026-07-31-30 | codegen | high | `for x in <module-level Vec/Map/Set/String>` compiled to a zero-iteration loop (run-vs-build divergence) | e0fdc44 |
 | B-2026-07-31-31 | parser+typecheck | medium | Mechanical diagnostics that name their own replacement carry no `karac fix` payload (`!` -> `not`, String -> StringSlice) | 49dc24c |
+| B-2026-07-31-32 | resolver+parser | medium | E_MODULE_BINDING_NAMING suggests renaming a single-uppercase-letter binding to itself | — |
 
 </details>
 

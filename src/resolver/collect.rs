@@ -1319,32 +1319,59 @@ impl<'a> super::Resolver<'a> {
         // code rather than the generic parser-side message shape.
         let actual = crate::lexer::classify_ident(&b.name);
         if actual != crate::lexer::IdentClass::Const {
-            let suggestion = crate::lexer::suggest_const_name(&b.name);
+            // B-2026-07-31-32 — only advertise a rename that actually lands in
+            // Const-class. `suggest_const_name` is the identity on a name whose
+            // sole letter is already uppercase (`M`, `M2`), which produced
+            // "consider renaming to `M`" for a binding named `M` AND a no-op
+            // machine-applicable edit: `karac fix` reported "applied 1 fix(es)"
+            // on every pass while the file stayed byte-identical and the error
+            // persisted, so an automated Mend loop never terminated.
+            let suggestion =
+                crate::lexer::suggest_name_for_class(&b.name, crate::lexer::IdentClass::Const);
             let actual_desc = match actual {
                 crate::lexer::IdentClass::Type => "Type-class",
                 crate::lexer::IdentClass::Value => "Value-class",
                 crate::lexer::IdentClass::Const => unreachable!(),
+            };
+            // When no case transform can reach Const-class, say WHY and what to
+            // do instead of naming a replacement. A fabricated distinct name
+            // (`M` -> `M_VALUE`) would be inventing the programmer's intent, so
+            // the diagnostic states the constraint and leaves the choice.
+            let advice = match &suggestion {
+                Some(s) => format!("consider renaming to `{s}`"),
+                None if crate::lexer::has_single_letter(&b.name) => {
+                    "a name with a single letter is always Type-class (so `T` / `K` / `V` read \
+                     as type parameters), and no capitalization change can make it Const-class \
+                     — use a name with more than one letter"
+                        .to_string()
+                }
+                None => "rename it to SCREAMING_SNAKE_CASE".to_string(),
             };
             self.errors.push(ResolveError {
                 message: format!(
                     "error[E_MODULE_BINDING_NAMING]: module-level binding name \
                      `{}` is {actual_desc} but module-level `let` / `let mut` \
                      bindings introduce Const-class identifiers \
-                     (SCREAMING_SNAKE_CASE); consider renaming to `{}`",
-                    b.name, suggestion,
+                     (SCREAMING_SNAKE_CASE); {advice}",
+                    b.name,
                 ),
                 span: b.span.clone(),
                 kind: ResolveErrorKind::UndefinedName,
-                suggestion: Some(format!("rename to `{}`", suggestion)),
+                suggestion: suggestion.as_ref().map(|s| format!("rename to `{s}`")),
                 // Machine-applicable rename (B-2026-07-06-3): the exact
                 // Const-cased candidate is already computed above, so wire
                 // it as a `.replacement` spanning the name identifier only
                 // (`b.name_span`, not the whole `let … = …;` statement).
-                replacement: Some(Box::new(crate::resolver::TextEdit {
-                    offset: b.name_span.offset,
-                    length: b.name_span.length,
-                    replacement: suggestion.clone(),
-                })),
+                // Withheld entirely when there is no usable candidate — an
+                // edit that cannot change the outcome is worse than none,
+                // because `karac fix` counts it as progress.
+                replacement: suggestion.as_ref().map(|s| {
+                    Box::new(crate::resolver::TextEdit {
+                        offset: b.name_span.offset,
+                        length: b.name_span.length,
+                        replacement: s.clone(),
+                    })
+                }),
                 stub_hint: None,
             });
             // Continue and still attempt registration under the

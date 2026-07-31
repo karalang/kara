@@ -1854,3 +1854,37 @@ fn test_four_dots_lex_as_dotdotdot_plus_dot() {
     assert_eq!(tokens[0], Token::DotDotDot);
     assert_eq!(tokens[1], Token::Dot);
 }
+
+// ── B-2026-07-31-32: validated rename suggestions ───────────────
+
+#[test]
+fn suggest_name_for_class_declines_unreachable_renames() {
+    use karac::lexer::{suggest_name_for_class, IdentClass};
+    // A name whose only letter is already uppercase is Type-class by CN-7, and
+    // uppercasing it is the identity — no Const-class rename exists.
+    for name in ["M", "M2", "M_2"] {
+        assert_eq!(
+            suggest_name_for_class(name, IdentClass::Const),
+            None,
+            "{name} has no reachable Const-class rename"
+        );
+    }
+    // The check is "does the suggestion classify as the target", not merely
+    // "does it differ": `_M` -> `M` IS a different string but still Type-class,
+    // so it must be declined too — otherwise `karac fix` renames once and then
+    // stalls on the identity case forever.
+    assert_eq!(suggest_name_for_class("_M", IdentClass::Const), None);
+}
+
+#[test]
+fn suggest_name_for_class_returns_reachable_renames() {
+    use karac::lexer::{classify_ident, suggest_name_for_class, IdentClass};
+    let s = suggest_name_for_class("maxRetries", IdentClass::Const)
+        .expect("a multi-letter name has a reachable Const rename");
+    assert_eq!(s, "MAX_RETRIES");
+    // Whatever comes back must satisfy the rule that prompted the diagnostic.
+    assert_eq!(classify_ident(&s), IdentClass::Const);
+    let t = suggest_name_for_class("my_widget", IdentClass::Type)
+        .expect("a snake_case name has a reachable Type rename");
+    assert_eq!(classify_ident(&t), IdentClass::Type);
+}

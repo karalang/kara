@@ -4,9 +4,7 @@
 //! Produces an AST from a token stream with error recovery and multi-error reporting.
 
 use crate::ast::*;
-use crate::lexer::{
-    classify_ident, suggest_const_name, suggest_type_name, suggest_value_name, IdentClass,
-};
+use crate::lexer::{classify_ident, IdentClass};
 use crate::token::{Span, SpannedToken, Token};
 
 mod attributes;
@@ -704,22 +702,35 @@ impl Parser {
         if actual == expected {
             return;
         }
-        let (expected_desc, suggestion) = match expected {
-            IdentClass::Type => ("Type-class (PascalCase)", suggest_type_name(name)),
-            IdentClass::Value => ("Value-class (snake_case)", suggest_value_name(name)),
-            IdentClass::Const => (
-                "Const-class (SCREAMING_SNAKE_CASE)",
-                suggest_const_name(name),
-            ),
+        let expected_desc = match expected {
+            IdentClass::Type => "Type-class (PascalCase)",
+            IdentClass::Value => "Value-class (snake_case)",
+            IdentClass::Const => "Const-class (SCREAMING_SNAKE_CASE)",
         };
         let actual_desc = match actual {
             IdentClass::Type => "Type-class",
             IdentClass::Value => "Value-class",
             IdentClass::Const => "Const-class",
         };
+        // B-2026-07-31-32 — same guard as the resolver's
+        // `E_MODULE_BINDING_NAMING`: name a replacement only when the case
+        // transform actually reaches `expected`. `const M = 1;` used to advise
+        // "consider renaming to `M`", because uppercasing a lone uppercase
+        // letter is the identity while CN-7 classifies a single-letter name as
+        // Type-class regardless. This site carries no machine-applicable edit,
+        // so the identity suggestion was merely useless rather than
+        // loop-inducing — but it is the same defect and shares the fix.
+        let advice = match crate::lexer::suggest_name_for_class(name, expected) {
+            Some(s) => format!("consider renaming to `{s}`"),
+            None if crate::lexer::has_single_letter(name) => format!(
+                "a name with a single letter is always Type-class, so no capitalization change \
+                 can make it {expected_desc} — use a name with more than one letter"
+            ),
+            None => format!("rename it to {expected_desc}"),
+        };
         self.errors.push(ParseError {
             message: format!(
-                "`{name}` is {actual_desc} but {context} names must be {expected_desc}; consider renaming to `{suggestion}`"
+                "`{name}` is {actual_desc} but {context} names must be {expected_desc}; {advice}"
             ),
             span,
         });

@@ -12365,3 +12365,45 @@ fn not_equal_and_vec_macro_are_not_bang_diagnostics() {
         );
     }
 }
+
+// ── B-2026-07-31-32: check_ident_class identity suggestions ─────
+
+#[test]
+fn const_single_letter_name_gets_no_identity_suggestion() {
+    // The shared `check_ident_class` family had the same defect as the
+    // resolver's E_MODULE_BINDING_NAMING: `const M = 1;` advised "consider
+    // renaming to `M`". This site carries no machine-applicable edit, so it
+    // was useless rather than loop-inducing — same cause, same fix.
+    let result = karac::parse("const M: i64 = 1;\nfn main() { println(M); }");
+    let err = result
+        .errors
+        .iter()
+        .find(|e| e.message.contains("Const-class"))
+        .expect("single-letter const is still diagnosed");
+    assert!(
+        !err.message.contains("renaming to `M`"),
+        "must not suggest the name it already has: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("single letter") && err.message.contains("more than one letter"),
+        "message should explain the rule: {}",
+        err.message
+    );
+}
+
+#[test]
+fn const_multi_letter_name_still_suggests_rename() {
+    // The reachable case keeps its concrete suggestion.
+    let result = karac::parse("const maxRetries: i64 = 1;\nfn main() { println(maxRetries); }");
+    let err = result
+        .errors
+        .iter()
+        .find(|e| e.message.contains("Const-class"))
+        .expect("expected naming diagnostic");
+    assert!(
+        err.message.contains("consider renaming to `MAX_RETRIES`"),
+        "got: {}",
+        err.message
+    );
+}
