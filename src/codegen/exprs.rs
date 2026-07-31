@@ -1262,6 +1262,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.restore_var_env(snap);
                 r
             }
+            // B-2026-07-31-9 — `providers { R => v } in { body }`. Without
+            // this arm it fell to the catch-all below and compiled to a bare
+            // constant 0: the body was never emitted, so a compiled program
+            // printed NOTHING and exited 0 while `--interp` ran it correctly.
+            ExprKind::Providers { bindings, body } => self.compile_providers_block(bindings, body),
             _ => Ok(self.context.i64_type().const_int(0, false).into()),
         }
     }

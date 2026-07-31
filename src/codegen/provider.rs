@@ -138,6 +138,75 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_with_provider_ambient(resource, provider_expr, closure_expr);
         }
 
+        // 1-3. Resolve the resource ID, vtable and provider data pointer.
+        //      Shared with the `providers { } in { }` block form
+        //      (B-2026-07-31-9) so both surfaces install identical frames.
+        let (resource_id, data_ptr, vtable_ptr) =
+            self.resolve_provider_binding_traitful(resource, provider_expr)?;
+
+        // 4. Alloca a `ProviderFrame` on the function entry block so the
+        //    storage outlives the push/pop pair without re-alloca'ing
+        //    on each loop iteration if a `with_provider` is in a loop.
+        let fn_val = self.current_fn.ok_or_else(|| {
+            "with_provider: no current function (called from top-level?)".to_string()
+        })?;
+        let frame_ptr = self.create_entry_alloca(fn_val, "wp.frame", self.provider_frame_ty.into());
+
+        // 5. Push: karac_provider_push(frame, resource_id, data, vtable_ptr).
+        let id_v = self.context.i32_type().const_int(resource_id as u64, false);
+        self.builder
+            .build_call(
+                self.karac_provider_push_fn,
+                &[
+                    frame_ptr.into(),
+                    id_v.into(),
+                    data_ptr.into(),
+                    vtable_ptr.into(),
+                ],
+                "",
+            )
+            .unwrap();
+
+        // 6. Inline the closure body. Only inline `||body` is supported in
+        //    v1 — the body's free variables resolve against the outer
+        //    scope, exactly as the interpreter handles a `with_provider`
+        //    closure (see `Interpreter::eval_with_provider`).
+        let body_result = self.compile_with_provider_body(closure_expr, resource)?;
+
+        // 7. Pop: karac_provider_pop(). Matches the push; the runtime
+        //    asserts head==frame and walks back to `frame.prev`.
+        self.builder
+            .build_call(self.karac_provider_pop_fn, &[], "")
+            .unwrap();
+
+        Ok(body_result)
+    }
+
+    /// Resolve one trait-ful `effect resource R: T` provider binding to the
+    /// `(resource_id, data_ptr, vtable_ptr)` triple a `karac_provider_push`
+    /// needs. Split out of [`Self::compile_with_provider`] so the
+    /// `providers { } in { }` block form can reuse it verbatim
+    /// (B-2026-07-31-9) — the block used to compile to nothing at all, and
+    /// the surest way to keep the two surfaces from drifting is to have them
+    /// build the frame through one function.
+    ///
+    /// Order is load-bearing and preserved from the original inline code: the
+    /// vtable is resolved BEFORE `compile_provider_data_ptr`, because that call
+    /// is what actually EVALUATES the provider expression. Resolving first
+    /// means a bad resource / missing vtable is a compile error raised before
+    /// any side effect is emitted.
+    fn resolve_provider_binding_traitful(
+        &mut self,
+        resource: &str,
+        provider_expr: &Expr,
+    ) -> Result<
+        (
+            u32,
+            inkwell::values::PointerValue<'ctx>,
+            inkwell::values::PointerValue<'ctx>,
+        ),
+        String,
+    > {
         // 1. Resolve the resource ID and provider trait. Both must have
         //    been populated by the early walk over `Item::EffectResource`
         //    in `compile_program`; absence here means the resource
@@ -196,44 +265,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    provider expression isn't a known identifier.
         let data_ptr = self.compile_provider_data_ptr(provider_expr, &provider_type_name)?;
 
-        // 4. Alloca a `ProviderFrame` on the function entry block so the
-        //    storage outlives the push/pop pair without re-alloca'ing
-        //    on each loop iteration if a `with_provider` is in a loop.
-        let fn_val = self.current_fn.ok_or_else(|| {
-            "with_provider: no current function (called from top-level?)".to_string()
-        })?;
-        let frame_ptr = self.create_entry_alloca(fn_val, "wp.frame", self.provider_frame_ty.into());
-
-        // 5. Push: karac_provider_push(frame, resource_id, data, vtable_ptr).
-        let i32_t = self.context.i32_type();
-        let id_v = i32_t.const_int(resource_id as u64, false);
-        let vtable_ptr = vt_global.as_pointer_value();
-        self.builder
-            .build_call(
-                self.karac_provider_push_fn,
-                &[
-                    frame_ptr.into(),
-                    id_v.into(),
-                    data_ptr.into(),
-                    vtable_ptr.into(),
-                ],
-                "",
-            )
-            .unwrap();
-
-        // 6. Inline the closure body. Only inline `||body` is supported in
-        //    v1 — the body's free variables resolve against the outer
-        //    scope, exactly as the interpreter handles a `with_provider`
-        //    closure (see `Interpreter::eval_with_provider`).
-        let body_result = self.compile_with_provider_body(closure_expr, resource)?;
-
-        // 7. Pop: karac_provider_pop(). Matches the push; the runtime
-        //    asserts head==frame and walks back to `frame.prev`.
-        self.builder
-            .build_call(self.karac_provider_pop_fn, &[], "")
-            .unwrap();
-
-        Ok(body_result)
+        Ok((resource_id, data_ptr, vt_global.as_pointer_value()))
     }
 
     /// Phase-8 line 153: lower `with_span(span, ||body)`.
@@ -586,11 +618,77 @@ impl<'ctx> super::Codegen<'ctx> {
         // Alloca the ProviderFrame on the entry block (one slot reused
         // across loop iterations), then push / body / pop — identical to
         // the user-resource path.
+        let frame_ptr = self.alloca_provider_frame("wp.amb.frame")?;
+        self.emit_provider_push(frame_ptr, resource_id, data_ptr, vtable_ptr);
+        let body_result = self.compile_with_provider_body(closure_expr, resource)?;
+        self.emit_provider_pop();
+        Ok(body_result)
+    }
+
+    /// Resolve ONE provider binding — trait-ful or ambient — to the
+    /// `(resource_id, data_ptr, vtable_ptr)` triple `karac_provider_push`
+    /// takes. The trait-*absence* discriminator is the same one
+    /// [`Self::compile_with_provider`] uses; see its step 0 for why absence of
+    /// a trait (not of an ID) is what selects the ambient path.
+    ///
+    /// Exists for the `providers { } in { }` block form (B-2026-07-31-9),
+    /// which must resolve EVERY binding before pushing ANY frame — so it
+    /// cannot go through the push/body/pop functions above.
+    fn resolve_provider_binding(
+        &mut self,
+        resource: &str,
+        provider_expr: &Expr,
+    ) -> Result<
+        (
+            u32,
+            inkwell::values::PointerValue<'ctx>,
+            inkwell::values::PointerValue<'ctx>,
+        ),
+        String,
+    > {
+        if self.provider_resource_traits.contains_key(resource) {
+            return self.resolve_provider_binding_traitful(resource, provider_expr);
+        }
+        let provider_type_name = self
+            .infer_provider_type_name(provider_expr)
+            .ok_or_else(|| {
+                format!(
+                    "providers[{}]: ambient-resource override requires a statically-typed                  provider (struct literal or typed binding); runtime-typed providers                  (e.g. a function return) are not supported on the codegen path in v1",
+                    resource
+                )
+            })?;
+        let resource_id = *self.provider_resource_ids.get(resource).ok_or_else(|| {
+            format!(
+                "providers[{}]: ambient resource has no minted resource ID — add it to                  `prelude::AMBIENT_RESOURCE_METHODS` (codegen bug)",
+                resource
+            )
+        })?;
+        let vtable_ptr = self.emit_ambient_vtable(&provider_type_name, resource)?;
+        let data_ptr = self.compile_provider_data_ptr(provider_expr, &provider_type_name)?;
+        Ok((resource_id, data_ptr, vtable_ptr))
+    }
+
+    /// Entry-block alloca for one `ProviderFrame`. Entry-block so the storage
+    /// outlives a push/pop pair inside a loop without re-alloca'ing per
+    /// iteration.
+    fn alloca_provider_frame(
+        &mut self,
+        name: &str,
+    ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
         let fn_val = self.current_fn.ok_or_else(|| {
             "with_provider: no current function (called from top-level?)".to_string()
         })?;
-        let frame_ptr =
-            self.create_entry_alloca(fn_val, "wp.amb.frame", self.provider_frame_ty.into());
+        Ok(self.create_entry_alloca(fn_val, name, self.provider_frame_ty.into()))
+    }
+
+    /// `karac_provider_push(frame, resource_id, data, vtable)`.
+    fn emit_provider_push(
+        &mut self,
+        frame_ptr: inkwell::values::PointerValue<'ctx>,
+        resource_id: u32,
+        data_ptr: inkwell::values::PointerValue<'ctx>,
+        vtable_ptr: inkwell::values::PointerValue<'ctx>,
+    ) {
         let id_v = self.context.i32_type().const_int(resource_id as u64, false);
         self.builder
             .build_call(
@@ -604,10 +702,102 @@ impl<'ctx> super::Codegen<'ctx> {
                 "",
             )
             .unwrap();
-        let body_result = self.compile_with_provider_body(closure_expr, resource)?;
+    }
+
+    /// `karac_provider_pop()`. Matches one push; the runtime asserts
+    /// head==frame and walks back to `frame.prev`.
+    fn emit_provider_pop(&mut self) {
         self.builder
             .build_call(self.karac_provider_pop_fn, &[], "")
             .unwrap();
+    }
+
+    /// B-2026-07-31-9 — lower `providers { R => v, ... } in { body }`.
+    ///
+    /// This form used to compile to NOTHING. `compile_expr` had no
+    /// `ExprKind::Providers` arm, so it fell to the catch-all that returns
+    /// constant 0: the body was never emitted, `karac build` and the JIT
+    /// printed nothing at all and exited 0, while `--interp` ran it correctly.
+    /// A silent no-output run-vs-build divergence, and the sugar most users
+    /// reach for first — `with_provider[R](v, ||{})`, the desugared form, was
+    /// fine on every backend.
+    ///
+    /// Phase order mirrors the interpreter's `eval_providers_block` exactly,
+    /// and the ordering is the reason this is NOT lowered as nested
+    /// `with_provider` calls: every provider expression is evaluated BEFORE
+    /// any frame is pushed. Nesting would evaluate the second provider with
+    /// the first already installed, so a binding whose value reads an earlier
+    /// resource in the same block (`providers { A => X{}, B => Y { n: A.get() } }`)
+    /// would see the NEW `A` under codegen and the OUTER `A` under the
+    /// interpreter — re-introducing a divergence while fixing one.
+    ///
+    /// Frames are pushed outer-to-inner in source order and popped in reverse,
+    /// which is what the runtime's head/prev assertion requires.
+    pub(super) fn compile_providers_block(
+        &mut self,
+        bindings: &[ProviderBinding],
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Phase 1 — resolve (and thereby evaluate) every provider first.
+        let mut resolved = Vec::with_capacity(bindings.len());
+        for b in bindings {
+            let (id, data_ptr, vtable_ptr) =
+                self.resolve_provider_binding(&b.resource, &b.value)?;
+            let frame_ptr = self.alloca_provider_frame("prov.frame")?;
+            resolved.push((frame_ptr, id, data_ptr, vtable_ptr));
+        }
+
+        // Phase 2 — push one frame per binding, outer-to-inner.
+        for (frame_ptr, id, data_ptr, vtable_ptr) in &resolved {
+            self.emit_provider_push(*frame_ptr, *id, *data_ptr, *vtable_ptr);
+        }
+
+        // Phase 3 — the body. `compile_block_with_frame` gives it its own
+        // lexical scope and cleanup frame, so body-local bindings are dropped
+        // before the pops below — the same order as the interpreter, whose
+        // `eval_block_inner` drains cleanup before `eval_providers_block`
+        // pops. A body with no tail value yields 0, matching the `Unsafe` arm.
+        let body_result = self
+            .compile_block_with_frame(body)?
+            .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into());
+
+        // A body that ends in a TERMINATOR (an early `return`, or a `break` /
+        // `continue` out of an enclosing loop) has already left this block, so
+        // the pops below would be appended after the terminator — invalid IR
+        // ("Terminator found in the middle of a basic block"). Refuse with an
+        // actionable message instead of letting module verification report it.
+        //
+        // This limitation is NOT introduced here: `with_provider`'s closure
+        // body has exactly the same hole and fails with exactly the same
+        // verifier error today (its pop is emitted after the inlined body the
+        // same way). Filed as its own entry — the correct fix is a
+        // provider-pop cleanup action that drains on every exit path, which is
+        // how user `Drop`/`defer` already reach the return path, and it fixes
+        // both surfaces at once.
+        //
+        // Before this arm existed the same program compiled to constant 0 and
+        // printed a WRONG answer silently, so a loud refusal is strictly
+        // better — but it does mean a program that previously "built" now does
+        // not.
+        if self
+            .builder
+            .get_insert_block()
+            .is_some_and(|bb| bb.get_terminator().is_some())
+        {
+            return Err(
+                "providers { } in { }: an early `return` (or `break`/`continue`) out of the \
+                 block body is not supported by codegen yet — the provider-frame pop would \
+                 be unreachable, leaving a dangling frame on the provider stack. \
+                 `with_provider` has the same limitation. Restructure the body to fall \
+                 through, or run with `--interp`."
+                    .to_string(),
+            );
+        }
+
+        // Phase 4 — pop in reverse, so each pop matches the innermost frame.
+        for _ in 0..resolved.len() {
+            self.emit_provider_pop();
+        }
         Ok(body_result)
     }
 
@@ -842,11 +1032,83 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Block(b) => {
                 self.scan_block_for_ambient_overrides(b, inherent_methods, ctor_returns, bindings)
             }
+            // B-2026-07-31-9 — the `providers { R => v } in { body }` block is
+            // an override site exactly like a `with_provider` call, and a
+            // TRAIT-LESS resource overridden only through the block form has no
+            // other way to get its `(U, R)` vtable minted or its method order
+            // recorded: both happen here, in this eager pre-pass, and it used
+            // to walk `with_provider` CALLS only. Without this arm the block
+            // form compiled fine for trait-ful resources and failed the
+            // trait-less ones with "no method order for resource" — which
+            // would have read as a resource-declaration problem rather than a
+            // missing scan.
+            ExprKind::Providers {
+                bindings: pbs,
+                body,
+            } => {
+                for pb in pbs {
+                    self.record_ambient_override_site(
+                        &pb.resource,
+                        &pb.value,
+                        bindings,
+                        inherent_methods,
+                        ctor_returns,
+                    );
+                    self.scan_expr_for_ambient_overrides(
+                        &pb.value,
+                        bindings,
+                        inherent_methods,
+                        ctor_returns,
+                    );
+                }
+                self.scan_block_for_ambient_overrides(
+                    body,
+                    inherent_methods,
+                    ctor_returns,
+                    bindings,
+                );
+            }
             ExprKind::Closure { body, .. } => {
                 self.scan_expr_for_ambient_overrides(body, bindings, inherent_methods, ctor_returns)
             }
             _ => {}
         }
+    }
+
+    /// Record one trait-less override site: mint the `(U, R)` vtable and, for a
+    /// USER (non-prelude) resource, pin `R`'s method order from the override
+    /// type's inherent impl. Extracted from the `with_provider` call arm so the
+    /// `providers { }` block arm records identically (B-2026-07-31-9) — the two
+    /// surfaces disagreeing about method ORDER would mean a vtable indexed one
+    /// way and dispatched another, which is a silent wrong-method call rather
+    /// than an error.
+    fn record_ambient_override_site(
+        &mut self,
+        resource: &str,
+        provider_expr: &Expr,
+        bindings: &std::collections::HashMap<String, String>,
+        inherent_methods: &std::collections::HashMap<String, Vec<String>>,
+        ctor_returns: &std::collections::HashMap<String, String>,
+    ) {
+        // Trait-ful resources are served by `emit_provider_vtables`; bogus
+        // names have no minted ID. Same two gates as the call-site arm.
+        if !self.provider_resource_ids.contains_key(resource)
+            || self.provider_resource_traits.contains_key(resource)
+        {
+            return;
+        }
+        let Some(ty) = ambient_provider_type(provider_expr, bindings, ctor_returns) else {
+            return;
+        };
+        if !crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&resource) {
+            if let Some(methods) = inherent_methods.get(&ty) {
+                self.user_ambient_resource_methods
+                    .entry(resource.to_string())
+                    .or_insert_with(|| methods.clone());
+            }
+        }
+        // Idempotent: `emit_ambient_vtable` no-ops if `(U, R)` already exists.
+        let _ = self.emit_ambient_vtable(&ty, resource);
     }
 
     /// The LLVM `FunctionType` to use for an indirect call through an

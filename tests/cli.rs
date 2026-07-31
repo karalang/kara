@@ -1854,6 +1854,80 @@ fn test_stdin_lines_run_and_build_parity() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Standing run-vs-build gate for the `providers { R => v } in { body }` BLOCK
+/// form (B-2026-07-31-9).
+///
+/// The block sugar compiled to NOTHING under codegen — `compile_expr` had no
+/// `ExprKind::Providers` arm, so it fell to the catch-all that returns constant
+/// 0 and the body was never emitted. `karac build` produced a program that
+/// printed nothing and exited 0 while `karac run --interp` printed the right
+/// answer. Nothing was red: no phase errored, and the desugared
+/// `with_provider[R](v, ||{})` call form — which every existing provider test
+/// uses — worked on all three backends, so the whole test suite stayed green
+/// while the form users actually write silently produced no output.
+///
+/// That is why this gate compares the two BACKENDS rather than asserting an
+/// expected string: the failure mode was one backend emitting nothing, which an
+/// interpreter-only test cannot see. Correctness is asserted separately so a
+/// regression that breaks both backends identically is still distinguishable
+/// from one that makes them disagree.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_providers_block_run_build_parity() {
+    let tmp = scratch_project("providers-block-parity");
+    let src = "trait Counter { fn get(ref self) -> i64; }\n\
+               effect resource Ctr: Counter;\n\
+               struct InMem { n: i64 }\n\
+               impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+               fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+               fn main() {\n\
+               \x20   providers { Ctr => InMem { n: 42 } } in { println(f\"{read()}\"); }\n\
+               }\n";
+    write(&tmp.join("prov.kara"), src);
+
+    let run_out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "prov.kara"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+
+    let build = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "prov.kara"])
+        .output();
+    let exe = tmp.join("prov");
+    let build_out = if build.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(r), Some(b)) = (run_out, build_out) else {
+        eprintln!("skip: could not produce both interp and compiled output (no runtime archive?)");
+        return;
+    };
+
+    // (1) PARITY — the constraint the missing codegen arm violated. Compiled
+    // output was empty against the interpreter's "42".
+    assert_eq!(
+        r, b,
+        "run/build parity for `providers {{ }} in {{ }}`: the interpreter and \
+         codegen must agree on the block's output"
+    );
+
+    // (2) CORRECTNESS — the body runs and sees the installed provider.
+    assert_eq!(
+        r.trim(),
+        "42",
+        "the providers block body must run with its provider installed"
+    );
+}
+
 /// Standing run-vs-build gate for user `impl Drop` on AGGREGATE FIELDS
 /// (B-2026-07-29-39's prerequisite).
 ///

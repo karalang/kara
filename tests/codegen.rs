@@ -13017,6 +13017,94 @@ fn main() {
         }
     }
 
+    // ── `providers { R => v } in { body }` block form (B-2026-07-31-9) ──
+    //
+    // The block sugar compiled to NOTHING: `compile_expr` had no
+    // `ExprKind::Providers` arm, so it fell to the catch-all returning constant
+    // 0 and the body was never emitted. A compiled program printed nothing and
+    // exited 0 while `--interp` ran it correctly — a silent no-output
+    // run-vs-build divergence on the form users reach for first (the desugared
+    // `with_provider[R](v, ||{})` call was always fine).
+
+    #[test]
+    fn e2e_providers_block_runs_body() {
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn main() {\n\
+                 providers { Ctr => InMem { n: 42 } } in { println(f\"{read()}\"); }\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
+    fn e2e_providers_block_multi_binding_nesting_and_order() {
+        // Three properties in one program, all of which a nested-`with_provider`
+        // lowering would get wrong:
+        //  * several bindings in ONE block are all installed;
+        //  * an inner block shadows one resource and leaves the other visible,
+        //    and the outer value is restored on exit;
+        //  * every provider EXPRESSION is evaluated before ANY frame is pushed,
+        //    so `B => InMem { n: ra() }` reads the OUTER `A` (5), not the `A`
+        //    being installed beside it (7). This is why the lowering resolves
+        //    all bindings first rather than nesting — the interpreter's
+        //    `eval_providers_block` has the same two-phase order.
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource A: Counter;\n\
+             effect resource B: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn ra() -> i64 with reads(A) { A.get() }\n\
+             fn rb() -> i64 with reads(B) { B.get() }\n\
+             fn main() {\n\
+                 providers { A => InMem { n: 1 }, B => InMem { n: 2 } } in {\n\
+                     println(f\"multi {ra()} {rb()}\");\n\
+                 }\n\
+                 providers { A => InMem { n: 10 }, B => InMem { n: 20 } } in {\n\
+                     providers { A => InMem { n: 99 } } in {\n\
+                         println(f\"nested {ra()} {rb()}\");\n\
+                     }\n\
+                     println(f\"restored {ra()} {rb()}\");\n\
+                 }\n\
+                 providers { A => InMem { n: 5 } } in {\n\
+                     providers { A => InMem { n: 7 }, B => InMem { n: ra() } } in {\n\
+                         println(f\"order {ra()} {rb()}\");\n\
+                     }\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "multi 1 2\nnested 99 20\nrestored 10 20\norder 7 5\n");
+        }
+    }
+
+    #[test]
+    fn e2e_providers_block_trait_less_ambient_resource() {
+        // A TRAIT-LESS `effect resource R;` overridden only through the block
+        // form. Its `(U, R)` vtable and method order are minted by the eager
+        // pre-pass (`emit_ambient_provider_vtables`), which walked
+        // `with_provider` CALLS only — so this failed with "no method order for
+        // resource" even after the block body started compiling.
+        if let Some(out) = run_program(
+            "effect resource Ambient;\n\
+             struct FakeAmb { n: i64 }\n\
+             impl FakeAmb { fn now(ref self) -> i64 { self.n } }\n\
+             fn readamb() -> i64 with reads(Ambient) { Ambient.now() }\n\
+             fn main() {\n\
+                 providers { Ambient => FakeAmb { n: 77 } } in {\n\
+                     println(f\"amb {readamb()}\");\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "amb 77\n");
+        }
+    }
+
     // ── Nested-place + compound-field assignment write-back (codegen) ──
     //
     // Regression: assignment to a value-type struct field through a projection
