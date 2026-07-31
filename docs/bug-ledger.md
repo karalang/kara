@@ -927,7 +927,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **799 surfaced 
 | B-2026-07-31-24 | interp | high | `Client.request(m, url)` and the ENTIRE `RequestBuilder` chain (`header`/`body`/`timeout`/`send`) had no interpreter dispatch arm — typechecks clean,… | 5e7c2e9 |
 | B-2026-07-31-25 | interp | medium | Interpreter captured ONLY `content-type` off an HTTP response, so `Response.header(name)` answered `None` for every other header and `Response.header… | 5e7c2e9 |
 | B-2026-07-31-26 | codegen | low | STALE CODEGEN-GAP DIAGNOSTICS: 15 codegen error/doc sites say a deferred construct "works under `karac run`" — false since `karac run` became JIT-by-… | 9d70e52,a6f5df7 |
-| B-2026-07-31-29 | ownership+cli | high | `karac build` and `karac run` DO NOT GATE on ownership errors: a use-after-move that `karac check` reports as `error[ownership]` (exit 1) still compi… | — |
+| B-2026-07-31-29 | ownership+cli | high | `karac build` and `karac run` DO NOT GATE on ownership errors: a use-after-move that `karac check` reports as `error[ownership]` (exit 1) still compi… | ef7e209 |
 
 </details>
 
