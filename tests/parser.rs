@@ -12286,3 +12286,82 @@ fn script_mode_preserves_module_const_bindings() {
         .count();
     assert_eq!(main_count, 1);
 }
+
+// ── B-2026-07-31-31: `!` → `not` machine-applicable fix ─────────
+
+#[test]
+fn bang_operator_carries_not_replacement_edit() {
+    // The diagnostic has always named the exact replacement ("use `not`
+    // instead") while `karac fix` left the file untouched — pure lost
+    // machine-fix rate on the mistake a C-family-trained model is most likely
+    // to make. The edit rewrites the `!` token span.
+    //
+    // `not` is a WORD operator, so `!flag` must become `not flag`, never
+    // `notflag`: with no whitespace after the `!`, the replacement carries its
+    // own trailing space.
+    let src = "fn main() { let f = true; if !f { println(\"x\"); } }";
+    let result = karac::parse(src);
+    assert_eq!(result.fix_edits.len(), 1, "errors: {:?}", result.errors);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(
+        &src[edit.offset..edit.offset + edit.length],
+        "!",
+        "edit should target exactly the `!` token"
+    );
+    assert_eq!(edit.replacement, "not ");
+    // Applying it yields the `not` form with a single separating space.
+    let mut fixed = src.to_string();
+    fixed.replace_range(edit.offset..edit.offset + edit.length, &edit.replacement);
+    assert!(fixed.contains("if not f {"), "got: {fixed}");
+    assert!(
+        karac::parse(&fixed).errors.is_empty(),
+        "fixed source must parse"
+    );
+}
+
+#[test]
+fn bang_operator_edit_reuses_existing_space() {
+    // `! f` already has the separator, so the replacement must NOT add a
+    // second one — otherwise `karac fix` reformats as it repairs.
+    let src = "fn main() { let f = true; if ! f { println(\"x\"); } }";
+    let result = karac::parse(src);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.replacement, "not");
+    let mut fixed = src.to_string();
+    fixed.replace_range(edit.offset..edit.offset + edit.length, &edit.replacement);
+    assert!(
+        fixed.contains("if not f {"),
+        "expected single space, got: {fixed}"
+    );
+    assert!(
+        karac::parse(&fixed).errors.is_empty(),
+        "fixed source must parse"
+    );
+}
+
+#[test]
+fn not_equal_and_vec_macro_are_not_bang_diagnostics() {
+    // The edit must fire only for a standalone prefix `!`. `!=` lexes as
+    // `BangEqual` and `vec![…]` is consumed on the postfix identifier path, so
+    // neither reaches the prefix arm — a regression that widened the arm would
+    // start rewriting working code.
+    for src in [
+        "fn main() { let a = 1; let b = 2; if a != b { println(\"ne\"); } }",
+        "fn main() { let v = vec![1, 2, 3]; println(v.len()); }",
+    ] {
+        let result = karac::parse(src);
+        assert!(
+            result.fix_edits.is_empty(),
+            "no `!` fix expected for {src:?}; got {:?}",
+            result.fix_edits
+        );
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("use `not` instead")),
+            "unexpected bang diagnostic for {src:?}: {:?}",
+            result.errors
+        );
+    }
+}

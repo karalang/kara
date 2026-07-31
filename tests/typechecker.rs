@@ -34863,3 +34863,89 @@ fn value_enum_payload_still_trips_the_nesting_rule() {
         errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+// ── B-2026-07-31-31: E_MODULE_BINDING_HEAP_TYPE fix-its ─────────
+
+#[test]
+fn module_binding_heap_type_annotated_carries_string_slice_fix_it() {
+    // `let X: String = "lit";` — the diagnostic names 'StringSlice' as the
+    // replacement, so it now ships the edit: rewrite the annotation span.
+    let src = "let ALPHA: String = \"abc\";\nfn main() { println(ALPHA); }";
+    let errors = typecheck_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::ModuleBindingHeapType)
+        .expect("String at module scope → E_MODULE_BINDING_HEAP_TYPE");
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("annotated heap-type binding must carry a machine-applicable fix-it");
+    assert_eq!(
+        &src[fix.span.offset..fix.span.offset + fix.span.length],
+        "String",
+        "fix should target the annotation, not the whole binding"
+    );
+    assert_eq!(fix.replacement, "StringSlice");
+    // Applying it must actually clear the error — the fix's whole claim.
+    let mut fixed = src.to_string();
+    fixed.replace_range(
+        fix.span.offset..fix.span.offset + fix.span.length,
+        &fix.replacement,
+    );
+    // `typecheck_ok` asserts a clean run — the fix's whole claim.
+    typecheck_ok(&fixed);
+}
+
+#[test]
+fn module_binding_heap_type_inferred_carries_annotation_insertion_fix_it() {
+    // `let X = "lit";` has no annotation span to rewrite, so the edit is an
+    // INSERTION of `: StringSlice` after the name. The fix-it span therefore
+    // sits at a different offset than the diagnostic (which points at the
+    // initializer) — the two are deliberately decoupled.
+    let src = "let BETA = \"xyz\";\nfn main() { println(BETA); }";
+    let errors = typecheck_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::ModuleBindingHeapType)
+        .expect("inferred String at module scope → E_MODULE_BINDING_HEAP_TYPE");
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("inferred heap-type binding must carry a machine-applicable fix-it");
+    assert_eq!(fix.span.length, 0, "fix-it must be an insertion");
+    assert_eq!(fix.replacement, ": StringSlice");
+    let mut fixed = src.to_string();
+    fixed.insert_str(fix.span.offset, &fix.replacement);
+    assert!(
+        fixed.starts_with("let BETA: StringSlice = \"xyz\";"),
+        "insertion landed wrong: {fixed}"
+    );
+    typecheck_ok(&fixed);
+}
+
+#[test]
+fn module_binding_heap_type_non_literal_init_withholds_fix_it() {
+    // The safety gate. `let J: String = "a" + "b";` is still an error, but
+    // rewriting the annotation to `StringSlice` would trade it for
+    // "expected 'StringSlice', found 'String'" — so the diagnostic stays
+    // descriptive-only rather than shipping an edit that swaps one error for
+    // another. A fix is offered exactly when applying it produces a program
+    // that passes.
+    let src = "let JOINED: String = \"a\" + \"b\";\nfn main() { println(JOINED); }";
+    let errors = typecheck_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::ModuleBindingHeapType)
+        .expect("still diagnosed");
+    assert!(
+        err.fix_it.is_none(),
+        "non-literal initializer must not get a fix-it, got {:?}",
+        err.fix_it
+    );
+    // Pin the reason: the would-be fix genuinely does not typecheck.
+    let attempted = "let JOINED: StringSlice = \"a\" + \"b\";\nfn main() { println(JOINED); }";
+    assert!(
+        !typecheck_errors(attempted).is_empty(),
+        "gate would be unnecessary if this passed"
+    );
+}

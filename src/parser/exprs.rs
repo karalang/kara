@@ -460,8 +460,37 @@ impl super::Parser {
                 })
             }
             Token::Bang => {
+                // B-2026-07-31-31 — machine-applicable `!` → `not`. This is the
+                // single most likely mistake a model writing Kāra makes (every
+                // C-family language spells negation `!`), and it is a pure
+                // token swap at a known span, so it should cost `karac fix` one
+                // edit rather than a human round-trip.
+                //
+                // `!=` never reaches here: the lexer emits `BangEqual` for it
+                // (lexer.rs), so `Token::Bang` is always a standalone prefix
+                // `!`. `vec![…]` is consumed on the postfix identifier path
+                // before prefix parsing, so it never reaches this arm either.
+                let bang_span = self.current_span();
                 self.error("the `!` operator is not used in Kāra; use `not` instead");
                 self.advance();
+                // `not` is a word operator, so it needs a separator that `!`
+                // did not: `!first` must become `not first`, never `notfirst`.
+                // The operand's own start offset tells us whether the source
+                // already has whitespace to reuse — no source text needed here.
+                let spaced_already =
+                    self.current_span().offset > bang_span.offset + bang_span.length;
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&bang_span),
+                    crate::resolver::TextEdit {
+                        offset: bang_span.offset,
+                        length: bang_span.length,
+                        replacement: if spaced_already {
+                            "not".to_string()
+                        } else {
+                            "not ".to_string()
+                        },
+                    },
+                );
                 let operand = self.parse_expr_bp(24)?;
                 Some(Expr {
                     span: self.span_from(&start),

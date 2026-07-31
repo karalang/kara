@@ -23487,3 +23487,57 @@ fn fatal_ownership_diagnostic_still_renders_as_error() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── B-2026-07-31-31: `karac fix` applies the two mechanical repairs ──
+
+#[test]
+fn fix_applies_bang_to_not_and_string_slice_edits() {
+    // End-to-end through the real binary — the unit tests pin the edits, this
+    // pins that `karac fix` actually reaches and applies them, which is what
+    // the Mend loop depends on.
+    //
+    // Two passes on purpose: the parse errors gate the typechecker, so the
+    // `!` edits land first and the E_MODULE_BINDING_HEAP_TYPE edits only
+    // become visible once the file parses. That is the loop's normal
+    // check → fix → re-check rhythm, not a shortcoming.
+    let (tmp, path) = ownership_gate_fixture(
+        "b31",
+        "let ALPHA: String = \"abc\";\n\
+         let BETA = \"xyz\";\n\
+         fn main() {\n\
+             let f = true;\n\
+             if !f { println(\"a\"); }\n\
+             let g = true;\n\
+             if ! g { println(\"b\"); }\n\
+             println(ALPHA);\n\
+             println(BETA);\n\
+         }\n",
+    );
+
+    for _ in 0..2 {
+        karac_bin().arg("fix").arg(&path).output().unwrap();
+    }
+
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        fixed.contains("let ALPHA: StringSlice = \"abc\";"),
+        "annotated String should be rewritten: {fixed}"
+    );
+    assert!(
+        fixed.contains("let BETA: StringSlice = \"xyz\";"),
+        "inferred String should gain an annotation: {fixed}"
+    );
+    // `not` is a word operator: a space is added where none existed, and the
+    // existing one is reused rather than doubled.
+    assert!(fixed.contains("if not f {"), "`!f` → `not f`: {fixed}");
+    assert!(fixed.contains("if not g {"), "`! g` → `not g`: {fixed}");
+    assert!(!fixed.contains('!'), "no `!` should survive: {fixed}");
+
+    let check = karac_bin().arg("check").arg(&path).output().unwrap();
+    assert!(
+        check.status.success(),
+        "fixed program must pass check; stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -2786,17 +2786,42 @@ impl<'a> super::TypeChecker<'a> {
             }
             let declared = self.lower_type_expr(ty_expr, &[]);
             if matches!(declared, Type::Str) {
-                self.type_error(
-                    format!(
-                        "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
-                         is declared with type 'String' which is heap-allocated; \
-                         module bindings live in the binary as constant data — \
-                         use 'StringSlice' for static string data",
-                        b.name,
-                    ),
-                    ty_expr.span.clone(),
-                    TypeErrorKind::ModuleBindingHeapType,
+                let message = format!(
+                    "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
+                     is declared with type 'String' which is heap-allocated; \
+                     module bindings live in the binary as constant data — \
+                     use 'StringSlice' for static string data",
+                    b.name,
                 );
+                // B-2026-07-31-31 — the diagnostic already names the exact
+                // replacement, so hand `karac fix` the edit: rewrite the
+                // annotation span to `StringSlice`.
+                //
+                // Gated on a bare string-literal initializer, which is exactly
+                // the condition the §1284 coercion carve-out below accepts for
+                // a `StringSlice`-declared binding. That gate is what makes the
+                // fix SAFE rather than merely plausible: applying it yields a
+                // program that typechecks. A non-literal initializer (whose
+                // `String` came from somewhere else) keeps the descriptive-only
+                // diagnostic rather than getting an edit that trades one error
+                // for another.
+                if matches!(b.value.kind, ExprKind::StringLit(_)) {
+                    self.type_error_with_fix_it(
+                        message,
+                        ty_expr.span.clone(),
+                        TypeErrorKind::ModuleBindingHeapType,
+                        crate::typechecker::FixIt {
+                            span: ty_expr.span.clone(),
+                            replacement: "StringSlice".to_string(),
+                        },
+                    );
+                } else {
+                    self.type_error(
+                        message,
+                        ty_expr.span.clone(),
+                        TypeErrorKind::ModuleBindingHeapType,
+                    );
+                }
                 return;
             }
             // §1284: at module scope, string literals have type
@@ -2848,17 +2873,44 @@ impl<'a> super::TypeChecker<'a> {
             // `StringSlice` at module scope) is not yet automatic —
             // direct the programmer to the explicit annotation instead.
             if matches!(inferred, Type::Str) {
-                self.type_error(
-                    format!(
-                        "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
-                         was inferred as 'String' which is heap-allocated; module \
-                         bindings live in the binary as constant data — annotate \
-                         the binding as `: StringSlice` for static string data",
-                        b.name,
-                    ),
-                    b.value.span.clone(),
-                    TypeErrorKind::ModuleBindingHeapType,
+                let message = format!(
+                    "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
+                     was inferred as 'String' which is heap-allocated; module \
+                     bindings live in the binary as constant data — annotate \
+                     the binding as `: StringSlice` for static string data",
+                    b.name,
                 );
+                // B-2026-07-31-31 — unannotated twin of the branch above. There
+                // is no annotation span to rewrite, so the edit is an INSERTION
+                // of `: StringSlice` immediately after the binding name
+                // (`name_span` exists for exactly this kind of attachment). The
+                // fix-it carries its own span, so it may sit at a different
+                // offset than the diagnostic, which points at the initializer.
+                //
+                // Same literal-initializer gate as the annotated branch, for the
+                // same reason: `let X = "lit";` → `let X: StringSlice = "lit";`
+                // hits the §1284 carve-out and typechecks.
+                if matches!(b.value.kind, ExprKind::StringLit(_)) {
+                    self.type_error_with_fix_it(
+                        message,
+                        b.value.span.clone(),
+                        TypeErrorKind::ModuleBindingHeapType,
+                        crate::typechecker::FixIt {
+                            span: Span {
+                                offset: b.name_span.offset + b.name_span.length,
+                                length: 0,
+                                ..b.name_span.clone()
+                            },
+                            replacement: ": StringSlice".to_string(),
+                        },
+                    );
+                } else {
+                    self.type_error(
+                        message,
+                        b.value.span.clone(),
+                        TypeErrorKind::ModuleBindingHeapType,
+                    );
+                }
                 return;
             }
             if !matches!(inferred, Type::Error) {
