@@ -261,6 +261,16 @@ impl Scan<'_> {
 
 /// Generic child-expression visitor — exhaustive over `ExprKind` (no `_`), used
 /// by the caller-side scan for any node other than `Call` / `Identifier`.
+/// Re-exported for `crate::deque_head`, which needs the same child walk.
+pub(crate) fn walk_children_pub(kind: &ExprKind, f: &mut dyn FnMut(&Expr)) {
+    walk_children(kind, f)
+}
+
+/// Re-exported for `crate::deque_head`.
+pub(crate) fn walk_stmt_children_pub(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
+    walk_stmt_children(stmt, f)
+}
+
 fn walk_children(kind: &ExprKind, f: &mut dyn FnMut(&Expr)) {
     fn blk(b: &Block, f: &mut dyn FnMut(&Expr)) {
         for s in &b.stmts {

@@ -80,6 +80,7 @@ pub mod pubgrub_solve;
 // on `not(target_arch = "wasm32")` at the function level — see those
 // modules for the wasm32 surface.
 pub mod cross_task_safe;
+pub mod deque_head;
 pub mod module;
 pub mod monomorphization;
 pub mod must_use_lint;
