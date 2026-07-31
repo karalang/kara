@@ -4947,6 +4947,18 @@ impl<'ctx> Codegen<'ctx> {
             file_flush_type,
             Some(Linkage::External),
         );
+        // Durability: (out, handle) -> void, same shape as flush but a
+        // real fsync/fdatasync rather than a userspace-buffer push.
+        module.add_function(
+            "karac_runtime_file_sync_all",
+            file_flush_type,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_file_sync_data",
+            file_flush_type,
+            Some(Linkage::External),
+        );
         // `FileSystem.read_lines(path)` — one-shot whole-file read split
         // into a `Vec[String]` of lines: (out_io, out_vec, path_ptr,
         // path_len) -> void. Two out-params: the KaracIoResult (Ok/Err

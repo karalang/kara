@@ -9,9 +9,9 @@
 //! `Slice[u8]` and returns the bytes-written count; `flush` returns
 //! `Result[Unit, IoError]`. Effect tracking matches the slice-F1
 //! design: `reads(FileSystem)` on `read`; `writes(FileSystem)` on
-//! `write` / `flush`.
+//! `write` / `flush` / `sync_all` / `sync_data`.
 //!
-//! Seek / sync_all / metadata are deferred to a follow-on slice.
+//! Seek / metadata are deferred to a follow-on slice.
 
 use std::io::{Read, Write};
 
@@ -153,6 +153,32 @@ impl<'a> super::Interpreter<'a> {
                     guard.flush()
                 };
                 match flush_result {
+                    Ok(()) => Some(io_ok(Value::Unit)),
+                    Err(e) => Some(io_err_value(io_error_from_std(&e))),
+                }
+            }
+            // Durability. Unlike `flush` (a no-op on `std::fs::File` —
+            // it pushes userspace buffers, never the page cache), these
+            // issue the real fsync/fdatasync and only return once the
+            // filesystem reports the bytes durable.
+            "sync_all" => {
+                self.track_effect("writes(FileSystem)");
+                let sync_result = {
+                    let guard = file_arc.lock().unwrap();
+                    guard.sync_all()
+                };
+                match sync_result {
+                    Ok(()) => Some(io_ok(Value::Unit)),
+                    Err(e) => Some(io_err_value(io_error_from_std(&e))),
+                }
+            }
+            "sync_data" => {
+                self.track_effect("writes(FileSystem)");
+                let sync_result = {
+                    let guard = file_arc.lock().unwrap();
+                    guard.sync_data()
+                };
+                match sync_result {
                     Ok(()) => Some(io_ok(Value::Unit)),
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }

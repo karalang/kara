@@ -8446,6 +8446,47 @@ fn test_file_flush_on_writable_handle_returns_ok() {
 }
 
 #[test]
+fn test_file_sync_all_and_sync_data_return_ok_and_persist() {
+    // B-2026-07-30-16 — interpreter half of the durability pair. Both
+    // typechecked but had no dispatch arm here, so a program that
+    // passed `karac check` died at runtime with "method 'sync_all' not
+    // found on type 'unknown'". Asserts the surface (Ok on both) and
+    // that the written bytes are readable afterwards; the codegen twin
+    // is `test_e2e_file_sync_all_and_sync_data_persist_contents`.
+    let tmp = std::env::temp_dir().join("karac_test_file_sync_pair.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     let mut data: Vec[u8] = Vec.new();
+                     data.push(79u8); data.push(75u8);
+                     match f.write(data) {{
+                         Ok(_) => println(\"wrote\"),
+                         Err(_) => println(\"write err\"),
+                     }}
+                     match f.sync_all() {{
+                         Ok(_) => println(\"sync_all\"),
+                         Err(_) => println(\"sync_all err\"),
+                     }}
+                     match f.sync_data() {{
+                         Ok(_) => println(\"sync_data\"),
+                         Err(_) => println(\"sync_data err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "wrote\nsync_all\nsync_data\n");
+    let contents = std::fs::read(&tmp).expect("read tempfile");
+    assert_eq!(contents, b"OK");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
 fn test_stderr_flush_is_callable() {
     let out = run_no_errors("fn main() { Stderr.flush(); println(\"ok\"); }");
     assert_eq!(out, "ok\n");

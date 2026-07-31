@@ -501,6 +501,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         file::karac_runtime_file_read,
         file::karac_runtime_file_write,
         file::karac_runtime_file_flush,
+        file::karac_runtime_file_sync_all,
+        file::karac_runtime_file_sync_data,
         file::karac_runtime_file_close,
         file::karac_runtime_file_seek,
         file::karac_runtime_stdin_read_line,

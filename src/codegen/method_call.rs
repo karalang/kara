@@ -1758,6 +1758,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 let self_val = self.compile_expr(object)?;
                 return self.compile_file_flush(self_val);
             }
+            if (key == "File.sync_all" || key == "File.sync_data") && args.is_empty() {
+                let self_val = self.compile_expr(object)?;
+                return self.compile_file_sync(self_val, key == "File.sync_data");
+            }
             if key == "TcpStream.read" && args.len() == 1 {
                 let self_val = self.compile_expr(object)?;
                 let elem_ty: BasicTypeEnum = self.context.i8_type().into();

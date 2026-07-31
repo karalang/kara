@@ -990,7 +990,14 @@ impl<'a> EffectChecker<'a> {
                 set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
                 self.inferred_effects.insert(fn_name.to_string(), set);
             }
-            for fn_name in ["File.create", "File.append", "File.write", "File.flush"] {
+            for fn_name in [
+                "File.create",
+                "File.append",
+                "File.write",
+                "File.flush",
+                "File.sync_all",
+                "File.sync_data",
+            ] {
                 let mut set = EffectSet::new();
                 set.add(
                     writes_fs.clone(),

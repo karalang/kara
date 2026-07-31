@@ -955,4 +955,42 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.lower_kara_io_result(slot, FileOkKind::Unit)
     }
+
+    /// Compile `file.sync_all()` / `file.sync_data()` — the durability
+    /// primitives. Returns `Result[Unit, IoError]`.
+    ///
+    /// Shares [`compile_file_flush`]'s shape (out-param slot + handle,
+    /// Unit-on-success) but targets a different runtime entry point:
+    /// `flush` pushes only userspace buffers, while these issue the
+    /// real fsync/fdatasync and return once the bytes are durable.
+    ///
+    /// [`compile_file_flush`]: Self::compile_file_flush
+    pub(super) fn compile_file_sync(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        sync_data: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let handle = self_val.into_pointer_value();
+        let slot = self.alloca_io_result_slot()?;
+        let sym = if sync_data {
+            "karac_runtime_file_sync_data"
+        } else {
+            "karac_runtime_file_sync_all"
+        };
+        let f = self
+            .module
+            .get_function(sym)
+            .unwrap_or_else(|| panic!("{sym} declared in Codegen::new"));
+        self.builder
+            .build_call(
+                f,
+                &[
+                    BasicMetadataValueEnum::PointerValue(slot),
+                    BasicMetadataValueEnum::PointerValue(handle),
+                ],
+                "file.sync.call",
+            )
+            .unwrap();
+        self.lower_kara_io_result(slot, FileOkKind::Unit)
+    }
 }

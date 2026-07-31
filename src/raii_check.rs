@@ -417,6 +417,33 @@ fn collect_cancel_unsafe_annotations(program: &Program) -> CancelUnsafeAnnotatio
     out
 }
 
+/// Does `candidate` clear a binding soiled with the `method = "…"`
+/// annotation value `annotated`?
+///
+/// The value is a comma-separated list so a soiling method can name
+/// several restoring calls. `File.write` is the motivating case: it is
+/// cleared by `flush`, but also by `sync_all` / `sync_data`, which are
+/// strictly stronger (they flush *and* fsync). Before the list form,
+/// `write(); sync_all(); <yield>` was rejected with "call `f.flush`" —
+/// a false positive that told the user to weaken a stronger guarantee.
+///
+/// A single name (the common case) parses as a one-element list, so
+/// existing annotations keep their exact behaviour.
+fn clears_soil(annotated: &str, candidate: &str) -> bool {
+    annotated.split(',').any(|c| c.trim() == candidate)
+}
+
+/// The first name in a `method = "…"` list — what the diagnostic
+/// suggests. Falls back to the whole string if the list is empty or
+/// malformed, so a bad annotation degrades to the old behaviour rather
+/// than producing an empty `help:`.
+fn first_clear_method(annotated: &str) -> String {
+    match annotated.split(',').map(str::trim).find(|c| !c.is_empty()) {
+        Some(c) => c.to_string(),
+        None => annotated.to_string(),
+    }
+}
+
 fn accumulate_annotations_from_items(items: &[Item], out: &mut CancelUnsafeAnnotations) {
     for item in items {
         let Item::ImplBlock(imp) = item else { continue };
@@ -650,6 +677,10 @@ impl StateFlowWalker<'_> {
         }
         let type_name = self.type_of(binding_name).unwrap_or("?").to_string();
         let binding_span = self.binding_span_of(binding_name);
+        // The annotation may list several clearing methods (see
+        // `clears_soil`); the diagnostic names the FIRST, which the
+        // convention treats as the canonical/cheapest one to suggest.
+        let clear_method_name = first_clear_method(&clear_method_name);
         self.errors.push(RaiiAcrossYieldError {
             fn_key: self.fn_key.clone(),
             binding_name: binding_name.to_string(),
@@ -771,10 +802,12 @@ impl StateFlowWalker<'_> {
             );
             return;
         }
-        // Clearing: if the current state names this method as the clear method, flip to Clean.
+        // Clearing: if the current state names this method as *a* clear
+        // method, flip to Clean.
         let should_clear = matches!(
             self.state.get(&binding_name),
-            Some(BindingState::Soiled { clear_method_name, .. }) if clear_method_name == method_name,
+            Some(BindingState::Soiled { clear_method_name, .. })
+                if clears_soil(clear_method_name, method_name),
         );
         if should_clear {
             self.state.insert(binding_name, BindingState::Clean);

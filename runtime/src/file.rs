@@ -509,6 +509,83 @@ pub unsafe extern "C" fn karac_runtime_file_flush(out: *mut KaracIoResult, handl
     };
 }
 
+/// Sync file contents **and metadata** to stable storage (`fsync`). On
+/// success `out.value == 0`.
+///
+/// This is the durability primitive, and it is NOT what
+/// [`karac_runtime_file_flush`] does: `Write::flush` on a `std::fs::File`
+/// is a documented no-op — it pushes userspace buffers and never the OS
+/// page cache, so data "flushed" that way is still lost on power failure.
+/// `sync_all` issues the real `fsync(2)` and only returns once the
+/// filesystem reports the bytes durable. `design.md` § cancellation
+/// safety names this call as the caller's durability obligation before a
+/// yield point.
+///
+/// # Safety
+///
+/// `out` must point to a writable, suitably-aligned `KaracIoResult`
+/// slot. `handle` must be a live pointer returned from an open-family
+/// call.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_file_sync_all(
+    out: *mut KaracIoResult,
+    handle: *mut KaracFile,
+) {
+    if handle.is_null() {
+        *out = err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "null file handle",
+        ));
+        return;
+    }
+    let file = &*handle;
+    let guard = match file.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    *out = match guard.sync_all() {
+        Ok(()) => ok(0),
+        Err(e) => err(&e),
+    };
+}
+
+/// Sync file **contents only**, skipping metadata where the platform
+/// supports it (`fdatasync`). On success `out.value == 0`.
+///
+/// Cheaper than [`karac_runtime_file_sync_all`] when the file's length is
+/// unchanged or its metadata does not need to be durable — one fewer
+/// metadata write per call. Where the platform has no `fdatasync`, Rust's
+/// `sync_data` falls back to a full `fsync`, so this is never *less*
+/// durable than it claims.
+///
+/// # Safety
+///
+/// `out` must point to a writable, suitably-aligned `KaracIoResult`
+/// slot. `handle` must be a live pointer returned from an open-family
+/// call.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_file_sync_data(
+    out: *mut KaracIoResult,
+    handle: *mut KaracFile,
+) {
+    if handle.is_null() {
+        *out = err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "null file handle",
+        ));
+        return;
+    }
+    let file = &*handle;
+    let guard = match file.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    *out = match guard.sync_data() {
+        Ok(()) => ok(0),
+        Err(e) => err(&e),
+    };
+}
+
 /// Close the file handle and free its memory. Called by codegen's
 /// scope-exit `FreeFileHandle` cleanup action.
 ///

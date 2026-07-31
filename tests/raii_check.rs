@@ -680,6 +680,53 @@ fn file_write_then_flush_then_yield_accepted() {
 }
 
 #[test]
+fn file_write_then_sync_then_yield_accepted() {
+    // B-2026-07-30-16 follow-on. `File.write` names three clearing
+    // methods (`flush,sync_all,sync_data`); `sync_all` / `sync_data`
+    // are strictly STRONGER than `flush` — they flush *and* fsync — so
+    // either must clear the soil. While the annotation held a single
+    // name, `write(); sync_all(); <yield>` was rejected with "call
+    // `f.flush`", telling the user to weaken a stronger guarantee.
+    for clear in ["sync_all", "sync_data"] {
+        let (_program, _typed, errors) = run_raii_check(&format!(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {{}}
+             fn driver(f: File, data: Slice[u8]) {{
+                 let _w = f.write(data);
+                 let _s = f.{clear}();
+                 fetch();
+             }}"
+        ));
+        assert!(
+            errors.is_empty(),
+            "write-then-{clear}-then-yield must accept: {:?}",
+            errors
+        );
+    }
+}
+
+#[test]
+fn file_write_then_yield_still_suggests_flush() {
+    // The multi-name list must not change what the diagnostic SAYS —
+    // the first entry is the canonical suggestion, so an uncleared
+    // write still points at the cheapest fix rather than at fsync.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File, data: Slice[u8]) {
+             let _w = f.write(data);
+             fetch();
+         }",
+    );
+    assert_eq!(errors.len(), 1, "expected one error: {:?}", errors);
+    let sv = errors[0]
+        .state_violation
+        .as_ref()
+        .expect("must carry state_violation payload");
+    assert_eq!(sv.clear_method_name, "flush");
+}
+
+#[test]
 fn file_param_without_write_held_across_yield_accepted() {
     // The binding's surface type is cancel-safe; only the soiling
     // call would have changed state. Without a write, no soil, no

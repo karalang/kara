@@ -103,11 +103,11 @@ impl FileSystem {
 // on the `Value::File` interpreter variant; the typechecker only
 // needs to know the type exists. Constructors `File.open` / `.create`
 // / `.append` return `Result[File, IoError]`; instance methods
-// `read` / `write` / `flush` thread through the mutex. Drop on the
-// last Arc closes the OS file descriptor. `seek` / `sync_all` /
-// `metadata` are deferred to a follow-on slice — minimum useful
-// surface only at F1. See `phase-8-stdlib-floor.md` "File handle
-// type" entry for the full sub-task plan.
+// `read` / `write` / `flush` / `sync_all` / `sync_data` thread through
+// the mutex. Drop on the last Arc closes the OS file descriptor.
+// `metadata` is deferred to a follow-on slice. See
+// `phase-8-stdlib-floor.md` "File handle type" entry for the full
+// sub-task plan.
 struct File { }
 
 impl File {
@@ -128,14 +128,30 @@ impl File {
     // `write` and `flush` would discard the pending bytes silently.
     // The slice-3 RAII-across-yield walker reads this attribute and
     // rejects a yield while any `File` binding has an unflushed
-    // write. Clear method: `flush` (also `sync_all` once seek/sync
-    // ship; only `flush` is in the v1 surface).
+    // write. Clear methods are a comma-separated list, first name is
+    // the one the diagnostic suggests: `flush` is the cheapest, and
+    // `sync_all` / `sync_data` also clear because they are strictly
+    // stronger (they flush *and* fsync).
     #[compiler_builtin]
-    #[cancel_unsafe_until(method = "flush")]
+    #[cancel_unsafe_until(method = "flush,sync_all,sync_data")]
     fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
     fn flush(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // Durability. `flush` is NOT a substitute: it pushes userspace
+    // buffers and never the OS page cache, so flushed-only data is
+    // still lost on power failure. `sync_all` issues the real fsync
+    // (contents + metadata); `sync_data` is the fdatasync-shaped
+    // cheaper form that may skip metadata, falling back to a full
+    // fsync where the platform has no fdatasync — so it is never less
+    // durable than it claims. design.md § cancellation safety names
+    // these two as the caller's durability obligation before a yield.
+    #[compiler_builtin]
+    fn sync_all(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn sync_data(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 }
 
 struct Env { }

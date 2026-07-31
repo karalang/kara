@@ -61841,6 +61841,55 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
     }
 
     #[test]
+    fn test_e2e_file_sync_all_and_sync_data_persist_contents() {
+        // B-2026-07-30-16 — the durability pair. Both were accepted by
+        // the typechecker but unimplemented in codegen AND the
+        // interpreter, so `karac check` went green on a program neither
+        // backend could run. They are NOT `flush` with a different name:
+        // `Write::flush` on a `std::fs::File` is a documented no-op that
+        // pushes userspace buffers and never the page cache, while these
+        // issue a real fsync/fdatasync. The syscall-level proof lives in
+        // the ledger entry (strace shows `fsync`/`fdatasync` for these
+        // and zero for a flush-only control); what this test pins is the
+        // surface: both return `Ok` and the bytes land on disk.
+        let tmp = std::env::temp_dir().join("karac_e2e_file_sync_pair.txt");
+        let _ = std::fs::remove_file(&tmp);
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with writes(FileSystem) {{
+    match File.create("{path}") {{
+        Ok(f) => {{
+            let mut data: Vec[u8] = Vec.new();
+            data.push(79u8); data.push(75u8);
+            match f.write(data) {{
+                Ok(_) => println("wrote"),
+                Err(_) => println("write-err"),
+            }}
+            match f.sync_all() {{
+                Ok(_) => println("sync_all"),
+                Err(_) => println("sync_all-err"),
+            }}
+            match f.sync_data() {{
+                Ok(_) => println("sync_data"),
+                Err(_) => println("sync_data-err"),
+            }}
+        }}
+        Err(_) => println("create-err"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "wrote\nsync_all\nsync_data");
+            let contents = std::fs::read(&tmp).expect("read tempfile");
+            assert_eq!(contents, b"OK");
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
     fn test_e2e_file_drop_closes_handle_and_flushes_pending_writes() {
         // F4b verification — no explicit `f.flush()`; the scope-exit
         // FreeFileHandle cleanup action runs `karac_runtime_file_close`,
