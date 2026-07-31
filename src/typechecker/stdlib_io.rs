@@ -85,7 +85,15 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
-            _ => self.handle_unknown_method(
+            // B-2026-07-31-1 — `Regex` dispatches through this hardcoded arm
+            // (not the impl-table path the other baked handle types use), and
+            // `handle_unknown_method` is SILENT unless the typo is edit-distance
+            // close, so `re.totally_bogus()` typechecked clean. The four arms
+            // above are the complete `Regex` surface — enumerated identically in
+            // the interpreter and codegen (B-2026-07-14-19) — so an unknown
+            // method here is genuinely absent: use `require_known_method`, which
+            // always emits `NoMethodFound` (with a `did you mean` when close).
+            _ => self.require_known_method(
                 "Regex",
                 method,
                 &["find", "find_all", "is_match", "replace_all"],

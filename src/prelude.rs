@@ -1194,6 +1194,30 @@ pub fn synthetic_gated_modules() -> Vec<(Vec<String>, Vec<Item>)> {
 /// the multi-file tree builder seeds into `ProgramTree.graph.by_path`
 /// (`std.prelude` + [`synthetic_gated_modules`]), so single-file and tree mode
 /// agree on which `std.*` imports resolve.
+/// B-2026-07-31-1 — is `name` declared as a nominal type (struct / enum /
+/// distinct type) in the baked stdlib sources (`runtime/stdlib/*.kara`,
+/// `STDLIB_PROGRAMS`)? Such a type's method surface is EXHAUSTIVELY defined by
+/// the `impl` blocks in those sources, so an unknown method on it is a real
+/// `NoMethodFound`, not the historical silent prelude fall-through.
+///
+/// The `defining_stdlib_origin` flag on `StructInfo`/`EnumInfo` cannot answer
+/// this — `STDLIB_PROGRAMS` items carry `stdlib_origin = false` at parse time
+/// (only the resolver-stub splice sets it), so `File` reads the same `false` a
+/// user struct does. Scanning the baked programs by name is authoritative.
+///
+/// Cold path: consulted only when a method already failed to resolve, and only
+/// on a prelude-named receiver.
+pub fn is_baked_stdlib_nominal_type(name: &str) -> bool {
+    STDLIB_PROGRAMS.iter().any(|(_, program)| {
+        program.items.iter().any(|item| match item {
+            Item::StructDef(s) => s.name == name,
+            Item::EnumDef(e) => e.name == name,
+            Item::DistinctType(d) => d.name == name,
+            _ => false,
+        })
+    })
+}
+
 pub fn is_importable_stdlib_module(path: &[String]) -> bool {
     let eq = |segs: &[&str]| {
         segs.len() == path.len() && segs.iter().zip(path).all(|(a, b)| *a == b.as_str())

@@ -10250,20 +10250,77 @@ fn test_channel_receiver_unknown_method_now_errors() {
 }
 
 #[test]
+fn baked_stdlib_handle_types_reject_unknown_methods() {
+    // B-2026-07-31-1 — a baked stdlib handle type's method surface is
+    // exhaustively defined by its `impl` blocks in `runtime/stdlib/*.kara`, so
+    // an unknown method is a real error, not the historical silent
+    // prelude fall-through. Every one of these accepted `bogus_xyz()` clean
+    // before the fix (11 of 11 resolvable handle types).
+    for ty in [
+        "File",
+        "TcpStream",
+        "TcpListener",
+        "Mutex[i64]",
+        "Pool",
+        "Interner",
+        "Semaphore",
+        "Arena",
+        "BufReader",
+        "BufWriter",
+    ] {
+        let src = format!("fn t(f: ref {ty}) {{ f.bogus_xyz(); }}\nfn main() {{}}\n");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no method 'bogus_xyz'")),
+            "expected NoMethodFound for unknown method on baked handle type '{ty}', got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn baked_stdlib_handle_types_accept_real_methods() {
+    // The fix must not over-reject: a genuine method on a baked handle type
+    // still resolves. `Interner.intern` / `Arena.reset` are real impl methods.
+    typecheck_ok(
+        "fn t(i: mut ref Interner) { let _s = i.intern(\"x\"); }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
 fn test_method_resolution_stdlib_phase11_arms_silent_for_runtime_only() {
-    // The four phase-11 arms (Regex, HTTP Client/Response/HttpError) still
-    // use `handle_unknown_method` — typo-only by design until their floors
-    // land. A typed name far from any enumerated method stays silent so
-    // the runtime-only methods these types expose continue to fall through
-    // until enumeration catches up. `typecheck_ok` asserts no errors fire.
+    // B-2026-07-31-1 flipped the `Regex` arm to always-error: its four-method
+    // surface (`find`/`find_all`/`is_match`/`replace_all`) is at interpreter +
+    // codegen parity, so an unknown method is genuinely absent. The HTTP arms
+    // (Client / Response / HttpError / RequestBuilder) still use
+    // `handle_unknown_method` (typo-only) — their enumeration has not been
+    // parity-audited, so they remain the known-remaining instance of this hole,
+    // recorded in the ledger.
     //
     // Phase-8 arms (String / Slice / Map / Entry / SortedSet / Set /
     // Iterator / Sender / Receiver) flipped to always-error in slice 7(d) —
     // see the per-arm `_unknown_method_now_errors` tests above.
-    typecheck_ok(
+    let errors = typecheck_errors(
         "fn main() {\n\
              let r = Regex.compile(\"[0-9]+\").unwrap();\n\
              r.completely_unrelated();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'completely_unrelated'")),
+        "Regex should reject an unknown method; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // The HTTP arms stay silent for now — a far-off name does not error.
+    typecheck_ok(
+        "fn main() {\n\
+             let c = Client.new();\n\
+             c.completely_unrelated_http_method();\n\
          }",
     );
 }
@@ -20246,7 +20303,15 @@ fn user_trait_default_method_over_container_resolves() {
     // impl by `synthesize_trait_default_methods`) type-checks over a container
     // target. `total_or` returns `total()` (no T-arith); `twice_total` needs
     // the `T: Add` bound for `self.total() + self.total()`.
-    typecheck_ok(
+    //
+    // Uses `typecheck_desugared_ok` — the splice happens in `desugar_program`
+    // (which the real `karac check`/`run`/`build` pipeline runs), so the plain
+    // `typecheck_ok` harness would not see `total_or`/`twice_total` on the
+    // Column impl at all. It passed before only because `Column`, a baked
+    // stdlib type, silently fell through the method-not-found arm to
+    // `Type::Error` — the very hole B-2026-07-31-1 closed. Running desugar makes
+    // the test exercise the pipeline it names.
+    typecheck_desugared_ok(
         "trait Stat[T: Add] {\n\
          \x20   fn total(ref self) -> T;\n\
          \x20   fn total_or(ref self, fallback: T) -> T { self.total() }\n\

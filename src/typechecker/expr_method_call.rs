@@ -5983,6 +5983,32 @@ impl<'a> super::TypeChecker<'a> {
                 const EXHAUSTIVE_PRELUDE: &[&str] =
                     &["Option", "Result", "Vec", "VecDeque", "Tensor", "DataFrame"];
                 let is_exhaustive_prelude = EXHAUSTIVE_PRELUDE.contains(&type_name.as_str());
+                // B-2026-07-31-1 — a BAKED stdlib handle type (`File`,
+                // `TcpStream`, `Mutex`, `Regex`, `Pool`, `Interner`,
+                // `Semaphore`, `Arena`, `BufReader`/`BufWriter`, …) has its
+                // ENTIRE method surface declared as real `impl` blocks in
+                // `runtime/stdlib/*.kara`, spliced in by `register_baked_stdlib`.
+                // Those impls resolve through the `Some(...)` dispatch above, so
+                // reaching this `None` arm means the method genuinely is not on
+                // the type — yet the blanket `PRELUDE_TYPES` exclusion in
+                // `is_user_defined` let every such name fall through silently,
+                // so `f.totally_bogus_method_xyz()` on a `File` typechecked
+                // clean while the same call on `String`/`Vec`/`Map` was
+                // correctly rejected (11 of 11 resolvable baked handle types
+                // affected). `is_baked_stdlib_nominal_type` restores the check
+                // by scanning the baked programs for a struct/enum/distinct of
+                // this name — the `defining_stdlib_origin` flag can't be used,
+                // as `STDLIB_PROGRAMS` items carry it `false` at parse time (a
+                // baked `File` reads the same `false` a user struct does). The
+                // compiler-native prelude collections
+                // (`Vec`/`VecDeque`/`Option`/`Result`/`Tensor`/`DataFrame`) are
+                // declared in the baked sources too but are already covered by
+                // `is_exhaustive_prelude`; `Map`/`Set`/`SortedMap`/… reject via
+                // their own dedicated arms above and never reach here — so any
+                // method that DOES reach this arm on a baked type is genuinely
+                // absent (a dedicated arm, if one existed for it, would have
+                // matched first).
+                let is_baked_stdlib_type = crate::prelude::is_baked_stdlib_nominal_type(&type_name);
                 // Args-specialization tightening: even on prelude types, fire
                 // NoMethodFound when the method exists on a *different*
                 // args-specialization of this type-name (e.g.,
@@ -6039,7 +6065,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
                     return Type::Error;
                 }
-                if (is_user_defined || is_exhaustive_prelude || method_on_other_specialization)
+                if (is_user_defined
+                    || is_exhaustive_prelude
+                    || method_on_other_specialization
+                    || is_baked_stdlib_type)
                     && !self.type_has_comptime_derive(&type_name)
                 {
                     let mut msg = format!("no method '{}' on type '{}'", method, type_name);
