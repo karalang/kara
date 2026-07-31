@@ -38,6 +38,36 @@ times with nothing else on the heap (`take hit=199 miss=1`):
 The cache is 6.79x faster here: it elides an mmap/munmap + page-zero cycle per
 iteration. **A fix must keep this win and remove the sieve loss.**
 
+## FIXED (507a446)
+
+`buf_cache::put` now calls `malloc_trim(64 MiB)` when parking, gated on a
+`SMALL_CHURN` flag set by `karac_free_buf`'s small-buffer fast path, so only
+programs that interleave small allocations with the parked buffer pay it.
+
+| oracle | before | after |
+|---|---|---|
+| sieve_only vs C | 1.75x | **1.14x** |
+| bigbuf cache win | 6.79x | **7.22x** |
+
+**The "kara defect" framing this document originally carried was wrong.** A
+pure-C mirror that retains the same array across iterations reproduces the
+slowdown at 1.82x (8.312 s -> 15.153 s) with no kara involved, and kara tracked
+C in both configurations to within 5 ms (cache ON 15.148 s vs C-hold 15.153 s;
+cache OFF 9.104 s vs C-free-each 8.312 s). Retaining a large buffer across many
+small allocations is slow for every language on glibc; the cache only steers
+programs into it. Per-phase timing shows the whole gap is in the SMALL
+allocations, not the zeroing or the freeing:
+
+| phase | free-each | hold |
+|---|---|---|
+| zero/alloc | 0.164 s | 0.127 s |
+| sieve build | 5.283 s | **11.385 s** |
+| free inner | 2.618 s | 3.036 s |
+
+Platform gap: `malloc_trim` is glibc-only (`target_env = "gnu"`; musl lacks it
+and CI builds this crate under `rust:alpine`). macOS and musl keep the old
+behaviour.
+
 ## Why the sieve is different
 
 The park decision reads only the buffer's SIZE. In `bigbuf` nothing happens
