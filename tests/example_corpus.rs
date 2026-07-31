@@ -77,29 +77,24 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// Entry packages (`kara.toml` + an entry file) that do not currently
 /// type-check, each with the first error the package-level build reports.
 /// Pinned rather than dropped: a fix turns this test RED and forces promotion.
-const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
-    "db_pipeline",
-    // History, because this pin has been retargeted repeatedly as each layer
-    // was peeled off. B-2026-07-29-19 fixed the call-site `ref` parse error
-    // that had been masking every later phase, exposing 18 latent errors. The
-    // example rot among those is now gone: the abandoned
-    // `Display::fmt`/`Formatter`/`write` in query.kara, a `Value` enum nested
-    // one level too deep, two missing imports, and the `Eq`/`Clone` derives
-    // `Value` needed. Three compiler bugs found underneath it have since been
-    // fixed too — B-2026-07-29-25 (imported type alias not expanded, which
-    // alone accounted for 8 errors), -26, and -27.
-    //
-    // Every remaining error is a compiler-side gap, none of them filed as a
-    // bug yet because each is arguably a design question rather than a defect.
-    "1 error, and not example rot: E_NOT_CROSS_TASK at main.kara:43 — the \
-         `InMemoryDb` provider cannot cross the `par` boundary the seed loop \
-         puts it across. Three earlier groups are gone: a map literal typing \
-         as `HashMap`, so unwritable in a typed position (B-2026-07-30-14); \
-         `Map` lookup rejecting a borrowed key (B-2026-07-30-17); and \
-         `Ok(Vec.new())` not receiving the expected payload type \
-         (B-2026-07-31-2, which this pin had misdiagnosed as a `?`-chain \
-         inference gap — neither the `?` nor the match was required).",
-)];
+/// Currently empty — every entry package type-checks.
+///
+/// `db_pipeline` was the last entry and was promoted out on 2026-07-31, after
+/// the pin inverted and this test went red demanding it. It began the sweep at
+/// 18 errors once B-2026-07-29-19 removed the call-site `ref` parse error that
+/// had been masking every later phase. Clearing it took de-rotting the example
+/// (the abandoned `Display::fmt`/`Formatter`/`write`, an over-nested `Value`
+/// enum, two missing imports, the `Eq`/`Clone` derives, and an under-declared
+/// effect set on `execute_pair`) plus six compiler fixes: B-2026-07-29-25,
+/// -26, -27, B-2026-07-30-14, -17, and B-2026-07-31-3.
+///
+/// TYPE-CHECKS is all that claims. This gate is compile-only by design (see the
+/// module docs), and db_pipeline does NOT yet run correctly on either backend:
+/// the interpreter loses provider mutations (B-2026-07-31-4 — inserts are
+/// invisible to later selects, so it prints "(no rows)"), and codegen rejects
+/// the structural `==` on its reference-typed `Value` enum, a gap its own
+/// diagnostic documents. Neither is a reason to re-pin it here.
+const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[];
 
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[

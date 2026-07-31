@@ -63,7 +63,7 @@ pub fn execute(plan: QueryPlan) -> Result[Vec[Row], DbError]
 // Safe because reads(Db) + reads(Db) does not conflict.
 pub fn execute_pair(plan_a: QueryPlan, plan_b: QueryPlan)
     -> (Result[Vec[Row], DbError], Result[Vec[Row], DbError])
-    with reads(Db)
+    with reads(Db) writes(Db) panics
 {
     // GAP-T: par {} requires the compiler to verify effect non-conflict
     // statically.  If plan_a or plan_b is an Insert/Delete (writes(Db)),

@@ -34628,3 +34628,44 @@ fn enum_payload_push_does_not_change_integer_coercion() {
          }",
     );
 }
+
+// ── par enum satisfies the nesting rule ─────────────────────────
+
+/// A `par enum` payload is a single pointer word exactly as a `shared enum`
+/// payload is — design.md § Type Kinds makes `shared` and `par` the two
+/// reference-semantics tiers, single-task RC and cross-task respectively. The
+/// nesting check counted only `shared`, so the two rules contradicted each
+/// other: E_ENUM_NESTED_ENUM_PAYLOAD said to mark the inner enum `shared`,
+/// while E_NOT_CROSS_TASK said `shared` cannot cross a task boundary and to use
+/// `par`. A program needing both — examples/db_pipeline — could not be written.
+#[test]
+fn par_enum_payload_satisfies_the_enum_nesting_rule() {
+    typecheck_ok(
+        "par enum Value { Int(i64), Null } \
+         enum Query { Delete { table: String, value: Value } } \
+         fn main() { let _ = Query.Delete { table: \"t\".to_string(), value: Value.Null }; }",
+    );
+    // The `shared` spelling must keep working — this adds a tier, not swaps one.
+    typecheck_ok(
+        "shared enum Value { Int(i64), Null } \
+         enum Query { Delete { table: String, value: Value } } \
+         fn main() { let _ = Query.Delete { table: \"t\".to_string(), value: Value.Null }; }",
+    );
+}
+
+/// A plain VALUE enum nested one level deep is still rejected — the relaxation
+/// is about pointer forms, not about dropping the rule.
+#[test]
+fn value_enum_payload_still_trips_the_nesting_rule() {
+    let errs = typecheck_errors(
+        "enum Value { Int(i64), Null } \
+         enum Query { Delete { table: String, value: Value } } \
+         fn main() {}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD")),
+        "a value enum payload must still be rejected, got: {:?}",
+        errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
+    );
+}

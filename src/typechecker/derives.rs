@@ -1123,7 +1123,16 @@ impl<'a> super::TypeChecker<'a> {
             .items
             .iter()
             .filter_map(|item| match item {
-                Item::EnumDef(e) if !e.is_shared => Some(e.name.clone()),
+                // `par` counts as a pointer form exactly like `shared`.
+                // design.md § Type Kinds: `shared` and `par` are the two
+                // reference-semantics tiers — single-task RC and cross-task
+                // respectively — so a `par enum` payload is the same single
+                // pointer word a `shared enum` payload is. Omitting it made the
+                // two rules contradict each other: this check told you to mark
+                // the inner enum `shared`, while E_NOT_CROSS_TASK told you
+                // `shared` cannot cross a task boundary and to use `par`. A
+                // program needing both could not be written.
+                Item::EnumDef(e) if !e.is_shared && !e.is_par => Some(e.name.clone()),
                 _ => None,
             })
             .collect();
@@ -1137,7 +1146,10 @@ impl<'a> super::TypeChecker<'a> {
         let items: Vec<_> = self.program.items.clone();
         for item in &items {
             if let Item::EnumDef(e) = item {
-                if e.is_shared {
+                // Pointer-form enums carry their payload behind an indirection,
+                // so nesting depth in the VALUE layout is not their problem —
+                // true of `par` for the same reason it is true of `shared`.
+                if e.is_shared || e.is_par {
                     continue;
                 }
                 for variant in &e.variants {
@@ -1168,8 +1180,9 @@ impl<'a> super::TypeChecker<'a> {
                                              '{}.{}' has a payload of nested enum type '{}' — \
                                              v1 only supports up to one level of enum nesting; \
                                              either flatten the variant, mark the inner enum as \
-                                             `shared` (RC pointer), or wrap it in a `Vec` / \
-                                             collection layer",
+                                             `shared` (RC pointer) or `par` (cross-task pointer — \
+                                             use this one if the value must cross a task \
+                                             boundary), or wrap it in a `Vec` / collection layer",
                                             e.name, variant.name, head
                                         ),
                                         variant.span.clone(),
