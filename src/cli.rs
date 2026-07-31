@@ -1335,19 +1335,59 @@ impl Pipeline {
         self.comptime_errors.as_ref().is_some_and(|c| !c.is_empty())
     }
 
-    /// Most ownership errors are advisory at the CLI layer (see the note on
-    /// `has_fatal_errors`), but the exclusive-borrow rule (B-2026-06-17-6) is a
-    /// soundness gate, not a lint: an aliased `mut ref` / `mut Slice` argument
-    /// (`f(mut v, mut v)`, `f(mut v, v)`) miscompiles — codegen passes the
-    /// borrow's value by copy per argument and assumes the two don't alias — so
-    /// it must stop before codegen. Only this one kind is promoted to fatal; the
-    /// rest of the ownership surface stays diagnostic-only.
+    /// Which ownership diagnostics stop a build. B-2026-07-31-29: this used to
+    /// promote ONLY `ExclusiveBorrowAliasedArgs`, leaving every other kind
+    /// advisory at the CLI layer — so `karac check` reported `error[ownership]`
+    /// and exited 1 while `karac build` produced a binary and exited 0 for the
+    /// same program. The two lanes disagreed about whether a program was valid,
+    /// which matters because `check` is the Mend loop's gate and the AI-first
+    /// surface's contract.
+    ///
+    /// The rule is now the inverse: an ownership error is fatal UNLESS it is one
+    /// of the two documented-advisory kinds, so `check` and `build` agree by
+    /// construction and a newly added kind is fatal by default rather than
+    /// silently advisory.
+    ///
+    /// Fatal, and why the previously-advisory ones had to be promoted:
+    ///   * `ExclusiveBorrowAliasedArgs` — the original soundness gate
+    ///     (B-2026-06-17-6): an aliased `mut ref` / `mut Slice` argument
+    ///     (`f(mut v, mut v)`) miscompiles, because codegen passes the borrow's
+    ///     value by copy per argument and assumes the two don't alias.
+    ///   * `ReassignToImmutable` / `MutateImmutableBinding` — design.md § Variable
+    ///     Binding Rules states outright that reassigning a `let` binding or
+    ///     calling a `mut ref self` method on it "is a compile error". It was not
+    ///     one: `let x = 1; x = 2;` built cleanly AND THE MUTATION TOOK EFFECT
+    ///     (the binary printed 2), so `let` versus `let mut` meant nothing in
+    ///     compiled code. The module-level form of the same rule is a
+    ///     *typechecker* error (`ReassignToImmutableModuleBinding`, E0252) and so
+    ///     was already fatal — the local form is now enforced to match.
+    ///   * `UseOfUninitialized`, `NoRcViolation`, `CaptureModeViolation`,
+    ///     `OwnershipCycle` — each is a real violation, not a hint, and none has
+    ///     a defensive-copy story that makes the emitted code correct anyway.
+    ///
+    /// Advisory (reported, but neither `check` nor `build` fails):
+    ///   * `RcFallbackNote` — declared "Performance note … Not blocking" at its
+    ///     definition; the RC it reports is inserted and correct.
+    ///   * `UseAfterMove` — codegen defensive-copies the reuse, so the binary is
+    ///     memory-safe; the diagnostic carries a machine-applicable `.clone()`
+    ///     fix precisely because the program compiles and runs. Keeping it
+    ///     non-fatal for `build` is deliberate; it is excluded from
+    ///     `total_errors` for the same reason, so `check` no longer fails on a
+    ///     program the compiler is documented to accept.
     fn has_fatal_ownership_errors(&self) -> bool {
         self.ownership.as_ref().is_some_and(|o| {
             o.errors
                 .iter()
-                .any(|e| e.kind == crate::ownership::OwnershipErrorKind::ExclusiveBorrowAliasedArgs)
+                .any(|e| Self::is_fatal_ownership_kind(&e.kind))
         })
+    }
+
+    /// The single classification consulted by both `has_fatal_ownership_errors`
+    /// (the build gate) and `total_errors` (the `check` exit code), so the two
+    /// cannot drift apart again.
+    fn is_fatal_ownership_kind(kind: &crate::ownership::OwnershipErrorKind) -> bool {
+        use crate::ownership::OwnershipErrorKind as K;
+        !matches!(kind, K::RcFallbackNote | K::UseAfterMove)
     }
 
     fn total_errors(&self) -> usize {
@@ -1366,7 +1406,17 @@ impl Pipeline {
                 .count();
         }
         if let Some(ref o) = self.ownership {
-            n += o.errors.len();
+            // B-2026-07-31-29: count only the kinds that also stop a build, so
+            // `karac check`'s exit code and `karac build`'s gate agree. Counting
+            // every kind here is what made `check` exit 1 on a `UseAfterMove`
+            // that `build` compiles by design. The advisory kinds are still
+            // RENDERED — they stay in the diagnostic stream and in
+            // `--output=json` — they just no longer decide the exit code.
+            n += o
+                .errors
+                .iter()
+                .filter(|e| Self::is_fatal_ownership_kind(&e.kind))
+                .count();
         }
         if let Some(ref esc) = self.provider_escape {
             n += esc.len();
@@ -1439,9 +1489,20 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     }
     if let Some(ref o) = pipeline.ownership {
         for err in &o.errors {
+            // B-2026-07-31-29: the label follows the same fatal/advisory split
+            // that decides the exit code, so the rendered severity and the
+            // outcome cannot contradict each other. Before, every kind printed
+            // `error[ownership]` — including the advisory `UseAfterMove` that
+            // codegen compiles by design — which produced the nonsense pairing
+            // of an `error[…]` line immediately followed by `All checks passed.`
+            let label = if Pipeline::is_fatal_ownership_kind(&err.kind) {
+                "error[ownership]"
+            } else {
+                "warning[ownership]"
+            };
             out.push(format!(
-                "error[ownership]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+                "{}: {}:{}:{}: {}",
+                label, filename, err.span.line, err.span.column, err.message
             ));
         }
         // RC-fallback (and other ownership) notes must reach the terminal too.

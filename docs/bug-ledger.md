@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
 | false-positive | 54 | 1 |
-| run-vs-build | 53 | 1 |
+| run-vs-build | 53 | 0 |
 | perf | 41 | 2 |
 | soundness | 32 | 0 |
 | crash | 32 | 0 |
@@ -113,10 +113,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 571 | 4 |
 | typecheck | 107 | 0 |
 | interp | 85 | 1 |
-| ownership | 35 | 2 |
+| ownership | 35 | 1 |
 | autopar | 26 | 0 |
 | other | 21 | 0 |
-| cli | 21 | 1 |
+| cli | 21 | 0 |
 | runtime | 17 | 0 |
 | resolver | 13 | 0 |
 | parser | 6 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **799 surfaced · 6 open · 785 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **799 surfaced · 5 open · 786 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,11 +135,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **799 surfaced 
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-31-27 | 2026-07-31 | codegen | medium | A whole-map rebind (`let m5 = m4;`) leaks the ENTIRE map — handle, bucket arrays, and every stored value's heap — on every execution of the shape. | — |
 | B-2026-07-31-28 | 2026-07-31 | ownership | medium | RC-fallback analysis is not path-sensitive across a branch JOIN: a value consumed exactly once on each of two MUTUALLY EXCLUSIVE `if`/`else` (or `match`) arms is reported as a re-use and gets a real RC inserted, even though only one arm can run. The same mutual exclusion expressed with an early `return` is analyzed correctly. | — |
-| B-2026-07-31-29 | 2026-07-31 | ownership+cli | high | `karac build` and `karac run` DO NOT GATE on ownership errors: a use-after-move that `karac check` reports as `error[ownership]` (exit 1) still compiles to a binary and runs (exit 0). Type errors gate correctly on both, so the two lanes disagree about whether the same program is valid. | — |
 
-### Fixed (785)
+### Fixed (786)
 
-<details><summary>785 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>786 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -928,6 +927,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **799 surfaced 
 | B-2026-07-31-24 | interp | high | `Client.request(m, url)` and the ENTIRE `RequestBuilder` chain (`header`/`body`/`timeout`/`send`) had no interpreter dispatch arm — typechecks clean,… | 5e7c2e9 |
 | B-2026-07-31-25 | interp | medium | Interpreter captured ONLY `content-type` off an HTTP response, so `Response.header(name)` answered `None` for every other header and `Response.header… | 5e7c2e9 |
 | B-2026-07-31-26 | codegen | low | STALE CODEGEN-GAP DIAGNOSTICS: 15 codegen error/doc sites say a deferred construct "works under `karac run`" — false since `karac run` became JIT-by-… | 9d70e52,a6f5df7 |
+| B-2026-07-31-29 | ownership+cli | high | `karac build` and `karac run` DO NOT GATE on ownership errors: a use-after-move that `karac check` reports as `error[ownership]` (exit 1) still compi… | — |
 
 </details>
 

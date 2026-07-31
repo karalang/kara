@@ -23334,3 +23334,156 @@ fn test_build_project_alias_rewrite_yields_to_a_shadowing_local() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Ownership gating: `check` and `build` must agree (B-2026-07-31-29) ──
+
+/// Write `src` to a fresh temp dir and return (dir, file path).
+fn ownership_gate_fixture(tag: &str, src: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-owngate-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("g.kara");
+    std::fs::write(&path, src).unwrap();
+    (tmp, path)
+}
+
+#[test]
+fn ownership_errors_gate_build_and_check_identically() {
+    // B-2026-07-31-29 — `karac check` reported `error[ownership]` and exited 1
+    // while `karac build` produced a binary and exited 0 for the SAME program,
+    // because the build gate promoted only `ExclusiveBorrowAliasedArgs` to
+    // fatal while the check exit code counted every ownership kind. The two
+    // lanes now consult one classification, so their exit codes must match on
+    // every case below — that agreement is the invariant this pins, which is
+    // why each case asserts `check == build` rather than a hardcoded code.
+    //
+    // The immutability cases are the ones that were actively wrong rather than
+    // merely inconsistent: design.md § Variable Binding Rules says reassigning
+    // a `let` binding or calling a `mut ref self` method on it "is a compile
+    // error", but both built cleanly AND THE MUTATION TOOK EFFECT (the binaries
+    // printed 2 and 1), so `let` versus `let mut` meant nothing once compiled.
+    let cases: &[(&str, &str, bool)] = &[
+        (
+            "use-after-move",
+            "fn c(v: Vec[i64]) -> i64 { v.len() }\n\
+             fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1);\n\
+             let a = c(v); let b = c(v); println((a + b).to_string()); }\n",
+            // Advisory: codegen defensive-copies the reuse, and the diagnostic
+            // carries a machine-applicable `.clone()` fix precisely because the
+            // program compiles and runs. Both lanes accept.
+            false,
+        ),
+        (
+            "reassign-to-immutable",
+            "fn main() { let x = 1; x = 2; println(x.to_string()); }\n",
+            true,
+        ),
+        (
+            "mutate-immutable-binding",
+            "struct S { n: i64 }\n\
+             impl S { fn bump(mut ref self) { self.n = self.n + 1; } }\n\
+             fn main() { let s = S { n: 0 }; s.bump(); println(s.n.to_string()); }\n",
+            true,
+        ),
+        (
+            "use-of-uninitialized",
+            "fn main() { let x: i64; println(x.to_string()); }\n",
+            true,
+        ),
+        // Controls: a clean program and a type error must be unaffected by the
+        // ownership reclassification.
+        (
+            "clean-control",
+            "fn main() { let mut x = 1; x = 2; println(x.to_string()); }\n",
+            false,
+        ),
+        (
+            "type-error-control",
+            "fn main() { let x: i64 = \"s\"; println(x.to_string()); }\n",
+            true,
+        ),
+    ];
+
+    for (tag, src, should_fail) in cases {
+        let (tmp, path) = ownership_gate_fixture(tag, src);
+        let check = karac_bin().arg("check").arg(&path).output().unwrap();
+        let build = karac_bin().arg("build").arg(&path).output().unwrap();
+        assert_eq!(
+            check.status.success(),
+            build.status.success(),
+            "`check` and `build` disagree on '{tag}': check_ok={}, build_ok={}",
+            check.status.success(),
+            build.status.success(),
+        );
+        assert_eq!(
+            !check.status.success(),
+            *should_fail,
+            "'{tag}' should {} — check stderr: {}",
+            if *should_fail {
+                "be rejected"
+            } else {
+                "be accepted"
+            },
+            String::from_utf8_lossy(&check.stderr),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+#[test]
+fn advisory_ownership_diagnostic_renders_as_warning_not_error() {
+    // The rendered severity follows the same fatal/advisory split that decides
+    // the exit code. Before the fix every kind printed `error[ownership]`,
+    // including the advisory `UseAfterMove`, which produced the contradiction
+    // of an `error[...]` line immediately followed by `All checks passed.`
+    // The diagnostic must still be REPORTED — demoting it must not silence it,
+    // or the Mend loop loses the signal (and its `.clone()` auto-fix).
+    let (tmp, path) = ownership_gate_fixture(
+        "warn-label",
+        "fn c(v: Vec[i64]) -> i64 { v.len() }\n\
+         fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1);\n\
+         let a = c(v); let b = c(v); println((a + b).to_string()); }\n",
+    );
+    let out = karac_bin().arg("check").arg(&path).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning[ownership]") && stderr.contains("moved here, used again here"),
+        "advisory use-after-move should render as warning[ownership]; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("error[ownership]"),
+        "advisory use-after-move must not render as an error; got: {stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "advisory diagnostic must not fail check"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn fatal_ownership_diagnostic_still_renders_as_error() {
+    // The other side of the split — a promoted kind keeps the `error` label and
+    // the nonzero exit, so demoting `UseAfterMove` did not weaken the rest.
+    let (tmp, path) = ownership_gate_fixture(
+        "err-label",
+        "fn main() { let x = 1; x = 2; println(x.to_string()); }\n",
+    );
+    let out = karac_bin().arg("check").arg(&path).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error[ownership]") && stderr.contains("cannot reassign"),
+        "reassign-to-immutable should render as error[ownership]; got: {stderr}"
+    );
+    assert!(
+        !out.status.success(),
+        "fatal ownership error must fail check"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
