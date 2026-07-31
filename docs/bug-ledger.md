@@ -903,7 +903,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **775 surfaced 
 | B-2026-07-30-18 | codegen | high | SILENT WRONG OUTPUT + OUT-OF-BOUNDS READ (run-vs-build): a `ref Slice[T]` / `ref Vec[T]` PARAM forwarded to a BY-VALUE `Slice[T]` parameter is read a… | ccf4053a |
 | B-2026-07-31-2 | typecheck | medium | `Ok(x)` / `Err(x)` / `Some(x)` did not push the expected PAYLOAD type inward, so a type-inferred constructor in the payload never resolved: `fn f() -… | dcdc9e1 |
 | B-2026-07-31-3 | typecheck | high | CONTRADICTORY RULES: E_ENUM_NESTED_ENUM_PAYLOAD said to mark a nested inner enum `shared`, while E_NOT_CROSS_TASK said a `shared enum` cannot cross a… | 895d4da |
-| B-2026-07-31-5 | codegen | low | A value enum's own `impl Drop` body fired at SCOPE EXIT under codegen but at the binding's NLL live-range end under the interpreter — `mid\|DS` vs `DS… | PENDING |
+| B-2026-07-31-5 | codegen | low | A value enum's own `impl Drop` body fired at SCOPE EXIT under codegen but at the binding's NLL live-range end under the interpreter — `mid\|DS` vs `DS… | 09459b2 |
 
 </details>
 
