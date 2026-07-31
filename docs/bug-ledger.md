@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 195 | 0 |
+| miscompile | 196 | 1 |
 | leak | 105 | 1 |
 | codegen-gap | 88 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
+| run-vs-build | 55 | 1 |
 | false-positive | 54 | 0 |
-| run-vs-build | 54 | 0 |
 | perf | 41 | 1 |
 | crash | 33 | 0 |
 | soundness | 32 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 574 | 2 |
+| codegen | 576 | 4 |
 | typecheck | 108 | 0 |
-| interp | 85 | 1 |
+| interp | 86 | 2 |
 | ownership | 35 | 0 |
 | autopar | 27 | 0 |
 | cli | 23 | 0 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced · 2 open · 796 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **808 surfaced · 4 open · 796 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve trails C/Rust on the sequential lane — now measured at 1.40-1.44x (not 2.5-2.9x), and localized to build_factors: the sieve alone is 1.65x vs C and accounts for MORE than the whole kata's deficit | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
+| B-2026-07-31-37 | 2026-07-31 | interp+codegen | high | `a = b` on a struct binding runs b's user `impl Drop` body TWICE on every backend — and on a heap-bearing type codegen's second run reads the MOVED-FROM value, so the two backends print different numbers. The `let c = b;` form of the same move is correct, which is the bisect. | src/codegen/stmts.rs (StmtKind::Assign, the `lhs_is_tracked_struct` branch and its `suppress_source_vec_cleanup_for_arg` call), src/codegen/runtime.rs (suppress_user_drop_for_var — the suppressor the assign path never calls), src/interpreter/eval_stmt.rs (StmtKind::Assign / record_container_bodies_move_sources) |
+| B-2026-07-31-38 | 2026-07-31 | codegen | medium | A binding moved into a variant constructor and then REASSIGNED never drops again on codegen: the ctor move retracts its UserDrop action permanently and the assign never re-arms it. The interpreter re-arms, so the two backends disagree. | src/codegen/runtime.rs (suppress_user_drop_for_var — retracts permanently), src/codegen/call_dispatch.rs (try_compile_enum_variant's ctor-arg retraction loop), src/codegen/stmts.rs (StmtKind::Assign — has no re-arm), src/interpreter/eval_stmt.rs (rearm_container_bodies_for_name — the interpreter twin that DOES re-arm) |
 
 ### Fixed (796)
 
