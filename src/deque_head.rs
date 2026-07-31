@@ -94,8 +94,14 @@ pub fn eligible_deque_locals(program: &Program) -> HashMap<String, HashSet<Strin
 }
 
 fn analyze_fn(body: &Block) -> HashSet<String> {
+    // Only statements directly in the function body. The head counter is an
+    // entry-block alloca zeroed once on entry, so a `let` nested inside a loop
+    // — which re-creates the deque every iteration and must re-zero the head —
+    // is out of scope. Rejecting it here keeps the init story trivial.
     let mut candidates = HashSet::new();
-    collect_candidates_block(body, &mut candidates);
+    for s in &body.stmts {
+        collect_candidate_stmt_shallow(s, &mut candidates);
+    }
     if candidates.is_empty() {
         return candidates;
     }
@@ -113,44 +119,22 @@ fn analyze_fn(body: &Block) -> HashSet<String> {
 
 // ── Candidate collection ────────────────────────────────────────────
 
-fn collect_candidates_block(block: &Block, out: &mut HashSet<String>) {
-    for s in &block.stmts {
-        collect_candidates_stmt(s, out);
-    }
-    if let Some(e) = &block.final_expr {
-        crate::rc_elide::walk_children_pub(&e.kind, &mut |sub| {
-            collect_candidates_expr(sub, out);
-        });
-    }
-}
-
-fn collect_candidates_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
-    if let crate::ast::StmtKind::Let {
+fn collect_candidate_stmt_shallow(stmt: &Stmt, out: &mut HashSet<String>) {
+    let crate::ast::StmtKind::Let {
         is_mut: true,
         pattern,
         ty,
         value,
     } = &stmt.kind
-    {
-        if let PatternKind::Binding(name) = &pattern.kind {
-            if is_deque_init(value) && deque_elem_is_pod(ty.as_ref()) {
-                out.insert(name.clone());
-            }
-        }
+    else {
+        return;
+    };
+    let PatternKind::Binding(name) = &pattern.kind else {
+        return;
+    };
+    if is_deque_init(value) && deque_elem_is_pod(ty.as_ref()) {
+        out.insert(name.clone());
     }
-    // Nested blocks (a deque declared inside a loop or `if`) are reachable
-    // through the statement's expressions.
-    crate::rc_elide::walk_stmt_children_pub(stmt, &mut |e| {
-        collect_candidates_expr(e, out);
-    });
-}
-
-fn collect_candidates_expr(expr: &Expr, out: &mut HashSet<String>) {
-    if let ExprKind::Block(b) = &expr.kind {
-        collect_candidates_block(b, out);
-    }
-    for_each_block(&expr.kind, &mut |b| collect_candidates_block(b, out));
-    crate::rc_elide::walk_children_pub(&expr.kind, &mut |sub| collect_candidates_expr(sub, out));
 }
 
 /// `VecDeque.new()` / `VecDeque.with_capacity(n)` — the only initializers that
@@ -314,6 +298,24 @@ mod tests {
 
     fn wrap(body: &str) -> String {
         format!("fn f() {{\n{body}\n}}\n")
+    }
+
+    #[test]
+    fn let_nested_in_a_loop_rejected() {
+        // The head counter is an entry-block alloca zeroed once; a deque
+        // re-created each iteration would need it re-zeroed per iteration.
+        let s = wrap(
+            r#"
+    let mut i = 0i64;
+    while i < 3 {
+        let mut q: VecDeque[i64] = VecDeque.new();
+        q.push_back(i);
+        let _ = q.pop_front();
+        i = i + 1;
+    }
+"#,
+        );
+        assert!(!eligible(&s).contains("q"));
     }
 
     /// The shape from kata #3629: BFS worklist, POD tuple elements, only
