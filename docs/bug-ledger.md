@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 191 | 0 |
 | leak | 104 | 1 |
-| codegen-gap | 89 | 2 |
+| codegen-gap | 89 | 1 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
 | false-positive | 52 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 566 | 5 |
+| codegen | 566 | 4 |
 | typecheck | 105 | 0 |
 | interp | 82 | 1 |
 | ownership | 33 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **787 surfaced · 6 open · 773 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **787 surfaced · 5 open · 774 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,11 +135,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **787 surfaced 
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site. Still silent: Map values, Option/Result payloads, non-let tuple positions. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-31-14 | 2026-07-31 | autopar+cli | medium | `karac query concurrency` reports `fanned_out: true` / `cost_gate: "fanout"` for a reduction with a FLOAT accumulator, which codegen always refuses to fan out (float reassociation needs an `#[fp_reassoc]` opt-in that does not exist in v1). The query is confidently wrong about the binary. | src/effect_graph.rs::loop_reductions_json / src/par_cost.rs::FanoutVerdict |
 | B-2026-07-31-16 | 2026-07-31 | codegen | low | `return` inside a `with_provider` CLOSURE body is closure-scoped per the typechecker and interpreter (`let x = with_provider[R](v, || { return 8; }); x + 1` typechecks and yields 9 under --interp), but codegen lowers it as a FN-level ret — so the non-tail shape still fails module verification. B-2026-07-31-11 fixed tail position, where the two semantics coincide observably. | src/codegen/provider.rs (compile_with_provider_body); return lowering in stmts/exprs for closure-scoped retargeting |
-| B-2026-07-31-17 | 2026-07-31 | codegen | low | A let-bound value expression that TERMINATES (`let x = { return 5; }; tail`) fails module verification under codegen — the let-site emits its store after the terminator — while --interp runs it (prints 5; the return is fn-scoped, matching the typechecker's `!` typing). No providers involved; the generic sibling of B-2026-07-31-16's shape. | src/codegen/stmts.rs (let-init of a terminated value expr; statement sequencing after a terminator) |
 
-### Fixed (773)
+### Fixed (774)
 
-<details><summary>773 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>774 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -916,6 +915,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **787 surfaced 
 | B-2026-07-31-12 | codegen | medium | `Json.parse` of a STRING / ARRAY / OBJECT leaks the lifted Kāra-side tree's heap payloads under codegen — one tree per parse, even when the payload i… | 66ec99f |
 | B-2026-07-31-13 | autopar+cli | medium | `codegen/reduce.rs` open-coded its own copy of the fan-out gate sequence instead of calling `par_cost::fanout_verdict` — the exact drift `par_cost` w… | 269d9ce |
 | B-2026-07-31-15 | interp+typecheck | medium | `break` out of an enclosing loop from inside a `with_provider` closure body makes the interpreter return UNIT from an i64 function — the Break contro… | c18c457 |
+| B-2026-07-31-17 | codegen | low | A let-bound value expression that TERMINATES (`let x = { return 5; }; tail`) fails module verification under codegen — the let-site emits its store a… | — |
 
 </details>
 

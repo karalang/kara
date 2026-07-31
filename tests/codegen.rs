@@ -13303,6 +13303,143 @@ fn main() {
         }
     }
 
+    // ── Terminated init/RHS statements (B-2026-07-31-17) ──
+    //
+    // A `let` / assignment whose RHS TERMINATES the current block (a `!`-typed
+    // block expression: `{ return 5; }`, an if/match whose every arm returns,
+    // a block that breaks the enclosing loop) used to emit its store AFTER the
+    // terminator, failing module verification ("Terminator found in the middle
+    // of a basic block") on programs the interpreter runs fine. The guard now
+    // skips the dead binding/store; compile_block's per-statement terminator
+    // check stops the rest of the block, exactly as for a bare `return;`.
+
+    #[test]
+    fn e2e_let_init_block_returns() {
+        // The ledger repro: the init returns, the binding never materializes,
+        // the tail 7 is unreachable.
+        if let Some(out) = run_program(
+            "fn t() -> i64 {\n\
+                 let x = { return 5; };\n\
+                 7\n\
+             }\n\
+             fn main() { println(f\"{t()}\"); }",
+        ) {
+            assert_eq!(out, "5\n");
+        }
+    }
+
+    #[test]
+    fn e2e_let_init_if_both_arms_return() {
+        if let Some(out) = run_program(
+            "fn t(c: bool) -> i64 {\n\
+                 let x = if c { return 1; } else { return 2; };\n\
+                 9\n\
+             }\n\
+             fn main() {\n\
+                 println(f\"{t(true)}\");\n\
+                 println(f\"{t(false)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n2\n");
+        }
+    }
+
+    #[test]
+    fn e2e_let_init_match_all_arms_return() {
+        if let Some(out) = run_program(
+            "fn t(n: i64) -> i64 {\n\
+                 let x = match n {\n\
+                     0 => { return 10; }\n\
+                     _ => { return 20; }\n\
+                 };\n\
+                 99\n\
+             }\n\
+             fn main() {\n\
+                 println(f\"{t(0)}\");\n\
+                 println(f\"{t(4)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n20\n");
+        }
+    }
+
+    #[test]
+    fn e2e_let_init_returns_with_live_heap_local() {
+        // A heap local is in scope when the init returns: the return edge's
+        // scope-exit cleanup drains it (no leak — see the asan twin).
+        if let Some(out) = run_program(
+            "fn t() -> i64 {\n\
+                 let s = f\"heap-{40 + 2}\";\n\
+                 let x = { return s.len(); };\n\
+                 0\n\
+             }\n\
+             fn main() { println(f\"{t()}\"); }",
+        ) {
+            assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
+    fn e2e_let_init_breaks_enclosing_loop() {
+        // The break-init variant: the let never binds and the loop exits;
+        // 0+1+2 accumulate before i == 3 breaks.
+        if let Some(out) = run_program(
+            "fn t() -> i64 {\n\
+                 let mut acc = 0;\n\
+                 for i in 0..5 {\n\
+                     if i == 3 {\n\
+                         let x = { break; };\n\
+                     }\n\
+                     acc = acc + i;\n\
+                 }\n\
+                 acc\n\
+             }\n\
+             fn main() { println(f\"{t()}\"); }",
+        ) {
+            assert_eq!(out, "3\n");
+        }
+    }
+
+    #[test]
+    fn e2e_assign_rhs_block_returns() {
+        // Assign + CompoundAssign twins: the store/binop must not be emitted
+        // after the RHS's terminator.
+        if let Some(out) = run_program(
+            "fn a1() -> i64 {\n\
+                 let mut x = 1;\n\
+                 x = { return 5; };\n\
+                 x\n\
+             }\n\
+             fn a2() -> i64 {\n\
+                 let mut x = 1;\n\
+                 x += { return 6; };\n\
+                 x\n\
+             }\n\
+             fn main() {\n\
+                 println(f\"{a1()}\");\n\
+                 println(f\"{a2()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n6\n");
+        }
+    }
+
+    #[test]
+    fn e2e_stmts_after_terminated_let_are_skipped() {
+        // Statements after the terminated let must not execute (or emit into
+        // the terminated block).
+        if let Some(out) = run_program(
+            "fn t() -> i64 {\n\
+                 let x = { return 5; };\n\
+                 println(\"never\");\n\
+                 7\n\
+             }\n\
+             fn main() { println(f\"{t()}\"); }",
+        ) {
+            assert_eq!(out, "5\n");
+        }
+    }
+
     // ── Nested-place + compound-field assignment write-back (codegen) ──
     //
     // Regression: assignment to a value-type struct field through a projection

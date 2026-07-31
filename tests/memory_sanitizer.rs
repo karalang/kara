@@ -34255,4 +34255,35 @@ fn main() with reads(Ctr) {
             "provider_early_return_frees_body_local",
         );
     }
+
+    /// B-2026-07-31-17: a `let` whose init TERMINATES (`let x = { return
+    /// s.len(); }`) with a heap local live in scope. The return edge's
+    /// scope-exit cleanup must free the f-string String on every iteration —
+    /// pre-fix this program did not even compile ("Terminator found in the
+    /// middle of a basic block"), so this gate cannot pass vacuously.
+    #[test]
+    fn asan_terminated_let_init_frees_live_heap_local() {
+        assert_clean_asan_run(
+            r#"
+fn t(k: i64) -> i64 {
+    let s = f"payload-{k}";
+    let x = { return s.len(); };
+    0
+}
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        n = n + t(i);
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // "payload-0".len() = 9 for i 0..9 (10 iters), 10 for i 10..99
+            // (90 iters), 11 for i 100..199 (100 iters): 90 + 900 + 1100 = 2090.
+            &["2090"],
+            "terminated_let_init_frees_live_heap_local",
+        );
+    }
 }

@@ -3419,6 +3419,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.pending_let_elem_type_expr = saved_pending_let_elem_te;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
                 self.pending_let_column_info = saved_pending_let_column;
+                // B-2026-07-31-17: a `let` whose RHS TERMINATES the current
+                // block (`let x = { return 5; }` — the init is `!`-typed;
+                // every path returns/breaks) leaves nothing to bind and no
+                // live insertion point, so emitting the store would place
+                // instructions after the terminator ("Terminator found in
+                // the middle of a basic block"). Skip the binding entirely
+                // — compile_block's per-statement terminator check stops
+                // the enclosing block right after, exactly as it does for a
+                // bare `return;` statement. (Partially-diverging RHS shapes
+                // — `if c { return 1 } else { 2 }`, `f()?` — end at a live
+                // merge/continuation block and never take this exit.)
+                if self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_terminator()
+                    .is_some()
+                {
+                    return Ok(());
+                }
                 // B-2026-07-21-11: `let p = <refparam>.field;` — a whole-field
                 // move of a heap-bearing struct/enum through a `ref` param
                 // bit-copy-aliases the caller's field while the binding gets
@@ -6102,6 +6122,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 let rhs_is_fresh = self.rhs_yields_fresh_ref(value);
                 let rhs_is_fstring = self.rhs_stages_fstr_acc(value);
                 let val = self.compile_expr(value)?;
+                // B-2026-07-31-17 (Assign twin of the Let guard): a RHS that
+                // TERMINATES the current block (`x = { return 5; };`) leaves
+                // no live insertion point — emitting the store would place
+                // instructions after the terminator. Skip the store; the
+                // enclosing block's per-statement terminator check stops
+                // compilation right after. A terminating RHS is a
+                // block/if/match (never an f-string), so no staging state is
+                // pending here.
+                if self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_terminator()
+                    .is_some()
+                {
+                    return Ok(());
+                }
                 // Owned String/Vec PARAM moved into an existing binding
                 // (`work = lists;` where `lists` is a bare by-value
                 // param) — same caller-frees double-free as the Let arm's
@@ -6822,6 +6859,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.load_variable(name)?
                     };
                     let rhs = self.compile_expr(value)?;
+                    // B-2026-07-31-17 (CompoundAssign twin of the Let guard):
+                    // a terminating RHS (`x += { return 6; };`) leaves no live
+                    // insertion point — skip the binop + store.
+                    if self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_terminator()
+                        .is_some()
+                    {
+                        return Ok(());
+                    }
                     let result = self.compile_binop(&binop, current, rhs)?;
                     // Slice 9: module-binding compound-assign — store
                     // the binop's result back through the global. The
@@ -6862,6 +6911,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // silently dropped.
                 let current = self.compile_expr(target)?;
                 let rhs = self.compile_expr(value)?;
+                // B-2026-07-31-17: terminating RHS — no live insertion point,
+                // skip the binop + place store (see the Let-arm guard).
+                if self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_terminator()
+                    .is_some()
+                {
+                    return Ok(());
+                }
                 let result = self.compile_binop(&binop, current, rhs)?;
                 match &target.kind {
                     ExprKind::FieldAccess { object, field } => {
