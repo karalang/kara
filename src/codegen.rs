@@ -7839,14 +7839,6 @@ impl<'ctx> Codegen<'ctx> {
         Ok(self.target_data.as_ref().unwrap())
     }
 
-    /// Load the head-index deque eligibility set (`crate::deque_head`).
-    ///
-    /// Computed from the AST, plain data — no LLVM type crosses the boundary,
-    /// so codegen containment holds (CLAUDE.md § Codegen architecture).
-    fn load_deque_head_locals(&mut self, program: &crate::ast::Program) {
-        self.deque_head_locals = crate::deque_head::eligible_deque_locals(program);
-    }
-
     /// Populate RC-fallback data from an ownership check result.
     ///
     /// Two side-tables land here:
@@ -7998,6 +7990,7 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     /// Load the head-index deque eligibility set (`crate::deque_head`).
+    ///
     /// Computed from the AST, plain data — no LLVM type crosses the boundary,
     /// so codegen containment holds (CLAUDE.md § Codegen architecture).
     fn load_deque_head_locals(&mut self, program: &crate::ast::Program) {
