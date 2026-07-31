@@ -910,7 +910,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **782 surfaced 
 | B-2026-07-31-7 | codegen | medium | An UNANNOTATED `let` of an `Option`/`Result` whose payload is heap-BOXED registered no cleanup at all and leaked the whole box, payload heap included… | d5f45d6 |
 | B-2026-07-31-8 | codegen | high | An INVERTED loop range (`for y in 5..3`) makes auto-par's `iter_total` negative, and the descriptor field is `u64` — so a loop that runs ZERO iterati… | db59de2 |
 | B-2026-07-31-9 | codegen | medium | The `providers { R => v } in { body }` BLOCK form emits NOTHING under codegen/JIT — even a read-only `R.get()` — while the interpreter runs it correc… | 74d2b387 |
-| B-2026-07-31-12 | codegen | medium | `Json.parse` of a STRING / ARRAY / OBJECT leaks the lifted Kāra-side tree's heap payloads under codegen — one tree per parse, even when the payload i… | PENDING |
+| B-2026-07-31-12 | codegen | medium | `Json.parse` of a STRING / ARRAY / OBJECT leaks the lifted Kāra-side tree's heap payloads under codegen — one tree per parse, even when the payload i… | 66ec99f |
 
 </details>
 
