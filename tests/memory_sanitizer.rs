@@ -34328,4 +34328,48 @@ fn main() with reads(Ctr) {
             "wp_closure_return_frees_body_local_and_moves_result",
         );
     }
+
+    /// B-2026-07-31-19: closure-scoped `?` — the fail edge's bounded drain
+    /// must free the heap body-local (`pad`) and the Err's String payload
+    /// must be owned exactly once through the merge slot. Both dynamic
+    /// paths, 200 iterations.
+    #[test]
+    fn asan_wp_closure_question_fail_edge_frees_body_local() {
+        assert_clean_asan_run(
+            r#"
+trait Counter { fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn might_fail(x: i64) -> Result[i64, String] {
+    if x > 5i64 { return Err(f"big-{x}"); }
+    Ok(x)
+}
+fn probe(n: i64) -> i64 with reads(Ctr) {
+    let r = with_provider[Ctr](InMem { n: n }, || {
+        let pad = f"pad-{read()}";
+        let v = might_fail(read())?;
+        Ok(v + pad.len())
+    });
+    match r {
+        Ok(v) => v,
+        Err(e) => e.len(),
+    }
+}
+fn main() with reads(Ctr) {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        acc = acc + probe(3i64) + probe(9i64);
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            // probe(3) = 3 + 5 = 8; probe(9) = "big-9".len() = 5; x 200 = 2600.
+            &["2600"],
+            "wp_closure_question_fail_edge_frees_body_local",
+        );
+    }
 }

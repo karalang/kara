@@ -1435,6 +1435,22 @@ pub(super) fn find_struct_def<'m>(
 
 // ── Type Checker ────────────────────────────────────────────────
 
+/// One closure literal's return-shape collector (B-2026-07-31-18 returns,
+/// B-2026-07-31-19 `?` demands). See `closure_return_types`.
+#[derive(Default)]
+pub(super) struct ClosureReturnFrame {
+    /// Types of `return E` statements in this closure body (Unit for bare
+    /// `return;`).
+    pub(super) returns: Vec<Type>,
+    /// Err types demanded by Result-form `?` sites in this closure body —
+    /// on Err the `?` returns `Err(e)` FROM THE CLOSURE, so the closure's
+    /// return type must be `Result[_, E]` for each demanded `E`.
+    pub(super) question_errs: Vec<Type>,
+    /// True when an Option-form `?` fired in this body (demands the
+    /// closure return `Option[_]`).
+    pub(super) question_option: bool,
+}
+
 pub struct TypeChecker<'a> {
     pub(super) program: &'a Program,
     pub(super) resolve_result: &'a ResolveResult,
@@ -1549,8 +1565,12 @@ pub struct TypeChecker<'a> {
     /// ordinary closure semantics, `return` inside a closure returns from
     /// the closure). The closure arm pops its frame after body inference
     /// and unifies the collected types with the body's tail type to
-    /// produce the closure's return type.
-    pub(super) closure_return_types: Vec<Vec<Type>>,
+    /// produce the closure's return type. B-2026-07-31-19 extends the frame
+    /// with `?`-demand collection: each `?` site in the body records its
+    /// operand's Err type (Result form) or Option-ness, and the closure arm
+    /// solves the closure's `Result[T, E]` / `Option[T]` from tail +
+    /// returns + demands.
+    pub(super) closure_return_types: Vec<ClosureReturnFrame>,
     pub(super) current_self_type: Option<Type>,
     /// FE-3c — true while type-checking the body of a `#[gpu]` function, so
     /// the closure-capture hook (`closure_type_with_capture_inference`) can

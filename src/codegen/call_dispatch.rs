@@ -228,7 +228,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some((resource, provider_expr, closure_expr)) =
             match_with_provider_call(callee, args)
         {
-            return self.compile_with_provider(&resource, provider_expr, closure_expr);
+            return self.compile_with_provider(&resource, provider_expr, closure_expr, call_span);
         }
 
         // Phase-8 line 153: `with_span(span, ||body)` installs `span`'s id

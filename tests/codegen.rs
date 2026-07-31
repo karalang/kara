@@ -13633,6 +13633,125 @@ fn main() {
     }
 
     #[test]
+    fn e2e_wp_closure_question_is_closure_scoped() {
+        // B-2026-07-31-19: `?` inside the wp closure returns the Err FROM
+        // THE CLOSURE — the wp call's value is that Err, and the enclosing
+        // fn's match handles it (-1). Pre-fix the fail path early-returned
+        // from the whole fn (unwrap_or saw the Err: -99).
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn might_fail(x: i64) -> Result[i64, String] {{\n\
+                 if x > 5 {{ return Err(\"too big\"); }}\n\
+                 Ok(x)\n\
+             }}\n\
+             fn probe(n: i64) -> Result[i64, String] with reads(Ctr) {{\n\
+                 let r = with_provider[Ctr](InMem {{ n: n }}, || {{\n\
+                     let v = might_fail(read())?;\n\
+                     Ok(v * 10)\n\
+                 }});\n\
+                 match r {{\n\
+                     Ok(v) => Ok(v),\n\
+                     Err(_) => Ok(-1),\n\
+                 }}\n\
+             }}\n\
+             fn main() with reads(Ctr) {{\n\
+                 println(f\"{{probe(3).unwrap()}}\");\n\
+                 println(f\"{{probe(9).unwrap_or(-99)}}\");\n\
+             }}",
+        )) {
+            assert_eq!(out, "30\n-1\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_question_err_string_payload_survives() {
+        // The Err's String payload must round-trip through the closure's
+        // Result shape (multi-word payload words copied into the merge slot).
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn might_fail(x: i64) -> Result[i64, String] {{\n\
+                 if x > 5 {{ return Err(f\"big-{{x}}\"); }}\n\
+                 Ok(x)\n\
+             }}\n\
+             fn probe(n: i64) -> String with reads(Ctr) {{\n\
+                 let r = with_provider[Ctr](InMem {{ n: n }}, || {{\n\
+                     let v = might_fail(read())?;\n\
+                     Ok(v * 10)\n\
+                 }});\n\
+                 match r {{\n\
+                     Ok(v) => f\"ok-{{v}}\",\n\
+                     Err(e) => f\"err-{{e}}\",\n\
+                 }}\n\
+             }}\n\
+             fn main() with reads(Ctr) {{\n\
+                 println(f\"{{probe(3)}}\");\n\
+                 println(f\"{{probe(9)}}\");\n\
+             }}",
+        )) {
+            assert_eq!(out, "ok-30\nerr-big-9\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_question_propagation_shape_unchanged() {
+        // The established `wp(...)?` continuation: the closure's Err becomes
+        // the wp value, and the OUTER `?` propagates it from the fn — same
+        // observable behavior as the old fn-level lowering, now via the
+        // closure-scoped route.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn might_fail(x: i64) -> Result[i64, String] {{\n\
+                 if x > 5 {{ return Err(\"big\"); }}\n\
+                 Ok(x)\n\
+             }}\n\
+             fn q(x: i64) -> Result[i64, String] with reads(Ctr) {{\n\
+                 let v = with_provider[Ctr](InMem {{ n: x }}, || {{\n\
+                     let got = might_fail(read())?;\n\
+                     Ok(got * 10)\n\
+                 }})?;\n\
+                 Ok(v + 1)\n\
+             }}\n\
+             fn main() with reads(Ctr) {{\n\
+                 println(f\"{{q(2).unwrap()}}\");\n\
+                 println(f\"{{q(7).unwrap_or(-1)}}\");\n\
+             }}",
+        )) {
+            assert_eq!(out, "21\n-1\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_question_drains_body_local_on_fail_edge() {
+        // A heap body-local live at the `?`: the fail edge's bounded drain
+        // frees it (then pops the provider) before joining the merge —
+        // asan twin covers the leak check; this pins the values.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn might_fail(x: i64) -> Result[i64, String] {{\n\
+                 if x > 5 {{ return Err(\"big\"); }}\n\
+                 Ok(x)\n\
+             }}\n\
+             fn probe(n: i64) -> i64 with reads(Ctr) {{\n\
+                 let r = with_provider[Ctr](InMem {{ n: n }}, || {{\n\
+                     let pad = f\"pad-{{read()}}\";\n\
+                     let v = might_fail(read())?;\n\
+                     Ok(v + pad.len())\n\
+                 }});\n\
+                 match r {{\n\
+                     Ok(v) => v,\n\
+                     Err(_) => -1,\n\
+                 }}\n\
+             }}\n\
+             fn main() with reads(Ctr) {{\n\
+                 println(f\"{{probe(3)}}\");\n\
+                 println(f\"{{probe(9)}}\");\n\
+             }}",
+        )) {
+            assert_eq!(out, "8\n-1\n");
+        }
+    }
+
+    #[test]
     fn e2e_wp_closure_return_provider_stack_healthy_after() {
         // The retargeted return must still pop the provider frame: a second
         // with_provider after the first must resolve its own provider, and

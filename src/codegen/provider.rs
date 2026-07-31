@@ -116,6 +116,7 @@ impl<'ctx> super::Codegen<'ctx> {
         resource: &str,
         provider_expr: &Expr,
         closure_expr: &Expr,
+        call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // 0. Trait-less resources have no `effect resource R: T` declaration,
         //    so no provider trait and no trait-keyed vtable. They override via
@@ -142,7 +143,12 @@ impl<'ctx> super::Codegen<'ctx> {
         //    routes all trait-less resources to the ambient path while leaving
         //    user `effect resource R: T` on the trait-vtable path below.
         if !self.provider_resource_traits.contains_key(resource) {
-            return self.compile_with_provider_ambient(resource, provider_expr, closure_expr);
+            return self.compile_with_provider_ambient(
+                resource,
+                provider_expr,
+                closure_expr,
+                call_span,
+            );
         }
 
         // 1-3. Resolve the resource ID, vtable and provider data pointer.
@@ -181,7 +187,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    v1 — the body's free variables resolve against the outer
         //    scope, exactly as the interpreter handles a `with_provider`
         //    closure (see `Interpreter::eval_with_provider`).
-        self.compile_wp_closure_body_retargeted(closure_expr, resource)
+        self.compile_wp_closure_body_retargeted(closure_expr, resource, call_span)
     }
 
     /// Compile a `with_provider` CLOSURE body with closure-scoped `return`
@@ -202,6 +208,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         closure_expr: &Expr,
         resource: &str,
+        call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let fn_val = self.current_fn.ok_or_else(|| {
             "with_provider: no current function (called from top-level?)".to_string()
@@ -215,6 +222,13 @@ impl<'ctx> super::Codegen<'ctx> {
             merge_bb: None,
             result_slot: None,
             result_ty: None,
+            // The typechecked wp result type, when concrete — the `?`
+            // retargeting derives the closure's Result shape from it
+            // (B-2026-07-31-19).
+            result_type_expr: self
+                .wp_result_types
+                .get(&(call_span.offset, call_span.length))
+                .cloned(),
         });
         let body_result = self.compile_provider_body_with_pop_frame(1, |me| {
             me.compile_with_provider_body(closure_expr, resource)
@@ -297,17 +311,29 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             None => self.context.i64_type().const_int(0, false).into(),
         };
-        let (cleanup_depth, fn_val) = {
-            let rt = self
-                .return_retargets
-                .last()
-                .expect("caller checked wp_return_retarget_active");
-            (rt.cleanup_depth, rt.fn_val)
-        };
+        let cleanup_depth = self
+            .return_retargets
+            .last()
+            .expect("caller checked wp_return_retarget_active")
+            .cleanup_depth;
         // Emit-only drain (frames stay tracked for the fall-through path):
         // body locals innermost-first, then the ProviderPop at the depth.
         self.emit_scope_cleanup_from(cleanup_depth);
-        // Lazily mint the merge block + result slot on the first return.
+        self.store_wp_retarget_value_and_branch(v);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Store `v` into the active retarget's result slot and branch to its
+    /// merge block, lazily minting both on first use. Shared by the
+    /// closure-scoped `return` path and the closure-scoped `?` fail path
+    /// (B-2026-07-31-19) — the caller is responsible for having already
+    /// drained the retarget's cleanup frames.
+    pub(super) fn store_wp_retarget_value_and_branch(&mut self, v: BasicValueEnum<'ctx>) {
+        let fn_val = self
+            .return_retargets
+            .last()
+            .expect("caller checked wp_return_retarget_active")
+            .fn_val;
         if self.return_retargets.last().unwrap().merge_bb.is_none() {
             let bb = self.context.append_basic_block(fn_val, "wp.ret.merge");
             self.return_retargets.last_mut().unwrap().merge_bb = Some(bb);
@@ -329,7 +355,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let v = self.coerce_scalar_to_type(v, slot_ty);
         self.builder.build_store(slot, v).unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
-        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// True when the innermost [`ReturnRetarget`] belongs to the function
@@ -804,6 +829,7 @@ impl<'ctx> super::Codegen<'ctx> {
         resource: &str,
         provider_expr: &Expr,
         closure_expr: &Expr,
+        call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let provider_type_name = self
             .infer_provider_type_name(provider_expr)
@@ -832,7 +858,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // body pops on the way out instead of producing invalid IR.
         let frame_ptr = self.alloca_provider_frame("wp.amb.frame")?;
         self.emit_provider_push(frame_ptr, resource_id, data_ptr, vtable_ptr);
-        self.compile_wp_closure_body_retargeted(closure_expr, resource)
+        self.compile_wp_closure_body_retargeted(closure_expr, resource, call_span)
     }
 
     /// Resolve ONE provider binding — trait-ful or ambient — to the

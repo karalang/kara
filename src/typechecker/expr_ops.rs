@@ -2095,6 +2095,36 @@ impl<'a> super::TypeChecker<'a> {
             );
         }
 
+        // Closure-scoped `?` (B-2026-07-31-19): inside a closure literal
+        // body, `?` on Err returns `Err(e)` FROM THE CLOSURE (the body is
+        // `Fn() -> T`; the interpreter's closure boundary catches the
+        // propagation), so the demand is recorded on the innermost closure
+        // frame for post-body solving instead of being checked against the
+        // enclosing FN's return type. Cross-error `From` conversions are
+        // not applied at closure `?` sites — the solver requires exact
+        // Err-type agreement.
+        if let Some(frame) = self.closure_return_types.last_mut() {
+            match inner_name.as_str() {
+                "Result" if inner_args.len() == 2 => {
+                    let e = inner_args[1].clone();
+                    frame.question_errs.push(e);
+                    return inner_args[0].clone();
+                }
+                "Option" if !inner_args.is_empty() => {
+                    frame.question_option = true;
+                    return inner_args[0].clone();
+                }
+                _ => {
+                    self.type_error(
+                        format!("'?' operator requires `Result` or `Option`, found '{inner_name}'"),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+            }
+        }
+
         let return_ty = match self.current_return_type.clone() {
             Some(t) => t,
             None => {

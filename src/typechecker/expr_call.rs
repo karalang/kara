@@ -620,6 +620,15 @@ impl<'a> super::TypeChecker<'a> {
                     // tolerant dispatch (which types the call `Error`)
                     // until wp grows real bidirectional inference.
                     if Self::wp_ret_is_fully_concrete(&ret, &self.env.substitutions) {
+                        // Record the wp call's result type for codegen at
+                        // EVERY wp call site (B-2026-07-31-19/-20): the Let
+                        // arm reads it as an implicit binding annotation,
+                        // and the closure-scoped `?` retargeting derives
+                        // the closure's Result LLVM shape from it.
+                        self.wp_result_types.insert(
+                            crate::resolver::SpanKey::from_span(span),
+                            Self::type_to_type_expr(&ret),
+                        );
                         self.record_expr_type(span, &ret);
                         return ret;
                     }

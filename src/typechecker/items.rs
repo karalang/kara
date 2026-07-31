@@ -3365,11 +3365,12 @@ impl<'a> super::TypeChecker<'a> {
                     inferred
                 };
                 // B-2026-07-31-20 — record the result type of a
-                // `with_provider[R](p, || ...)` RHS. A wp call has no callee
-                // fn whose declared return type codegen could consult, so an
-                // unannotated heap-typed binding never registered its
-                // String/Vec metadata and method dispatch on it loud-bailed.
-                // Codegen's Let arm reads this as an implicit annotation.
+                // `with_provider[R](p, || ...)` RHS for codegen's Let arm
+                // (read as an implicit binding annotation). The intercept in
+                // `infer_call` already records every CONCRETELY-typed wp
+                // call; this Let-site recording additionally covers the
+                // ANNOTATED path (`let s: T = wp(...)` runs check_expr, not
+                // the concrete-commit branch) and keys on the same span.
                 if Self::is_with_provider_call_shape(value)
                     && expected_ty != Type::Error
                     && expected_ty != Type::Never

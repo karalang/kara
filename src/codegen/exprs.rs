@@ -1602,35 +1602,53 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding's perspective). When `current_fn_err_payload_ty` is
         // `None` (no annotation / not a `Result[T, E]` return type),
         // fall back to staging `w0` as before.
-        let staged_payload = match self.current_fn_err_payload_ty {
-            Some(e_ty) => {
-                let w0_i = w0.into_int_value();
-                let payload_word_count = enum_ty.count_fields().saturating_sub(1) as usize;
-                let zero = i64_t.const_int(0, false);
-                let w1_i = if payload_word_count >= 2 {
-                    self.builder
-                        .build_extract_value(val.into_struct_value(), 2, "q_w1")
-                        .unwrap()
-                        .into_int_value()
-                } else {
-                    zero
-                };
-                let w2_i = if payload_word_count >= 3 {
-                    self.builder
-                        .build_extract_value(val.into_struct_value(), 3, "q_w2")
-                        .unwrap()
-                        .into_int_value()
-                } else {
-                    zero
-                };
-                self.rebuild_value_from_payload_words(e_ty, w0_i, w1_i, w2_i)
-                    .ok()
-            }
-            None => Some(w0),
-        };
-        self.pending_errdefer_payload = staged_payload;
-        self.emit_scope_cleanup_for_error_path();
-        self.pending_errdefer_payload = None;
+        // Closure-scoped `?` (B-2026-07-31-19): inside an inline-lowered
+        // with_provider body, the Err exits the CLOSURE — the wp call's
+        // value becomes that Err — so drain only the frames down to the
+        // retarget depth (body locals, then the ProviderPop), NOT the
+        // whole function. `emit_scope_cleanup_from` skips UserErrDefer:
+        // errdefers are fn-error-path constructs and an errdefer inside a
+        // wp body observing a closure-local `?` is unspecified — deferred
+        // with the `From`-conversion support (both need the closure-scoped
+        // error-path design).
+        if self.wp_return_retarget_active() {
+            let depth = self
+                .return_retargets
+                .last()
+                .expect("active retarget checked above")
+                .cleanup_depth;
+            self.emit_scope_cleanup_from(depth);
+        } else {
+            let staged_payload = match self.current_fn_err_payload_ty {
+                Some(e_ty) => {
+                    let w0_i = w0.into_int_value();
+                    let payload_word_count = enum_ty.count_fields().saturating_sub(1) as usize;
+                    let zero = i64_t.const_int(0, false);
+                    let w1_i = if payload_word_count >= 2 {
+                        self.builder
+                            .build_extract_value(val.into_struct_value(), 2, "q_w1")
+                            .unwrap()
+                            .into_int_value()
+                    } else {
+                        zero
+                    };
+                    let w2_i = if payload_word_count >= 3 {
+                        self.builder
+                            .build_extract_value(val.into_struct_value(), 3, "q_w2")
+                            .unwrap()
+                            .into_int_value()
+                    } else {
+                        zero
+                    };
+                    self.rebuild_value_from_payload_words(e_ty, w0_i, w1_i, w2_i)
+                        .ok()
+                }
+                None => Some(w0),
+            };
+            self.pending_errdefer_payload = staged_payload;
+            self.emit_scope_cleanup_for_error_path();
+            self.pending_errdefer_payload = None;
+        }
 
         // Cross-error-type conversion + multi-word error propagation
         // (B-2026-07-09-20). The inner `?` error is carried as uniform i64
@@ -1698,6 +1716,61 @@ impl<'ctx> super::Codegen<'ctx> {
             // No conversion: the inner words ARE the error's words.
             None => vec![w0_i, w1_i, w2_i],
         };
+
+        if self.wp_return_retarget_active() {
+            // Closure-scoped `?` (B-2026-07-31-19): build the Err in the
+            // CLOSURE's Result shape (from the wp call's typechecked result
+            // TypeExpr — never the enclosing fn's return type) and route it
+            // to the retarget merge as the with_provider call's value. The
+            // typechecker's closure `?` solver enforces exact Err-type
+            // agreement, so no `From` conversion applies here
+            // (`converted_err` is always None: closure sites record no
+            // `question_conversions` entry).
+            let rt_te = self
+                .return_retargets
+                .last()
+                .expect("active retarget checked above")
+                .result_type_expr
+                .clone();
+            let closure_enum_ty = match rt_te {
+                Some(te) => match self.llvm_type_for_type_expr(&te) {
+                    BasicTypeEnum::StructType(s) => s,
+                    _ => enum_ty,
+                },
+                // No recorded concrete wp type (should not happen for a
+                // typechecked `?`-bearing body — the solver pins it) —
+                // fall back to the fn shape rather than crash.
+                None => enum_ty,
+            };
+            let word_count = (closure_enum_ty.count_fields() as usize).saturating_sub(1);
+            let mut agg = self
+                .builder
+                .build_insert_value(
+                    closure_enum_ty.get_undef(),
+                    i64_t.const_int(0, false),
+                    0,
+                    "wp_q_err_tag",
+                )
+                .unwrap();
+            for (i, w) in [w0_i, w1_i, w2_i].iter().enumerate() {
+                if i >= word_count {
+                    break;
+                }
+                agg = self
+                    .builder
+                    .build_insert_value(agg, *w, (i + 1) as u32, "wp_q_err_w")
+                    .unwrap();
+            }
+            self.store_wp_retarget_value_and_branch(agg.into_struct_value().into());
+            // Ok/Some continuation block, shared with the fn-level path.
+            self.builder.position_at_end(ok_bb);
+            if !self.strip_error_trace {
+                self.builder
+                    .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
+                    .unwrap();
+            }
+            return self.reconstruct_question_ok_payload(inner, val, w0);
+        }
 
         if self.current_fn_name == "main" && self.main_result_err_te.is_some() {
             // `?` inside `main() -> Result[(), E]`: `main`'s LLVM signature is

@@ -1139,6 +1139,12 @@ pub(crate) struct ReturnRetarget<'ctx> {
     /// LLVM type of the slot's contents (typed by the first retargeted
     /// return's value; later stores scalar-coerce to it).
     pub(crate) result_ty: Option<BasicTypeEnum<'ctx>>,
+    /// The wp call's typechecked result `TypeExpr` (from `wp_result_types`),
+    /// when the typechecker committed to a concrete closure return type.
+    /// The closure-scoped `?` retargeting (B-2026-07-31-19) derives the
+    /// closure's Result LLVM shape from it — the fail path must build the
+    /// Err in the CLOSURE's shape, not the enclosing fn's.
+    pub(crate) result_type_expr: Option<crate::ast::TypeExpr>,
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-

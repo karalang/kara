@@ -2510,6 +2510,118 @@ impl<'a> super::TypeChecker<'a> {
         Some(Type::Error)
     }
 
+    /// Solve a closure's return type against the `?` demands its body
+    /// raised (B-2026-07-31-19). Result-form `?` sites demand
+    /// `Result[_, E]` with a single unified `E`; Option-form sites demand
+    /// `Option[_]`. An unbound Err slot left by a bare `Ok(v)` tail
+    /// (`Result[T, ?E]`) is substituted with the demanded `E`; a concrete
+    /// conflicting Err (or a non-Result/Option return with demands) is a
+    /// hard error at the closure. Cross-error `From` conversions are not
+    /// applied inside closures — the demand must match exactly.
+    fn solve_closure_question_demands(
+        &mut self,
+        ret: Type,
+        question_errs: Vec<Type>,
+        question_option: bool,
+        span: &Span,
+    ) -> Type {
+        if question_errs.is_empty() && !question_option {
+            return ret;
+        }
+        if question_option && !question_errs.is_empty() {
+            self.type_error(
+                "closure mixes `?` on Result and `?` on Option; its return type \
+                 cannot be both"
+                    .to_string(),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return ret;
+        }
+        if question_option {
+            match &ret {
+                Type::Named { name, .. } if name == "Option" => return ret,
+                Type::Never | Type::Error => return ret,
+                other => {
+                    self.type_error(
+                        format!(
+                            "`?` on an Option inside this closure requires the closure to \
+                             return `Option`, found '{}'",
+                            type_display(other)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return ret;
+                }
+            }
+        }
+        // Result form: unify the demanded Err types.
+        let mut e_unified: Option<Type> = None;
+        for e in question_errs {
+            let e = resolve_type_var_top(&e, &self.env.substitutions);
+            if matches!(e, Type::Error) {
+                continue;
+            }
+            match &e_unified {
+                None => e_unified = Some(e),
+                Some(cur) if *cur != e => {
+                    self.type_error(
+                        format!(
+                            "`?` sites in this closure propagate conflicting error types: \
+                             '{}' vs '{}'",
+                            type_display(cur),
+                            type_display(&e)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return ret;
+                }
+                _ => {}
+            }
+        }
+        let Some(e_final) = e_unified else { return ret };
+        match &ret {
+            Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+                let e_slot = resolve_type_var_top(&args[1], &self.env.substitutions);
+                match &e_slot {
+                    _ if e_slot == e_final => ret,
+                    Type::TypeVar(_) | Type::TypeParam(_) | Type::Error => Type::Named {
+                        name: "Result".to_string(),
+                        args: vec![args[0].clone(), e_final],
+                    },
+                    other => {
+                        self.type_error(
+                            format!(
+                                "`?` inside this closure propagates '{}' but the closure \
+                                 returns `Result[_, {}]`",
+                                type_display(&e_final),
+                                type_display(other)
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        ret
+                    }
+                }
+            }
+            Type::Never | Type::Error => ret,
+            other => {
+                self.type_error(
+                    format!(
+                        "`?` on a Result inside this closure requires the closure to \
+                         return `Result`, found '{}'",
+                        type_display(other)
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                ret
+            }
+        }
+    }
+
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
         let ty = self.infer_expr_inner(expr);
         self.record_expr_type(&expr.span, &ty);
@@ -3478,9 +3590,10 @@ impl<'a> super::TypeChecker<'a> {
                 // (§ with_provider signature: the body is `Fn() -> T`) and
                 // the interpreter/codegen, a closure's `return` exits the
                 // closure — its type belongs to the closure's return type.
-                self.closure_return_types.push(Vec::new());
+                self.closure_return_types
+                    .push(super::ClosureReturnFrame::default());
                 let body_ty = self.infer_expr(body);
-                let collected_returns = self
+                let collected = self
                     .closure_return_types
                     .pop()
                     .expect("closure return collector pushed above");
@@ -3507,7 +3620,7 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Never => None,
                         ref t => Some(t.clone()),
                     };
-                    for t in collected_returns {
+                    for t in collected.returns {
                         let t = resolve_type_var_top(&t, &self.env.substitutions);
                         if matches!(t, Type::Never | Type::Error) {
                             continue;
@@ -3530,6 +3643,18 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     ret_ty.unwrap_or(Type::Never)
                 };
+                // B-2026-07-31-19 — solve the closure's Result/Option shape
+                // from the `?` demands its body raised. A `?` on Err returns
+                // `Err(e)` from the CLOSURE, so a body like
+                // `|| { let v = f(x)?; Ok(v * 10) }` (whose bare `Ok` tail
+                // left the Err side an unbound param) is pinned to
+                // `Result[T, E]` with E from the `?` operands.
+                let body_ty = self.solve_closure_question_demands(
+                    body_ty,
+                    collected.question_errs,
+                    collected.question_option,
+                    &expr.span,
+                );
                 self.closure_type_with_capture_inference(
                     &expr.span,
                     *capture_mode,
@@ -3558,6 +3683,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.closure_return_types
                         .last_mut()
                         .expect("checked non-empty above")
+                        .returns
                         .push(t);
                     return Type::Never;
                 }
