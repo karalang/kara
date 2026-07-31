@@ -621,7 +621,20 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value);
-        self.bind_pattern_values(pattern, val)?;
+        // B-2026-07-31-45: record variant-payload binding names so a
+        // Drop-declaring payload struct rides the UserDrop channel — the
+        // match/if-let sites' mirror. The binding escapes into the
+        // ENCLOSING scope, so its body fires at the binding's own NLL end
+        // there, after its last use.
+        self.current_variant_payload_bindings.clear();
+        {
+            let mut vp_names: Vec<String> = Vec::new();
+            Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
+            self.current_variant_payload_bindings.extend(vp_names);
+        }
+        let bind_res = self.bind_pattern_values(pattern, val);
+        self.current_variant_payload_bindings.clear();
+        bind_res?;
         if self.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, None, &[])?;
         }
@@ -629,6 +642,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+        } else if optres_bindings_owned {
+            // B-2026-07-31-45 — the OWNED-VARIABLE disarm the match
+            // (B-2026-07-23-13) and if-let sites already run: `let Full(r2)
+            // = w else { … }` destructure-MOVES the payload into r2, but
+            // w's own drop walk still read the populated payload words and
+            // fired the body/frees a second time (before r2's own slot, and
+            // while r2 is live). Zero the consumed fields so the walk skips
+            // exactly what r2 now owns; the divergent else edge runs no
+            // suppression and drops `w` whole.
+            self.suppress_destructured_enum_payload_cleanup(value, pattern);
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee — `s` binds into
         // the enclosing scope where x's `FreeInlineOptionPayload` also lives,

@@ -1847,6 +1847,13 @@ impl<'a> super::Interpreter<'a> {
                 // else block runs (matching codegen's drop-during-return order).
                 let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
                 let drop_val = scrut_drop.as_ref().map(|_| val.clone());
+                // B-2026-07-31-45 — the `let…else` twin of the match/if-let
+                // disarm: this pattern moves a Drop-bearing payload out into
+                // an ESCAPING binding, so the source's payload-body walk must
+                // skip it or the body runs twice (once via the source's walk
+                // at its NLL death — before the binding is even used — and
+                // once via the binding's own slot).
+                self.disarm_moved_out_enum_payload_one(value, &val, pattern);
                 if self.try_match_pattern(pattern, &val) {
                     self.bind_pattern(pattern, val);
                     if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {

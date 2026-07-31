@@ -26506,6 +26506,45 @@ fn test_if_let_moved_payload_runs_drop_body() {
     );
 }
 
+/// B-2026-07-31-45 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_let_else_moved_payload_single_drop`, same source and expected
+/// string. The pre-fix interpreter printed the body TWICE (drop 52 before
+/// `bound 52` via the un-disarmed source walk, and again after).
+#[test]
+fn test_let_else_moved_payload_single_drop() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn check(w: Box2) {\n\
+                 let Full(r2) = w else {\n\
+                     println(\"nope\")\n\
+                     return\n\
+                 }\n\
+                 println(f\"bound {r2.id}\")\n\
+             }\n\
+             fn main() {\n\
+                 let w = Box2.Full(Res { id: 52 });\n\
+                 println(\"a\");\n\
+                 let Full(r2) = w else {\n\
+                     println(\"nope\")\n\
+                     return\n\
+                 }\n\
+                 println(f\"bound {r2.id}\");\n\
+                 println(\"b\");\n\
+                 check(Box2.Full(Res { id: 53 }));\n\
+                 println(\"c\");\n\
+                 check(Box2.Empty);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\nbound 52\ndrop 52\nb\nbound 53\ndrop 53\nc\nnope\nend\n"
+    );
+}
+
 /// B-2026-07-31-37 (heap face) — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_assign_move_heap_body_once`, same source and expected string.
 /// The interpreter's pre-fix behavior was `D7 D7 x` (double body, right

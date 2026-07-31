@@ -6202,6 +6202,54 @@ fn main() {
         );
     }
 
+    /// B-2026-07-31-45 — `let…else` with a moved Drop-bearing enum payload
+    /// runs the payload's body exactly ONCE, at the escaped binding's NLL
+    /// end (after its last use). Pre-fix the interpreter ran it twice (the
+    /// source's un-disarmed walk before the binding use + the binding's
+    /// slot) and AOT ran it once via the source's walk while the binding
+    /// was still live. The miss edge diverges without a spurious fire.
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_let_else_moved_payload_single_drop`.
+    #[test]
+    fn e2e_let_else_moved_payload_single_drop() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn check(w: Box2) {\n\
+             \x20   let Full(r2) = w else {\n\
+             \x20       println(\"nope\")\n\
+             \x20       return\n\
+             \x20   }\n\
+             \x20   println(f\"bound {r2.id}\")\n\
+             }\n\
+             fn main() {\n\
+             \x20   let w = Box2.Full(Res { id: 52 });\n\
+             \x20   println(\"a\");\n\
+             \x20   let Full(r2) = w else {\n\
+             \x20       println(\"nope\")\n\
+             \x20       return\n\
+             \x20   }\n\
+             \x20   println(f\"bound {r2.id}\");\n\
+             \x20   println(\"b\");\n\
+             \x20   check(Box2.Full(Res { id: 53 }));\n\
+             \x20   println(\"c\");\n\
+             \x20   check(Box2.Empty);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\nbound 52\ndrop 52\nb\nbound 53\ndrop 53\nc\nnope\nend\n"
+        );
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///
