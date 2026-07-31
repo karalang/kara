@@ -74,6 +74,16 @@ impl<'a> super::Interpreter<'a> {
         // separate phase-1 stack that drains first on error paths.
         let mut cleanup: Vec<CleanupAction> = Vec::new();
         let mut errdefers: Vec<ErrDeferEntry> = Vec::new();
+        // B-2026-07-30-11 (match-arm leg): adopt the taken match arm's
+        // moved-payload bindings — stashed by `eval_match` immediately before
+        // this block (the arm body) evaluates — as ordinary Drop slots. From
+        // here on they are indistinguishable from `let`-introduced bindings:
+        // the NLL last-use fire, the LIFO scope drain, and every
+        // move-suppression hook (let-rebind, ctor args, `return`) apply
+        // unchanged. Empty for every block that is not a match arm body.
+        for name in std::mem::take(&mut self.pending_arm_drop_bindings) {
+            cleanup.push(CleanupAction::Drop { name });
+        }
         // Sub-step 3 (NLL placement): pre-compute each owned binding's
         // last-use statement index. After every successful statement,
         // any `Drop` slot whose binding's last use was that statement

@@ -449,6 +449,17 @@ pub struct Interpreter<'a> {
     /// at `try_compile_enum_variant`'s arg loop. Re-armed on a fresh
     /// `let`/assign of the name like the other moved-out sets.
     pub(crate) moved_out_user_drop_bindings: HashSet<String>,
+    /// B-2026-07-30-11 (match-arm leg) — payload bindings of the TAKEN match
+    /// arm whose moved-out value carries a user `impl Drop`, stashed by
+    /// `eval_match` just before the arm body evaluates and drained by
+    /// `eval_block_inner` into that block's cleanup vec as ordinary `Drop`
+    /// slots. Routing them through the block executor is the point: every
+    /// existing move-suppression hook (let-rebind, ctor args, `return`) and
+    /// the NLL last-use placement then apply to an arm binding exactly as
+    /// they do to a `let` binding. A non-block arm body never reaches the
+    /// executor, so `eval_match` fires any leftovers itself (conservatively)
+    /// and clears the list.
+    pub(crate) pending_arm_drop_bindings: Vec<String>,
     /// B-2026-07-30-11 (Map-values leg) — the resolved `Map[K, V]`
     /// instantiation per let-bound variable, recorded through the SAME
     /// static chain codegen's `__karac_dropelems_map_*` registration uses
@@ -733,6 +744,7 @@ impl<'a> Interpreter<'a> {
             moved_out_container_bodies_bindings: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             moved_out_user_drop_bindings: HashSet::new(),
+            pending_arm_drop_bindings: Vec::new(),
             map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,

@@ -817,7 +817,34 @@ impl<'ctx> super::Codegen<'ctx> {
                                 || is_copy_supported_user_struct
                                 || is_inline_optres_struct_payload
                             {
-                                self.track_struct_var(tn, alloca);
+                                // B-2026-07-30-11 (match-arm leg): a payload
+                                // whose type declares `impl Drop` routes to the
+                                // UserDrop channel INSTEAD of StructDrop — the
+                                // same rule the let site applies
+                                // (`track_user_drop_var`'s doc): the wrapper
+                                // already invokes the field synthesizer, so
+                                // registering both would double-clean, and only
+                                // UserDrop entries fire the user body at the
+                                // binding's NLL end. This is what makes
+                                // `match b { Full(r) => … }` run r's body at
+                                // all — the scrutinee's own payload walk is
+                                // retracted at the consuming arm, so before
+                                // this the moved payload's body ran NOWHERE.
+                                // Every existing move hook (ctor args,
+                                // let-rebind, return) retracts UserDrop by
+                                // name, so an arm body that moves the binding
+                                // on composes unchanged.
+                                if self.user_drop_wrapper_fns.contains_key(tn)
+                                    && self
+                                        .current_variant_payload_bindings
+                                        .contains(name.as_str())
+                                {
+                                    let tn_owned = tn.to_string();
+                                    let name_owned = name.clone();
+                                    self.track_user_drop_var(&tn_owned, &name_owned, alloca);
+                                } else {
+                                    self.track_struct_var(tn, alloca);
+                                }
                             }
                             // B-2026-07-31-12 — the ENUM sibling of the
                             // B-2026-07-10-3 struct arm above: an

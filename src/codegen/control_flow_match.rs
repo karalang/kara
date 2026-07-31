@@ -390,6 +390,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // multi-word payloads), fall back to slice 3a's
                 // value-source + ref-shim path which still produces
                 // correct (though copy-aliased) bindings.
+                // B-2026-07-30-11 (match-arm leg): record which of this arm's
+                // binding names sit in a VARIANT payload position, so
+                // `bind_pattern_values` can route a Drop-declaring payload
+                // struct to the UserDrop channel. Name-scoped to this bind
+                // call and cleared right after — bare-tuple elements never
+                // enter the set, keeping the tuple-element walk the single
+                // body owner for those.
+                self.current_variant_payload_bindings.clear();
+                {
+                    let mut vp_names: Vec<String> = Vec::new();
+                    Self::collect_variant_payload_binding_names(&arm.pattern, false, &mut vp_names);
+                    self.current_variant_payload_bindings.extend(vp_names);
+                }
                 let handled_via_ptr = if let Some((scrut_ptr, pointee_ty)) = scrut_ref_ptr {
                     self.bind_pattern_values_via_ptr(&arm.pattern, scrut_ptr, pointee_ty)?
                         .is_some()
@@ -398,6 +411,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if !handled_via_ptr {
                     self.bind_pattern_values(&arm.pattern, scrut)?;
+                    self.current_variant_payload_bindings.clear();
                     // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
                     // over a `Map.get` scrutinee whose arm (guard or body)
                     // MOVES `x` gets a deep clone + owned tracking — the

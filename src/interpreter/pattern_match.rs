@@ -45,6 +45,34 @@ impl<'a> super::Interpreter<'a> {
                 }
                 self.env.push_scope();
                 self.bind_pattern(&arm.pattern, scrutinee.clone());
+                // B-2026-07-30-11 (match-arm leg): the taken arm's moved-out
+                // Drop-bearing payload bindings get REAL Drop slots. Stash
+                // them; the arm body's block executor adopts them into its
+                // cleanup vec at entry, so NLL placement and every move hook
+                // apply exactly as for `let` bindings. Only for a consuming
+                // scrutinee — an owned binding/`self` (whose walk the disarm
+                // above retracted) or a temp (which registered no walk); a
+                // field-access place is a view whose owner still walks.
+                let consuming_scrutinee = matches!(scrutinee, Value::EnumVariant { .. })
+                    && scrutinee_place.is_none_or(|p| {
+                        matches!(&p.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+                    });
+                if consuming_scrutinee {
+                    if let Value::EnumVariant { enum_name, .. } = scrutinee {
+                        for n in self.arm_moved_user_drop_payload_bindings(enum_name, &arm.pattern)
+                        {
+                            let is_drop_struct = match self.env.get(&n) {
+                                Some(Value::Struct { name: tn, .. }) => {
+                                    self.program.drop_method_keys.contains_key(&tn)
+                                }
+                                _ => false,
+                            };
+                            if is_drop_struct {
+                                self.pending_arm_drop_bindings.push(n);
+                            }
+                        }
+                    }
+                }
                 // B-2026-07-28-7: watch the scrutinee's slot across the arm
                 // body. If the body ASSIGNS to it (`match cur { Some(n) => {
                 // cur = n.next } }` — every linked-structure walk and every
@@ -88,6 +116,37 @@ impl<'a> super::Interpreter<'a> {
                     if Self::match_place_is_writable(place) {
                         if let Some(patched) = self.patch_arm_bindings(&arm.pattern, scrutinee) {
                             self.write_back_receiver(place, patched);
+                        }
+                    }
+                }
+                // B-2026-07-30-11 (match-arm leg): a NON-block arm body never
+                // reaches `eval_block_inner`, so the stash above was never
+                // adopted — fire the leftovers here, at the arm's end.
+                // A body whose only uses of the binding are field / tuple
+                // projections (`println(r.id)`) is a read — fire, matching
+                // codegen's NLL placement. Any other mention could be a move
+                // (`take(r)`, `r.consume()` with an owned receiver) and stays
+                // silent, as does a binding some in-body ctor moved out.
+                // Block bodies — the common case — drain to empty in the
+                // executor and take the precise path instead.
+                for n in std::mem::take(&mut self.pending_arm_drop_bindings) {
+                    if self.moved_out_user_drop_bindings.contains(&n) {
+                        continue;
+                    }
+                    if crate::deque_head::expr_mentions_name_outside_field_projection(&arm.body, &n)
+                    {
+                        continue;
+                    }
+                    if let Some(Value::Struct { name: tn, fields }) = self.env.get(&n) {
+                        if self.program.drop_method_keys.contains_key(&tn) {
+                            let tn = tn.clone();
+                            self.run_user_drop_body_on_value(
+                                &tn,
+                                Value::Struct {
+                                    name: tn.clone(),
+                                    fields,
+                                },
+                            );
                         }
                     }
                 }
@@ -169,6 +228,89 @@ impl<'a> super::Interpreter<'a> {
         if self.pattern_consumes_user_drop_payload(&enum_name, pattern) {
             self.moved_out_enum_payload_bindings.insert(name);
         }
+    }
+
+    /// B-2026-07-30-11 (match-arm leg) — the names a taken arm's pattern binds
+    /// at payload positions whose value moved out of the scrutinee and carries
+    /// a user `impl Drop`. Per-binding sibling of
+    /// [`Self::pattern_consumes_user_drop_payload`], with the SAME gates per
+    /// position, so a binding is collected exactly when that function would
+    /// have disarmed the scrutinee's walk for it — the two must agree or the
+    /// payload body fires twice (walk + arm binding) or not at all. DIRECT
+    /// payload positions only; a bare `Tuple` pattern is deliberately not a
+    /// collector (a tuple scrutinee's element walk stays armed and fires, the
+    /// shape-B behavior pinned by `b3011_nonlet1`).
+    fn arm_moved_user_drop_payload_bindings(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) -> Vec<String> {
+        let variant = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                match path.last() {
+                    Some(v) => v.clone(),
+                    None => return Vec::new(),
+                }
+            }
+            _ => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        // Option/Result: shape-only, like the disarm — no EnumDef to consult.
+        // The caller's runtime-value filter (a bound `Value::Struct` whose type
+        // is in `drop_method_keys`) is what keeps a scalar payload silent.
+        if enum_name == "Option" || enum_name == "Result" {
+            if matches!(variant.as_str(), "Some" | "Ok" | "Err") {
+                if let PatternKind::TupleVariant { patterns, .. } = &pattern.kind {
+                    for sub in patterns {
+                        if let PatternKind::Binding(n) = &sub.kind {
+                            out.push(n.clone());
+                        }
+                    }
+                }
+            }
+            return out;
+        }
+        let Some(decls) = self.variant_payload_decls(enum_name, &variant) else {
+            return Vec::new();
+        };
+        match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => {
+                for (i, sub) in patterns.iter().enumerate() {
+                    if let PatternKind::Binding(n) = &sub.kind {
+                        if decls
+                            .get(i)
+                            .map(|(_, te)| self.type_expr_runs_user_drop(te))
+                            .unwrap_or(false)
+                        {
+                            out.push(n.clone());
+                        }
+                    }
+                }
+            }
+            PatternKind::Struct { fields, .. } => {
+                for fp in fields {
+                    let bind_name = match &fp.pattern {
+                        None => Some(fp.name.clone()),
+                        Some(sub) => match &sub.kind {
+                            PatternKind::Binding(n) => Some(n.clone()),
+                            _ => None,
+                        },
+                    };
+                    if let Some(n) = bind_name {
+                        let runs = decls
+                            .iter()
+                            .find(|(dn, _)| dn.as_deref() == Some(fp.name.as_str()))
+                            .map(|(_, te)| self.type_expr_runs_user_drop(te))
+                            .unwrap_or(false);
+                        if runs {
+                            out.push(n);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
     }
 
     /// Does `pattern` bind out a payload position of `enum_name` whose declared

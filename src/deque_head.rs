@@ -165,6 +165,58 @@ pub fn expr_mentions_name_deep(expr: &Expr, name: &str) -> bool {
     bad.contains(name)
 }
 
+/// Does `expr` mention `name` anywhere OTHER than as the direct base of a
+/// field / tuple-index projection? `r.id` and `r.0` are reads of the binding
+/// and return false when they are the only uses; a bare `r` in any other
+/// position — call argument, method receiver, constructor payload, tail
+/// value, nested block — returns true. The match-arm drop leg
+/// (B-2026-07-30-11) uses this to decide whether a NON-block arm body could
+/// have MOVED the payload binding: projection-only bodies fire the binding's
+/// Drop body at arm end; anything else stays silent (a method receiver is
+/// deliberately "other" — an owned-`self` method consumes the value, and
+/// this walk cannot see receiver modes).
+pub fn expr_mentions_name_outside_field_projection(expr: &Expr, name: &str) -> bool {
+    let mut bad = false;
+    walk_outside_projection(expr, name, &mut bad);
+    bad
+}
+
+fn walk_outside_projection(expr: &Expr, name: &str, bad: &mut bool) {
+    if *bad {
+        return;
+    }
+    match &expr.kind {
+        ExprKind::Identifier(n) => {
+            if n == name {
+                *bad = true;
+            }
+            return;
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            // A direct `name.field` / `name.0` base is a projection read;
+            // any deeper base expression is walked normally.
+            if !matches!(&object.kind, ExprKind::Identifier(n) if n == name) {
+                walk_outside_projection(object, name, bad);
+            }
+            return;
+        }
+        _ => {}
+    }
+    for_each_block(&expr.kind, &mut |b| {
+        for s in &b.stmts {
+            crate::rc_elide::walk_stmt_children_pub(s, &mut |e| {
+                walk_outside_projection(e, name, bad)
+            });
+        }
+        if let Some(e) = &b.final_expr {
+            walk_outside_projection(e, name, bad);
+        }
+    });
+    crate::rc_elide::walk_children_pub(&expr.kind, &mut |sub| {
+        walk_outside_projection(sub, name, bad)
+    });
+}
+
 // ── Candidate collection ────────────────────────────────────────────
 
 fn collect_candidate_stmt_shallow(stmt: &Stmt, out: &mut HashSet<String>) {

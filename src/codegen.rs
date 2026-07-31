@@ -3166,6 +3166,15 @@ pub(super) struct Codegen<'ctx> {
     /// is what keeps every generic Vec path (drop, clone, par-copy) correct —
     /// the analysis only admits locals no such path can reach.
     pub(crate) deque_head_locals: HashMap<String, HashSet<String>>,
+    /// B-2026-07-30-11 (match-arm leg) — the binding names of the pattern
+    /// currently being bound that sit in an enum VARIANT payload position
+    /// (`collect_variant_payload_binding_names`; bare-tuple elements excluded
+    /// — a tuple scrutinee's element walk stays armed and must remain the
+    /// single body owner). `bind_pattern_values` consults this to route a
+    /// Drop-declaring payload struct to the UserDrop channel instead of
+    /// StructDrop; set/cleared around each bind call by the match / if-let
+    /// compilers. Empty everywhere else, so `let` destructures are untouched.
+    pub(crate) current_variant_payload_bindings: HashSet<String>,
     /// Entry-block `i64` alloca holding `head` for each eligible deque local of
     /// the function being compiled. Cleared per function; a name present here
     /// is one the head-aware method arms must use.
@@ -7675,6 +7684,7 @@ impl<'ctx> Codegen<'ctx> {
             branch_cancel_ptr: None,
             rc_fallback_fns: HashMap::new(),
             deque_head_locals: HashMap::new(),
+            current_variant_payload_bindings: HashSet::new(),
             deque_head_slots: HashMap::new(),
             vec_index_borrow_spans: HashSet::new(),
             elided_bindings: HashMap::new(),

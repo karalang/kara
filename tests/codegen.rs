@@ -5637,8 +5637,8 @@ fn main() {
     /// Shapes: inline ctor let, `Err` side, BOXED payload from an
     /// unannotated call (`mk(3)` — the >3-word spill; the body reads the
     /// box, not the box pointer as struct bytes), `None` (nothing), match
-    /// move-out (source disarmed; the arm binding's silence is the known
-    /// non-let residual), a NON-consuming `Some(_)` arm (source stays
+    /// move-out (source disarmed; since the match-arm leg the arm binding
+    /// fires the body — the 95), a NON-consuming `Some(_)` arm (source stays
     /// armed — 96 fires), `unwrap` (consuming-combinator disarm; the result
     /// binding's own drop fires instead), and a ctor-arg move
     /// (`Option.Some(h)` — h's own drop is silenced, s's walk owns the body).
@@ -5690,7 +5690,7 @@ fn main() {
         };
         assert_eq!(
             out,
-            "91\n1\n92\n2\n83\n3\n4\n25\n5\n40\n96\n6\n17\n97\n7\n98\n8\n"
+            "91\n1\n92\n2\n83\n3\n4\n25\n95\n5\n40\n96\n6\n17\n97\n7\n98\n8\n"
         );
     }
 
@@ -5927,6 +5927,47 @@ fn main() {
             return;
         };
         assert_eq!(out, "D1\nD2\nx\n");
+    }
+
+    /// B-2026-07-30-11 (match-arm leg) — a match arm binding that receives a
+    /// MOVED enum payload runs the payload's user `impl Drop` body at the
+    /// binding's NLL end, on every backend and for both block and
+    /// bare-expression arm bodies. Before this leg the consuming arm
+    /// retracted the scrutinee's payload walk (correct) but the arm binding
+    /// registered nothing, so the moved payload's body ran NOWHERE — the
+    /// exact hole the B-2026-07-30-11 ledger entry tracked as "the match arm
+    /// binding that receives a moved payload".
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_match_arm_moved_payload_runs_drop_body`.
+    #[test]
+    fn e2e_match_arm_moved_payload_runs_drop_body() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn main() {\n\
+             \x20   let b = Box2.Full(Res { id: 4 });\n\
+             \x20   match b {\n\
+             \x20       Box2.Full(r) => { println(f\"arm sees {r.id}\"); }\n\
+             \x20       Box2.Empty => {}\n\
+             \x20   }\n\
+             \x20   println(\"between\");\n\
+             \x20   let c = Box2.Full(Res { id: 9 });\n\
+             \x20   match c {\n\
+             \x20       Box2.Full(r) => println(r.id),\n\
+             \x20       Box2.Empty => {}\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "arm sees 4\ndrop 4\nbetween\n9\ndrop 9\nend\n");
     }
 
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
@@ -6181,10 +6222,13 @@ fn main() {
         ) else {
             return;
         };
-        // 31 / 33: bound out, so the source runs nothing (the arm binding is not
-        // a `let`, so nothing runs its body either — a residual leak both
-        // backends share). 32: `_` binds nothing, so the source still fires.
-        assert_eq!(out, "31\n100\n32\n33\n999\n");
+        // 31: bound out — the source runs nothing, and since the match-arm
+        // leg (B-2026-07-30-11) the ARM BINDING runs the body at its NLL end
+        // (the second 31; it was a residual leak before). 32: `_` binds
+        // nothing, so the source still fires. 33: `if let` payload bindings
+        // are NOT yet on the arm-drop channel on either backend — the
+        // remaining residual, silent by parity.
+        assert_eq!(out, "31\n31\n100\n32\n33\n999\n");
     }
 
     /// B-2026-07-31-5 — a value enum's OWN `impl Drop` body fires at the

@@ -26168,7 +26168,7 @@ fn test_optres_payload_runs_user_drop_bodies() {
                  let s = Option.Some(h);\n\
                  println(8);\n\
              }\n"),
-        "91\n1\n92\n2\n83\n3\n4\n25\n5\n40\n96\n6\n17\n97\n7\n98\n8\n"
+        "91\n1\n92\n2\n83\n3\n4\n25\n95\n5\n40\n96\n6\n17\n97\n7\n98\n8\n"
     );
 }
 
@@ -26280,6 +26280,39 @@ fn test_struct_reassign_displaced_drop_semantics() {
                  println(\"after consume\");\n\
              }\n"),
         "drop 1\ndrop 2\nafter overwrite\ndrop 3\ndrop 4\nafter move\ndrop 15\nafter consume\n"
+    );
+}
+
+/// B-2026-07-30-11 (match-arm leg) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_match_arm_moved_payload_runs_drop_body`, same source and expected
+/// string. Block arm bodies adopt the payload binding as a real Drop slot in
+/// the block executor; bare-expression bodies fire at arm end when the only
+/// uses are field projections.
+#[test]
+fn test_match_arm_moved_payload_runs_drop_body() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn main() {\n\
+                 let b = Box2.Full(Res { id: 4 });\n\
+                 match b {\n\
+                     Box2.Full(r) => { println(f\"arm sees {r.id}\"); }\n\
+                     Box2.Empty => {}\n\
+                 }\n\
+                 println(\"between\");\n\
+                 let c = Box2.Full(Res { id: 9 });\n\
+                 match c {\n\
+                     Box2.Full(r) => println(r.id),\n\
+                     Box2.Empty => {}\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "arm sees 4\ndrop 4\nbetween\n9\ndrop 9\nend\n"
     );
 }
 
@@ -26587,7 +26620,7 @@ fn test_enum_payload_move_out_disarms_source_drop() {
                    if let Slot.Full(q) = u { println(q.id) } }\n\
                  println(999);\n\
              }\n"),
-        "31\n100\n32\n33\n999\n"
+        "31\n31\n100\n32\n33\n999\n"
     );
 }
 
