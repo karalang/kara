@@ -917,6 +917,11 @@ jobs:
   # `deny.toml`. Advisories, licenses, and sources are blocking; the
   # duplicate-version lint is a warning because the arrow / tokio trees
   # legitimately carry several versions of small helper crates.
+  #
+  # This job covers what a diff introduces. It cannot cover an advisory
+  # published against a lockfile nobody is touching — no push, no run. The
+  # nightly `.github/workflows/supply-chain.yml` is the other half; the two
+  # invocations are intentionally identical, so change them together.
   supply-chain:
     name: Supply chain (cargo-deny)
     runs-on: ubuntu-latest

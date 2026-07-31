@@ -25,7 +25,15 @@
 #                license appearing is a decision the maintainer should
 #                make consciously, not absorb silently.
 #
-# Run locally with: cargo deny check
+# Run locally with: cargo deny --all-features check
+#
+# `--all-features` is a GLOBAL cargo-deny flag, not an argument to `check`
+# — `cargo deny check --all-features` is rejected outright. The position
+# matters beyond pedantry: without the flag the llvm / gpu / regex / arrow
+# feature trees are absent from the graph, so a local pass can precede a CI
+# failure on crates the local run never looked at. CI passes the same flag
+# (`ci.yml`'s `supply-chain` job, and the nightly
+# `.github/workflows/supply-chain.yml`).
 
 [graph]
 # Check the dependency tree for the targets we actually ship to. Left

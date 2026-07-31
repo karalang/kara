@@ -1,0 +1,53 @@
+name: Supply chain (scheduled)
+
+# `ci.yml`'s `supply-chain` job audits the dependency tree on every push
+# and pull request. That catches what a diff introduces — and nothing else.
+# Most RUSTSEC advisories arrive the other way round: published against a
+# lockfile nobody is touching, naming a crate that has been pinned for
+# months. On a push/PR trigger alone that tree stays unaudited until
+# someone happens to open a PR, and the quiet weeks — when no one is
+# looking anyway — are exactly when the window is longest.
+#
+# This workflow closes it by running the same `cargo deny` check against
+# `main` on a daily cron. GitHub emails the repository owner when a
+# scheduled workflow fails, so a fresh advisory surfaces without anyone
+# watching a dashboard.
+#
+# Why a separate file rather than a `schedule:` trigger on `ci.yml`: the
+# cron there is workflow-level, so it would fire all eighteen CI jobs
+# nightly — codegen E2E ×3, both sanitizer legs, the cross matrix — to
+# answer one advisory query, and suppressing them means eighteen
+# `if: github.event_name != 'schedule'` guards, each its own chance to get
+# it wrong. Deliberately NOT a merge gate; `ci.yml` already owns that.
+#
+# The cost is that the invocation below duplicates ci.yml's job. Keep the
+# two in step. The policy itself is not duplicated — both read `deny.toml`,
+# which is where every block/warn decision actually lives.
+on:
+  schedule:
+    # 05:00 UTC daily — an hour after the fuzz workflow, off-peak for the
+    # shared runner pool.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    name: Supply chain (cargo-deny, scheduled)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Mirrors ci.yml's `supply-chain` job exactly: same action, same
+      # arguments, same `deny.toml`. `--all-features` is a GLOBAL cargo-deny
+      # flag, so the action places it ahead of the subcommand — which is why
+      # the local equivalent is `cargo deny --all-features check` and not
+      # `cargo deny check --all-features` (the latter is a hard error).
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
