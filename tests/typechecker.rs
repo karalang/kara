@@ -34585,3 +34585,46 @@ fn map_insert_still_requires_an_owned_key() {
         errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+// ── enum payload gets the expected type ─────────────────────────
+
+/// `Ok(x)` / `Err(x)` / `Some(x)` must push the expected PAYLOAD slot inward,
+/// or a type-inferred constructor in the payload never resolves. Every payload
+/// whose type was already known worked — `Ok(0)`, `Ok(Vec[1, 2])`, `Ok(v)` on
+/// an annotated binding, `Ok(None)` — so this needed a payload that is itself
+/// inference-driven, which is why it survived.
+#[test]
+fn enum_payload_receives_the_expected_type() {
+    // The reported shape: function tail, no match, no `?`.
+    typecheck_ok("fn f() -> Result[Vec[i64], String] { Ok(Vec.new()) }");
+    typecheck_ok("fn f() -> Result[Map[String, i64], String] { Ok(Map.new()) }");
+    // `Err`'s slot is the SECOND type argument, not the first.
+    typecheck_ok("fn f() -> Result[Vec[i64], Vec[String]] { Err(Vec.new()) }");
+    // `Some` over `Option`.
+    typecheck_ok("fn f() -> Option[Vec[i64]] { Some(Vec.new()) }");
+    typecheck_ok("fn f() -> Option[Map[String, i64]] { Some(Map.new()) }");
+    // Inside a match arm, which is how examples/db_pipeline hit it.
+    typecheck_ok(
+        "fn f(x: i64) -> Result[Vec[i64], String] { \
+             match x { 0 => Ok(Vec.new()), _ => Ok(Vec.new()) } \
+         }",
+    );
+}
+
+/// The push is deliberately restricted to a payload that is a type-inferred
+/// constructor. Applying it to EVERY payload changes integer handling: an
+/// `i64` loop index returned as `Some(i)` from an `Option[u64]` function then
+/// check-mode-coerces and trips the i64 -> u64 narrowing diagnostic, where
+/// synthesis mode accepted it. `book_snippets_compile` caught that on ch08's
+/// `find[T]`, and this pins the behaviour so the scope cannot quietly widen.
+#[test]
+fn enum_payload_push_does_not_change_integer_coercion() {
+    typecheck_ok(
+        "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
+             for i in 0..items.len() { \
+                 if items[i] == target { return Some(i); } \
+             } \
+             None \
+         }",
+    );
+}

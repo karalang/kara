@@ -257,6 +257,75 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
         }
+        // Enum-payload constructors at check-mode: `Ok(x)` / `Err(x)` against
+        // an expected `Result[T, E]`, and `Some(x)` against `Option[T]`.
+        // Push the PAYLOAD slot inward so a type-inferred constructor in the
+        // payload resolves against it.
+        //
+        // Without this, `fn f() -> Result[Vec[i64], String] { Ok(Vec.new()) }`
+        // was rejected: `Ok`'s argument was inferred in synthesis mode, minting
+        // `Vec[?T]`, and the enclosing `Result[Vec[?T], E]` could not unify
+        // against the declared `Result[Vec[i64], String]` — reported as
+        // `expected 'Result<Vec<i64>, String>', found 'Result<Vec<?T2>, E>'`.
+        // Every payload whose type was already known worked (`Ok(0)`,
+        // `Ok(Vec[1, 2])`, `Ok(v)` on an annotated binding, `Ok(None)`), which
+        // is why this survived: it needs a payload that is itself
+        // inference-driven, i.e. `Vec.new()` / `Map.new()`.
+        //
+        // Placed BEFORE the collection-constructor short-circuit below so the
+        // payload lands there with a concrete expectation already in hand.
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if args.len() == 1 {
+                if let ExprKind::Identifier(ctor) = &callee.kind {
+                    let payload_slot = match (ctor.as_str(), expected) {
+                        ("Ok", Type::Named { name, args: ta })
+                            if name == "Result" && ta.len() == 2 =>
+                        {
+                            Some(ta[0].clone())
+                        }
+                        ("Err", Type::Named { name, args: ta })
+                            if name == "Result" && ta.len() == 2 =>
+                        {
+                            Some(ta[1].clone())
+                        }
+                        ("Some", Type::Named { name, args: ta })
+                            if name == "Option" && ta.len() == 1 =>
+                        {
+                            Some(ta[0].clone())
+                        }
+                        _ => None,
+                    };
+                    // Narrowly scoped to a payload that is itself a
+                    // type-INFERRED collection constructor (`Vec.new()`,
+                    // `Map.new()`, ...), which is the shape that cannot resolve
+                    // without the expectation. Pushing the slot at EVERY
+                    // payload changes integer handling: `return Some(i)` with
+                    // `i: i64` into an `Option[u64]` then check-mode-coerces
+                    // and trips the i64->u64 narrowing diagnostic, where
+                    // synthesis mode had accepted it (caught by
+                    // `book_snippets_compile` on ch08's `find[T]`). Every
+                    // neighbouring short-circuit here is targeted the same way.
+                    let payload_is_inferred_ctor = matches!(
+                        &args[0].value.kind,
+                        ExprKind::Call { callee: inner_callee, args: inner_args }
+                            if inner_args.is_empty()
+                                && matches!(
+                                    &inner_callee.kind,
+                                    ExprKind::Path { segments, .. }
+                                        if segments.len() == 2 && segments[1] == "new"
+                                )
+                    );
+                    if let Some(slot) = payload_slot {
+                        if payload_is_inferred_ctor {
+                            self.check_expr(&args[0].value, &slot);
+                            self.record_expr_type(&expr.span, expected);
+                            return expected.clone();
+                        }
+                    }
+                }
+            }
+        }
+
         // Built-in collection constructors at check-mode: `Vec.new()` /
         // `VecDeque.new()` / `Set.new()` / `SortedSet.new()` / `Map.new()`
         // resolve to the expected type directly when the surface names
