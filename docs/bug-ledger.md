@@ -919,7 +919,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **796 surfaced 
 | B-2026-07-31-18 | typecheck | low | The typechecker types a `return E` inside a `with_provider(p, \|\| { .. | 64c4df5 |
 | B-2026-07-31-19 | codegen | medium | `?` inside a `with_provider` CLOSURE body lowers as a FN-LEVEL early return of the Err, but per design.md (body is `Fn() -> T`) and the interpreter i… | 7190a77 |
 | B-2026-07-31-20 | codegen | medium | codegen never registers heap-type metadata (string_vars / vec_elem_types / var_type_names) for a `let` binding whose RHS is a with_provider call, so… | a710d6c |
-| B-2026-07-31-21 | runtime | high | Map/Set capacity grows linearly with TOTAL removals, not live size -- a sliding-window map leaks memory without bound (297 MB where Rust holds 2.4 MB) | — |
+| B-2026-07-31-21 | runtime | high | Map/Set capacity grows linearly with TOTAL removals, not live size -- a sliding-window map leaks memory without bound (297 MB where Rust holds 2.4 MB) | 75a3a92 |
 | B-2026-07-31-22 | interp+codegen | high | A whole-value MOVE of a binding carrying a container-bodies walk (enum payload / Vec element / tuple element) left the source's __karac_dropelems_* a… | ef85e85 |
 | B-2026-07-31-23 | typecheck | high | B-2026-07-31-1 PRONG 3 — the four HTTP hardcoded arms (`Client` / `RequestBuilder` / `Response` / `HttpError`) still accepted any far-from-anything m… | 5e7c2e9 |
 | B-2026-07-31-24 | interp | high | `Client.request(m, url)` and the ENTIRE `RequestBuilder` chain (`header`/`body`/`timeout`/`send`) had no interpreter dispatch arm — typechecks clean,… | 5e7c2e9 |
