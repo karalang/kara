@@ -23578,7 +23578,19 @@ fn ownership_errors_gate_build_and_check_identically() {
     for (tag, src, should_fail) in cases {
         let (tmp, path) = ownership_gate_fixture(tag, src);
         let check = karac_bin().arg("check").arg(&path).output().unwrap();
-        let build = karac_bin().arg("build").arg(&path).output().unwrap();
+        // `-o` into the fixture dir is load-bearing, not tidiness: `karac
+        // build` defaults its artifact to `<stem>` in the CWD, and cargo runs
+        // tests with CWD = the crate root. The accepted cases below build
+        // successfully, so without this every suite run drops a stray `g`
+        // executable into the repo root, where `git add -A` sweeps it into a
+        // commit (the recurring class guarded by tests/no_tracked_binaries.rs).
+        let build = karac_bin()
+            .arg("build")
+            .arg(&path)
+            .arg("-o")
+            .arg(tmp.join("g"))
+            .output()
+            .unwrap();
         assert_eq!(
             check.status.success(),
             build.status.success(),

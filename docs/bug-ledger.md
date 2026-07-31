@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
 | false-positive | 54 | 1 |
-| run-vs-build | 53 | 0 |
+| run-vs-build | 54 | 0 |
 | perf | 41 | 1 |
 | crash | 33 | 0 |
 | soundness | 32 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 85 | 1 |
 | ownership | 35 | 1 |
 | autopar | 27 | 0 |
-| cli | 22 | 0 |
+| cli | 23 | 0 |
 | other | 21 | 0 |
 | runtime | 18 | 1 |
 | resolver | 15 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **805 surfaced · 4 open · 793 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced · 4 open · 794 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **805 surfaced 
 | B-2026-07-31-28 | 2026-07-31 | ownership | medium | RC-fallback analysis is not path-sensitive across a branch JOIN: a value consumed exactly once on each of two MUTUALLY EXCLUSIVE `if`/`else` (or `match`) arms is reported as a re-use and gets a real RC inserted, even though only one arm can run. The same mutual exclusion expressed with an early `return` is analyzed correctly. | — |
 | B-2026-07-31-34 | 2026-07-31 | codegen+runtime | low | 17 codegen-declared runtime symbols are absent from `__preserve_no_mangle_symbols` — each needs a per-symbol strip-risk verdict (async/net/TLS families). Pinned by tests/extern_keep_list.rs so the set cannot grow silently, but the pin is a placeholder for triage, NOT an approval. | — |
 
-### Fixed (793)
+### Fixed (794)
 
-<details><summary>793 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>794 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -934,6 +934,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **805 surfaced 
 | B-2026-07-31-32 | resolver+parser | medium | E_MODULE_BINDING_NAMING suggests renaming a single-uppercase-letter binding to itself | 41cb78a |
 | B-2026-07-31-33 | resolver+cli | medium | `karac fix` renames a module binding's DECLARATION only, breaking every use site | 0c1c599 |
 | B-2026-07-31-35 | autopar+codegen | high | An eligible head-index deque in a function auto-par splits fails the BUILD: the __par_branch_* compile inherits the outer function's name-keyed head… | 6ed7439 |
+| B-2026-07-31-36 | cli | medium | `karac build -o <path>` / `--out <path>` was PARSED BUT SILENTLY IGNORED for executable builds — the artifact always landed at `<stem>` in the CWD | — |
 
 </details>
 

@@ -6662,7 +6662,20 @@ fn cmd_build(
             .join(format!("karac_{}_{exe_name}.o", std::process::id()))
             .to_string_lossy()
             .into_owned();
-        let exe_path = if is_wasm {
+        let exe_path = if let Some(explicit) = out_path {
+            // `-o <path>` / `--out <path>`. Until B-2026-07-31-36 this branch
+            // did not exist: the flag parsed, so it drew no "unknown flag"
+            // error, but the executable path never consulted it and the
+            // artifact still landed at `<stem>` in the CWD. Silently writing
+            // somewhere other than where the user pointed is the worst of the
+            // three options — worse than rejecting the flag — and it left no
+            // way at all to redirect a build, which is why stray `karac build`
+            // outputs kept accumulating at the repo root.
+            //
+            // Honored verbatim, `cc -o` style: no extension is appended, on
+            // any target. An explicit path is the user's to name.
+            explicit.to_string()
+        } else if is_wasm {
             // WASI command module — the artifact is loaded by a wasm
             // host, never exec'd directly, so it always carries the
             // extension. (`dist/wasm/<pkg>.wasm` layout is project
