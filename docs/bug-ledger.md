@@ -904,8 +904,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **777 surfaced 
 | B-2026-07-31-2 | typecheck | medium | `Ok(x)` / `Err(x)` / `Some(x)` did not push the expected PAYLOAD type inward, so a type-inferred constructor in the payload never resolved: `fn f() -… | dcdc9e1 |
 | B-2026-07-31-3 | typecheck | high | CONTRADICTORY RULES: E_ENUM_NESTED_ENUM_PAYLOAD said to mark a nested inner enum `shared`, while E_NOT_CROSS_TASK said a `shared enum` cannot cross a… | 895d4da |
 | B-2026-07-31-5 | codegen | low | A value enum's own `impl Drop` body fired at SCOPE EXIT under codegen but at the binding's NLL live-range end under the interpreter — `mid\|DS` vs `DS… | 09459b2 |
-| B-2026-07-31-6 | codegen | medium | A `Result[T, E]` whose payload is HEAP-BOXED got the INLINE payload cleanup registered ON TOP of the correct box drop, so the inline overlay read the… | PENDING |
-| B-2026-07-31-7 | codegen | medium | An UNANNOTATED `let` of an `Option`/`Result` whose payload is heap-BOXED registered no cleanup at all and leaked the whole box, payload heap included… | PENDING |
+| B-2026-07-31-6 | codegen | medium | A `Result[T, E]` whose payload is HEAP-BOXED got the INLINE payload cleanup registered ON TOP of the correct box drop, so the inline overlay read the… | d5f45d6 |
+| B-2026-07-31-7 | codegen | medium | An UNANNOTATED `let` of an `Option`/`Result` whose payload is heap-BOXED registered no cleanup at all and leaked the whole box, payload heap included… | d5f45d6 |
 
 </details>
 
