@@ -79,6 +79,16 @@
 //! rather than wrapping — a wrapped coefficient would "prove" disjointness of
 //! ranges that in fact overlap, which is the silent-miscompile class this whole
 //! slice is gated against.
+//!
+//! ## Debugging a decline
+//!
+//! `KARAC_PROOF_DEBUG=1` prints the span obligation that failed, as
+//! `unproven=[<poly> >= 0]` plus the atom facts that were in scope. A
+//! `footprint_overlap` decline otherwise reports only *that* the footprint was
+//! not provable, which leaves "what fact is missing?" to a hand-derivation —
+//! and a hand-derivation of these is easy to get wrong (see the note at the
+//! span check). `KARAC_DISJOINT_DEBUG=1` is its counterpart one phase later,
+//! on the codegen side.
 
 use crate::ast::{
     assign_target_root, BinOp, Block, CompoundOp, Expr, ExprKind, MatchArm, Pattern, PatternKind,
@@ -789,6 +799,34 @@ pub fn prove_disjoint_indexed_writes(
                 let nonneg: HashSet<String> = a.nonneg.union(&b.nonneg).cloned().collect();
                 let positive: HashSet<String> = a.positive.union(&b.positive).cloned().collect();
                 if !slack.provably_nonneg(&nonneg, &positive) {
+                    // `KARAC_PROOF_DEBUG=1` prints the obligation that failed.
+                    // The decline reason can only say "the per-iteration index
+                    // range is not provably inside `[0, stride)`" — it has no
+                    // room for the polynomial, and without the polynomial the
+                    // next question ("so what fact is missing?") needs a
+                    // debugger or a hand-derivation. This is the same escape
+                    // hatch `KARAC_DISJOINT_DEBUG=1` provides on the codegen
+                    // side, one phase earlier. It earned its keep working out
+                    // why Veil's rect kernels decline: the obligation turned
+                    // out to be `3 + 4*sw - 4*w >= 0`, i.e. `sw >= w`, and NOT
+                    // the `x + w <= sw` a hand-derivation had assumed — the
+                    // span depends on the inner range's WIDTH, not on where it
+                    // starts.
+                    if std::env::var("KARAC_PROOF_DEBUG").as_deref() == Ok("1") {
+                        let sorted = |s: &HashSet<String>| {
+                            let mut v: Vec<String> = s.iter().cloned().collect();
+                            v.sort();
+                            v.join(",")
+                        };
+                        eprintln!(
+                            "karac-proof-debug: target={target} stride=[{}] unproven=[{} >= 0] \
+                             nonneg={{{}}} positive={{{}}}",
+                            stride.render(),
+                            slack.render(),
+                            sorted(&nonneg),
+                            sorted(&positive),
+                        );
+                    }
                     return Err(DisjointDecline::FootprintOverlap);
                 }
             }
