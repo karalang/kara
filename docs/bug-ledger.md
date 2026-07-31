@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 196 | 0 |
-| leak | 106 | 1 |
+| leak | 107 | 2 |
 | codegen-gap | 88 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
-| run-vs-build | 55 | 0 |
+| run-vs-build | 56 | 1 |
 | false-positive | 54 | 0 |
 | perf | 41 | 1 |
 | crash | 33 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 577 | 2 |
+| codegen | 579 | 4 |
 | typecheck | 108 | 0 |
 | interp | 86 | 1 |
 | ownership | 35 | 0 |
-| autopar | 27 | 0 |
+| autopar | 29 | 2 |
 | cli | 23 | 0 |
 | other | 21 | 0 |
 | runtime | 18 | 0 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **809 surfaced · 2 open · 799 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **811 surfaced · 4 open · 799 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve trails C/Rust on the sequential lane — now measured at 1.40-1.44x (not 2.5-2.9x), and localized to build_factors: the sieve alone is 1.65x vs C and accounts for MORE than the whole kata's deficit | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
+| B-2026-07-31-40 | 2026-07-31 | autopar+codegen | medium | A Map introduced INSIDE an auto-par parallel group leaks whole (handle + buckets) at branch write-back — 344 bytes definitely lost per execution of the probe shape | — |
+| B-2026-07-31-41 | 2026-07-31 | autopar+codegen | medium | User Drop timing diverges in auto-par lanes: under the DEFAULT build a displaced struct binding's body fires with the wrong id/time (drop 6 at the assignment, drop 5 after scope exit) while the sequential lanes on all three backends agree (drop 5 then drop 6) | — |
 
 ### Fixed (799)
 
