@@ -1,0 +1,139 @@
+// URL shortener — a real HTTP service in Kāra.
+//
+//   POST /shorten   body = the long URL   → 201, JSON {"code","short"}
+//   GET  /<code>                          → 302 + Location: <long URL>
+//   GET  /stats                           → 200, JSON hit counts
+//   GET  /                                → 200, usage text
+//   anything else                         → 404
+//
+// Build & run:  karac run examples/shortener/shortener.kara
+//   then:       curl -d 'https://example.com' localhost:8080/shorten
+//               curl -i localhost:8080/<code>
+//
+// Written as a dogfooding exercise through the Mend loop; it found
+// B-2026-07-31-30 (`for (code, n) in HITS` over a module-level Map
+// compiled to a zero-iteration loop, so `/stats` reported `"hits":{}`
+// while `LINKS.len()` on the sibling map was correct).
+
+// The OPTIONAL third `headers` field is the response-header channel:
+// codegen lowers each pair through
+// `karac_runtime_http_response_set_header` (src/codegen/http.rs). A
+// two-field `Response { status, body }` — what the other examples use —
+// still works; without the third field there is no way to set
+// `Location`, so a redirect (this program's whole point) is
+// unexpressible. Response headers default to `content-type:
+// application/json` unless a pair overrides it.
+struct Response {
+    status: i64,
+    body: String,
+    headers: Vec[(String, String)],
+}
+
+let mut LINKS: Map[String, String] = Map.new();
+let mut HITS: Map[String, i64] = Map.new();
+let mut SEQ: i64 = 0;
+
+let CODE_ALPHABET: StringSlice = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+// Base-36 encode `n` using CODE_ALPHABET. Always at least one char.
+fn encode_code(n: i64) -> String {
+    if n == 0 {
+        return "a";
+    }
+    let mut out = "";
+    let mut v = n;
+    while v > 0 {
+        let digit = v % 36;
+        match CODE_ALPHABET.char_at(digit) {
+            Some(c) => { out = c.to_string() + out; }
+            None => { }
+        }
+        v = v / 36;
+    }
+    out
+}
+
+fn json_escape(s: String) -> String {
+    let mut out = "";
+    for ch in s.chars() {
+        if ch == '"' {
+            out = out + "\\\"";
+        } else {
+            if ch == '\\' {
+                out = out + "\\\\";
+            } else {
+                out = out + ch.to_string();
+            }
+        }
+    }
+    out
+}
+
+fn no_headers() -> Vec[(String, String)] {
+    Vec.new()
+}
+
+fn text(status: i64, body: String) -> Response {
+    Response { status: status, body: body, headers: no_headers() }
+}
+
+fn handle(req: Request) -> Response {
+    let path = req.path();
+    let method = req.method();
+
+    if path == "/" {
+        return text(200, "POST /shorten with a URL body; GET /<code> to follow.\n");
+    }
+
+    if path == "/shorten" {
+        if method != "POST" {
+            return text(405, "{\"error\":\"use POST\"}");
+        }
+        let url = req.body();
+        if url.len() == 0 {
+            return text(400, "{\"error\":\"empty body\"}");
+        }
+        let code = encode_code(SEQ);
+        SEQ = SEQ + 1;
+        LINKS.insert(code.clone(), url);
+        HITS.insert(code.clone(), 0);
+        return text(
+            201,
+            "{\"code\":\"" + code.clone() + "\",\"short\":\"/" + code + "\"}",
+        );
+    }
+
+    if path == "/stats" {
+        let mut body = "{\"links\":" + LINKS.len().to_string() + ",\"hits\":{";
+        let mut first = true;
+        for (code, n) in HITS {
+            if not first {
+                body = body + ",";
+            }
+            body = body + "\"" + code + "\":" + n.to_string();
+            first = false;
+        }
+        return text(200, body + "}}");
+    }
+
+    // Everything else is a short-code lookup: strip the leading '/'.
+    let code = path.substring(1, path.len());
+    match LINKS.get(code) {
+        Some(target) => {
+            let seen = match HITS.get(code) {
+                Some(n) => n,
+                None => 0,
+            };
+            HITS.insert(code, seen + 1);
+            let mut h: Vec[(String, String)] = Vec.new();
+            h.push(("location", target));
+            Response { status: 302, body: "", headers: h }
+        }
+        None => text(404, "{\"error\":\"no such code\"}"),
+    }
+}
+
+fn main() {
+    println("shortener listening on 127.0.0.1:8080");
+    let _ = Server.serve("127.0.0.1:8080", handle);
+}

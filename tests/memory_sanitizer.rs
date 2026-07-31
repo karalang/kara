@@ -34517,4 +34517,71 @@ fn main() with reads(Ctr) {
             "wp_closure_question_fail_edge_frees_body_local",
         );
     }
+
+    #[test]
+    fn asan_module_binding_container_for_loop_no_leak() {
+        // B-2026-07-31-30 made these loops LIVE for the first time: the
+        // `compile_for` Identifier arm used to skip module-level containers
+        // entirely and emit a zero-iteration loop, so the Vec/Map/Set
+        // iteration machinery never ran on a global. Iterating a Map allocates
+        // a runtime iterator (`karac_map_iter_new`/`_next`/`_free`) whose
+        // scope-exit cleanup is what keeps an early `return` out of the body
+        // leak-free, and each String key/element yielded is a fresh
+        // allocation — none of which was exercised against a global before.
+        //
+        // Covers all four container arms plus the two shapes most likely to
+        // strand the iterator or the yielded elements: an early `return` out
+        // of the middle of a module-Map loop, and a `break` out of a
+        // module-Set loop.
+        assert_clean_asan_run(
+            r#"
+let mut MV: Vec[String] = Vec.new();
+let mut MM: Map[String, i64] = Map.new();
+let mut MS: Set[String] = Set.new();
+let TITLE: StringSlice = "hi";
+
+fn early_return_out_of_map_loop() -> i64 {
+    for (k, v) in MM {
+        if v == 2 {
+            return v;
+        }
+    }
+    0
+}
+
+fn main() {
+    MV.push("alpha"); MV.push("beta");
+    MM.insert("a", 1); MM.insert("b", 2);
+    MS.insert("p"); MS.insert("q");
+
+    let mut n = 0;
+    for s in MV { n = n + s.len(); }
+    println(n);
+
+    let mut total = 0;
+    for (k, v) in MM { total = total + v + k.len(); }
+    println(total);
+
+    let mut seen = 0;
+    for s in MS {
+        seen = seen + 1;
+        if seen == 1 { break; }
+    }
+    println(seen);
+
+    let mut chars = 0;
+    for c in TITLE { chars = chars + 1; }
+    println(chars);
+
+    println(early_return_out_of_map_loop());
+}
+"#,
+            // MV: "alpha"(5) + "beta"(4) = 9.
+            // MM: (1+2) values + (1+1) key lens = 5.
+            // MS: breaks after the first element = 1.
+            // TITLE: "hi" = 2 chars.  early return finds v == 2.
+            &["9", "5", "1", "2", "2"],
+            "module_binding_container_for_loop_no_leak",
+        );
+    }
 }

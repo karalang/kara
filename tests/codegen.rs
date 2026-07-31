@@ -60311,6 +60311,87 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_modbind_container_for_loop_iterates() {
+        // B-2026-07-31-30 — `for x in <module-level container>` compiled to a
+        // ZERO-ITERATION loop. The `compile_for` Identifier arm gated its whole
+        // container dispatch (String/Vec/Slice/Map/Set) on `self.variables`, the
+        // LOCALS table, so a module binding matched nothing and fell through to
+        // the arm's `const 0` — which is a silently empty loop, not an error.
+        //
+        // Every OTHER access path on the same binding read the live global
+        // correctly (`len()`, `v[i]`, `clone()`), so the collection was provably
+        // populated while the loop saw nothing, and `--interp` iterated it fine:
+        // a silent run-vs-build divergence. Asserting the sum/count rather than
+        // just "non-empty" pins the elements actually observed.
+        let output = run_program(
+            "let mut MV: Vec[i64] = Vec.new();\n\
+             let mut MM: Map[String, i64] = Map.new();\n\
+             let mut MS: Set[String] = Set.new();\n\
+             fn main() {\n\
+                 MV.push(10); MV.push(20);\n\
+                 MM.insert(\"a\", 1); MM.insert(\"b\", 2);\n\
+                 MS.insert(\"p\"); MS.insert(\"q\");\n\
+                 let mut vs = 0;\n\
+                 for x in MV { vs = vs + x; }\n\
+                 println(vs);\n\
+                 let mut ms = 0;\n\
+                 for (k, v) in MM { ms = ms + v; }\n\
+                 println(ms);\n\
+                 let mut sc = 0;\n\
+                 for s in MS { sc = sc + 1; }\n\
+                 println(sc);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "30\n3\n2\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_container_for_loop_matches_other_access_paths() {
+        // The discriminator that localized B-2026-07-31-30: indexing and
+        // `.clone()` were always right, so any of the three disagreeing with the
+        // others means the for-loop lowering regressed again rather than the
+        // module-binding storage itself breaking (which would move all three).
+        let output = run_program(
+            "let mut MV: Vec[i64] = Vec.new();\n\
+             fn main() {\n\
+                 MV.push(10); MV.push(20);\n\
+                 let mut direct = 0;\n\
+                 for x in MV { direct = direct + x; }\n\
+                 let mut indexed = 0;\n\
+                 for i in 0..MV.len() { indexed = indexed + MV[i]; }\n\
+                 let copy = MV.clone();\n\
+                 let mut cloned = 0;\n\
+                 for x in copy { cloned = cloned + x; }\n\
+                 println(direct);\n\
+                 println(indexed);\n\
+                 println(cloned);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "30\n30\n30\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_string_for_loop_iterates_chars() {
+        // The String arm rides the same dispatch, and it is ordered BEFORE the
+        // Vec arm on purpose (String vars are also registered in
+        // `vec_elem_types` with an i8 element type). Iterating a module-level
+        // StringSlice must therefore still yield chars, not bytes — a regression
+        // that reordered the arms would print 5 bytes' worth of something else.
+        let output = run_program(
+            "let GREETING: StringSlice = \"héllo\";\n\
+             fn main() {\n\
+                 let mut n = 0;\n\
+                 for c in GREETING { n = n + 1; }\n\
+                 println(n);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "5\n");
+    }
+
+    #[test]
     fn test_e2e_modbind_computed_cross_referencing_initializer() {
         // B-2026-07-11-16: a COMPUTED / cross-referencing module-binding
         // initializer (`let DOUBLED = COUNT * 2`, referencing another binding) is

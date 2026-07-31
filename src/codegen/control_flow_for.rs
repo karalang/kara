@@ -680,6 +680,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         let arr_ptr = self.get_data_ptr(name).unwrap();
                         return self.compile_for_array_var(label, pattern, arr_ptr, at, body);
                     }
+                }
+                // Container dispatch — a LOCAL *or* a MODULE-LEVEL binding
+                // (B-2026-07-31-30). The array arms above need `slot.ty`, so
+                // they stay gated on the locals table; these five need only the
+                // NAME, because each helper recovers storage through
+                // `get_data_ptr`, which already falls back to
+                // `module_bindings` (and the type side-tables below are
+                // reseeded for module bindings by
+                // `reseed_module_binding_side_tables`).
+                //
+                // Gating all seven on `self.variables` — as this arm used to —
+                // silently skipped every container loop over a module-level
+                // binding: `for x in MV` fell through to the `const 0` below,
+                // which is a ZERO-ITERATION loop, not an error. `MV.len()`,
+                // `MV[i]`, and `MV.clone()` all read the live global correctly,
+                // so the collection was demonstrably populated while the loop
+                // saw nothing, and the interpreter iterated it correctly — a
+                // silent run-vs-build divergence. `compile_for_map_var` /
+                // `compile_for_set_var` even document "No `self.variables`
+                // precheck: `get_data_ptr` below gates" — this caller was
+                // imposing exactly the precheck the callees were written to
+                // avoid. Module-level `Map`/`Vec`/`Set` is the ordinary way to
+                // hold service state (`examples/shortener`), so the miss was
+                // load-bearing.
+                if self.variables.contains_key(name.as_str())
+                    || self.module_bindings.contains_key(name.as_str())
+                {
                     // String iteration — per Unicode scalar value. Must
                     // come before the `vec_elem_types` arm: String vars
                     // are *also* registered in `vec_elem_types` (with i8
