@@ -7,6 +7,14 @@ a.out
 # (the AOT compiler emits `<stem>` into the cwd). Ignore the scratch ones
 # that have leaked in; the real fix is to build into a scratch dir.
 tup_vec
+# Same class, untracked 2026-07-31: repro binaries from bug-hunting sessions
+# whose `.kara` sources were already dropped (`blockmin.kara` in db32610), so
+# these were orphaned artifacts with no source and no build-system reference.
+# Root-anchored: `t` and `pan` are short enough that a bare pattern would also
+# ignore any same-named file or directory deeper in the tree.
+/blockmin
+/pan
+/t
 
 # IDX
 .idx/
