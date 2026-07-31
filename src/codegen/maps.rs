@@ -404,6 +404,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // actions so no body fires over a moved-from slot).
             self.disarm_container_bodies_for_arg(k_expr);
             self.disarm_container_bodies_for_arg(v_expr);
+            // Value side: the moved binding's own body belongs to the map's
+            // value walk now.
+            self.disarm_moved_value_arg_user_drops(v_expr);
             self.builder.build_store(key_slot, k_val).unwrap();
             self.builder.build_store(val_slot, v_val).unwrap();
             self.builder
@@ -1509,6 +1512,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Container-bodies twin of the cap-zeros above.
                 self.disarm_container_bodies_for_arg(&args[0].value);
                 self.disarm_container_bodies_for_arg(&args[1].value);
+                self.disarm_moved_value_arg_user_drops(&args[1].value);
                 self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
@@ -1676,6 +1680,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
                 // Container-bodies twin of the cap-zero above.
                 self.disarm_container_bodies_for_arg(&args[1].value);
+                self.disarm_moved_value_arg_user_drops(&args[1].value);
                 // Slice 3u: a moved boxed-payload Option/Result binding
                 // (`m.insert(k, o)` on a Map[K, Option[Wide]]) — null the
                 // source's box word so its BoxedEnumDrop skips; the map's

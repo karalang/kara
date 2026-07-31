@@ -2454,6 +2454,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // its `__karac_dropelems_*` action or the body fires over
                 // the zeroed moved-from slot.
                 self.disarm_container_bodies_for_arg(&args[0].value);
+                // And the binding's OWN body: the moved value belongs to the
+                // container's element walk now (see
+                // `disarm_moved_value_arg_user_drops`).
+                self.disarm_moved_value_arg_user_drops(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -2687,6 +2691,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // its `__karac_dropelems_*` action or the body fires over
                 // the zeroed moved-from slot.
                 self.disarm_container_bodies_for_arg(&args[1].value);
+                // And the binding's OWN body: the moved value belongs to the
+                // container's element walk now (see
+                // `disarm_moved_value_arg_user_drops`).
+                self.disarm_moved_value_arg_user_drops(&args[1].value);
                 if let ExprKind::Identifier(n) = &args[1].value.kind {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
@@ -2845,6 +2853,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // its `__karac_dropelems_*` action or the body fires over
                 // the zeroed moved-from slot.
                 self.disarm_container_bodies_for_arg(&args[0].value);
+                // And the binding's OWN body: the moved value belongs to the
+                // container's element walk now (see
+                // `disarm_moved_value_arg_user_drops`).
+                self.disarm_moved_value_arg_user_drops(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -3046,6 +3058,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // its `__karac_dropelems_*` action or the body fires over
                 // the zeroed moved-from slot.
                 self.disarm_container_bodies_for_arg(&args[0].value);
+                // And the binding's OWN body: the moved value belongs to the
+                // container's element walk now (see
+                // `disarm_moved_value_arg_user_drops`).
+                self.disarm_moved_value_arg_user_drops(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -3201,6 +3217,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // its `__karac_dropelems_*` action or the body fires over
                 // the zeroed moved-from slot.
                 self.disarm_container_bodies_for_arg(&args[0].value);
+                // And the binding's OWN body: the moved value belongs to the
+                // container's element walk now (see
+                // `disarm_moved_value_arg_user_drops`).
+                self.disarm_moved_value_arg_user_drops(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's

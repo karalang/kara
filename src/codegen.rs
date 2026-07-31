@@ -2970,6 +2970,10 @@ pub(super) struct Codegen<'ctx> {
     /// the move disarms the source — the same role `tuple_var_elem_tes`
     /// plays for tuples. Cleared per function alongside it.
     pub(crate) optres_var_payload_tes: HashMap<String, TypeExpr>,
+    /// `Map[K, V]` instantiation per let-bound variable whose VALUE-bodies
+    /// walk registered (`__karac_dropelems_map_*`) — the rebind fallback in
+    /// the shared static chain, exactly like `optres_var_payload_tes`.
+    pub(crate) map_val_bodies_tes: HashMap<String, TypeExpr>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -7629,6 +7633,7 @@ impl<'ctx> Codegen<'ctx> {
             enum_inst_var_types: HashMap::new(),
             tuple_var_elem_tes: HashMap::new(),
             optres_var_payload_tes: HashMap::new(),
+            map_val_bodies_tes: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             mono_payload_binding_type_exprs: HashMap::new(),

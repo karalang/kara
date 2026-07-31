@@ -26172,6 +26172,45 @@ fn test_optres_payload_runs_user_drop_bodies() {
     );
 }
 
+/// B-2026-07-30-11 (Map-values leg) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_map_values_run_user_drop_bodies`, same source and expected string.
+/// One Drop-bearing value per map because iteration order is per-backend
+/// (unordered-map semantics); the walk keys on the te the Let arm records
+/// through codegen's exact chain.
+#[test]
+fn test_map_values_run_user_drop_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }\n\
+             struct HeapRes { name: String, id: i64 }\n\
+             impl Drop for HeapRes { fn drop(mut ref self) { println(80 + self.id); } }\n\
+             fn main() {\n\
+                 let mut m: Map[i64, Res] = Map.new();\n\
+                 m.insert(1, Res { id: 1 });\n\
+                 println(1);\n\
+                 let mut m2: Map[i64, Res] = Map.new();\n\
+                 m2.insert(5, Res { id: 5 });\n\
+                 let out = m2.remove(5);\n\
+                 println(2);\n\
+                 let mut m3: Map[i64, Res] = Map.new();\n\
+                 m3.insert(7, Res { id: 7 });\n\
+                 let m4 = m3;\n\
+                 println(3);\n\
+                 let mut m5: Map[i64, Res] = Map.new();\n\
+                 let r = Res { id: 4 };\n\
+                 m5.insert(4, r);\n\
+                 println(4);\n\
+                 let mut m6: Map[i64, HeapRes] = Map.new();\n\
+                 m6.insert(9, HeapRes { name: \"value-payload-string\", id: 9 });\n\
+                 println(5);\n\
+                 let mut m7: Map[i64, i64] = Map.new();\n\
+                 m7.insert(2, 2);\n\
+                 println(6);\n\
+             }\n"),
+        "91\n1\n95\n2\n97\n3\n94\n4\n89\n5\n6\n"
+    );
+}
+
 /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS runs
 /// its `Drop` body exactly once.
 ///

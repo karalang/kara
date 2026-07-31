@@ -3240,6 +3240,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         let name = var_name.clone();
                         self.compile_map_new_stmt(&name)?;
+                        // B-2026-07-30-11 (Map-values leg): this early return
+                        // bypasses the general registration below, so the
+                        // value-bodies walk registers here too (annotation
+                        // arm of the chain — `Map.new()` has no bare-fn
+                        // callee to consult).
+                        self.register_map_val_bodies(&name, ty.as_ref(), value);
                         // (No snapshot capture here. Every REPL capture
                         // is emitted once at END OF CELL from
                         // `emit_pending_snapshot_captures`, so a mutation
@@ -5861,6 +5867,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             );
                         }
                     }
+                    // B-2026-07-30-11 (Map-values leg) — the stored VALUES'
+                    // user `impl Drop` bodies, on the `UserDrop` (NLL)
+                    // channel, AFTER any memory registration for this
+                    // binding. Ungated by the fresh-handle arm above: a bare
+                    // rebind (`let m4 = m3;`) reaches only here, resolving
+                    // its te through the source-var record after the
+                    // whole-value-move disarm retracted the source's walk.
+                    // (`Map.new()` lets early-return far above and register
+                    // at that site.)
+                    self.register_map_val_bodies(var_name, ty.as_ref(), value);
                 }
                 // OnceLock/OnceCell local binding: `let cell: OnceLock[T] =
                 // OnceLock.new()` — queue a scope-exit `FreeOnceHandle` so the

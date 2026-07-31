@@ -478,15 +478,13 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Unit
                     };
-                    // A bare-identifier arg moves its container value into
-                    // the Vec — silence the source binding's element/payload
-                    // body walks (codegen's `disarm_container_bodies_for_arg`
-                    // twin at the push lowering).
-                    if let Some(arg) = args.first() {
-                        if let ExprKind::Identifier(n) = &arg.value.kind {
-                            let n = n.clone();
-                            self.record_container_move_source_name(&n);
-                        }
+                    // A bare-identifier arg moves its WHOLE value into the
+                    // Vec — own `impl Drop` body included; the container's
+                    // element walk runs it now (codegen twin:
+                    // `disarm_moved_value_arg_user_drops` at the push
+                    // lowering).
+                    if !args.is_empty() {
+                        self.record_ctor_arg_moves(&args[..1]);
                     }
                     let label = match &object.kind {
                         ExprKind::Identifier(n) => n.clone(),
@@ -585,15 +583,10 @@ impl<'a> super::Interpreter<'a> {
             //    front-vs-back by name.
             "push_back" | "push_front" | "pop" | "pop_back" | "pop_front" => {
                 if matches!(&obj, Value::Array(_)) {
-                    // Deque pushes consume a bare-identifier arg's container
-                    // value — same disarm as the `push` arm above.
-                    if matches!(method, "push_back" | "push_front") {
-                        if let Some(arg) = args.first() {
-                            if let ExprKind::Identifier(n) = &arg.value.kind {
-                                let n = n.clone();
-                                self.record_container_move_source_name(&n);
-                            }
-                        }
+                    // Deque pushes consume a bare-identifier arg's WHOLE
+                    // value — same full disarm as the `push` arm above.
+                    if matches!(method, "push_back" | "push_front") && !args.is_empty() {
+                        self.record_ctor_arg_moves(&args[..1]);
                     }
                     return Some(self.eval_vec_deque_method(method, &obj, object, args));
                 }
@@ -654,13 +647,10 @@ impl<'a> super::Interpreter<'a> {
                         ExprKind::Identifier(n) => n.clone(),
                         _ => "<value>".to_string(),
                     };
-                    // The inserted value at arg 1 moves in — same disarm as
-                    // the `push` arm.
-                    if let Some(arg) = args.get(1) {
-                        if let ExprKind::Identifier(n) = &arg.value.kind {
-                            let n = n.clone();
-                            self.record_container_move_source_name(&n);
-                        }
+                    // The inserted value at arg 1 moves in whole — same full
+                    // disarm as the `push` arm.
+                    if args.len() > 1 {
+                        self.record_ctor_arg_moves(&args[1..2]);
                     }
                     let mut guard = try_write_or_panic(rc, &label);
                     let len = guard.len();

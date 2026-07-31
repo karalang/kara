@@ -5753,6 +5753,184 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-07-30-11 (Map-values leg) — `__karac_dropelems_map_<K>_<V>`: a
+    /// BODY-ONLY walk over a `Map[K, V]` binding's live buckets, running each
+    /// stored value's user `impl Drop` (`<V>.drop` + the field-bodies walk).
+    /// The memory side is untouched: bucket heap is still freed by the
+    /// `FreeMapHandle` family on the scope-exit channel, so this frees
+    /// nothing and cannot double-free.
+    ///
+    /// No runtime entry is needed — the walk is emitted directly against the
+    /// pinned `KaracMap` ABI (offsets 0/8/16/40/48, control-byte occupancy
+    /// via `emit_map_is_occupied`), exactly like the scalar for-in fast walk
+    /// in `control_flow_for.rs`. Bucket order, which differs from the
+    /// interpreter's insertion order — consistent with `for (k, v) in m`,
+    /// which already iterates in different orders per backend (unordered-map
+    /// semantics); parity tests must be order-insensitive.
+    ///
+    /// Value loads happen at `kv + i*stride + key_size`, which carries no
+    /// natural alignment guarantee for a mixed-width key — the same packed
+    /// addressing every existing per-value drop fn already uses.
+    pub(super) fn emit_map_val_user_drop_bodies_fn(
+        &mut self,
+        map_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &map_te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Map") {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let crate::ast::GenericArg::Type(val_te) = args.get(1)? else {
+            return None;
+        };
+        let TypeKind::Path(vp) = &val_te.kind else {
+            return None;
+        };
+        let vname = vp.segments.first()?.clone();
+        if self.shared_types.contains_key(&vname)
+            || !self.struct_types.contains_key(&vname)
+            || !self.type_runs_user_drop(&vname, &mut Vec::new())
+        {
+            return None;
+        }
+
+        let fn_name = format!("__karac_dropelems_map_{}", Self::display_mangle_te(map_te));
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let saved = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        let walk = self.context.append_basic_block(walker, "walk");
+        let loop_bb = self.context.append_basic_block(walker, "loop");
+        let scan_bb = self.context.append_basic_block(walker, "scan");
+        let body_bb = self.context.append_basic_block(walker, "body");
+        let exit = self.context.append_basic_block(walker, "exit");
+
+        self.builder.position_at_end(entry);
+        let slot = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let handle = self
+            .builder
+            .build_load(ptr_ty, slot, "dm.handle")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                handle,
+                ptr_ty.const_null(),
+                "dm.isnull",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_null, exit, walk)
+            .unwrap();
+
+        self.builder.position_at_end(walk);
+        let hdr = |cg: &Self, off: u64, ty: inkwell::types::BasicTypeEnum<'ctx>, name: &str| {
+            let ptr = unsafe {
+                cg.builder
+                    .build_in_bounds_gep(i8_t, handle, &[i64_t.const_int(off, false)], name)
+                    .unwrap()
+            };
+            cg.builder.build_load(ty, ptr, name).unwrap()
+        };
+        let status_ptr = hdr(self, 0, ptr_ty.into(), "dm.status").into_pointer_value();
+        let kv_ptr = hdr(self, 8, ptr_ty.into(), "dm.kv").into_pointer_value();
+        let capacity = hdr(self, 16, i64_t.into(), "dm.cap").into_int_value();
+        let key_size = hdr(self, 40, i64_t.into(), "dm.ksz").into_int_value();
+        let val_size = hdr(self, 48, i64_t.into(), "dm.vsz").into_int_value();
+        let stride = self
+            .builder
+            .build_int_add(key_size, val_size, "dm.stride")
+            .unwrap();
+        let idx_slot = self.builder.build_alloca(i64_t, "dm.i").unwrap();
+        self.builder
+            .build_store(idx_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.builder.position_at_end(loop_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, idx_slot, "dm.i.v")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, i, capacity, "dm.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, scan_bb, exit)
+            .unwrap();
+
+        self.builder.position_at_end(scan_bb);
+        let st_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[i], "dm.st.p")
+                .unwrap()
+        };
+        let st = self
+            .builder
+            .build_load(i8_t, st_p, "dm.st")
+            .unwrap()
+            .into_int_value();
+        let occupied = self.emit_map_is_occupied(st, "dm.occ");
+        let next_i = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "dm.i.next")
+            .unwrap();
+        self.builder.build_store(idx_slot, next_i).unwrap();
+        self.builder
+            .build_conditional_branch(occupied, body_bb, loop_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let off = self.builder.build_int_mul(i, stride, "dm.off").unwrap();
+        let voff = self
+            .builder
+            .build_int_add(off, key_size, "dm.voff")
+            .unwrap();
+        let vptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[voff], "dm.v.p")
+                .unwrap()
+        };
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
+        if owns_body {
+            if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
+                self.builder.build_call(f, &[vptr.into()], "").unwrap();
+            }
+        }
+        if let Some(f) =
+            self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
+        {
+            self.builder.build_call(f, &[vptr.into()], "").unwrap();
+        }
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.builder.position_at_end(exit);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
         if let Some(f) = self.user_drop_wrapper_fns.get(type_name) {
             return Some(*f);

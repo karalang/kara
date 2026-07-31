@@ -34052,6 +34052,70 @@ fn main() {
         );
     }
 
+    // B-2026-07-30-11 (Map-values leg) — value bodies for let-bound Maps,
+    // plus the remove-tombstone skip, the insert-of-binding full disarm, and
+    // the whole-map rebind disarm. Same unsafe-direction guard as the other
+    // legs: the bucket walk frees nothing, so what ASAN catches is an
+    // OVER-fire — the walk reading a tombstoned (removed) slot's stale bytes,
+    // a moved-from binding's wiped value, or the rebound source's buckets
+    // after the destination freed them. The `self.buf[0]` read keeps the
+    // element allocations live (the standing vacuity lesson).
+    #[test]
+    fn asan_map_value_user_drop_bodies_fire_once() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+impl Drop for Full {
+    fn drop(mut ref self) {
+        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        self.buf.clear();
+    }
+}
+
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "map-value-payload-string", buf: b };
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Held to the binding's end — the value body fires via the walk.
+        let mut m: Map[i64, Full] = Map.new();
+        m.insert(i, mk(i));
+        n = n + 1i64;
+
+        // Removed value leaves through the Option; the walk must skip the
+        // tombstone and the moved-out binding runs the body instead.
+        let mut m2: Map[i64, Full] = Map.new();
+        m2.insert(i, mk(i));
+        let out = m2.remove(i);
+        n = n + 1i64;
+
+        // Insert of a BINDING: the source's own action is fully disarmed;
+        // only the map walk runs the body.
+        let mut m3: Map[i64, Full] = Map.new();
+        let r = mk(i);
+        m3.insert(i, r);
+        n = n + 1i64;
+
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 3 per iteration x 200 = 600. The whole-map REBIND shape is
+            // deliberately absent: `let m5 = m4;` leaks the ENTIRE map
+            // (handle + arrays + values) on unmodified main — a pre-existing
+            // MEMORY defect (B-2026-07-31-27), not a bodies problem; its
+            // BODY parity is pinned by the e2e/interp twins instead.
+            &["600"],
+            "map_value_user_drop_bodies_fire_once",
+        );
+    }
+
     // B-2026-07-31-7 — an UNANNOTATED `let` of an `Option`/`Result` whose
     // payload is heap-BOXED registered no cleanup at all and leaked the whole
     // box, payload heap included.

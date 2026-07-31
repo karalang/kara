@@ -449,6 +449,13 @@ pub struct Interpreter<'a> {
     /// at `try_compile_enum_variant`'s arg loop. Re-armed on a fresh
     /// `let`/assign of the name like the other moved-out sets.
     pub(crate) moved_out_user_drop_bindings: HashSet<String>,
+    /// B-2026-07-30-11 (Map-values leg) — the resolved `Map[K, V]`
+    /// instantiation per let-bound variable, recorded through the SAME
+    /// static chain codegen's `__karac_dropelems_map_*` registration uses
+    /// (annotation → bare-identifier callee's declared return → source-var
+    /// record). The value-bodies walk consults it at drop time; absent means
+    /// codegen registered no walker either.
+    pub(crate) map_val_bodies_tes: HashMap<String, TypeExpr>,
     /// REPL value-snapshot output channel. Populated by the Let arm of
     /// `eval_stmt_cf` whenever the binding name is in
     /// `let_snapshot_watch`. The REPL reads this after `run()` returns;
@@ -726,6 +733,7 @@ impl<'a> Interpreter<'a> {
             moved_out_container_bodies_bindings: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             moved_out_user_drop_bindings: HashSet::new(),
+            map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,
             timed_out: false,

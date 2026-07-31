@@ -5152,6 +5152,47 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-07-30-11 (Map-values leg) — register the value-bodies walk
+    /// (`__karac_dropelems_map_*`) for a let-bound `Map[K, V]` whose `V`
+    /// runs a user `impl Drop`. Gated on the SHARED static chain (annotation
+    /// → bare-identifier callee's declared return → source-var record for a
+    /// bare rebind), NOT on `var_elem_type_exprs` — that table is richer
+    /// than what the interpreter can mirror, and an asymmetric gate is a
+    /// run/build parity break. Interp twin: `record_map_val_bodies_te` /
+    /// `run_map_val_user_drops`. No-op when the chain resolves nothing or
+    /// the value type carries no user drop.
+    pub(super) fn register_map_val_bodies(
+        &mut self,
+        var_name: &str,
+        ty: Option<&TypeExpr>,
+        value: &Expr,
+    ) {
+        let te = ty
+            .cloned()
+            .or_else(|| match &value.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(f) => self.fn_return_type_exprs.get(f.as_str()).cloned(),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .or_else(|| match &value.kind {
+                ExprKind::Identifier(n) => self.map_val_bodies_tes.get(n.as_str()).cloned(),
+                _ => None,
+            });
+        let Some(te) = te else {
+            return;
+        };
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            return;
+        };
+        if let Some(bodies) = self.emit_map_val_user_drop_bodies_fn(&te) {
+            self.map_val_bodies_tes
+                .insert(var_name.to_string(), te.clone());
+            self.track_user_drop_var_with_fn("", var_name, slot.ptr, bodies);
+        }
+    }
+
     /// Consuming-ARG form of [`Self::disarm_container_bodies_move_sources`]:
     /// a bare-identifier arg to a container-consuming method (`v.push(e)`,
     /// `m.insert(k, e)`) moves the binding's value into the container, and the
@@ -5162,6 +5203,26 @@ impl<'ctx> super::Codegen<'ctx> {
         match &e.kind {
             ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
             ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
+            _ => {}
+        }
+    }
+
+    /// Full-strength sibling of [`Self::disarm_container_bodies_for_arg`] for
+    /// a moved VALUE arg (`v.push(r)`, `m.insert(k, r)`): the binding's WHOLE
+    /// value — own `impl Drop` body included — now belongs to the container,
+    /// whose element/value walk runs it. Leaving the source's own-body action
+    /// armed printed the body twice on both backends (`let r = Res{..};
+    /// v.push(r);` fired at r's NLL end AND at the container walk). Key args
+    /// stay on the container-only disarm: no container walk covers keys, so
+    /// a key source's own body firing once is today's (leak-free) behavior.
+    /// Interp twin: `record_ctor_arg_moves` at the same method sites.
+    pub(super) fn disarm_moved_value_arg_user_drops(&mut self, e: &Expr) {
+        match &e.kind {
+            ExprKind::Identifier(n) => {
+                let n = n.clone();
+                self.suppress_user_drop_for_var(&n);
+            }
+            ExprKind::SelfValue => self.suppress_user_drop_for_var("self"),
             _ => {}
         }
     }

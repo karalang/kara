@@ -672,6 +672,10 @@ impl<'a> super::Interpreter<'a> {
         if self.run_array_element_user_drops(name) {
             return;
         }
+        // Map-values leg: same treatment for a `Map` binding's stored values.
+        if self.run_map_val_user_drops(name) {
+            return;
+        }
         // Resolve the binding's type (and, for a shared struct, its Arc
         // strong-count) WITHOUT cloning — cloning the value first would
         // bump a shared struct's refcount and break the last-reference
@@ -1256,7 +1260,7 @@ impl<'a> super::Interpreter<'a> {
     /// machinery.
     pub(crate) fn record_container_move_source_name(&mut self, name: &str) {
         match self.env.get(name) {
-            Some(Value::EnumVariant { .. } | Value::Array(_) | Value::Tuple(_)) => {
+            Some(Value::EnumVariant { .. } | Value::Array(_) | Value::Tuple(_) | Value::Map(_)) => {
                 self.moved_out_container_bodies_bindings
                     .insert(name.to_string());
             }
@@ -1381,6 +1385,93 @@ impl<'a> super::Interpreter<'a> {
         } else {
             self.optres_payload_bodies_tes.remove(name);
         }
+    }
+
+    /// B-2026-07-30-11 (Map-values leg) — record the binding's resolved
+    /// `Map[K, V]` instantiation for the value-bodies walk. Chain mirrors
+    /// codegen's registration verbatim: annotation → bare-identifier
+    /// callee's declared return → the source var's record for a bare rebind.
+    /// A non-qualifying let clears any stale record.
+    fn record_map_val_bodies_te(&mut self, name: &str, ty: &Option<TypeExpr>, value: &Expr) {
+        let te = ty
+            .clone()
+            .or_else(|| match &value.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(f) => {
+                        self.program.items.iter().find_map(|item| match item {
+                            Item::Function(func) if func.name == *f => func.return_type.clone(),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .or_else(|| match &value.kind {
+                ExprKind::Identifier(n) => self.map_val_bodies_tes.get(n).cloned(),
+                _ => None,
+            });
+        let qualifies = te.as_ref().is_some_and(|te| {
+            let TypeKind::Path(p) = &te.kind else {
+                return false;
+            };
+            if p.segments.last().map(String::as_str) != Some("Map") {
+                return false;
+            }
+            matches!(
+                p.generic_args.as_ref().and_then(|a| a.get(1)),
+                Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
+            )
+        });
+        if qualifies {
+            self.map_val_bodies_tes
+                .insert(name.to_string(), te.expect("qualifies implies Some"));
+        } else {
+            self.map_val_bodies_tes.remove(name);
+        }
+    }
+
+    /// The walk half: run each stored VALUE's user `impl Drop` body for a
+    /// dying `Map` binding. Insertion order — codegen's walk is bucket
+    /// order, and the two differ exactly as `for (k, v) in m` already does
+    /// (unordered-map semantics); parity tests are order-insensitive.
+    /// Returns `true` when the binding resolved to a Map (walked or not) so
+    /// the caller stops — a Map is not a `drop_target` shape.
+    fn run_map_val_user_drops(&mut self, name: &str) -> bool {
+        let entries = match self.env.get(name) {
+            Some(Value::Map(entries)) => entries,
+            _ => return false,
+        };
+        if self.moved_out_container_bodies_bindings.contains(name) {
+            return true;
+        }
+        let Some(te) = self.map_val_bodies_tes.get(name).cloned() else {
+            return true;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return true;
+        };
+        let Some(crate::ast::GenericArg::Type(val_te)) =
+            p.generic_args.as_ref().and_then(|a| a.get(1))
+        else {
+            return true;
+        };
+        let declared_head = Self::declared_field_type_head(val_te);
+        for (_, v) in entries {
+            let Value::Struct { name: tn, .. } = &v else {
+                continue;
+            };
+            if declared_head.as_deref() != Some(tn.as_str()) {
+                continue;
+            }
+            let tn = tn.clone();
+            if self.program.drop_method_keys.contains_key(&tn) {
+                self.run_user_drop_body_on_value(&tn, v);
+            } else if self.value_runs_user_drop(&v) {
+                self.drop_user_drop_fields_of_value(&v);
+            }
+        }
+        true
     }
 
     /// The walk half of [`Self::record_optres_payload_te`]: run the live
@@ -1519,6 +1610,8 @@ impl<'a> super::Interpreter<'a> {
                 if let crate::ast::PatternKind::Binding(bname) = &pattern.kind {
                     let bname = bname.clone();
                     self.record_optres_payload_te(&bname, ty, value);
+                    // Map-values leg: same registration moment, same chain.
+                    self.record_map_val_bodies_te(&bname, ty, value);
                 }
             }
             StmtKind::LetUninit { name, .. } => {

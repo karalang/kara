@@ -130,15 +130,19 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                // Bare-identifier key/value args move their container values
-                // into the map — same disarm as Vec.push (codegen twin: the
-                // `disarm_container_bodies_for_arg` calls at the map insert
-                // lowering).
-                for arg in args.iter().take(2) {
+                // Key arg: container walks only (no map walk covers keys —
+                // the key source's own body firing once is today's
+                // behavior). Value arg: the WHOLE value moves in, own body
+                // included; the map's value walk runs it now (codegen twin:
+                // `disarm_moved_value_arg_user_drops`).
+                if let Some(arg) = args.first() {
                     if let ExprKind::Identifier(n) = &arg.value.kind {
                         let n = n.clone();
                         self.record_container_move_source_name(&n);
                     }
+                }
+                if args.len() > 1 {
+                    self.record_ctor_arg_moves(&args[1..2]);
                 }
                 if let Value::Map(mut m) = obj {
                     // Map.insert(key, value) -> Option[V] (old value)

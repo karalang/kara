@@ -5694,6 +5694,66 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (Map-values leg) — a let-bound `Map[K, V]` runs each
+    /// stored VALUE's user `impl Drop` body when the binding dies, via a
+    /// bucket walk (`__karac_dropelems_map_*`) emitted directly against the
+    /// pinned `KaracMap` ABI — bodies only, memory stays with the
+    /// `FreeMapHandle` family. The gate is the SHARED static chain
+    /// (annotation -> bare-fn-callee return -> source-var record), mirrored
+    /// verbatim by the interpreter's `record_map_val_bodies_te`.
+    ///
+    /// Every map here holds at most ONE Drop-bearing value, deliberately:
+    /// map iteration order differs per backend (insertion vs bucket — the
+    /// same unordered semantics `for (k, v) in m` already has), so parity
+    /// tests must be order-insensitive. Shapes: insert-literal held to the
+    /// end, `remove` (the moved-out Option binding owns the body — 95 fires
+    /// via the Option/Result leg, the map walk skips the tombstone), a
+    /// whole-map rebind (source disarmed, destination re-registers via the
+    /// source-var record), insert of a BINDING (the source's own action is
+    /// fully disarmed — this printed the body twice before
+    /// `disarm_moved_value_arg_user_drops`, and the same hole existed for
+    /// `v.push(r)` since the Vec leg), a heap-carrying value (valgrind-clean
+    /// — the walk frees nothing), and a scalar-value map registering
+    /// nothing.
+    ///
+    /// Twin of `tests/interpreter.rs`'s `test_map_values_run_user_drop_bodies`
+    /// on identical source and expected output.
+    #[test]
+    fn e2e_map_values_run_user_drop_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }\n\
+             struct HeapRes { name: String, id: i64 }\n\
+             impl Drop for HeapRes { fn drop(mut ref self) { println(80 + self.id); } }\n\
+             fn main() {\n\
+             \x20   let mut m: Map[i64, Res] = Map.new();\n\
+             \x20   m.insert(1, Res { id: 1 });\n\
+             \x20   println(1);\n\
+             \x20   let mut m2: Map[i64, Res] = Map.new();\n\
+             \x20   m2.insert(5, Res { id: 5 });\n\
+             \x20   let out = m2.remove(5);\n\
+             \x20   println(2);\n\
+             \x20   let mut m3: Map[i64, Res] = Map.new();\n\
+             \x20   m3.insert(7, Res { id: 7 });\n\
+             \x20   let m4 = m3;\n\
+             \x20   println(3);\n\
+             \x20   let mut m5: Map[i64, Res] = Map.new();\n\
+             \x20   let r = Res { id: 4 };\n\
+             \x20   m5.insert(4, r);\n\
+             \x20   println(4);\n\
+             \x20   let mut m6: Map[i64, HeapRes] = Map.new();\n\
+             \x20   m6.insert(9, HeapRes { name: \"value-payload-string\", id: 9 });\n\
+             \x20   println(5);\n\
+             \x20   let mut m7: Map[i64, i64] = Map.new();\n\
+             \x20   m7.insert(2, 2);\n\
+             \x20   println(6);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "91\n1\n95\n2\n97\n3\n94\n4\n89\n5\n6\n");
+    }
+
     /// B-2026-07-30-11 (Vec leg) — a `Vec[T]`'s ELEMENTS run their user
     /// `impl Drop` bodies when the Vec dies.
     ///

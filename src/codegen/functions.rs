@@ -1286,6 +1286,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.enum_inst_var_types.clear();
         self.tuple_var_elem_tes.clear();
         self.optres_var_payload_tes.clear();
+        self.map_val_bodies_tes.clear();
         self.string_vars.clear();
         self.ascii_const_string_lets.clear();
         self.slice_elem_types.clear();
