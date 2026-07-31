@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 88 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
-| false-positive | 54 | 1 |
+| false-positive | 54 | 0 |
 | run-vs-build | 54 | 0 |
 | perf | 41 | 1 |
 | crash | 33 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 574 | 3 |
 | typecheck | 108 | 0 |
 | interp | 85 | 1 |
-| ownership | 35 | 1 |
+| ownership | 35 | 0 |
 | autopar | 27 | 0 |
 | cli | 23 | 0 |
 | other | 21 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced · 4 open · 794 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced · 3 open · 795 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve trails C/Rust on the sequential lane — now measured at 1.40-1.44x (not 2.5-2.9x), and localized to build_factors: the sieve alone is 1.65x vs C and accounts for MORE than the whole kata's deficit | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
-| B-2026-07-31-28 | 2026-07-31 | ownership | medium | RC-fallback analysis is not path-sensitive across a branch JOIN: a value consumed exactly once on each of two MUTUALLY EXCLUSIVE `if`/`else` (or `match`) arms is reported as a re-use and gets a real RC inserted, even though only one arm can run. The same mutual exclusion expressed with an early `return` is analyzed correctly. | — |
 | B-2026-07-31-34 | 2026-07-31 | codegen+runtime | low | 17 codegen-declared runtime symbols are absent from `__preserve_no_mangle_symbols` — each needs a per-symbol strip-risk verdict (async/net/TLS families). Pinned by tests/extern_keep_list.rs so the set cannot grow silently, but the pin is a placeholder for triage, NOT an approval. | — |
 
-### Fixed (794)
+### Fixed (795)
 
-<details><summary>794 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>795 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -928,6 +927,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced 
 | B-2026-07-31-25 | interp | medium | Interpreter captured ONLY `content-type` off an HTTP response, so `Response.header(name)` answered `None` for every other header and `Response.header… | 5e7c2e9 |
 | B-2026-07-31-26 | codegen | low | STALE CODEGEN-GAP DIAGNOSTICS: 15 codegen error/doc sites say a deferred construct "works under `karac run`" — false since `karac run` became JIT-by-… | 9d70e52,a6f5df7 |
 | B-2026-07-31-27 | codegen | medium | A whole-map rebind (`let m5 = m4;`) leaks the ENTIRE map — handle, bucket arrays, and every stored value's heap — on every execution of the shape. | 193956f |
+| B-2026-07-31-28 | ownership | medium | RC-fallback analysis is not path-sensitive across a branch JOIN: a value consumed exactly once on each of two MUTUALLY EXCLUSIVE `if`/`else` (or `mat… | 35723fc9 |
 | B-2026-07-31-29 | ownership+cli | high | `karac build` and `karac run` DO NOT GATE on ownership errors: a use-after-move that `karac check` reports as `error[ownership]` (exit 1) still compi… | ef7e209 |
 | B-2026-07-31-30 | codegen | high | `for x in <module-level Vec/Map/Set/String>` compiled to a zero-iteration loop (run-vs-build divergence) | e0fdc44 |
 | B-2026-07-31-31 | parser+typecheck | medium | Mechanical diagnostics that name their own replacement carry no `karac fix` payload (`!` -> `not`, String -> StringSlice) | 49dc24c |
