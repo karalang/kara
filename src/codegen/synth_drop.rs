@@ -23,6 +23,12 @@ use crate::ast::{GenericArg, Item, TypeExpr, TypeKind, VariantKind};
 
 use super::state::EnumDropKind;
 
+/// B-2026-07-30-11 (enum leg) — one `(discriminant, variant name, payload
+/// slots)` row for `emit_enum_payload_user_drop_bodies_fn`, where each payload
+/// slot is `(LLVM field index within the enum's unified type, payload struct
+/// name)`. Aliased because the inline tuple trips `clippy::type_complexity`.
+type EnumPayloadBodyTargets = Vec<(u64, String, Vec<(u32, String)>)>;
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Phase 7.2 Slice DP — synthesize (or reuse) the per-enum drop
     /// function `__karac_drop_<EnumName>` for value-type enums.
@@ -5386,6 +5392,152 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
+    /// B-2026-07-30-11 (enum leg) — emit `__karac_dropelems_enum_<E>(e: *mut E)`:
+    /// run the user `impl Drop` BODY of the LIVE variant's Drop-bearing payload
+    /// fields. `None` when no variant of `E` carries one.
+    ///
+    /// The enum sibling of [`Self::emit_vec_elem_user_drop_bodies_fn`] and
+    /// [`Self::emit_tuple_elem_user_drop_bodies_fn`], with the same contract:
+    /// BODIES ONLY. Payload MEMORY is still freed by the unchanged
+    /// `emit_enum_drop_switch` (`__karac_drop_<E>`) on the scope-exit channel —
+    /// its `NestedStruct` arm already calls `__karac_drop_struct_<S>`. Adding a
+    /// second memory-freeing call here would double-free those buffers, so this
+    /// walk frees nothing, cannot double-free, and moves no existing free.
+    ///
+    /// Structurally a second tag switch rather than an extra arm inside
+    /// `emit_enum_drop_switch`, because of WHERE each must run: memory at scope
+    /// exit, a user body at the binding's NLL live-range end (design.md § Drop
+    /// ordering), which is where the interpreter puts it. Folding them together
+    /// compiles but prints at a different time than `karac run` — the same
+    /// run/build parity break that reverted the Vec leg's first attempt.
+    ///
+    /// A payload's LLVM field index is `start_word + 1` (tag is field 0), the
+    /// same addressing `emit_enum_drop_switch`'s `NestedStruct` arm uses: the
+    /// struct lays out over the payload words bit-for-bit, so its own drop
+    /// symbols read that pointer as the concrete struct.
+    pub(super) fn emit_enum_payload_user_drop_bodies_fn(
+        &mut self,
+        enum_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let layout = self.enum_layouts.get(enum_name)?.clone();
+        if layout.is_shared {
+            return None; // DP3 — shared enums drop through the RC machinery
+        }
+        // (tag, variant, [(llvm field index, payload struct name)]) for every
+        // variant that carries at least one Drop-bearing struct payload.
+        let mut targets: EnumPayloadBodyTargets = Vec::new();
+        for (tag, vname, tes) in self.enum_variant_field_type_exprs(enum_name) {
+            let Some(offsets) = layout.field_word_offsets.get(&vname) else {
+                continue;
+            };
+            let mut fields: Vec<(u32, String)> = Vec::new();
+            for (fi, te) in tes.iter().enumerate() {
+                let Some((start_word, _)) = offsets.get(fi).copied() else {
+                    continue;
+                };
+                let TypeKind::Path(p) = &te.kind else {
+                    continue;
+                };
+                let Some(name) = p.segments.first().cloned() else {
+                    continue;
+                };
+                if self.shared_types.contains_key(&name) || !self.struct_types.contains_key(&name) {
+                    continue;
+                }
+                if self.type_runs_user_drop(&name, &mut Vec::new()) {
+                    fields.push(((start_word + 1) as u32, name));
+                }
+            }
+            if !fields.is_empty() {
+                targets.push((tag, vname, fields));
+            }
+        }
+        if targets.is_empty() {
+            return None;
+        }
+        // Sort by discriminant so the BB layout is reproducible run to run —
+        // `layout.tags` is a HashMap and preserves no useful order.
+        targets.sort_by_key(|(tag, _, _)| *tag);
+
+        let fn_name = format!("__karac_dropelems_enum_{enum_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let saved = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        let exit = self.context.append_basic_block(walker, "exit");
+        self.builder.position_at_end(entry);
+        let p_arg = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(layout.llvm_type, p_arg, 0, "de.tag.p")
+            .unwrap();
+        let tag_val = self
+            .builder
+            .build_load(i64_t, tag_ptr, "de.tag")
+            .unwrap()
+            .into_int_value();
+
+        let mut switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let case_bbs: Vec<(BasicBlock<'ctx>, Vec<(u32, String)>)> = targets
+            .into_iter()
+            .map(|(tag, vname, fields)| {
+                let bb = self
+                    .context
+                    .append_basic_block(walker, &format!("de.{vname}"));
+                switch_cases.push((i64_t.const_int(tag, false), bb));
+                (bb, fields)
+            })
+            .collect();
+        self.builder
+            .build_switch(tag_val, exit, &switch_cases)
+            .unwrap();
+
+        for (bb, fields) in case_bbs {
+            self.builder.position_at_end(bb);
+            // Forward field order within a variant, matching the interpreter's
+            // walk over `EnumData::Tuple` / `Struct`. (Struct FIELDS drop in
+            // reverse declaration order; a variant's payload SLOTS do not, and
+            // both backends agree on that split — same rule as tuple elements.)
+            for (field_idx, sname) in fields {
+                let fp = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, p_arg, field_idx, "de.payload.p")
+                    .unwrap();
+                let owns_body = self
+                    .program_snapshot
+                    .as_deref()
+                    .is_some_and(|p| p.drop_method_keys.contains_key(&sname));
+                if owns_body {
+                    if let Some(f) = self.module.get_function(&format!("{sname}.drop")) {
+                        self.builder.build_call(f, &[fp.into()], "").unwrap();
+                    }
+                }
+                if let Some(f) =
+                    self.emit_user_drop_field_bodies_fn(&sname, &std::collections::HashMap::new())
+                {
+                    self.builder.build_call(f, &[fp.into()], "").unwrap();
+                }
+            }
+            self.builder.build_unconditional_branch(exit).unwrap();
+        }
+
+        self.builder.position_at_end(exit);
         self.builder.build_return(None).unwrap();
         if let Some(bb) = saved {
             self.builder.position_at_end(bb);

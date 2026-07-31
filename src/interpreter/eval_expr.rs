@@ -748,6 +748,11 @@ impl<'a> super::Interpreter<'a> {
                 // clone cannot double-free.
                 let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
                 let drop_val = scrut_drop.as_ref().map(|_| val.clone());
+                // B-2026-07-30-11 (enum leg) — the `if let` twin of the `match`
+                // disarm: once this pattern moves a Drop-bearing payload out,
+                // the source binding's payload-body walk must skip it, matching
+                // codegen's retraction at `control_flow.rs`'s owned-variable arm.
+                self.disarm_moved_out_enum_payload_one(value, &val, pattern);
                 let result = if self.try_match_pattern(pattern, &val) {
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);

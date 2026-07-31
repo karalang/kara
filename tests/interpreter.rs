@@ -25753,3 +25753,81 @@ fn test_tuple_elements_run_user_drop_bodies() {
         "7\n21\n1\n22\n23\n0\n24\n1\n999\n"
     );
 }
+
+/// B-2026-07-30-11 (enum leg) — the interpreter half: a value enum's
+/// live-variant payload runs its user `impl Drop` body when the enum binding
+/// dies. Same source and expected output as `tests/codegen.rs`'s
+/// `e2e_enum_payload_runs_user_drop_bodies`.
+///
+/// Both backends were silent here, so this pair is what makes the new behaviour
+/// a shared contract rather than one backend drifting ahead of the other.
+#[test]
+fn test_enum_payload_runs_user_drop_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             struct W { r: Res }\n\
+             enum Slot { Empty, Full(Res) }\n\
+             enum Named { None0, One { r: Res, tag: i64 } }\n\
+             enum Pair { Zero, Two(Res, Res) }\n\
+             enum Nest { Nil, Wrap(W) }\n\
+             enum Plain { A, B(i64) }\n\
+             fn main() {\n\
+                 { let s = Slot.Full(Res { id: 21 }); println(1); }\n\
+                 { let n = Named.One { r: Res { id: 22 }, tag: 5 }; println(2); }\n\
+                 { let p = Pair.Two(Res { id: 23 }, Res { id: 24 }); println(3); }\n\
+                 { let w = Nest.Wrap(W { r: Res { id: 25 } }); println(4); }\n\
+                 { let q = Plain.B(7); println(5); }\n\
+                 println(999);\n\
+             }\n"),
+        "21\n1\n22\n2\n23\n24\n3\n25\n4\n5\n999\n"
+    );
+}
+
+/// B-2026-07-30-11 (enum leg) — the interpreter half of the move-out disarm.
+/// Same source and expected output as `tests/codegen.rs`'s
+/// `e2e_enum_payload_move_out_disarms_source_drop`.
+///
+/// The interpreter's disarm has to be as COARSE as codegen's compile-time
+/// retraction: it fires when any arm consumes the payload, not only the arm
+/// taken. Anything finer would print a body `karac build` does not.
+#[test]
+fn test_enum_payload_move_out_disarms_source_drop() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             enum Slot { Empty, Full(Res) }\n\
+             fn main() {\n\
+                 { let s = Slot.Full(Res { id: 31 });\n\
+                   match s { Slot.Full(r) => println(r.id), Slot.Empty => println(0) } }\n\
+                 { let t = Slot.Full(Res { id: 32 });\n\
+                   match t { Slot.Full(_) => println(100), Slot.Empty => println(0) } }\n\
+                 { let u = Slot.Full(Res { id: 33 });\n\
+                   if let Slot.Full(q) = u { println(q.id) } }\n\
+                 println(999);\n\
+             }\n"),
+        "31\n100\n32\n33\n999\n"
+    );
+}
+
+/// B-2026-07-31-5 — the interpreter half: an enum's OWN `impl Drop` body at
+/// the NLL live-range end, then its payload's. Same source and expected output
+/// as `tests/codegen.rs`'s `e2e_enum_own_drop_body_fires_at_nll_end`. The
+/// interpreter was already right here; the twin is what pins codegen to it.
+#[test]
+fn test_enum_own_drop_body_fires_at_nll_end() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             enum Bare { Empty, Full(i64) }\n\
+             impl Drop for Bare { fn drop(mut ref self) { println(1); } }\n\
+             enum Both { Nil, Held(Res) }\n\
+             impl Drop for Both { fn drop(mut ref self) { println(2); } }\n\
+             fn main() {\n\
+                 { let b = Bare.Full(7); println(50); }\n\
+                 { let h = Both.Held(Res { id: 41 }); println(51); }\n\
+                 println(999);\n\
+             }\n"),
+        "1\n50\n2\n41\n51\n999\n"
+    );
+}

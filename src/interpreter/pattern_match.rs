@@ -25,6 +25,12 @@ impl<'a> super::Interpreter<'a> {
         arms: &[MatchArm],
         span: &Span,
     ) -> Value {
+        // B-2026-07-30-11 (enum leg) — before any arm runs, disarm the
+        // scrutinee binding's payload-body walk if ANY arm moves a Drop-bearing
+        // payload out. Scanning every arm rather than only the taken one is
+        // what keeps this in step with codegen, whose retraction is a
+        // compile-time removal and therefore cannot be path-sensitive.
+        self.disarm_moved_out_enum_payload(scrutinee_place, scrutinee, arms);
         for arm in arms {
             if self.try_match_pattern(&arm.pattern, scrutinee) {
                 // Check guard if present
@@ -103,6 +109,181 @@ impl<'a> super::Interpreter<'a> {
             ),
             span,
         )
+    }
+
+    /// B-2026-07-30-11 (enum leg) — record that a `match` over the enum binding
+    /// `scrutinee_place` has an arm that moves a Drop-bearing payload out, so
+    /// the source's payload-body walk skips it.
+    ///
+    /// The interpreter twin of codegen's prefix-keyed
+    /// `suppress_container_elem_bodies_for_var`, and matched to it on all three
+    /// gates: an identifier / `self` place (a fresh temp registered nothing to
+    /// disarm), a value enum (a `shared` enum drops through refcounts), and a
+    /// payload position whose DECLARED type runs a user body — a Wildcard or
+    /// literal sub-pattern claims no ownership, so the source must still fire.
+    pub(crate) fn disarm_moved_out_enum_payload(
+        &mut self,
+        scrutinee_place: Option<&Expr>,
+        scrutinee: &Value,
+        arms: &[MatchArm],
+    ) {
+        let Some(place) = scrutinee_place else {
+            return;
+        };
+        let name = match &place.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        let Value::EnumVariant { enum_name, .. } = scrutinee else {
+            return;
+        };
+        let enum_name = enum_name.clone();
+        if arms
+            .iter()
+            .any(|arm| self.pattern_consumes_user_drop_payload(&enum_name, &arm.pattern))
+        {
+            self.moved_out_enum_payload_bindings.insert(name);
+        }
+    }
+
+    /// Single-pattern form of [`Self::disarm_moved_out_enum_payload`], for the
+    /// `if let` site (codegen's `control_flow.rs` mirror of the `match` call).
+    /// Runs BEFORE the match test, like codegen's compile-time retraction,
+    /// which cannot know whether the pattern will match at runtime.
+    pub(crate) fn disarm_moved_out_enum_payload_one(
+        &mut self,
+        scrutinee_place: &Expr,
+        scrutinee: &Value,
+        pattern: &Pattern,
+    ) {
+        let name = match &scrutinee_place.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        let Value::EnumVariant { enum_name, .. } = scrutinee else {
+            return;
+        };
+        let enum_name = enum_name.clone();
+        if self.pattern_consumes_user_drop_payload(&enum_name, pattern) {
+            self.moved_out_enum_payload_bindings.insert(name);
+        }
+    }
+
+    /// Does `pattern` bind out a payload position of `enum_name` whose declared
+    /// type runs a user `impl Drop`? The interpreter's twin of codegen's
+    /// `enum_pattern_consumes_user_drop_payload`, down to consulting the
+    /// DECLARED payload type rather than the runtime value — an erased generic
+    /// payload is invisible to codegen at emit time, so both backends skip it.
+    fn pattern_consumes_user_drop_payload(&self, enum_name: &str, pattern: &Pattern) -> bool {
+        let variant = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                match path.last() {
+                    Some(v) => v.clone(),
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
+        let Some(decls) = self.variant_payload_decls(enum_name, &variant) else {
+            return false;
+        };
+        let consumed: Vec<usize> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .enumerate()
+                .filter(|(_, sub)| Self::pattern_claims_ownership(sub))
+                .map(|(i, _)| i)
+                .collect(),
+            PatternKind::Struct { fields, .. } => fields
+                .iter()
+                .filter(|fp| {
+                    fp.pattern
+                        .as_ref()
+                        .is_none_or(Self::pattern_claims_ownership)
+                })
+                .filter_map(|fp| {
+                    decls
+                        .iter()
+                        .position(|(n, _)| n.as_deref() == Some(fp.name.as_str()))
+                })
+                .collect(),
+            _ => return false,
+        };
+        consumed.into_iter().any(|pos| {
+            decls
+                .get(pos)
+                .map(|(_, te)| self.type_expr_runs_user_drop(te))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Does a payload sub-pattern claim ownership of the position it covers? A
+    /// `Wildcard` / literal / range / slice does not; anything that binds
+    /// (directly or through a nested destructure) does, except a `ref name @ …`
+    /// whose whole subtree borrows (design.md § @ Bindings). Arm-for-arm the
+    /// same rule as codegen's `pattern_consumes_field` — duplicated rather than
+    /// shared because that one lives behind `--features llvm`.
+    fn pattern_claims_ownership(sub: &Pattern) -> bool {
+        match &sub.kind {
+            PatternKind::Wildcard
+            | PatternKind::Literal(_)
+            | PatternKind::RangePattern { .. }
+            | PatternKind::Slice { .. } => false,
+            PatternKind::Binding(_) => true,
+            PatternKind::AtBinding { by_ref: true, .. } => false,
+            PatternKind::AtBinding { pattern, .. } => Self::pattern_claims_ownership(pattern),
+            PatternKind::Tuple(pats) => pats.iter().any(Self::pattern_claims_ownership),
+            PatternKind::TupleVariant { patterns, .. } => {
+                patterns.iter().any(Self::pattern_claims_ownership)
+            }
+            PatternKind::Struct { fields, .. } => fields.iter().any(|f| {
+                f.pattern
+                    .as_ref()
+                    .map(Self::pattern_claims_ownership)
+                    .unwrap_or(true)
+            }),
+            PatternKind::Or(pats) => pats.iter().any(Self::pattern_claims_ownership),
+        }
+    }
+
+    /// Does the head type of `te` name a struct that runs a user `impl Drop`
+    /// body, directly or through a field?
+    fn type_expr_runs_user_drop(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(head) = p.segments.first() else {
+            return false;
+        };
+        self.type_name_runs_user_drop(head, &mut Vec::new())
+    }
+
+    fn type_name_runs_user_drop(&self, name: &str, seen: &mut Vec<String>) -> bool {
+        if self.program.drop_method_keys.contains_key(name) {
+            return true;
+        }
+        if seen.iter().any(|s| s == name) {
+            return false;
+        }
+        seen.push(name.to_string());
+        self.program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::StructDef(s) if s.name == name => Some(s),
+                _ => None,
+            })
+            .is_some_and(|s| {
+                s.fields.iter().any(|f| match &f.ty.kind {
+                    TypeKind::Path(p) => p
+                        .segments
+                        .first()
+                        .is_some_and(|h| self.type_name_runs_user_drop(h, seen)),
+                    _ => false,
+                })
+            })
     }
 
     /// B-2026-07-23-12: is `place` a bare-identifier / `self` scrutinee whose

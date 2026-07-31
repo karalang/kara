@@ -5647,6 +5647,112 @@ fn main() {
         assert_eq!(out, "7\n21\n1\n22\n23\n0\n24\n1\n999\n");
     }
 
+    /// B-2026-07-30-11 (enum leg) — a value enum's live-variant PAYLOAD runs its
+    /// user `impl Drop` body when the enum binding dies.
+    ///
+    /// Every backend was silent here before: `let s = Slot.Full(Res { .. })`
+    /// freed the payload's memory (`__karac_drop_<E>`'s `NestedStruct` arm) but
+    /// ran no body, so a resource held in an enum payload was never released.
+    ///
+    /// Pins, in order: a tuple variant; a struct variant (payload addressed by
+    /// declared position, not by name order); two payloads in forward order; a
+    /// payload whose own FIELD is the Drop-bearing one; and an all-scalar enum
+    /// that must emit nothing. `Res { id: i64 }` owns NO heap deliberately —
+    /// the body must run for a payload the memory-side machinery ignores.
+    ///
+    /// Twinned with `tests/interpreter.rs`'s
+    /// `test_enum_payload_runs_user_drop_bodies`.
+    #[test]
+    fn e2e_enum_payload_runs_user_drop_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             struct W { r: Res }\n\
+             enum Slot { Empty, Full(Res) }\n\
+             enum Named { None0, One { r: Res, tag: i64 } }\n\
+             enum Pair { Zero, Two(Res, Res) }\n\
+             enum Nest { Nil, Wrap(W) }\n\
+             enum Plain { A, B(i64) }\n\
+             fn main() {\n\
+             \x20   { let s = Slot.Full(Res { id: 21 }); println(1); }\n\
+             \x20   { let n = Named.One { r: Res { id: 22 }, tag: 5 }; println(2); }\n\
+             \x20   { let p = Pair.Two(Res { id: 23 }, Res { id: 24 }); println(3); }\n\
+             \x20   { let w = Nest.Wrap(W { r: Res { id: 25 } }); println(4); }\n\
+             \x20   { let q = Plain.B(7); println(5); }\n\
+             \x20   println(999);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "21\n1\n22\n2\n23\n24\n3\n25\n4\n5\n999\n");
+    }
+
+    /// B-2026-07-30-11 (enum leg) — a `match` / `if let` arm that BINDS the
+    /// payload out disarms the source's payload-body walk, so the body does not
+    /// fire against a payload the source no longer owns. A `_` sub-pattern
+    /// claims no ownership, so there the source still fires.
+    ///
+    /// Without the disarm the body ran on the cap-zeroed source and printed
+    /// garbage read out of a wiped payload.
+    ///
+    /// Twinned with `tests/interpreter.rs`'s
+    /// `test_enum_payload_move_out_disarms_source_drop`.
+    #[test]
+    fn e2e_enum_payload_move_out_disarms_source_drop() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             enum Slot { Empty, Full(Res) }\n\
+             fn main() {\n\
+             \x20   { let s = Slot.Full(Res { id: 31 });\n\
+             \x20     match s { Slot.Full(r) => println(r.id), Slot.Empty => println(0) } }\n\
+             \x20   { let t = Slot.Full(Res { id: 32 });\n\
+             \x20     match t { Slot.Full(_) => println(100), Slot.Empty => println(0) } }\n\
+             \x20   { let u = Slot.Full(Res { id: 33 });\n\
+             \x20     if let Slot.Full(q) = u { println(q.id) } }\n\
+             \x20   println(999);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // 31 / 33: bound out, so the source runs nothing (the arm binding is not
+        // a `let`, so nothing runs its body either — a residual leak both
+        // backends share). 32: `_` binds nothing, so the source still fires.
+        assert_eq!(out, "31\n100\n32\n33\n999\n");
+    }
+
+    /// B-2026-07-31-5 — a value enum's OWN `impl Drop` body fires at the
+    /// binding's NLL live-range end, not at scope exit.
+    ///
+    /// `karac_drop_<E>` is body-only for an enum (the wrapper's field-bodies and
+    /// struct-memory steps both decline for an enum name; payload memory is the
+    /// separate scope-exit `EnumDrop`), but it was excluded from the NLL channel
+    /// because the filter tested `struct_types`. Measured `mid|DS` under AOT vs
+    /// `DS|mid` under `karac run`.
+    ///
+    /// The second block pins the interleave when the enum ALSO has a
+    /// Drop-bearing payload: own body first, then the payload's — the order
+    /// `run_user_drop_body` + `drop_user_drop_fields_of_binding` produce.
+    #[test]
+    fn e2e_enum_own_drop_body_fires_at_nll_end() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(self.id); } }\n\
+             enum Bare { Empty, Full(i64) }\n\
+             impl Drop for Bare { fn drop(mut ref self) { println(1); } }\n\
+             enum Both { Nil, Held(Res) }\n\
+             impl Drop for Both { fn drop(mut ref self) { println(2); } }\n\
+             fn main() {\n\
+             \x20   { let b = Bare.Full(7); println(50); }\n\
+             \x20   { let h = Both.Held(Res { id: 41 }); println(51); }\n\
+             \x20   println(999);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "1\n50\n2\n41\n51\n999\n");
+    }
+
     /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS
     /// runs its `Drop` body exactly ONCE, and its buffer is freed exactly once.
     ///

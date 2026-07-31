@@ -5000,7 +5000,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     } if last_use.get(binding_name.as_str()).copied() == Some(stmt_idx)
                         && (Self::is_container_elem_bodies_fn(*drop_fn)
                             || (self.struct_types.contains_key(type_name.as_str())
-                                && !self.shared_types.contains_key(type_name.as_str()))) =>
+                                && !self.shared_types.contains_key(type_name.as_str()))
+                            // B-2026-07-31-5 — a value ENUM's own `impl Drop`
+                            // body belongs on this channel too. Its
+                            // `karac_drop_<E>` wrapper is BODY-ONLY (the wrapper
+                            // emitter's field-bodies and struct-memory steps
+                            // both decline for an enum name; the payload memory
+                            // is the separate scope-exit `EnumDrop`), so firing
+                            // it early frees nothing early. Without this clause
+                            // the body ran at scope exit while the interpreter
+                            // ran it at the NLL point — measured `DS|mid` vs
+                            // `mid|DS`. Shared enums are excluded for the same
+                            // reason shared structs are: refcount-driven drop.
+                            || self
+                                .enum_layouts
+                                .get(type_name.as_str())
+                                .is_some_and(|l| !l.is_shared)) =>
                     {
                         Some((binding_name.clone(), *binding_ptr, *drop_fn))
                     }
@@ -5016,12 +5031,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_call(*drop_fn, &[(*ptr).into()], &format!("nll.drop.{name}"))
                 .unwrap();
         }
-        let names: std::collections::HashSet<&str> =
-            due.iter().map(|(n, _, _)| n.as_str()).collect();
+        // Retire exactly the actions that just fired, keyed on (binding name,
+        // drop fn) rather than the name alone. B-2026-07-30-11 (enum leg) made
+        // the name-only form wrong: one binding can now carry TWO `UserDrop`
+        // actions — an enum with its own `impl Drop` has its `karac_drop_<E>`
+        // wrapper AND a `__karac_dropelems_enum_<E>` payload-bodies walk. Only
+        // the bodies walk passes the filter above (the wrapper's `type_name` is
+        // an enum, not a struct), so a name-keyed retain deleted the wrapper
+        // without ever calling it and the enum's own body silently vanished.
+        let fired: Vec<(&str, FunctionValue<'ctx>)> =
+            due.iter().map(|(n, _, f)| (n.as_str(), *f)).collect();
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.retain(|a| {
-                !matches!(a, CleanupAction::UserDrop { binding_name, .. }
-                    if names.contains(binding_name.as_str()))
+                !matches!(a, CleanupAction::UserDrop { binding_name, drop_fn, .. }
+                    if fired.iter().any(|(n, f)| *n == binding_name.as_str() && f == drop_fn))
             });
         }
     }
@@ -5040,6 +5063,39 @@ impl<'ctx> super::Codegen<'ctx> {
         for frame in self.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop { binding_name, .. } => binding_name != name,
+                _ => true,
+            });
+        }
+    }
+
+    /// B-2026-07-30-11 (enum leg) — the PREFIX-KEYED sibling of
+    /// [`Self::suppress_user_drop_for_var`]: remove only the CONTAINER-ELEMENT
+    /// bodies action (`__karac_dropelems_*`) for `name`, leaving the binding's
+    /// own `karac_drop_<T>` wrapper in place.
+    ///
+    /// Needed because the plain name-keyed form is too coarse here. An enum
+    /// that has its own `impl Drop` AND a Drop-bearing payload carries TWO
+    /// `UserDrop` actions for the one binding, and a `match` that destructures
+    /// moves out only the PAYLOAD — the enum's own body must still run. A
+    /// blanket removal would silence both.
+    ///
+    /// The removal is STATIC while the memory-side cap-zeroing it sits beside
+    /// is per-arm and RUNTIME. That asymmetry is deliberate and unavoidable: a
+    /// payload struct with no heap (`Slot.Full(Res)` where `Res { id: i64 }`)
+    /// has no cap to zero, so there is no runtime state a guard could read. The
+    /// consequence is that a match binding the payload out in ONE arm disarms
+    /// the source's body on every path, so a sibling arm that does not consume
+    /// it runs no body — a LEAK, which is the safe side of this trade (an
+    /// under-suppressed body would print twice, an over-suppressed one prints
+    /// once too few).
+    pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
+        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+            frame.retain(|action| match action {
+                CleanupAction::UserDrop {
+                    binding_name,
+                    drop_fn,
+                    ..
+                } => binding_name != name || !Self::is_container_elem_bodies_fn(*drop_fn),
                 _ => true,
             });
         }

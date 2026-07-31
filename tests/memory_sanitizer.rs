@@ -33905,6 +33905,80 @@ fn main() {
         );
     }
 
+    // B-2026-07-30-11 (enum leg) — payload bodies added to a value enum's drop,
+    // plus the match/if-let move-out disarm.
+    //
+    // Same direction as the Vec leg: the bug was a LEAK and the fix is
+    // bodies-only (payload MEMORY was always freed by `__karac_drop_<E>`'s
+    // `NestedStruct` arm), so LSan cannot witness the fix landing. What it
+    // guards is the two ways this can go wrong in the unsafe direction:
+    //
+    //  * OVER-firing — the payload body runs against a payload a match arm
+    //    already moved out, whose words the memory-side cap-zeroing has wiped.
+    //    Reading `self.buf[0]` there is a use-after-free.
+    //  * DOUBLE-freeing — the bodies walk sits beside an existing free of the
+    //    same payload region, so a second memory-touching call would show up
+    //    here immediately.
+    //
+    // Non-vacuity, same lesson as the Vec leg: `buf.clear()` alone lets LLVM
+    // delete every element allocation. The `self.buf[0]` read observes the
+    // BYTES and keeps them; the guard is never true, so the branch is dead at
+    // runtime but not to the optimizer.
+    #[test]
+    fn asan_enum_payload_user_drop_bodies_fire_once() {
+        assert_clean_asan_run(
+            r#"
+struct Res { tag: i64, buf: Vec[i64] }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        self.buf.clear();
+    }
+}
+struct Wrap { r: Res }
+enum Slot { Empty, Full(Res) }
+enum Nest { Nil, Held(Wrap) }
+
+fn mk(i: i64) -> Res {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Res { tag: 1, buf: b };
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Held to the binding's end — the payload body fires here.
+        let s = Slot.Full(mk(i));
+        n = n + 1i64;
+
+        // Drop-bearing payload FIELD, one struct deeper.
+        let w = Nest.Held(Wrap { r: mk(i) });
+        n = n + 1i64;
+
+        // Payload MOVED OUT by a match arm — the source must run no body
+        // against the wiped payload words.
+        let t = Slot.Full(mk(i));
+        match t {
+            Slot.Full(r) => { n = n + r.tag; }
+            Slot.Empty => { n = n + 100i64; }
+        }
+
+        // Same, through `if let`.
+        let u = Slot.Full(mk(i));
+        if let Slot.Full(q) = u { n = n + q.tag; }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 1 + 1 + 1 + 1 per iteration x 200 = 800.
+            &["800"],
+            "enum_payload_user_drop_bodies_fire_once",
+        );
+    }
+
     // B-2026-07-30-11 SHAPE 2 — the same glue for an owned aggregate TEMP
     // (`consume(H { .. })`, and the return-passthrough `pass(H { .. })`).
     //

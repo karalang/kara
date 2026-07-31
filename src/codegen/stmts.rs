@@ -4857,6 +4857,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;
                             self.track_enum_var(&name, alloca);
+                            // B-2026-07-30-11 (enum leg) — the live variant's
+                            // Drop-bearing PAYLOAD bodies, on the `UserDrop`
+                            // (NLL) channel. Registered OUTSIDE `track_enum_var`
+                            // and after it, deliberately, on both counts:
+                            //  * outside, because `track_enum_var` self-filters
+                            //    on `field_drop_kinds` — whether a payload owns
+                            //    HEAP. `Slot.Full(Res)` where `Res { id: i64 }`
+                            //    owns none, yet its body must still run (the
+                            //    same gate mistake the tuple leg had to avoid).
+                            //  * after, because a frame drains LIFO: the memory
+                            //    action must be pushed FIRST so the body runs
+                            //    before the fields it reads are freed.
+                            if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&name)
+                            {
+                                self.track_user_drop_var_with_fn("", var_name, alloca, bodies);
+                            }
                             // B-2026-07-05-2: a for-loop heap-ENUM element moved
                             // WHOLE into a new owner (`for a in items { let x = a
                             // }`). `a` bit-copy-aliases the container's

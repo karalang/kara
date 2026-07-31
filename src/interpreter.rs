@@ -409,6 +409,14 @@ pub struct Interpreter<'a> {
     /// `disarm_user_drop_fields_for_moved_field`, including its coarseness: the
     /// source's whole field walk is disarmed, not just the moved field.
     pub(crate) moved_out_drop_field_bindings: HashSet<String>,
+    /// B-2026-07-30-11 (enum leg) — enum binding names whose live-variant
+    /// PAYLOAD a `match` / `if let` arm binds out. The arm's binding owns the
+    /// payload from then on, so the source's payload-body walk
+    /// (`run_enum_payload_user_drops`) must skip it. Codegen's twin is the
+    /// prefix-keyed `suppress_container_elem_bodies_for_var` retraction; kept a
+    /// SEPARATE set from `moved_out_drop_field_bindings` so the two disarms
+    /// can't cross-talk when a name is later rebound to a different shape.
+    pub(crate) moved_out_enum_payload_bindings: HashSet<String>,
     /// REPL value-snapshot output channel. Populated by the Let arm of
     /// `eval_stmt_cf` whenever the binding name is in
     /// `let_snapshot_watch`. The REPL reads this after `run()` returns;
@@ -682,6 +690,7 @@ impl<'a> Interpreter<'a> {
             let_value_overrides: HashMap::new(),
             let_snapshot_watch: HashSet::new(),
             moved_out_drop_field_bindings: HashSet::new(),
+            moved_out_enum_payload_bindings: HashSet::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,
             timed_out: false,

@@ -4557,7 +4557,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`drain_top_frame_with_emit`) freeing the new binding stays
     /// load-bearing — this fn only neutralizes the *source's* drop.
     pub(super) fn suppress_destructured_enum_payload_cleanup(
-        &self,
+        &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
@@ -4584,6 +4584,17 @@ impl<'ctx> super::Codegen<'ctx> {
             None => return,
         };
         self.suppress_destructured_enum_payload_cleanup_at(slot.ptr, &enum_name, pattern);
+        // B-2026-07-30-11 (enum leg) — the BODIES channel's half of the same
+        // move-out. The cap-zeroing above disarms the source's MEMORY drop; the
+        // payload's user `impl Drop` body rides the separate NLL `UserDrop`
+        // channel and needs its own retraction, prefix-keyed so an enum with
+        // its own `impl Drop` keeps that body. Reached only from an identifier
+        // / `self` scrutinee, which is exactly where a let-site registration
+        // could exist — a fresh temp has no binding name and never registered
+        // one.
+        if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
+            self.suppress_container_elem_bodies_for_var(scrut_name);
+        }
     }
 
     /// #15 companion: when a `match` scrutinee is a struct FIELD whose type is a
@@ -5070,6 +5081,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// source so the enum's `__karac_drop_<E>` walk skips it (the binding's own
     /// cleanup frees that buffer); unbound heap fields keep their cap and are
     /// freed by the drop walk.
+    ///
+    /// The consumed-position computation is shared with
+    /// [`Self::enum_pattern_consumed_positions`], which the B-2026-07-30-11
+    /// payload-BODIES disarm also consults so the two channels agree on what
+    /// "this arm moved the payload out" means.
     pub(super) fn suppress_destructured_enum_payload_cleanup_at(
         &self,
         slot_ptr: PointerValue<'ctx>,
@@ -5083,57 +5099,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if layout.is_shared {
             return;
         }
-        // Both tuple-variant (`V(x)`) and struct-variant (`V { f }`) patterns
-        // move payload fields into bindings. The variant name is the path's
-        // last segment for either shape.
-        let variant_name = match &pattern.kind {
-            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
-                match path.last() {
-                    Some(n) => n.as_str(),
-                    None => return,
-                }
-            }
-            _ => return,
+        let Some((variant_name, consumed_positions)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return;
         };
-        let drop_kinds = match layout.field_drop_kinds.get(variant_name) {
+        let drop_kinds = match layout.field_drop_kinds.get(&variant_name) {
             Some(k) => k,
             None => return,
         };
-        let offsets = match layout.field_word_offsets.get(variant_name) {
+        let offsets = match layout.field_word_offsets.get(&variant_name) {
             Some(o) => o,
             None => return,
-        };
-        // Declared-position indices of the payload fields this pattern
-        // *consumes* (moves into a binding). Tuple-variant fields are
-        // positional; struct-variant fields are named, so each named field is
-        // mapped to its declared position via `enum_variant_struct_field_names`
-        // — the same field order `field_drop_kinds` / `field_word_offsets` and
-        // the struct-variant constructor are keyed on. A field is consumed when
-        // its sub-pattern binds (directly or via a nested destructure); a
-        // `Wildcard`/literal sub-pattern doesn't claim ownership, so the
-        // source's drop must still fire (suppressing it would leak). A
-        // struct-variant shorthand field (`{ value }`, `pattern: None`) is a
-        // direct binding and always consumes.
-        let consumed_positions: Vec<usize> = match &pattern.kind {
-            PatternKind::TupleVariant { patterns, .. } => patterns
-                .iter()
-                .enumerate()
-                .filter(|(_, sub)| pattern_consumes_field(sub))
-                .map(|(i, _)| i)
-                .collect(),
-            PatternKind::Struct { fields, .. } => {
-                let field_names =
-                    match self.enum_variant_struct_field_names(enum_name, variant_name) {
-                        Some(n) => n,
-                        None => return,
-                    };
-                fields
-                    .iter()
-                    .filter(|fp| fp.pattern.as_ref().is_none_or(pattern_consumes_field))
-                    .filter_map(|fp| field_names.iter().position(|n| n == &fp.name))
-                    .collect()
-            }
-            _ => return,
         };
         let i64_t = self.context.i64_type();
         let zero = i64_t.const_int(0, false);
@@ -5174,6 +5151,86 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// `(variant name, declared-position indices of the payload fields this
+    /// pattern CONSUMES)` — the positions it moves into a binding. `None` for a
+    /// non-variant pattern, or a struct-variant whose field names can't be
+    /// resolved.
+    ///
+    /// Both variant shapes move payload fields into bindings, and the variant
+    /// name is the path's last segment for either. Tuple-variant fields are
+    /// positional; struct-variant fields are named, so each named field is
+    /// mapped to its declared position via `enum_variant_struct_field_names` —
+    /// the same field order `field_drop_kinds` / `field_word_offsets` and the
+    /// struct-variant constructor are keyed on. A field is consumed when its
+    /// sub-pattern binds (directly or via a nested destructure); a
+    /// `Wildcard`/literal sub-pattern doesn't claim ownership, so the source's
+    /// drop must still fire (suppressing it would leak). A struct-variant
+    /// shorthand field (`{ value }`, `pattern: None`) is a direct binding and
+    /// always consumes.
+    pub(super) fn enum_pattern_consumed_positions(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) -> Option<(String, Vec<usize>)> {
+        let variant_name = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                path.last()?.clone()
+            }
+            _ => return None,
+        };
+        let positions: Vec<usize> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .enumerate()
+                .filter(|(_, sub)| pattern_consumes_field(sub))
+                .map(|(i, _)| i)
+                .collect(),
+            PatternKind::Struct { fields, .. } => {
+                let field_names = self.enum_variant_struct_field_names(enum_name, &variant_name)?;
+                fields
+                    .iter()
+                    .filter(|fp| fp.pattern.as_ref().is_none_or(pattern_consumes_field))
+                    .filter_map(|fp| field_names.iter().position(|n| n == &fp.name))
+                    .collect()
+            }
+            _ => return None,
+        };
+        Some((variant_name, positions))
+    }
+
+    /// B-2026-07-30-11 (enum leg) — does `pattern` move out a payload position
+    /// whose type runs a user `impl Drop` body? The gate for retracting the
+    /// source binding's `__karac_dropelems_enum_<E>` action: once the payload
+    /// belongs to the arm's binding, running the source's body would either
+    /// print twice or (after the memory-side cap-zeroing) read a wiped payload.
+    ///
+    /// Distinct from the memory side's `is_heap_bearing` test on purpose. A
+    /// `Res { id: i64 }` payload has no heap and nothing to cap-zero, yet its
+    /// body still has to be disarmed — the same gate mistake the tuple leg had
+    /// to avoid at its registration site, seen from the suppression end.
+    fn enum_pattern_consumes_user_drop_payload(&self, enum_name: &str, pattern: &Pattern) -> bool {
+        let Some((variant_name, consumed)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return false;
+        };
+        let Some((_, _, tes)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| *n == variant_name)
+        else {
+            return false;
+        };
+        consumed.into_iter().any(|pos| {
+            tes.get(pos)
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) => p.segments.first().cloned(),
+                    _ => None,
+                })
+                .is_some_and(|n| self.type_runs_user_drop(&n, &mut Vec::new()))
+        })
     }
 
     /// Shared-enum analog of [`Self::suppress_destructured_enum_payload_cleanup_at`]

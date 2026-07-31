@@ -21,7 +21,7 @@ use super::exec::{
     compute_block_last_use, push_drops_for_stmt, CleanupAction, ControlFlow, ErrDeferEntry,
     EvalResult, ExitPath,
 };
-use super::value::Value;
+use super::value::{EnumData, Value};
 use super::Interpreter;
 
 impl<'a> super::Interpreter<'a> {
@@ -719,7 +719,125 @@ impl<'a> super::Interpreter<'a> {
         let Some(value) = self.env.get(name) else {
             return;
         };
+        // B-2026-07-30-11 (enum leg) — an enum binding's live-variant PAYLOAD
+        // bodies. Handled here, at the NAME-keyed entry point, rather than
+        // inside the value-level `drop_user_drop_fields_of_value`: that walker
+        // has several other callers (discarded temps, container elements) and
+        // widening it would fire on shapes codegen's let-site-only registration
+        // does not cover. This entry point is reached only from
+        // `invoke_user_drop_if_applicable`, whose `Drop` action
+        // `push_drops_for_stmt` registers only for `let` bindings — the same
+        // position `__karac_dropelems_enum_<E>` is registered at, so the two
+        // backends cover exactly this and no more.
+        if matches!(value, Value::EnumVariant { .. }) {
+            self.run_enum_payload_user_drops(name, &value);
+            return;
+        }
         self.drop_user_drop_fields_of_value(&value);
+    }
+
+    /// B-2026-07-30-11 (enum leg) — run the user `impl Drop` body of each
+    /// Drop-bearing payload of `value`'s live variant, in forward declaration
+    /// order (matching codegen's `__karac_dropelems_enum_<E>` walk).
+    ///
+    /// No-op once `name` is in `moved_out_enum_payload_bindings` — a `match` /
+    /// `if let` arm bound the payload out, so the source no longer owns it.
+    /// Codegen's twin is the prefix-keyed `suppress_container_elem_bodies_for_var`
+    /// retraction, and this shares its coarseness deliberately: the flag is set
+    /// when ANY arm consumes a Drop-bearing payload, not only the arm actually
+    /// taken, because codegen's retraction is a compile-time removal that
+    /// cannot be path-sensitive. Firing here on a non-consuming sibling arm
+    /// would print a body `karac build` does not.
+    fn run_enum_payload_user_drops(&mut self, name: &str, value: &Value) {
+        if self.moved_out_enum_payload_bindings.contains(name) {
+            return;
+        }
+        let Value::EnumVariant {
+            enum_name,
+            variant,
+            data,
+        } = value
+        else {
+            return;
+        };
+        let Some(decls) = self.variant_payload_decls(enum_name, variant) else {
+            return;
+        };
+        // (declared head type, payload value) for each declared position.
+        let payloads: Vec<(Option<String>, Value)> = match data {
+            EnumData::Unit => return,
+            EnumData::Tuple(items) => decls
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, te))| {
+                    items
+                        .get(i)
+                        .map(|v| (Self::declared_field_type_head(te), v.clone()))
+                })
+                .collect(),
+            EnumData::Struct(fields) => decls
+                .iter()
+                .filter_map(|(fname, te)| {
+                    fields
+                        .get(fname.as_deref()?)
+                        .map(|v| (Self::declared_field_type_head(te), v.clone()))
+                })
+                .collect(),
+        };
+        for (declared_head, payload) in payloads {
+            let Value::Struct { name: tn, .. } = &payload else {
+                continue;
+            };
+            // Declared-type-driven, exactly like the struct-field walk: a
+            // payload declared as a bare generic param is erased at the point
+            // codegen emits its glue, so both backends skip it and the residual
+            // is a leak — the safe direction.
+            if declared_head.as_deref() != Some(tn.as_str()) {
+                continue;
+            }
+            if self.program.drop_method_keys.contains_key(tn) {
+                let tn = tn.clone();
+                self.run_user_drop_body_only(&tn, payload.clone());
+            }
+            self.drop_user_drop_fields_of_value(&payload);
+        }
+    }
+
+    /// `(field name, declared type)` for each payload position of
+    /// `Enum.Variant`, in declaration order — `None` field name for a tuple
+    /// variant. Scans the user program then the baked stdlib, the same two
+    /// sources codegen's `enum_variant_field_type_exprs` consults.
+    pub(crate) fn variant_payload_decls(
+        &self,
+        enum_name: &str,
+        variant: &str,
+    ) -> Option<Vec<(Option<String>, TypeExpr)>> {
+        fn scan(
+            items: &[Item],
+            enum_name: &str,
+            variant: &str,
+        ) -> Option<Vec<(Option<String>, TypeExpr)>> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => e
+                    .variants
+                    .iter()
+                    .find(|v| v.name == variant)
+                    .map(|v| match &v.kind {
+                        VariantKind::Unit => Vec::new(),
+                        VariantKind::Tuple(tys) => tys.iter().map(|t| (None, t.clone())).collect(),
+                        VariantKind::Struct(fs) => fs
+                            .iter()
+                            .map(|f| (Some(f.name.clone()), f.ty.clone()))
+                            .collect(),
+                    }),
+                _ => None,
+            })
+        }
+        scan(&self.program.items, enum_name, variant).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| scan(&p.items, enum_name, variant))
+        })
     }
 
     /// B-2026-07-29-39 — record that a `let x = <src>.<field>;` moved a
