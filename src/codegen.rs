@@ -6927,6 +6927,13 @@ impl<'ctx> Codegen<'ctx> {
             json_make_number_ty,
             Some(Linkage::External),
         );
+        // B-2026-07-30-15 — exact-i64 sibling of make_number.
+        let json_make_int_ty = ptr_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_make_int",
+            json_make_int_ty,
+            Some(Linkage::External),
+        );
         let json_make_string_ty = ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_json_make_string",

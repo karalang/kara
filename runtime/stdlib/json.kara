@@ -36,6 +36,16 @@ pub enum Json {
     String(String),
     Array(Vec[Json]),
     Object(Vec[(String, Json)]),
+    // B-2026-07-30-15 — exact integers. Revises locked design (i)
+    // (Number-as-f64 only): an i64 forced through f64 emitted whole numbers
+    // as `1.0` (which Go's encoding/json refuses into an int field) and
+    // silently corrupted any magnitude past 2^53. `Json.parse` picks the
+    // variant by the input token's SYNTAX — `7` parses as Int, `7.0` as
+    // Number — the serde_json / Go json.Number model, so an integer that
+    // was exact in the input round-trips exactly. Appended LAST so the
+    // seeded codegen tags 0..5 for the original six variants are unchanged
+    // (Int = 6; see src/codegen/declarations.rs).
+    Int(i64),
 }
 
 // Parse / stringify error surface. `line` / `column` are 1-indexed;

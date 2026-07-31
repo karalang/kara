@@ -58120,7 +58120,7 @@ fn main() {
              }",
         );
         if let Some(out) = out {
-            assert_eq!(out.trim(), "[1.0,2.0,3.0]");
+            assert_eq!(out.trim(), "[1,2,3]");
         }
     }
 
@@ -58156,7 +58156,7 @@ fn main() {
              }",
         );
         if let Some(out) = out {
-            assert_eq!(out.trim(), "{\"a\":1.0,\"b\":true}");
+            assert_eq!(out.trim(), "{\"a\":1,\"b\":true}");
         }
     }
 
@@ -58174,10 +58174,7 @@ fn main() {
              }",
         );
         if let Some(out) = out {
-            assert_eq!(
-                out.trim(),
-                "{\"items\":[1.0,2.0,3.0],\"meta\":{\"v\":true}}"
-            );
+            assert_eq!(out.trim(), "{\"items\":[1,2,3],\"meta\":{\"v\":true}}");
         }
     }
 
@@ -58197,6 +58194,57 @@ fn main() {
         if let Some(out) = out {
             assert_eq!(out.trim(), "err");
         }
+    }
+
+    /// B-2026-07-30-15 — `Json.Int(i64)` under codegen: a constructed Int
+    /// stringifies without `.0`; 2^53 + 1 (unrepresentable in f64) survives a
+    /// parse + stringify round-trip exactly; float SYNTAX still round-trips as
+    /// `Number` with its fractional form; and the seventh variant participates
+    /// in `match` (both the make_int lowering arm and the offset-72 `int_val`
+    /// read in the lift walker). Twinned with `tests/json.rs`'s
+    /// `test_json_int_variant_exact_roundtrip` / `_match_destructure`.
+    #[test]
+    fn test_e2e_json_int_variant_exact_roundtrip() {
+        let Some(out) = run_program(
+            "fn describe(j: Json) -> String {\n\
+                 match j {\n\
+                     Json.Null => \"null\",\n\
+                     Json.Bool(b) => \"bool\",\n\
+                     Json.Number(f) => \"num\",\n\
+                     Json.Int(i) => \"int:\" + i.to_string(),\n\
+                     Json.String(s) => \"str\",\n\
+                     Json.Array(xs) => \"arr\",\n\
+                     Json.Object(kv) => \"obj\",\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let o: Json = Json.Object(Vec[(\"id\", Json.Int(1))]);\n\
+                 println(o.stringify());\n\
+                 match Json.parse(\"{\\\"n\\\":9007199254740993}\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 match Json.parse(\"[7, 2.5, 1.0]\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 println(Json.Int(-42).stringify());\n\
+                 match Json.parse(\"41\") {\n\
+                     Ok(j) => println(describe(j)),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 match Json.parse(\"4.5\") {\n\
+                     Ok(j) => println(describe(j)),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "{\"id\":1}\n{\"n\":9007199254740993}\n[7,2.5,1.0]\n-42\nint:41\nnum\n"
+        );
     }
 
     #[test]

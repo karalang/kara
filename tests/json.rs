@@ -20,8 +20,11 @@ fn run(source: &str) -> String {
 
 #[test]
 fn test_json_parse_roundtrip_object() {
-    // Locked design (i): all numbers stringify as f64 (`1` → `1.0`).
-    // Locked design (ii): Object keys preserved in input order.
+    // B-2026-07-30-15 revised locked design (i): an integer-syntax token
+    // parses as `Json.Int` and stringifies WITHOUT the historical `.0`
+    // (which Go's encoding/json refused into an int field); float syntax
+    // still round-trips as f64. Locked design (ii): Object keys preserved
+    // in input order.
     let output = run(
         "fn main() {\n\
              match Json.parse(\"{\\\"a\\\": 1, \\\"b\\\": \\\"hello\\\", \\\"c\\\": [true, null]}\") {\n\
@@ -31,8 +34,8 @@ fn test_json_parse_roundtrip_object() {
          }",
     );
     assert_eq!(
-        output, "{\"a\":1.0,\"b\":\"hello\",\"c\":[true,null]}\n",
-        "object round-trip should preserve keys and stringify numbers as f64"
+        output, "{\"a\":1,\"b\":\"hello\",\"c\":[true,null]}\n",
+        "object round-trip should preserve keys and integer syntax exactly"
     );
 }
 
@@ -44,14 +47,14 @@ fn test_json_parse_roundtrip_array() {
                  Err(e) => println(\"err\"),\n\
              }\n\
          }");
-    assert_eq!(output, "[1.0,2.5,\"x\",true,null]\n");
+    assert_eq!(output, "[1,2.5,\"x\",true,null]\n");
 }
 
 #[test]
 fn test_json_parse_roundtrip_primitives() {
     // One scalar at a time — number, string, bool, null. Each goes
-    // through parse + stringify and must come back byte-equivalent
-    // (modulo the int → f64 stringification rule from locked design (i)).
+    // through parse + stringify and must come back byte-equivalent —
+    // including the bare integer, since B-2026-07-30-15 (`Json.Int`).
     let output = run("fn main() {\n\
              match Json.parse(\"42\") {\n\
                  Ok(j) => println(j.stringify()),\n\
@@ -70,7 +73,7 @@ fn test_json_parse_roundtrip_primitives() {
                  Err(e) => println(\"err\"),\n\
              }\n\
          }");
-    assert_eq!(output, "42.0\n\"hi\"\ntrue\nnull\n");
+    assert_eq!(output, "42\n\"hi\"\ntrue\nnull\n");
 }
 
 #[test]
@@ -99,7 +102,7 @@ fn test_json_object_preserves_insertion_order() {
     // Locked design (ii): Object iterates in input insertion order, NOT
     // alphabetical. Backed by `Vec[(String, Json)]` on the Kāra side
     // and `serde_json` with `preserve_order` on the Rust side. If this
-    // test fails with `{"a":2.0,"m":3.0,"z":1.0}` (alphabetical), the
+    // test fails with `{"a":2,"m":3,"z":1}` (alphabetical), the
     // `preserve_order` feature was dropped from the runtime crate's
     // `serde_json` dependency.
     let output = run("fn main() {\n\
@@ -108,7 +111,7 @@ fn test_json_object_preserves_insertion_order() {
                  Err(e) => println(\"err\"),\n\
              }\n\
          }");
-    assert_eq!(output, "{\"z\":1.0,\"a\":2.0,\"m\":3.0}\n");
+    assert_eq!(output, "{\"z\":1,\"a\":2,\"m\":3}\n");
 }
 
 #[test]
@@ -134,4 +137,64 @@ fn test_to_json_manual_impl() {
              println(p.to_json().stringify());\n\
          }");
     assert_eq!(output, "{\"x\":1.0,\"y\":2.0}\n");
+}
+
+#[test]
+fn test_json_int_variant_exact_roundtrip() {
+    // B-2026-07-30-15 — `Json.Int(i64)`. Three pins:
+    //  * a constructed Int stringifies with no `.0` (Go's encoding/json
+    //    refuses `1.0` into an int field, so `{"id":1.0}` was not
+    //    interchangeable);
+    //  * 2^53 + 1 — unrepresentable in f64 — survives a parse + stringify
+    //    round-trip exactly (was silently truncated to ...992.0);
+    //  * float SYNTAX (`1.0`) still round-trips as `Json.Number`, keeping its
+    //    fractional form — the variant is chosen by the input token's syntax,
+    //    the serde_json / Go json.Number model.
+    let output = run("fn main() {\n\
+             let o: Json = Json.Object(Vec[(\"id\", Json.Int(1))]);\n\
+             println(o.stringify());\n\
+             match Json.parse(\"{\\\"n\\\":9007199254740993}\") {\n\
+                 Ok(j) => println(j.stringify()),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             match Json.parse(\"[7, 2.5, 1.0]\") {\n\
+                 Ok(j) => println(j.stringify()),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             println(Json.Int(-42).stringify());\n\
+         }");
+    assert_eq!(
+        output,
+        "{\"id\":1}\n{\"n\":9007199254740993}\n[7,2.5,1.0]\n-42\n"
+    );
+}
+
+#[test]
+fn test_json_int_match_destructure() {
+    // The seventh variant participates in `match` like the original six, and
+    // an integer-syntax parse lands in the `Int` arm while float syntax lands
+    // in `Number`.
+    let output = run("fn describe(j: Json) -> String {\n\
+             match j {\n\
+                 Json.Null => \"null\",\n\
+                 Json.Bool(b) => \"bool\",\n\
+                 Json.Number(f) => \"num\",\n\
+                 Json.Int(i) => \"int:\" + i.to_string(),\n\
+                 Json.String(s) => \"str\",\n\
+                 Json.Array(xs) => \"arr\",\n\
+                 Json.Object(kv) => \"obj\",\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             match Json.parse(\"41\") {\n\
+                 Ok(j) => println(describe(j)),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             match Json.parse(\"4.5\") {\n\
+                 Ok(j) => println(describe(j)),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             println(describe(Json.Int(99)));\n\
+         }");
+    assert_eq!(output, "int:41\nnum\nint:99\n");
 }

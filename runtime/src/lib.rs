@@ -545,6 +545,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_json_make_null,
         karac_runtime_json_make_bool,
         karac_runtime_json_make_number,
+        karac_runtime_json_make_int,
         karac_runtime_json_make_string,
         karac_runtime_json_alloc_items_buf,
         karac_runtime_json_alloc_keys_buf,
@@ -3634,7 +3635,10 @@ fn push_u32(out: &mut String, n: u32) {
 // keep the surface live.
 
 /// Tag byte for `KaracJsonValue`. Values 0..=5 in source-spec order:
-/// Null, Bool, Number, String, Array, Object. `#[repr(u8)]` for stable
+/// Null, Bool, Number, String, Array, Object; `Int = 6` was appended by
+/// B-2026-07-30-15 (an i64 must not round-trip through f64 — whole numbers
+/// emitted `1.0`, which Go's encoding/json refuses into an int field, and any
+/// magnitude past 2^53 was silently corrupted). `#[repr(u8)]` for stable
 /// FFI; layout pinned by `tests::test_karac_json_value_layout_pinned`.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3645,6 +3649,7 @@ pub enum KaracJsonTag {
     String = 3,
     Array = 4,
     Object = 5,
+    Int = 6,
 }
 
 /// FFI representation of a single Kāra `Json` enum node. The active
@@ -3678,6 +3683,12 @@ pub struct KaracJsonValue {
     pub obj_keys: *mut *mut std::os::raw::c_char,
     pub obj_vals: *mut *mut KaracJsonValue,
     pub obj_len: usize,
+    /// Active when `tag == KaracJsonTag::Int` (B-2026-07-30-15). Placed at
+    /// the END of the struct deliberately: codegen addresses this struct by
+    /// BYTE OFFSET (`src/codegen/json.rs`'s `KARAC_JSON_VALUE_*_OFFSET`
+    /// constants), so appending keeps every existing offset valid — offset 72,
+    /// pinned by `tests::test_karac_json_value_layout_pinned`.
+    pub int_val: i64,
 }
 
 /// FFI representation of a `serde_json::Error` location + message.
@@ -3709,6 +3720,7 @@ fn json_value_to_karac(value: &serde_json::Value) -> *mut KaracJsonValue {
             obj_keys: std::ptr::null_mut(),
             obj_vals: std::ptr::null_mut(),
             obj_len: 0,
+            int_val: 0,
         },
         serde_json::Value::Bool(b) => KaracJsonValue {
             tag: KaracJsonTag::Bool as u8,
@@ -3721,18 +3733,42 @@ fn json_value_to_karac(value: &serde_json::Value) -> *mut KaracJsonValue {
             obj_keys: std::ptr::null_mut(),
             obj_vals: std::ptr::null_mut(),
             obj_len: 0,
+            int_val: 0,
         },
-        serde_json::Value::Number(n) => KaracJsonValue {
-            tag: KaracJsonTag::Number as u8,
-            bool_val: false,
-            num_val: n.as_f64().unwrap_or(0.0),
-            str_ptr: std::ptr::null_mut(),
-            str_len: 0,
-            arr_items: std::ptr::null_mut(),
-            arr_len: 0,
-            obj_keys: std::ptr::null_mut(),
-            obj_vals: std::ptr::null_mut(),
-            obj_len: 0,
+        // B-2026-07-30-15 — variant chosen by the input token's SYNTAX, the
+        // serde_json / Go json.Number model: serde parses `7` as an integer
+        // Number (`as_i64` = Some) and `7.0` as a float Number (`as_i64` =
+        // None), so an integer that was exact in the input text round-trips
+        // as `Int` and re-stringifies without a `.0` and without 2^53
+        // truncation. A u64 past i64::MAX has no `Int` home and falls to the
+        // f64 arm (documented lossy — the Kāra payload is i64).
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => KaracJsonValue {
+                tag: KaracJsonTag::Int as u8,
+                bool_val: false,
+                num_val: 0.0,
+                str_ptr: std::ptr::null_mut(),
+                str_len: 0,
+                arr_items: std::ptr::null_mut(),
+                arr_len: 0,
+                obj_keys: std::ptr::null_mut(),
+                obj_vals: std::ptr::null_mut(),
+                obj_len: 0,
+                int_val: i,
+            },
+            None => KaracJsonValue {
+                tag: KaracJsonTag::Number as u8,
+                bool_val: false,
+                num_val: n.as_f64().unwrap_or(0.0),
+                str_ptr: std::ptr::null_mut(),
+                str_len: 0,
+                arr_items: std::ptr::null_mut(),
+                arr_len: 0,
+                obj_keys: std::ptr::null_mut(),
+                obj_vals: std::ptr::null_mut(),
+                obj_len: 0,
+                int_val: 0,
+            },
         },
         serde_json::Value::String(s) => {
             let bytes = s.as_bytes();
@@ -3754,6 +3790,7 @@ fn json_value_to_karac(value: &serde_json::Value) -> *mut KaracJsonValue {
                 obj_keys: std::ptr::null_mut(),
                 obj_vals: std::ptr::null_mut(),
                 obj_len: 0,
+                int_val: 0,
             }
         }
         serde_json::Value::Array(items) => {
@@ -3778,6 +3815,7 @@ fn json_value_to_karac(value: &serde_json::Value) -> *mut KaracJsonValue {
                 obj_keys: std::ptr::null_mut(),
                 obj_vals: std::ptr::null_mut(),
                 obj_len: 0,
+                int_val: 0,
             }
         }
         serde_json::Value::Object(map) => {
@@ -3810,6 +3848,7 @@ fn json_value_to_karac(value: &serde_json::Value) -> *mut KaracJsonValue {
                 obj_keys: keys_ptr,
                 obj_vals: vals_ptr,
                 obj_len,
+                int_val: 0,
             }
         }
     };
@@ -3835,6 +3874,12 @@ unsafe fn karac_to_json_value(node: *const KaracJsonValue) -> serde_json::Value 
         x if x == KaracJsonTag::Number as u8 => serde_json::Number::from_f64(n.num_val)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
+        // B-2026-07-30-15 — `Int` renders through `Number::from(i64)`, which
+        // serde stringifies with no fractional part and no f64 rounding, so
+        // `9007199254740993` survives exactly.
+        x if x == KaracJsonTag::Int as u8 => {
+            serde_json::Value::Number(serde_json::Number::from(n.int_val))
+        }
         x if x == KaracJsonTag::String as u8 => {
             if n.str_ptr.is_null() || n.str_len == 0 {
                 serde_json::Value::String(String::new())
@@ -4046,6 +4091,7 @@ pub extern "C" fn karac_runtime_json_make_null() -> *mut KaracJsonValue {
         obj_keys: std::ptr::null_mut(),
         obj_vals: std::ptr::null_mut(),
         obj_len: 0,
+        int_val: 0,
     }))
 }
 
@@ -4064,6 +4110,7 @@ pub extern "C" fn karac_runtime_json_make_bool(b: u8) -> *mut KaracJsonValue {
         obj_keys: std::ptr::null_mut(),
         obj_vals: std::ptr::null_mut(),
         obj_len: 0,
+        int_val: 0,
     }))
 }
 
@@ -4081,6 +4128,27 @@ pub extern "C" fn karac_runtime_json_make_number(n: f64) -> *mut KaracJsonValue 
         obj_keys: std::ptr::null_mut(),
         obj_vals: std::ptr::null_mut(),
         obj_len: 0,
+        int_val: 0,
+    }))
+}
+
+/// Construct a `KaracJsonValue::Int` (B-2026-07-30-15) — the exact-i64
+/// sibling of `karac_runtime_json_make_number`, so a Kāra `Json.Int(i)`
+/// stringifies with no `.0` and no f64 rounding past 2^53.
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_make_int(i: i64) -> *mut KaracJsonValue {
+    Box::into_raw(Box::new(KaracJsonValue {
+        tag: KaracJsonTag::Int as u8,
+        bool_val: false,
+        num_val: 0.0,
+        str_ptr: std::ptr::null_mut(),
+        str_len: 0,
+        arr_items: std::ptr::null_mut(),
+        arr_len: 0,
+        obj_keys: std::ptr::null_mut(),
+        obj_vals: std::ptr::null_mut(),
+        obj_len: 0,
+        int_val: i,
     }))
 }
 
@@ -4117,6 +4185,7 @@ pub unsafe extern "C" fn karac_runtime_json_make_string(
         obj_keys: std::ptr::null_mut(),
         obj_vals: std::ptr::null_mut(),
         obj_len: 0,
+        int_val: 0,
     }))
 }
 
@@ -4202,6 +4271,7 @@ pub extern "C" fn karac_runtime_json_make_array(
         obj_keys: std::ptr::null_mut(),
         obj_vals: std::ptr::null_mut(),
         obj_len: 0,
+        int_val: 0,
     }))
 }
 
@@ -4226,6 +4296,7 @@ pub extern "C" fn karac_runtime_json_make_object(
         obj_keys: keys,
         obj_vals: vals,
         obj_len: len,
+        int_val: 0,
     }))
 }
 
@@ -9376,7 +9447,10 @@ mod tests {
         //   obj_keys:  ptr-of-ptr   offset 48  (size 8)
         //   obj_vals:  ptr-of-ptr   offset 56  (size 8)
         //   obj_len:   usize        offset 64  (size 8)
-        assert_eq!(std::mem::size_of::<KaracJsonValue>(), 72);
+        //   int_val:   i64          offset 72  (size 8) — appended by
+        //                                       B-2026-07-30-15 so every
+        //                                       pre-existing offset is stable
+        assert_eq!(std::mem::size_of::<KaracJsonValue>(), 80);
         assert_eq!(std::mem::offset_of!(KaracJsonValue, tag), 0);
         assert_eq!(std::mem::offset_of!(KaracJsonValue, bool_val), 1);
         assert_eq!(std::mem::offset_of!(KaracJsonValue, num_val), 8);
@@ -9387,6 +9461,7 @@ mod tests {
         assert_eq!(std::mem::offset_of!(KaracJsonValue, obj_keys), 48);
         assert_eq!(std::mem::offset_of!(KaracJsonValue, obj_vals), 56);
         assert_eq!(std::mem::offset_of!(KaracJsonValue, obj_len), 64);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, int_val), 72);
     }
 
     #[test]
@@ -9634,10 +9709,55 @@ mod tests {
                 .to_string_lossy()
                 .into_owned()
         };
-        assert_eq!(stringified, r#"{"a":1.0,"b":[true,null]}"#);
+        // B-2026-07-30-15: an integer-syntax token parses as `Int` and
+        // stringifies without the historical `.0` (which Go's encoding/json
+        // refused into an int field).
+        assert_eq!(stringified, r#"{"a":1,"b":[true,null]}"#);
         unsafe {
             karac_runtime_json_free_string(s_ptr);
             karac_runtime_json_free_value(tree);
+        }
+    }
+
+    /// B-2026-07-30-15 — the three number shapes through parse + stringify:
+    /// integer syntax survives as `Int` (exact past 2^53), float syntax stays
+    /// `Number` (keeps its `.0`), and a Kāra-built `make_int` node prints with
+    /// no fractional part.
+    #[test]
+    fn test_karac_runtime_json_int_roundtrip_exact() {
+        let input = std::ffi::CString::new("{\"i\":9007199254740993,\"f\":2.5,\"w\":1.0}").unwrap();
+        let mut err = KaracJsonError {
+            line: 0,
+            column: 0,
+            message: std::ptr::null_mut(),
+        };
+        let tree = unsafe { karac_runtime_json_parse(input.as_ptr(), &mut err) };
+        assert!(!tree.is_null(), "parse should succeed");
+        let s_ptr = unsafe { karac_runtime_json_stringify(tree) };
+        let stringified = unsafe {
+            std::ffi::CStr::from_ptr(s_ptr)
+                .to_string_lossy()
+                .into_owned()
+        };
+        // 9007199254740993 = 2^53 + 1: unrepresentable in f64, exact in i64.
+        // `1.0` is FLOAT syntax, so it round-trips as a float, unchanged.
+        assert_eq!(stringified, r#"{"i":9007199254740993,"f":2.5,"w":1.0}"#);
+        unsafe {
+            karac_runtime_json_free_string(s_ptr);
+            karac_runtime_json_free_value(tree);
+        }
+
+        let node = karac_runtime_json_make_int(-42);
+        let s_ptr = unsafe { karac_runtime_json_stringify(node) };
+        let stringified = unsafe {
+            std::ffi::CStr::from_ptr(s_ptr)
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(stringified, "-42");
+        unsafe {
+            karac_runtime_json_free_string(s_ptr);
+            karac_runtime_json_free_value(node);
         }
     }
 

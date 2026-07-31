@@ -3661,6 +3661,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //   String  (tag=3) — 3 payload words ({data ptr, len, cap})
         //   Array   (tag=4) — 3 payload words (Vec[Json] = {data, len, cap})
         //   Object  (tag=5) — 3 payload words (Vec[(String, Json)] = {data, len, cap})
+        //   Int     (tag=6) — 1 payload word  (i64 at w0; B-2026-07-30-15)
         //
         // String/Array/Object's data buffer should be dropped at scope
         // exit. EnumDropKind::VecOrString does the standard `cap > 0 ?
@@ -3688,6 +3689,9 @@ impl<'ctx> super::Codegen<'ctx> {
             tags.insert("String".to_string(), 3u64);
             tags.insert("Array".to_string(), 4u64);
             tags.insert("Object".to_string(), 5u64);
+            // B-2026-07-30-15 — exact-integer variant, appended so the six
+            // original tags stay stable. One i64 payload word, no heap.
+            tags.insert("Int".to_string(), 6u64);
             let mut field_counts = HashMap::new();
             field_counts.insert("Null".to_string(), 0usize);
             field_counts.insert("Bool".to_string(), 1usize);
@@ -3695,6 +3699,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_counts.insert("String".to_string(), 1usize);
             field_counts.insert("Array".to_string(), 1usize);
             field_counts.insert("Object".to_string(), 1usize);
+            field_counts.insert("Int".to_string(), 1usize);
             let mut field_word_offsets = HashMap::new();
             field_word_offsets.insert("Null".to_string(), Vec::new());
             field_word_offsets.insert("Bool".to_string(), vec![(0, 1)]);
@@ -3702,6 +3707,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_word_offsets.insert("String".to_string(), vec![(0, 3)]);
             field_word_offsets.insert("Array".to_string(), vec![(0, 3)]);
             field_word_offsets.insert("Object".to_string(), vec![(0, 3)]);
+            field_word_offsets.insert("Int".to_string(), vec![(0, 1)]);
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("Null".to_string(), Vec::new());
             field_drop_kinds.insert("Bool".to_string(), vec![EnumDropKind::None]);
@@ -3709,6 +3715,7 @@ impl<'ctx> super::Codegen<'ctx> {
             field_drop_kinds.insert("String".to_string(), vec![EnumDropKind::VecOrString]);
             field_drop_kinds.insert("Array".to_string(), vec![EnumDropKind::VecOrString]);
             field_drop_kinds.insert("Object".to_string(), vec![EnumDropKind::VecOrString]);
+            field_drop_kinds.insert("Int".to_string(), vec![EnumDropKind::None]);
             self.enum_layouts.insert(
                 "Json".to_string(),
                 EnumLayout {

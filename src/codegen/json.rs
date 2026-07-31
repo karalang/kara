@@ -38,6 +38,9 @@ const JSON_TAG_NUMBER: u64 = 2;
 const JSON_TAG_STRING: u64 = 3;
 const JSON_TAG_ARRAY: u64 = 4;
 const JSON_TAG_OBJECT: u64 = 5;
+/// B-2026-07-30-15 — exact-integer variant, appended after the original six
+/// so their tags stay stable. One i64 payload word.
+const JSON_TAG_INT: u64 = 6;
 
 /// Stride in bytes of the elements stored in `Vec[Json]`. A Json enum
 /// occupies four i64 words (tag + 3 payload words — see
@@ -69,6 +72,10 @@ const KARAC_JSON_VALUE_ARR_LEN_OFFSET: u64 = 40;
 const KARAC_JSON_VALUE_OBJ_KEYS_OFFSET: u64 = 48;
 const KARAC_JSON_VALUE_OBJ_VALS_OFFSET: u64 = 56;
 const KARAC_JSON_VALUE_OBJ_LEN_OFFSET: u64 = 64;
+/// `int_val` sits at the END of `KaracJsonValue` (B-2026-07-30-15) so every
+/// prior offset is unchanged; pinned by the runtime's
+/// `test_karac_json_value_layout_pinned`.
+const KARAC_JSON_VALUE_INT_OFFSET: u64 = 72;
 
 /// Byte offsets within `KaracJsonError` (`#[repr(C)]` layout pinned by
 /// `runtime/src/lib.rs::tests::test_karac_json_error_layout_pinned`).
@@ -98,7 +105,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if segments.len() == 2 && segments[0] == "Json" {
                 return matches!(
                     segments[1].as_str(),
-                    "Null" | "Bool" | "Number" | "String" | "Array" | "Object"
+                    "Null" | "Bool" | "Number" | "String" | "Array" | "Object" | "Int"
                 );
             }
         }
@@ -112,7 +119,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if name == "Json" {
                     return matches!(
                         field.as_str(),
-                        "Null" | "Bool" | "Number" | "String" | "Array" | "Object"
+                        "Null" | "Bool" | "Number" | "String" | "Array" | "Object" | "Int"
                     );
                 }
             }
@@ -148,6 +155,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let null_bb = ctx.append_basic_block(func, "json.null");
         let bool_bb = ctx.append_basic_block(func, "json.bool");
         let number_bb = ctx.append_basic_block(func, "json.number");
+        let int_bb = ctx.append_basic_block(func, "json.int");
         let string_bb = ctx.append_basic_block(func, "json.string");
         let array_entry_bb = ctx.append_basic_block(func, "json.array.entry");
         let array_loop_head_bb = ctx.append_basic_block(func, "json.array.head");
@@ -178,6 +186,7 @@ impl<'ctx> super::Codegen<'ctx> {
             (i64_ty.const_int(JSON_TAG_STRING, false), string_bb),
             (i64_ty.const_int(JSON_TAG_ARRAY, false), array_entry_bb),
             (i64_ty.const_int(JSON_TAG_OBJECT, false), object_entry_bb),
+            (i64_ty.const_int(JSON_TAG_INT, false), int_bb),
         ];
         self.builder.build_switch(tag, default_bb, &cases).unwrap();
 
@@ -233,6 +242,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic();
         self.builder.build_return(Some(&num_ret)).unwrap();
+
+        // ── Int arm (B-2026-07-30-15) ───────────────────────────────
+        self.builder.position_at_end(int_bb);
+        let make_int = self
+            .module
+            .get_function("karac_runtime_json_make_int")
+            .expect("declared in Codegen::new");
+        // The i64 payload IS the word — no bit-cast, unlike Number.
+        let int_ret = self
+            .builder
+            .build_call(make_int, &[w0.into()], "json.int.call")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        self.builder.build_return(Some(&int_ret)).unwrap();
 
         // ── String arm ──────────────────────────────────────────────
         self.builder.position_at_end(string_bb);
@@ -805,6 +829,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let null_bb = ctx.append_basic_block(func, "lift.null");
         let bool_bb = ctx.append_basic_block(func, "lift.bool");
         let number_bb = ctx.append_basic_block(func, "lift.number");
+        let int_bb = ctx.append_basic_block(func, "lift.int");
         let string_bb = ctx.append_basic_block(func, "lift.string");
         let array_entry_bb = ctx.append_basic_block(func, "lift.array.entry");
         let array_loop_head_bb = ctx.append_basic_block(func, "lift.array.head");
@@ -861,6 +886,7 @@ impl<'ctx> super::Codegen<'ctx> {
             (i64_ty.const_int(JSON_TAG_STRING, false), string_bb),
             (i64_ty.const_int(JSON_TAG_ARRAY, false), array_entry_bb),
             (i64_ty.const_int(JSON_TAG_OBJECT, false), object_entry_bb),
+            (i64_ty.const_int(JSON_TAG_INT, false), int_bb),
         ];
         self.builder
             .build_switch(tag_i64, default_bb, &cases)
@@ -943,6 +969,22 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         pack_and_return(self, JSON_TAG_NUMBER, Some(num_bits), None, None);
+
+        // ── Int arm (B-2026-07-30-15) ──────────────────────────────
+        self.builder.position_at_end(int_bb);
+        let int_off = i64_ty.const_int(KARAC_JSON_VALUE_INT_OFFSET, false);
+        let int_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, ffi_ptr, &[int_off], "lift.int.p")
+                .unwrap()
+        };
+        // The i64 payload IS the word — no bit-cast, unlike Number.
+        let int_i64 = self
+            .builder
+            .build_load(i64_ty, int_addr, "lift.int.i64")
+            .unwrap()
+            .into_int_value();
+        pack_and_return(self, JSON_TAG_INT, Some(int_i64), None, None);
 
         // ── String arm: copy bytes into a Kāra-owned buffer. ───────
         self.builder.position_at_end(string_bb);

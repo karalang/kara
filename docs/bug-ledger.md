@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 103 | 1 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
-| missing-feature | 72 | 1 |
+| missing-feature | 72 | 0 |
 | false-positive | 52 | 0 |
 | run-vs-build | 49 | 1 |
 | perf | 40 | 3 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 562 | 6 |
+| codegen | 562 | 5 |
 | typecheck | 104 | 0 |
-| interp | 81 | 2 |
+| interp | 81 | 1 |
 | ownership | 33 | 0 |
 | autopar | 24 | 0 |
 | other | 21 | 0 |
@@ -124,22 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **780 surfaced · 6 open · 766 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **780 surfaced · 5 open · 767 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve is ~2.5-2.9x behind BOTH Rust and C on the sequential lane -- the corpus's largest genuine deficit. Cause is quantitatively CONSISTENT with B-2026-07-30-5 (VecDeque.pop_front O(n)): at the measured 3.61 G elem-moves/s, an average queue depth of ~21k-23.5k of n=50k accounts for the whole gap. Confirming it needs one number -- the kata's average queue depth. | — |
 | B-2026-07-30-5 | 2026-07-30 | codegen | medium | VecDeque.pop_front is O(n) (memmove per pop), making a DEEP queue drain O(n^2) — real, but NOT the cause of B-2026-07-30-4 | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site. Still silent: Map values, Option/Result payloads, non-let tuple positions. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
-| B-2026-07-30-15 | 2026-07-30 | codegen+interp | high | `Json` has no integer variant — every i64 serializes through f64, so whole numbers emit `1.0` (which Go's encoding/json REFUSES into an int field) and any value past 2^53 is silently corrupted. Both defects survive a `Json.parse` round-trip, so a service cannot echo an integer field unchanged. | — |
 | B-2026-07-31-9 | 2026-07-31 | codegen | medium | The `providers { R => v } in { body }` BLOCK form emits NOTHING under codegen/JIT — even a read-only `R.get()` — while the interpreter runs it correctly. A silent no-output run-vs-build divergence for the block sugar; the `with_provider[R](v, ||{})` call form works on both backends. | src/codegen (providers-block lowering); interp path src/interpreter/eval_call.rs eval_providers_block |
 | B-2026-07-31-10 | 2026-07-31 | codegen | medium | `body_is_memory_bound` classifies a 7-tap vector CONVOLUTION as memory-bound — it keys on "has an index read and no substantial CALL" and cannot see that the body's work is a runtime-bounded nested LOOP. Narrowly worked around for the indexed-write fan-out (measured 21% of wall time on Prism's Lanczos); the REDUCTION path still carries it. | src/par_cost.rs (body_is_memory_bound / MemoryBoundDetector) |
 
-### Fixed (766)
+### Fixed (767)
 
-<details><summary>766 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>767 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -898,6 +897,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **780 surfaced 
 | B-2026-07-30-12 | codegen | medium | A by-value owned-struct arg that the callee RETURNS mishandled its caller temp TWO ways: a fn-call arg (`pass(mk())`) leaked the orphaned buffer, and… | 3ee768a |
 | B-2026-07-30-13 | typecheck | low | An arithmetic mismatch whose wrong operand is an Option/Result was reported as an integer/floating-point mix, naming a float type that appears nowher… | 3981fef |
 | B-2026-07-30-14 | typecheck | high | A MAP LITERAL typed as `HashMap<K, V>` — a name Kāra source cannot write — so it matched no annotation: `let m: Map[String, i64] = Map["x": 1];` fail… | b9995ce |
+| B-2026-07-30-15 | codegen+interp | high | `Json` has no integer variant — every i64 serializes through f64, so whole numbers emit `1.0` (which Go's encoding/json REFUSES into an int field) an… | PENDING |
 | B-2026-07-30-16 | typecheck+codegen+interp | high | `File.sync_all()` / `sync_data()` — the durability API design.md:9150 mandates — TYPECHECKS CLEAN but is unimplemented in codegen AND the interpreter… | 38808e0 |
 | B-2026-07-30-17 | typecheck | medium | Map LOOKUP (`get` / `get_or` / `contains_key` / `remove`) rejected a borrowed key: `m.get(key)` where `key: ref String` failed with `expected 'String… | 097f0a4 |
 | B-2026-07-30-18 | codegen | high | SILENT WRONG OUTPUT + OUT-OF-BOUNDS READ (run-vs-build): a `ref Slice[T]` / `ref Vec[T]` PARAM forwarded to a BY-VALUE `Slice[T]` parameter is read a… | ccf4053a |

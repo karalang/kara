@@ -996,10 +996,19 @@ pub(super) fn serde_json_to_kara_json(v: &serde_json::Value) -> Value {
     let (variant, data) = match v {
         serde_json::Value::Null => ("Null", EnumData::Unit),
         serde_json::Value::Bool(b) => ("Bool", EnumData::Tuple(vec![Value::Bool(*b)])),
-        serde_json::Value::Number(n) => (
-            "Number",
-            EnumData::Tuple(vec![Value::Float(n.as_f64().unwrap_or(0.0))]),
-        ),
+        // B-2026-07-30-15 — variant by the input token's SYNTAX (the
+        // serde_json / Go json.Number model): serde parses `7` as an integer
+        // Number (`as_i64` = Some) and `7.0` as a float (`as_i64` = None), so
+        // an integer that was exact in the input round-trips as `Int` — no
+        // `.0` on re-stringify, no truncation past 2^53. A u64 beyond
+        // i64::MAX falls to the f64 arm (documented lossy; the payload is i64).
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => ("Int", EnumData::Tuple(vec![Value::Int(i)])),
+            None => (
+                "Number",
+                EnumData::Tuple(vec![Value::Float(n.as_f64().unwrap_or(0.0))]),
+            ),
+        },
         serde_json::Value::String(s) => ("String", EnumData::Tuple(vec![Value::String(s.clone())])),
         serde_json::Value::Array(items) => {
             let xs: Vec<Value> = items.iter().map(serde_json_to_kara_json).collect();
@@ -1071,6 +1080,14 @@ pub(super) fn kara_json_to_serde_json(v: &Value) -> serde_json::Value {
                     .map(serde_json::Value::Number)
                     .unwrap_or(serde_json::Value::Null)
             }
+            _ => serde_json::Value::Null,
+        },
+        // B-2026-07-30-15 — `Int` renders through `Number::from(i64)`: no
+        // fractional part, no f64 rounding, so 2^53+1 survives exactly. A
+        // float payload in the Int slot (defensive) truncates.
+        "Int" => match payload.first() {
+            Some(Value::Int(i)) => serde_json::Value::Number(serde_json::Number::from(*i)),
+            Some(Value::Float(f)) => serde_json::Value::Number(serde_json::Number::from(*f as i64)),
             _ => serde_json::Value::Null,
         },
         "String" => match payload.first() {
