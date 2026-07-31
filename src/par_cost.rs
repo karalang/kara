@@ -114,13 +114,73 @@ pub fn fanout_verdict(
     program: Option<&Program>,
     bound_references_param: bool,
 ) -> FanoutVerdict {
-    if body_is_memory_bound(body) {
-        return FanoutVerdict::DeclinedMemoryBound;
-    }
+    fanout_verdict_inner(
+        body,
+        end_expr,
+        lo_expr,
+        program,
+        bound_references_param,
+        false,
+    )
+}
+
+/// [`fanout_verdict`] for the **indexed-write** fan-out shape
+/// (`codegen/disjoint_par.rs`), which differs in one gate.
+///
+/// `body_is_memory_bound` asks "does the body read memory and make no
+/// substantial CALL", and it is right for the scalar reduction it was
+/// calibrated on (kata-153's `let x = nums[i]; if x < m { m = x; }`). It has no
+/// notion of a body whose work is a runtime-bounded nested LOOP, so it
+/// classifies a convolution as memory-streaming. Measured on Prism's Lanczos
+/// vertical pass — a ~7-tap `Vector[f64,2]` FMA per output pixel — the gate
+/// cost 21% of wall time (1600x1200 -> 800x600, 4 cores, 9 runs, median:
+/// 43.8 ms declined vs 34.5 ms fanned out, with user-CPU flat, so the parallel
+/// work was not being wasted). It also made converting that kernel to the
+/// natural loop form a REGRESSION against the hand-rolled band fan-out it
+/// replaced, which is not something to ship to a live app.
+///
+/// So for this shape the memory-bound gate is skipped when the body already
+/// scores at least one nested loop's worth of work — reusing
+/// [`VARIABLE_K_PER_ITER_FLOOR_UNITS`], the constant the cost model already
+/// uses to mean exactly that, rather than inventing a second threshold.
+///
+/// Deliberately NOT applied to the reduction path: that calibration was set
+/// against reduction benchmarks, and re-tuning it belongs in a slice that can
+/// re-run them. `B-2026-07-31-10` tracks the general fix.
+pub fn fanout_verdict_indexed_writes(
+    body: &Block,
+    end_expr: &Expr,
+    lo_expr: Option<&Expr>,
+    program: Option<&Program>,
+    bound_references_param: bool,
+) -> FanoutVerdict {
+    fanout_verdict_inner(
+        body,
+        end_expr,
+        lo_expr,
+        program,
+        bound_references_param,
+        true,
+    )
+}
+
+fn fanout_verdict_inner(
+    body: &Block,
+    end_expr: &Expr,
+    lo_expr: Option<&Expr>,
+    program: Option<&Program>,
+    bound_references_param: bool,
+    nested_loop_beats_memory_bound: bool,
+) -> FanoutVerdict {
     let per_iter_cost = match program {
         Some(prog) => CostEstimator::new(prog).estimate_body(body),
         None => estimate_body_cost_units(body),
     };
+    let substantial =
+        nested_loop_beats_memory_bound && per_iter_cost >= VARIABLE_K_PER_ITER_FLOOR_UNITS;
+    if !substantial && body_is_memory_bound(body) {
+        return FanoutVerdict::DeclinedMemoryBound;
+    }
     if let Some(k) = const_eval_iter_count(end_expr, lo_expr) {
         if k.saturating_mul(per_iter_cost) < REDUCE_DISPATCH_THRESHOLD_UNITS {
             return FanoutVerdict::DeclinedBelowCostThreshold;

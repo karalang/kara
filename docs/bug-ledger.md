@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 72 | 1 |
 | false-positive | 52 | 0 |
 | run-vs-build | 49 | 1 |
-| perf | 39 | 2 |
+| perf | 40 | 3 |
 | crash | 32 | 0 |
 | soundness | 30 | 0 |
 | diagnostics | 24 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 561 | 5 |
+| codegen | 562 | 6 |
 | typecheck | 104 | 0 |
 | interp | 81 | 2 |
 | ownership | 33 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **779 surfaced · 5 open · 766 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **780 surfaced · 6 open · 766 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **779 surfaced 
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site. Still silent: Map values, Option/Result payloads, non-let tuple positions. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-30-15 | 2026-07-30 | codegen+interp | high | `Json` has no integer variant — every i64 serializes through f64, so whole numbers emit `1.0` (which Go's encoding/json REFUSES into an int field) and any value past 2^53 is silently corrupted. Both defects survive a `Json.parse` round-trip, so a service cannot echo an integer field unchanged. | — |
 | B-2026-07-31-9 | 2026-07-31 | codegen | medium | The `providers { R => v } in { body }` BLOCK form emits NOTHING under codegen/JIT — even a read-only `R.get()` — while the interpreter runs it correctly. A silent no-output run-vs-build divergence for the block sugar; the `with_provider[R](v, ||{})` call form works on both backends. | src/codegen (providers-block lowering); interp path src/interpreter/eval_call.rs eval_providers_block |
+| B-2026-07-31-10 | 2026-07-31 | codegen | medium | `body_is_memory_bound` classifies a 7-tap vector CONVOLUTION as memory-bound — it keys on "has an index read and no substantial CALL" and cannot see that the body's work is a runtime-bounded nested LOOP. Narrowly worked around for the indexed-write fan-out (measured 21% of wall time on Prism's Lanczos); the REDUCTION path still carries it. | src/par_cost.rs (body_is_memory_bound / MemoryBoundDetector) |
 
 ### Fixed (766)
 

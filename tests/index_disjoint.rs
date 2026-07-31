@@ -343,6 +343,85 @@ fn test_inclusive_inner_range_widens_the_residual_bound() {
     );
 }
 
+#[test]
+fn test_rgba_lane_writes_share_one_footprint() {
+    // The canonical image-kernel write pattern, and the shape that drove the
+    // span formulation: four writes to consecutive lanes of one pixel, sharing
+    // a stride but differing by a constant lane offset.
+    //
+    // An earlier rule required every write to satisfy `Rmin >= 0` and
+    // `Rmax < stride` INDEPENDENTLY, which forced all writes to share a base
+    // and rejected this outright — caught by converting Prism's real Lanczos
+    // horizontal pass, where it declined as `stride_mismatch`. The property is
+    // weaker than that rule: iteration `v` writes `{v*S + t}` for a
+    // v-independent offset set `T`, and two iterations collide only if some
+    // `t1 - t2` equals a nonzero multiple of `S`. So the condition is
+    // `max(T) - min(T) < S`, nothing about where `T` sits.
+    assert_proven(
+        &program(
+            r#"fn k(h: i64, w: i64, out: mut Slice[f64]) {
+                for y in 0..h {
+                    let mut x: i64 = 0;
+                    while x < w {
+                        let o = (y * w + x) * 4;
+                        out[o] = 1.0;
+                        out[o + 1] = 2.0;
+                        out[o + 2] = 3.0;
+                        out[o + 3] = 4.0;
+                        x = x + 1;
+                    }
+                }
+            }"#,
+        ),
+        "out",
+        "4 * w",
+        "0",
+    );
+}
+
+#[test]
+fn test_lane_writes_spanning_past_the_stride_still_decline() {
+    // The counterpart: five lane writes against a stride of only four per
+    // column. `max(T) - min(T)` reaches `4*w`, one past `S - 1`, so iteration
+    // `y` runs into `y + 1`. The relaxation above must not swallow this.
+    assert_tag(
+        &program(
+            r#"fn k(h: i64, w: i64, out: mut Slice[f64]) {
+                for y in 0..h {
+                    let mut x: i64 = 0;
+                    while x < w {
+                        let o = (y * w + x) * 4;
+                        out[o] = 1.0;
+                        out[o + 4] = 5.0;
+                        x = x + 1;
+                    }
+                }
+            }"#,
+        ),
+        "footprint_overlap",
+    );
+}
+
+#[test]
+fn test_atom_sign_facts_survive_to_the_deferred_span_check() {
+    // `out[y * w]` with no `w` term in the residual needs `w >= 1`, which comes
+    // from the enclosing `for x in 0..w`. The span check runs AFTER the walk
+    // (it is a property of all writes together), by which point the walk has
+    // restored its scoped fact sets — so the facts must travel with the
+    // recorded extent. Without that they were gone by check time and this
+    // correct kernel declined.
+    assert_proven(
+        &program(
+            r#"fn k(h: i64, w: i64, out: mut Slice[i64]) {
+                for y in 0..h { for x in 0..w { out[y * w] = x; } }
+            }"#,
+        ),
+        "out",
+        "w",
+        "0",
+    );
+}
+
 // ── Declined: the shapes the slice scopes out ───────────────────
 
 #[test]

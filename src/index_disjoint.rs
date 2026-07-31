@@ -412,6 +412,24 @@ struct IvBound {
     hi_exclusive: SymPoly,
 }
 
+/// One indexed write's offset range, plus the atom sign facts that held **at
+/// that write's position in the walk**.
+///
+/// Carrying the facts is not bookkeeping — it is required for correctness. A
+/// fact like "`w >= 1`" comes from an enclosing `for x in 0..w`, and the walk
+/// restores its fact sets on the way out of that loop. The span check runs
+/// after the walk (it is a property of all writes together), by which point
+/// those sets are empty; without the snapshot, `out[y * w]` inside
+/// `for x in 0..w` stops discharging `w - 1 >= 0` and a correct kernel starts
+/// declining.
+#[derive(Clone, Debug)]
+struct Extent {
+    lo: SymPoly,
+    hi: SymPoly,
+    nonneg: HashSet<String>,
+    positive: HashSet<String>,
+}
+
 // ── Verdicts ────────────────────────────────────────────────────
 
 /// Why a loop's indexed writes are *not* provably disjoint.
@@ -734,18 +752,62 @@ pub fn prove_disjoint_indexed_writes(
         nonneg: HashSet::new(),
         positive: HashSet::new(),
         strides: BTreeMap::new(),
+        extents: BTreeMap::new(),
         write_counts: BTreeMap::new(),
         inner_loop_depth: 0,
     };
     prover.walk_block(body)?;
 
+    // ── The span check. ──
+    //
+    // Iteration `v`'s writes to one target land at `{v*S + t}` for a
+    // v-INDEPENDENT set of offsets `T`. Two iterations collide iff some
+    // `t1 - t2 == (v2 - v1) * S`, whose magnitude is at least `S`. So the whole
+    // condition is `max(T) - min(T) <= S - 1` — the union of a target's writes
+    // must span less than one stride.
+    //
+    // Checked pairwise over the recorded extents because symbolic min/max is
+    // not decidable in general, while `provably_nonneg` on each difference is.
+    // Note what this does NOT require: that `T` sit inside `[0, S)`. An earlier
+    // formulation demanded exactly that — `Rmin >= 0` and `Rmax < S` per write
+    // — and it rejected the canonical RGBA image-kernel shape, four writes at
+    // `tmp[o]`..`tmp[o+3]` differing only in a constant lane offset. That shape
+    // is disjoint; the old rule was simply stronger than the property.
+    for (target, extents) in &prover.extents {
+        let stride = &prover.strides[target];
+        for a in extents.iter() {
+            for b in extents.iter() {
+                let span = a.hi.sub(&b.lo).ok_or(DisjointDecline::SymbolicOverflow)?;
+                let slack = stride
+                    .sub(&span)
+                    .and_then(|d| d.sub(&SymPoly::constant(1)))
+                    .ok_or(DisjointDecline::SymbolicOverflow)?;
+                // Facts from BOTH writes are available: a collision between
+                // them requires both to execute, and an atom an enclosing loop
+                // forces positive is loop-invariant, so the fact holds for the
+                // whole loop once that write runs at all.
+                let nonneg: HashSet<String> = a.nonneg.union(&b.nonneg).cloned().collect();
+                let positive: HashSet<String> = a.positive.union(&b.positive).cloned().collect();
+                if !slack.provably_nonneg(&nonneg, &positive) {
+                    return Err(DisjointDecline::FootprintOverlap);
+                }
+            }
+        }
+    }
+
     let footprints: Vec<TargetFootprint> = prover
         .strides
         .iter()
-        .map(|(target, (stride, base))| TargetFootprint {
+        .map(|(target, stride)| TargetFootprint {
             target: target.clone(),
             stride: stride.render(),
-            base: base.render(),
+            // The first write's low offset, in source order. With several
+            // writes the proven property is about the union's span, not any one
+            // base; this names where the tiling starts.
+            base: prover.extents[target]
+                .first()
+                .map(|e| e.lo.render())
+                .unwrap_or_else(|| "0".to_string()),
             writes: prover.write_counts.get(target).copied().unwrap_or(0),
         })
         .collect();
@@ -792,12 +854,14 @@ struct Prover<'a> {
     /// upper bound is that atom must have executed to reach here. Saved and
     /// restored around each nested loop.
     positive: HashSet<String>,
-    /// Per-target `(stride, base)`, fixed by the first proven write and required
-    /// to match for every later write to the same target. Both must match: two
-    /// writes at the same stride but different bases tile the buffer at
-    /// different offsets, and `[dy*S + B1, ...)` can overlap
-    /// `[(dy+1)*S + B2, ...)` when `B2 < B1`.
-    strides: BTreeMap<String, (SymPoly, SymPoly)>,
+    /// Per-target stride, fixed by the first proven write and required to match
+    /// for every later write to the same target. Two writes at different
+    /// strides tile the buffer differently and their ranges cross.
+    strides: BTreeMap<String, SymPoly>,
+    /// Per-target list of recorded write extents. Disjointness is a property of
+    /// this whole set, not of each write separately; see the span check in
+    /// [`prove_disjoint_indexed_writes`].
+    extents: BTreeMap<String, Vec<Extent>>,
     write_counts: BTreeMap<String, usize>,
     /// Nesting depth of loops *inside* the loop being parallelized. An
     /// unlabeled `break` at depth 0 exits the outer loop.
@@ -1048,13 +1112,12 @@ impl Prover<'_> {
             return Err(DisjointDecline::InvariantWriteSlot);
         }
 
-        // The loop-invariant part is the tiling's BASE, not part of the
-        // residual: it shifts every iteration's range by the same amount, so it
-        // can never make two iterations collide. Folding it into the residual
-        // instead would reject `out[offset + dy*w + x]`, which is disjoint.
-        let base = form.base.clone();
-        let mut r_min = SymPoly::zero();
-        let mut r_max = SymPoly::zero();
+        // Offsets are measured from `stride * loop_var`, so the loop-invariant
+        // part of the index rides along with the residual: it shifts every
+        // iteration's range by the same amount and can never make two
+        // iterations collide.
+        let mut r_min = form.base.clone();
+        let mut r_max = form.base.clone();
         for (name, coeff) in &form.iv {
             if name == &self.loop_var {
                 continue;
@@ -1089,33 +1152,27 @@ impl Prover<'_> {
                 .ok_or(DisjointDecline::SymbolicOverflow)?;
         }
 
-        // Obligation 1: the residual never reaches below the range base.
-        if !r_min.provably_nonneg(&self.nonneg, &self.positive) {
-            return Err(DisjointDecline::FootprintOverlap);
-        }
-        // Obligation 2: `r_max <= stride - 1`, i.e. the residual never reaches
-        // the next iteration's base. Together with (1) this also forces
-        // `stride >= 1` whenever a write happens, which is what makes the
-        // half-open ranges pairwise disjoint.
-        let slack = stride
-            .sub(&r_max)
-            .and_then(|d| d.sub(&SymPoly::constant(1)))
-            .ok_or(DisjointDecline::SymbolicOverflow)?;
-        if !slack.provably_nonneg(&self.nonneg, &self.positive) {
-            return Err(DisjointDecline::FootprintOverlap);
-        }
-
         // Writes to one target must agree on the stride: two different strides
         // tile the buffer differently and their ranges cross.
         match self.strides.get(target) {
-            Some((s, b)) if *s != stride || *b != base => {
-                return Err(DisjointDecline::StrideMismatch)
-            }
+            Some(s) if *s != stride => return Err(DisjointDecline::StrideMismatch),
             Some(_) => {}
             None => {
-                self.strides.insert(target.to_string(), (stride, base));
+                self.strides.insert(target.to_string(), stride);
             }
         }
+        // The span check is deferred: it is a property of ALL writes to this
+        // target taken together, so it cannot be discharged one write at a
+        // time. Record the extent and check the set once the walk is done.
+        self.extents
+            .entry(target.to_string())
+            .or_default()
+            .push(Extent {
+                lo: r_min,
+                hi: r_max,
+                nonneg: self.nonneg.clone(),
+                positive: self.positive.clone(),
+            });
         *self.write_counts.entry(target.to_string()).or_insert(0) += 1;
         Ok(())
     }

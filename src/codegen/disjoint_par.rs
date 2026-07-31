@@ -52,7 +52,7 @@
 //! that is the A/B lever the differential harness sub-slice drives.
 
 use crate::ast::{Block, StmtKind};
-use crate::par_cost::{extract_loop_shape, fanout_verdict};
+use crate::par_cost::{extract_loop_shape, fanout_verdict_indexed_writes};
 
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -121,7 +121,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .lo_expr
                 .as_ref()
                 .is_some_and(|e| self.expr_references_current_param(e));
-        let verdict = fanout_verdict(
+        let verdict = fanout_verdict_indexed_writes(
             &shape.body,
             &shape.end_expr,
             shape.lo_expr.as_ref(),

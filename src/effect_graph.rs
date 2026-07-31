@@ -416,7 +416,7 @@ fn disjoint_loop_verdict(
             .lo_expr
             .as_ref()
             .is_some_and(|e| expr_mentions_any_name(e, &params));
-    Some(crate::par_cost::fanout_verdict(
+    Some(crate::par_cost::fanout_verdict_indexed_writes(
         &shape.body,
         &shape.end_expr,
         shape.lo_expr.as_ref(),
