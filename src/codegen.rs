@@ -7999,14 +7999,6 @@ impl<'ctx> Codegen<'ctx> {
 
     /// Set the source filename used for `karac_error_trace_push` calls at
     /// `?` failure sites. See the field doc on `source_filename`.
-    /// Load the head-index deque eligibility set (`crate::deque_head`).
-    ///
-    /// Computed from the AST, plain data — no LLVM type crosses the boundary,
-    /// so codegen containment holds (CLAUDE.md § Codegen architecture).
-    fn load_deque_head_locals(&mut self, program: &crate::ast::Program) {
-        self.deque_head_locals = crate::deque_head::eligible_deque_locals(program);
-    }
-
     fn set_source_filename(&mut self, filename: Option<&str>) {
         self.source_filename = filename.map(|s| s.to_string());
     }
