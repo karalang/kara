@@ -1268,6 +1268,13 @@ impl<'a> super::Interpreter<'a> {
                 ..
             } => {
                 let val = self.eval_expr_inner(value);
+                // Poison discipline (B-2026-07-31-15): a faulted scrutinee must
+                // propagate — without this the poison Unit falls into
+                // `try_match_pattern`, misses, and runs the `else` block
+                // spuriously on an error path that should unwind.
+                if let Some(cf) = self.pending_cf.take() {
+                    return Err(cf);
+                }
                 // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`
                 // (both edges), mirroring codegen — on the miss edge AFTER the
                 // else block runs (matching codegen's drop-during-return order).
@@ -1297,6 +1304,17 @@ impl<'a> super::Interpreter<'a> {
             }
             StmtKind::Assign { target, value } => {
                 let val = self.eval_expr_inner(value);
+                // A faulted RHS (index OOB, unwrap of None, …) or a control-flow
+                // signal escaping a closure body (`break` out of an enclosing
+                // loop through a `with_provider` body, B-2026-07-31-15) sets
+                // `pending_cf` and yields a poison value. Propagate the signal
+                // instead of storing the poison into the target — `Let` and
+                // `Expr` statements already do; storing first corrupted the
+                // binding (an i64 accumulator became Unit) before the loop
+                // machinery ever saw the `break`.
+                if let Some(cf) = self.pending_cf.take() {
+                    return Err(cf);
+                }
                 if !self.assign_to_place(target, val) {
                     unreachable!(
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",
@@ -1306,7 +1324,17 @@ impl<'a> super::Interpreter<'a> {
             }
             StmtKind::CompoundAssign { target, op, value } => {
                 let current = self.eval_expr_inner(target);
+                // Same poison discipline as `Assign` (B-2026-07-31-15): a
+                // faulted operand must propagate, not feed `eval_binary`
+                // (whose variant match would hit an internal unreachable on
+                // the poison Unit) and then overwrite the target.
+                if let Some(cf) = self.pending_cf.take() {
+                    return Err(cf);
+                }
                 let rhs = self.eval_expr_inner(value);
+                if let Some(cf) = self.pending_cf.take() {
+                    return Err(cf);
+                }
                 let bin_op = match op {
                     CompoundOp::Add => BinOp::Add,
                     CompoundOp::Sub => BinOp::Sub,

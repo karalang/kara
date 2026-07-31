@@ -7794,6 +7794,132 @@ fn test_with_provider_mut_ref_self_mutates_heap_field() {
     assert_eq!(output, "3\n");
 }
 
+// ── Poison discipline on Assign/CompoundAssign/LetElse (B-2026-07-31-15) ──
+//
+// A control-flow signal escaping an expression (a `break` out of an
+// enclosing loop through a `with_provider` closure body, or through a plain
+// block expression) reaches the statement layer as `pending_cf` plus a
+// poison Unit value. The `Assign` arm used to store the poison into the
+// target BEFORE anyone checked the pending signal, so an i64 accumulator
+// became Unit and the function returned `()` from an i64 signature (the
+// codegen twins in tests/codegen.rs print the correct value). Same class:
+// `CompoundAssign` fed the poison into `eval_binary`, and `LetElse` fell
+// into the `else` block spuriously.
+
+#[test]
+fn test_break_through_with_provider_body_does_not_corrupt_assign_target() {
+    // The B-2026-07-31-11 ledger repro shape: acc accumulates 0+1+2, the
+    // closure breaks when read() == 3, and the fn must return 3 — not Unit.
+    let output = run("trait Counter { fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }
+         fn brk() -> i64 with reads(Ctr) {
+             let mut acc = 0;
+             for i in 0..5 {
+                 acc = acc + with_provider[Ctr](InMem { n: i }, || {
+                     if read() == 3 { break; }
+                     read()
+                 });
+             }
+             acc
+         }
+         fn main() with reads(Ctr) { println(f\"{brk()}\"); }");
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_continue_through_with_provider_body_skips_iteration_only() {
+    // `continue` is the sibling signal: skip i == 2's accumulation, keep the
+    // loop running. Pre-fix the poison store corrupted acc to Unit and the
+    // NEXT iteration died on `Unit + Int`.
+    let output = run("trait Counter { fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }
+         fn cont() -> i64 with reads(Ctr) {
+             let mut acc = 0;
+             for i in 0..5 {
+                 acc = acc + with_provider[Ctr](InMem { n: i }, || {
+                     if read() == 2 { continue; }
+                     read()
+                 });
+             }
+             acc
+         }
+         fn main() with reads(Ctr) { println(f\"{cont()}\"); }");
+    assert_eq!(output, "8\n");
+}
+
+#[test]
+fn test_break_through_provider_body_compound_assign_target_untouched() {
+    // CompoundAssign leg: `acc += <poison>` must propagate the break without
+    // running the `+` on the poison (which hit eval_binary's internal
+    // unreachable) or writing the target.
+    let output = run("trait Counter { fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }
+         fn cmp() -> i64 with reads(Ctr) {
+             let mut acc = 100;
+             for i in 0..5 {
+                 acc += with_provider[Ctr](InMem { n: i }, || {
+                     if read() == 3 { break; }
+                     read()
+                 });
+             }
+             acc
+         }
+         fn main() with reads(Ctr) { println(f\"{cmp()}\"); }");
+    assert_eq!(output, "103\n");
+}
+
+#[test]
+fn test_break_through_provider_body_let_else_does_not_run_else() {
+    // LetElse leg: the poison scrutinee used to MISS the pattern and run the
+    // else block spuriously (adding 1000) instead of propagating the break.
+    let output = run("trait Counter { fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }
+         fn le() -> i64 with reads(Ctr) {
+             let mut acc = 0;
+             for i in 0..5 {
+                 let Some(v) = with_provider[Ctr](InMem { n: i }, || {
+                     if read() == 3 { break; }
+                     Some(read())
+                 }) else {
+                     acc = acc + 1000;
+                     continue
+                 }
+                 acc = acc + v;
+             }
+             acc
+         }
+         fn main() with reads(Ctr) { println(f\"{le()}\"); }");
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_break_out_of_block_expr_assign_rhs_no_providers() {
+    // The provider-free minimal shape of the same statement-level bug: a
+    // `break` escaping a block expression in an Assign RHS. No closures, no
+    // resources — just the poison-store ordering.
+    let output = run("fn f() -> i64 {
+             let mut acc = 0;
+             for i in 0..5 {
+                 acc = acc + { if i == 3 { break; } i };
+             }
+             acc
+         }
+         fn main() { println(f\"{f()}\"); }");
+    assert_eq!(output, "3\n");
+}
+
 #[test]
 fn test_with_provider_ref_self_does_not_rebind_provider() {
     // A `ref self` reader must NOT trigger a write-back (it can't mutate), so

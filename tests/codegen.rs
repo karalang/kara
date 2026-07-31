@@ -13224,9 +13224,9 @@ fn main() {
         // cleanup depth), and the next iteration pushes a fresh frame onto a
         // healthy stack. acc accumulates 0+1+2, breaks when read() == 3.
         //
-        // Codegen-only assertion: the interpreter currently mis-handles this
-        // shape (returns unit from an i64 fn — filed separately), so this
-        // pins the type-sound transparent-break behaviour codegen has.
+        // The interpreter agrees since B-2026-07-31-15 (its `Assign` arm used
+        // to store the poison Unit before propagating the break); the interp
+        // twin lives in tests/interpreter.rs.
         if let Some(out) = run_program(
             "trait Counter { fn get(ref self) -> i64; }\n\
              effect resource Ctr: Counter;\n\
