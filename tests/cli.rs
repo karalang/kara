@@ -2070,6 +2070,74 @@ fn test_provider_early_return_run_build_parity() {
     );
 }
 
+/// Run-vs-build gate for CLOSURE-SCOPED `return` in a with_provider body
+/// (B-2026-07-31-16): the return value becomes the with_provider call's
+/// value and the enclosing fn CONTINUES (design.md § with_provider
+/// signature: `f: Fn() -> T`). Pre-fix, codegen lowered the return
+/// fn-level — a verifier failure originally, then (after the
+/// B-2026-07-31-17 terminator guard) a silent wrong-scope return that made
+/// this program print 8 instead of 9 under `karac build` while `--interp`
+/// printed 9.
+#[test]
+fn test_provider_closure_scoped_return_run_build_parity() {
+    let tmp = scratch_project("provider-closure-return-parity");
+    let src = "trait Counter { fn get(ref self) -> i64; }\n\
+               effect resource Ctr: Counter;\n\
+               struct InMem { n: i64 }\n\
+               impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+               fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+               fn f() -> i64 with reads(Ctr) {\n\
+               \x20   let x = with_provider[Ctr](InMem { n: 8 }, || { return read(); });\n\
+               \x20   x + 1\n\
+               }\n\
+               fn main() with reads(Ctr) {\n\
+               \x20   println(f\"{f()}\");\n\
+               }\n";
+    write(&tmp.join("provclo.kara"), src);
+
+    let run_out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "provclo.kara"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+
+    let build = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "provclo.kara"])
+        .output();
+    if let Ok(o) = &build {
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            !stderr.contains("codegen failed"),
+            "closure-scoped provider return failed codegen:\n{stderr}"
+        );
+    }
+    let exe = tmp.join("provclo");
+    let build_out = if build.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(r), Some(b)) = (run_out, build_out) else {
+        eprintln!("skip: could not produce both interp and compiled output (no runtime archive?)");
+        return;
+    };
+    assert_eq!(
+        r, b,
+        "run/build parity for a closure-scoped with_provider return"
+    );
+    assert_eq!(
+        r, "9\n",
+        "the closure's return value must feed the binding, not exit the fn"
+    );
+}
+
 /// Standing run-vs-build gate for user `impl Drop` on AGGREGATE FIELDS
 /// (B-2026-07-29-39's prerequisite).
 ///

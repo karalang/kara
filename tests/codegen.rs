@@ -13440,6 +13440,161 @@ fn main() {
         }
     }
 
+    // ── Closure-scoped `return` in with_provider bodies (B-2026-07-31-16) ──
+    //
+    // Per design.md § with_provider signature, the body is a genuine closure
+    // (`f: Fn() -> T with R, E`) and the call returns `T` — so `return E`
+    // inside it returns from the CLOSURE (E becomes the with_provider call's
+    // value), matching the interpreter. Codegen inlines the body, so returns
+    // are RETARGETED to a merge block (draining body locals then the
+    // ProviderPop, the interpreter's order) instead of emitting a fn-level
+    // `ret` — which used to verifier-fail non-tail shapes and, after the
+    // B-2026-07-31-17 guard, silently returned from the wrong scope.
+
+    const WP_PREAMBLE: &str = "trait Counter { fn get(ref self) -> i64; }\n\
+         effect resource Ctr: Counter;\n\
+         struct InMem { n: i64 }\n\
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }\n";
+
+    #[test]
+    fn e2e_wp_closure_return_is_closure_scoped_nontail() {
+        // The B-2026-07-31-16 repro: the closure's return value feeds the
+        // binding, and the enclosing fn continues — 9, not 8.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn f() -> i64 with reads(Ctr) {{\n\
+                 let x = with_provider[Ctr](InMem {{ n: 8 }}, || {{ return read(); }});\n\
+                 x + 1\n\
+             }}\n\
+             fn main() with reads(Ctr) {{ println(f\"{{f()}}\"); }}",
+        )) {
+            assert_eq!(out, "9\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_conditional_return_joins_fall_through() {
+        // Both dynamic paths of one body: the return edge and the
+        // fall-through tail join at the merge with the right values.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn cond(n: i64) -> i64 with reads(Ctr) {{\n\
+                 let x = with_provider[Ctr](InMem {{ n: n }}, || {{\n\
+                     if read() == 8 {{ return 100; }}\n\
+                     read()\n\
+                 }});\n\
+                 x + 1\n\
+             }}\n\
+             fn main() with reads(Ctr) {{\n\
+                 println(f\"{{cond(8)}}\");\n\
+                 println(f\"{{cond(3)}}\");\n\
+             }}",
+        )) {
+            assert_eq!(out, "101\n4\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_nested_closure_return_inner_only() {
+        // A return in the INNER body exits only the inner closure: inner wp
+        // = 20, outer body = 20 + read(=1) = 21, fn = 1021.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn nested() -> i64 with reads(Ctr) {{\n\
+                 let outer = with_provider[Ctr](InMem {{ n: 1 }}, || {{\n\
+                     let inner = with_provider[Ctr](InMem {{ n: 2 }}, || {{ return read() * 10; }});\n\
+                     inner + read()\n\
+                 }});\n\
+                 outer + 1000\n\
+             }}\n\
+             fn main() with reads(Ctr) {{ println(f\"{{nested()}}\"); }}",
+        )) {
+            assert_eq!(out, "1021\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_return_heap_string() {
+        // A heap String moves out through the closure return and is used
+        // (not returned) by the enclosing fn.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn heap() -> String with reads(Ctr) {{\n\
+                 let s = with_provider[Ctr](InMem {{ n: 42 }}, || {{ return f\"v-{{read()}}\"; }});\n\
+                 f\"got-{{s}}\"\n\
+             }}\n\
+             fn main() with reads(Ctr) {{ println(f\"{{heap()}}\"); }}",
+        )) {
+            assert_eq!(out, "got-v-42\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_valueless_return_gates_side_effect() {
+        // `return;` in a unit closure skips the println without exiting the
+        // enclosing fn.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn quiet(n: i64) with reads(Ctr) {{\n\
+                 with_provider[Ctr](InMem {{ n: n }}, || {{\n\
+                     if read() == 3 {{ return; }}\n\
+                     println(f\"seen-{{read()}}\");\n\
+                 }});\n\
+                 println(\"after\");\n\
+             }}\n\
+             fn main() with reads(Ctr) {{\n\
+                 quiet(3);\n\
+                 quiet(5);\n\
+             }}",
+        )) {
+            assert_eq!(out, "after\nseen-5\nafter\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_return_drops_body_local_before_join() {
+        // A heap body-local is live at the return: the retarget drain frees
+        // it (then pops the provider) on the return edge, and the ordinary
+        // frame drain covers the fall-through edge. \"pad-9\".len() = 5.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn local(n: i64) -> i64 with reads(Ctr) {{\n\
+                 let x = with_provider[Ctr](InMem {{ n: n }}, || {{\n\
+                     let pad = f\"pad-{{read()}}\";\n\
+                     if read() == 9 {{ return pad.len() * 100; }}\n\
+                     read()\n\
+                 }});\n\
+                 x + 1\n\
+             }}\n\
+             fn main() with reads(Ctr) {{\n\
+                 println(f\"{{local(9)}}\");\n\
+                 println(f\"{{local(4)}}\");\n\
+             }}",
+        )) {
+            assert_eq!(out, "501\n5\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_closure_return_provider_stack_healthy_after() {
+        // The retargeted return must still pop the provider frame: a second
+        // with_provider after the first must resolve its own provider, and
+        // an outer resource read after an inner early-return must see the
+        // OUTER provider again.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn f() -> i64 with reads(Ctr) {{\n\
+                 let a = with_provider[Ctr](InMem {{ n: 5 }}, || {{ return read(); }});\n\
+                 let b = with_provider[Ctr](InMem {{ n: 6 }}, || {{ read() }});\n\
+                 a * 10 + b\n\
+             }}\n\
+             fn main() with reads(Ctr) {{ println(f\"{{f()}}\"); }}",
+        )) {
+            assert_eq!(out, "56\n");
+        }
+    }
+
     // ── Nested-place + compound-field assignment write-back (codegen) ──
     //
     // Regression: assignment to a value-type struct field through a projection

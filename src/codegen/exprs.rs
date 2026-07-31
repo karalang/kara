@@ -660,6 +660,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.compile_closure(params, body, &expr.span)
             }
             ExprKind::Return(val) => {
+                // Closure-scoped return (B-2026-07-31-16): inside an
+                // inline-lowered `with_provider` closure body, `return E`
+                // returns from the CLOSURE — `E` becomes the with_provider
+                // call's value — per the typechecker and interpreter. Route
+                // to the retarget merge instead of the fn-level machinery
+                // below. Fn-tagged, so returns inside real closures / par
+                // branches compiled while a retarget is live are unaffected.
+                if self.wp_return_retarget_active() {
+                    return self.compile_wp_retargeted_return(val.as_deref());
+                }
                 // Early-return cleanup parity with the function-end path
                 // at `compile_function`: walk the full `scope_cleanup_actions`
                 // stack and emit cleanup IR for every tracked binding before

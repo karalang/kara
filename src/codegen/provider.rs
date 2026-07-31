@@ -181,9 +181,167 @@ impl<'ctx> super::Codegen<'ctx> {
         //    v1 — the body's free variables resolve against the outer
         //    scope, exactly as the interpreter handles a `with_provider`
         //    closure (see `Interpreter::eval_with_provider`).
-        self.compile_provider_body_with_pop_frame(1, |me| {
+        self.compile_wp_closure_body_retargeted(closure_expr, resource)
+    }
+
+    /// Compile a `with_provider` CLOSURE body with closure-scoped `return`
+    /// retargeting active (B-2026-07-31-16). The typechecker and interpreter
+    /// treat `return E` inside the `|| { ... }` body as returning from the
+    /// CLOSURE — `E` becomes the `with_provider` call's value — so the
+    /// inline lowering must not emit a fn-level `ret`. A [`ReturnRetarget`]
+    /// entry is live while the body compiles; the `ExprKind::Return` arm
+    /// routes matching returns to a merge block, and this joins the
+    /// fall-through tail with them. A body with no `return` never mints the
+    /// merge block and compiles exactly as before.
+    ///
+    /// The `providers {} in {}` BLOCK form deliberately does not come
+    /// through here: its body is a block, not a closure, so the typechecker
+    /// types `return` there as fn-level (`!`) and the plain fn-level
+    /// lowering is correct.
+    fn compile_wp_closure_body_retargeted(
+        &mut self,
+        closure_expr: &Expr,
+        resource: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.ok_or_else(|| {
+            "with_provider: no current function (called from top-level?)".to_string()
+        })?;
+        // Depth BEFORE the pop frame is pushed, so a retargeted return's
+        // bounded drain covers the body's frames AND the ProviderPop frame.
+        let cleanup_depth = self.scope_cleanup_actions.len();
+        self.return_retargets.push(super::state::ReturnRetarget {
+            fn_val,
+            cleanup_depth,
+            merge_bb: None,
+            result_slot: None,
+            result_ty: None,
+        });
+        let body_result = self.compile_provider_body_with_pop_frame(1, |me| {
             me.compile_with_provider_body(closure_expr, resource)
-        })
+        });
+        let rt = self
+            .return_retargets
+            .pop()
+            .expect("retarget pushed above is still on the stack");
+        let fall_through = body_result?;
+        self.join_retargeted_returns(rt, fall_through)
+    }
+
+    /// Join the fall-through tail value of a retargeted `with_provider` body
+    /// with any closure-scoped returns that branched to the merge block. If
+    /// no `return` fired (`merge_bb` never minted), this is the identity on
+    /// `fall_through` — zero IR overhead for the common body.
+    fn join_retargeted_returns(
+        &mut self,
+        rt: super::state::ReturnRetarget<'ctx>,
+        fall_through: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Some(merge_bb) = rt.merge_bb else {
+            return Ok(fall_through);
+        };
+        let slot = rt
+            .result_slot
+            .expect("result slot is minted together with the merge block");
+        let slot_ty = rt
+            .result_ty
+            .expect("result type recorded when the slot was minted");
+        let cur = self
+            .builder
+            .get_insert_block()
+            .expect("builder positioned inside the enclosing function");
+        if cur.get_terminator().is_none() {
+            // Fall-through path joins: store the tail value and branch. A
+            // terminated body (its tail WAS the retargeted return, or an
+            // enclosing-loop break) has nothing to store — the merge's only
+            // predecessors are the return edges.
+            let v = self.coerce_scalar_to_type(fall_through, slot_ty);
+            self.builder.build_store(slot, v).unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        self.builder.position_at_end(merge_bb);
+        Ok(self
+            .builder
+            .build_load(slot_ty, slot, "wp.ret.val")
+            .unwrap())
+    }
+
+    /// Emit one closure-scoped `return` inside an inline-lowered
+    /// `with_provider` body (B-2026-07-31-16): compile the value with the
+    /// same move-out suppressions the fn-level early-return path applies
+    /// (the moved-out source must not be freed by the drain below), drain
+    /// cleanup frames down to the retarget's depth — body locals first,
+    /// then the ProviderPop frame, the interpreter's order — and branch to
+    /// the merge block with the value in the result slot. The fn-level
+    /// machinery (ensures/invariants, ref-return, sret/coercion, coroutine
+    /// completion) is deliberately skipped: this is not a function exit.
+    pub(super) fn compile_wp_retargeted_return(
+        &mut self,
+        e: Option<&Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let v: BasicValueEnum<'ctx> = match e {
+            Some(e) => {
+                let v = self.compile_expr(e)?;
+                let v = self.maybe_defensive_copy_return_value(e, v);
+                self.suppress_source_vec_cleanup_for_arg(e);
+                self.consume_freshtemp_field_move(e);
+                if let ExprKind::Identifier(name) = &e.kind {
+                    self.suppress_user_drop_for_var(name);
+                    self.suppress_map_cleanup_for_tail_identifier(name);
+                    self.neutralize_moved_closure_env_slot(name);
+                    self.neutralize_moved_aggregate_env_slots(name);
+                    self.neutralize_moved_container_env_slots(name);
+                    self.suppress_channel_drop_for_var(name);
+                }
+                self.suppress_fstr_acc_if_moved_out(e);
+                v
+            }
+            None => self.context.i64_type().const_int(0, false).into(),
+        };
+        let (cleanup_depth, fn_val) = {
+            let rt = self
+                .return_retargets
+                .last()
+                .expect("caller checked wp_return_retarget_active");
+            (rt.cleanup_depth, rt.fn_val)
+        };
+        // Emit-only drain (frames stay tracked for the fall-through path):
+        // body locals innermost-first, then the ProviderPop at the depth.
+        self.emit_scope_cleanup_from(cleanup_depth);
+        // Lazily mint the merge block + result slot on the first return.
+        if self.return_retargets.last().unwrap().merge_bb.is_none() {
+            let bb = self.context.append_basic_block(fn_val, "wp.ret.merge");
+            self.return_retargets.last_mut().unwrap().merge_bb = Some(bb);
+        }
+        if self.return_retargets.last().unwrap().result_slot.is_none() {
+            let slot = self.create_entry_alloca(fn_val, "wp.ret.slot", v.get_type());
+            let rt = self.return_retargets.last_mut().unwrap();
+            rt.result_slot = Some(slot);
+            rt.result_ty = Some(v.get_type());
+        }
+        let (slot, slot_ty, merge_bb) = {
+            let rt = self.return_retargets.last().unwrap();
+            (
+                rt.result_slot.unwrap(),
+                rt.result_ty.unwrap(),
+                rt.merge_bb.unwrap(),
+            )
+        };
+        let v = self.coerce_scalar_to_type(v, slot_ty);
+        self.builder.build_store(slot, v).unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// True when the innermost [`ReturnRetarget`] belongs to the function
+    /// currently being compiled — i.e. a `return` here is inside an
+    /// inline-lowered `with_provider` closure body of THIS function, not
+    /// inside a real closure / par branch / mono body compiled while the
+    /// entry happens to be live (those switch `current_fn` and fail the
+    /// tag check).
+    pub(super) fn wp_return_retarget_active(&self) -> bool {
+        self.return_retargets
+            .last()
+            .is_some_and(|rt| Some(rt.fn_val) == self.current_fn)
     }
 
     /// B-2026-07-31-11 — compile a provider body inside a dedicated cleanup
@@ -674,9 +832,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // body pops on the way out instead of producing invalid IR.
         let frame_ptr = self.alloca_provider_frame("wp.amb.frame")?;
         self.emit_provider_push(frame_ptr, resource_id, data_ptr, vtable_ptr);
-        self.compile_provider_body_with_pop_frame(1, |me| {
-            me.compile_with_provider_body(closure_expr, resource)
-        })
+        self.compile_wp_closure_body_retargeted(closure_expr, resource)
     }
 
     /// Resolve ONE provider binding — trait-ful or ambient — to the

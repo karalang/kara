@@ -1107,6 +1107,40 @@ pub(crate) enum CleanupAction<'ctx> {
     },
 }
 
+/// One active closure-scoped return target for an inline-lowered
+/// `with_provider` body (B-2026-07-31-16). The typechecker and interpreter
+/// treat a `return E` inside the `with_provider(p, || { ... })` closure as
+/// returning from the CLOSURE — `E` becomes the `with_provider` call's
+/// value — not from the enclosing function. Since codegen inlines the
+/// closure body into the enclosing function, a plain `ret` would exit the
+/// wrong scope; instead, while an entry is on `return_retargets`, the
+/// `ExprKind::Return` arm drains cleanup frames down to `cleanup_depth`
+/// (body locals first, then the `ProviderPop` frame sitting AT that depth —
+/// the interpreter's order), stores the value into `result_slot`, and
+/// branches to `merge_bb`. The block and slot are minted lazily on the
+/// first retargeted return so a body with no `return` pays nothing.
+///
+/// `fn_val` tags the function the target belongs to: a `return` inside a
+/// REAL closure / par-branch / mono body compiled while this entry is live
+/// runs with a different `current_fn`, fails the tag check, and takes the
+/// ordinary fn-level return — no cross-function retargeting, mirroring the
+/// `mem::take(&mut scope_cleanup_actions)` isolation those paths use.
+pub(crate) struct ReturnRetarget<'ctx> {
+    pub(crate) fn_val: FunctionValue<'ctx>,
+    /// `scope_cleanup_actions.len()` recorded BEFORE the ProviderPop frame
+    /// was pushed, so `emit_scope_cleanup_from(cleanup_depth)` drains the
+    /// body's frames AND the pop frame (emit-only; the fall-through path
+    /// still owns the tracked frames).
+    pub(crate) cleanup_depth: usize,
+    /// Join block for all retargeted returns + the fall-through tail.
+    pub(crate) merge_bb: Option<BasicBlock<'ctx>>,
+    /// Entry-block slot holding the closure's return value across the join.
+    pub(crate) result_slot: Option<PointerValue<'ctx>>,
+    /// LLVM type of the slot's contents (typed by the first retargeted
+    /// return's value; later stores scalar-coerce to it).
+    pub(crate) result_ty: Option<BasicTypeEnum<'ctx>>,
+}
+
 /// One let-binding hoisted out of an auto-par group via the slice-A return-
 /// slot mechanism (Phase-7 Slice A — Par codegen: return values).
 ///

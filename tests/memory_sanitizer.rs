@@ -34286,4 +34286,46 @@ fn main() {
             "terminated_let_init_frees_live_heap_local",
         );
     }
+
+    /// B-2026-07-31-16: closure-scoped `return` retargeting must stay
+    /// leak/double-free clean on both edges — the retargeted return drains
+    /// the heap body-local (`pad`) then the provider frame, and the moved-out
+    /// String returned THROUGH the closure (`heap`) must be owned exactly
+    /// once by the receiving binding. 200 iterations of both dynamic paths
+    /// plus the String-through-closure shape.
+    #[test]
+    fn asan_wp_closure_return_frees_body_local_and_moves_result() {
+        assert_clean_asan_run(
+            r#"
+trait Counter { fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn local(n: i64) -> i64 with reads(Ctr) {
+    let x = with_provider[Ctr](InMem { n: n }, || {
+        let pad = f"pad-{read()}";
+        if read() == 9i64 { return pad.len() * 100i64; }
+        read()
+    });
+    x + 1i64
+}
+fn heap() -> String with reads(Ctr) {
+    with_provider[Ctr](InMem { n: 42i64 }, || { return f"v-{read()}"; })
+}
+fn main() with reads(Ctr) {
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        acc = acc + local(9i64) + local(4i64) + heap().len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            // (501 + 5 + 4) x 200 = 102000.
+            &["102000"],
+            "wp_closure_return_frees_body_local_and_moves_result",
+        );
+    }
 }

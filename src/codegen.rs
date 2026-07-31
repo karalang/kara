@@ -2336,6 +2336,13 @@ pub(super) struct Codegen<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// Active closure-scoped return targets for inline-lowered
+    /// `with_provider` bodies (B-2026-07-31-16); innermost last. See
+    /// [`state::ReturnRetarget`]. Entries are fn-tagged rather than
+    /// saved/cleared across function boundaries — the `ExprKind::Return`
+    /// arm only retargets when the top entry's `fn_val` matches
+    /// `current_fn`.
+    pub(crate) return_retargets: Vec<state::ReturnRetarget<'ctx>>,
     /// Phase 7 § *defer / errdefer codegen* slice 4. Staging slot for the
     /// about-to-be-returned Err payload, set by each error-exit site
     /// (`compile_question`'s `fail_bb`, `ExprKind::Return(Err(...))`, and
@@ -7526,6 +7533,7 @@ impl<'ctx> Codegen<'ctx> {
             binding_layouts: HashMap::new(),
             soa_return_locals: std::collections::HashSet::new(),
             scope_cleanup_actions: Vec::new(),
+            return_retargets: Vec::new(),
             pending_errdefer_payload: None,
             current_fn_err_payload_ty: None,
             main_result_err_te: None,
