@@ -5396,3 +5396,136 @@ fn module_binding_multi_letter_rename_is_unaffected() {
     assert_eq!(edit.replacement, "MAX_RETRIES");
     assert!(err.message.contains("consider renaming to `MAX_RETRIES`"));
 }
+
+/// Apply a resolver fix envelope to `src` the way `karac fix` does —
+/// highest offset first, so earlier edits keep their offsets valid.
+fn apply_edits(src: &str, edits: &[karac::resolver::TextEdit]) -> String {
+    let mut sorted: Vec<&karac::resolver::TextEdit> = edits.iter().collect();
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    let mut out = src.to_string();
+    for e in sorted {
+        out.replace_range(e.offset..e.offset + e.length, &e.replacement);
+    }
+    out
+}
+
+fn naming_fix_envelope(src: &str) -> (Option<String>, Vec<karac::resolver::TextEdit>) {
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "unexpected parse errors");
+    let result = resolve(&parsed.program);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| e.message.contains("E_MODULE_BINDING_NAMING"))
+        .expect("expected naming diagnostic");
+    let single = err.replacement.as_ref().map(|r| r.replacement.clone());
+    let envelope = result
+        .error_fix_diffs
+        .get(&karac::resolver::SpanKey::from_span(&err.span))
+        .cloned()
+        .unwrap_or_default();
+    (single, envelope)
+}
+
+#[test]
+fn module_binding_rename_rewrites_use_sites_too() {
+    // B-2026-07-31-33: the rename used to span the DECLARATION only, so
+    // applying it to a binding that was actually referenced produced
+    // `undefined name` at every use site — a fix that broke the program.
+    //
+    // The oracle is the whole point of this test: apply the edits and
+    // re-resolve. "Three edits were emitted" proves nothing on its own.
+    let src = "pub let maxRetries: i32 = 3;\n\
+               fn main() { let a = maxRetries + 1; println(maxRetries); println(a); }\n";
+    let (single, envelope) = naming_fix_envelope(src);
+    assert!(
+        single.is_none(),
+        "a rename with use sites must NOT publish a declaration-only \
+         `replacement` — a consumer reading just that field would apply half \
+         a rename; got {single:?}"
+    );
+    assert_eq!(
+        envelope.len(),
+        3,
+        "declaration + two use sites, got {envelope:?}"
+    );
+    let fixed = apply_edits(src, &envelope);
+    assert_eq!(
+        fixed,
+        "pub let MAX_RETRIES: i32 = 3;\n\
+         fn main() { let a = MAX_RETRIES + 1; println(MAX_RETRIES); println(a); }\n"
+    );
+    let reparsed = parse(&fixed);
+    assert!(reparsed.errors.is_empty(), "fixed source must parse");
+    assert!(
+        resolve(&reparsed.program).errors.is_empty(),
+        "the whole point: the fixed program resolves clean, got {:?}",
+        resolve(&reparsed.program).errors
+    );
+}
+
+#[test]
+fn module_binding_rename_covers_method_receiver_use_sites() {
+    // The shape from the bug report, and the reason `resolutions` alone
+    // cannot drive the rename: a method call records its receiver under the
+    // span of the ENTIRE call (`MyMap.insert("a", 1)`), so an edit built
+    // from that span would overwrite the call with the new name. The
+    // identifier-offset side table is what makes this land correctly.
+    let src = "let mut MyMap: Map[String, i64] = Map.new();\n\
+               fn main() { MyMap.insert(\"a\", 1); println(MyMap.len()); }\n";
+    let (_, envelope) = naming_fix_envelope(src);
+    let fixed = apply_edits(src, &envelope);
+    assert_eq!(
+        fixed,
+        "let mut MY_MAP: Map[String, i64] = Map.new();\n\
+         fn main() { MY_MAP.insert(\"a\", 1); println(MY_MAP.len()); }\n",
+        "each edit must cover the bare identifier, not the call around it"
+    );
+}
+
+#[test]
+fn module_binding_rename_covers_interpolated_use_sites() {
+    // `f"{NAME}"` desugars to a real expression, so a reference inside one
+    // is a reference like any other — miss it and the fixed program stops
+    // resolving. Two slots in one literal also pins that per-occurrence
+    // offsets are used rather than one span per literal.
+    let src = "let mut Counter: i64 = 7;\nfn main() { println(f\"{Counter}+{Counter}\"); }\n";
+    let (_, envelope) = naming_fix_envelope(src);
+    let fixed = apply_edits(src, &envelope);
+    assert_eq!(
+        fixed,
+        "let mut COUNTER: i64 = 7;\nfn main() { println(f\"{COUNTER}+{COUNTER}\"); }\n"
+    );
+}
+
+#[test]
+fn module_binding_rename_without_use_sites_stays_a_single_edit() {
+    // An unreferenced binding needs no envelope — the declaration edit is
+    // already the complete rename, so it keeps the single-edit slot that
+    // pre-B-33 consumers understand.
+    let (single, envelope) = naming_fix_envelope("pub let myConfig: i64 = 5;\n");
+    assert_eq!(single.as_deref(), Some("MY_CONFIG"));
+    assert!(
+        envelope.is_empty(),
+        "no use sites means no envelope, got {envelope:?}"
+    );
+}
+
+#[test]
+fn module_binding_rename_ignores_shadowing_locals() {
+    // A local that shadows the binding resolves to a DIFFERENT symbol, so
+    // it must keep its name — renaming it would change what the local is
+    // called for no reason, and could collide with the outer rename.
+    let src = "pub let myConfig: i64 = 5;\n\
+               fn main() { let myConfig = 1; println(myConfig); }\n\
+               fn other() { println(myConfig); }\n";
+    let (_, envelope) = naming_fix_envelope(src);
+    let fixed = apply_edits(src, &envelope);
+    assert_eq!(
+        fixed,
+        "pub let MY_CONFIG: i64 = 5;\n\
+         fn main() { let myConfig = 1; println(myConfig); }\n\
+         fn other() { println(MY_CONFIG); }\n",
+        "only the module binding and its own references may be rewritten"
+    );
+}

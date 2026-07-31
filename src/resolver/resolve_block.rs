@@ -333,6 +333,10 @@ impl<'a> super::Resolver<'a> {
                 if let Some(sym) = self.table.lookup(name) {
                     let id = sym.id;
                     self.record_resolution(&expr.span, id);
+                    // `expr.span` can run past the identifier — a method
+                    // call records its receiver under the whole call — but
+                    // it always *starts* at it. B-2026-07-31-33.
+                    self.record_ident_ref(&expr.span, id);
                 } else {
                     self.error_undefined_name(name, expr.span.clone());
                 }
@@ -344,6 +348,10 @@ impl<'a> super::Resolver<'a> {
                     if let Some(sym) = self.table.lookup(first) {
                         let id = sym.id;
                         self.record_resolution(&expr.span, id);
+                        // The resolved name is the FIRST segment, which the
+                        // path span starts at — so the same offset rule
+                        // holds and a rename rewrites the qualifier only.
+                        self.record_ident_ref(&expr.span, id);
                     } else {
                         self.error_undefined_name(first, expr.span.clone());
                     }

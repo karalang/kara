@@ -7042,8 +7042,12 @@ fn test_fix_applies_module_binding_const_rename() {
     // B-2026-07-06-3: a module-level `let camelCase` violates the
     // Const-class naming rule; the resolver computes the exact
     // SCREAMING_SNAKE candidate and now carries it as a machine-applicable
-    // `.replacement` spanning the name identifier. `karac fix` applies the
-    // rename at the declaration site.
+    // `.replacement` spanning the name identifier. `karac fix` applies it.
+    //
+    // This binding has no use sites, which is why one edit suffices — see
+    // `test_fix_module_binding_rename_updates_use_sites` for the referenced
+    // case. Until B-2026-07-31-33 that distinction was accidental rather
+    // than deliberate, and this test passed by dodging the bug.
     let path = fix_scratch_file("const-rename", "pub let myConfig: i64 = 5;\n");
     let out = karac_bin()
         .args(["fix", path.to_str().unwrap()])
@@ -7058,6 +7062,167 @@ fn test_fix_applies_module_binding_const_rename() {
     assert!(stdout.contains("applied 1 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert_eq!(rewritten, "pub let MY_CONFIG: i64 = 5;\n");
+    // And the fixed file actually checks — the assertion whose absence let
+    // B-2026-07-31-33 hide here.
+    let check = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "fixed program must check: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_fix_module_binding_rename_updates_use_sites() {
+    // B-2026-07-31-33: the rename spanned the declaration only, so applying
+    // it to a binding that was actually used left every reference dangling:
+    //
+    //     $ karac fix n.kara
+    //     applied 1 fix(es)
+    //     $ karac check n.kara
+    //     error[resolve]: undefined name 'MyMap' (x2)
+    //
+    // Converging on a program that no longer resolves is worse than the
+    // no-op of B-2026-07-31-32 — that one merely failed to make progress.
+    let path = fix_scratch_file(
+        "binding-use-sites",
+        "let mut MyMap: Map[String, i64] = Map.new();\n\
+         fn main() {\n    MyMap.insert(\"a\", 1);\n    println(MyMap.len());\n}\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("applied 3 fix"),
+        "declaration + two use sites: {stdout}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "let mut MY_MAP: Map[String, i64] = Map.new();\n\
+         fn main() {\n    MY_MAP.insert(\"a\", 1);\n    println(MY_MAP.len());\n}\n",
+    );
+    // The oracle: a fix loop must converge on a program that BUILDS, and a
+    // second pass must find nothing left to do.
+    let check = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "fixed program must check: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let again = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&again.stdout).contains("no fixable diagnostics"),
+        "fix must reach a fixpoint: {}",
+        String::from_utf8_lossy(&again.stdout)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_fix_withholds_pub_binding_rename_inside_a_package() {
+    // The other half of B-2026-07-31-33's blast radius. `karac fix` edits
+    // one file, so it can complete a rename only for names whose readers it
+    // can see. A `pub` binding in a package is read by sibling modules that
+    // a single-file check never parses — renaming it here would leave the
+    // importer calling a name that no longer exists.
+    //
+    // The private binding in the same file is the control: module-local, so
+    // every use site IS visible, so it gets renamed.
+    let tmp = scratch_project("pub-binding-rename");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import helper;\n\nfn main() { println(helper.myConfig); }\n",
+    );
+    write(
+        &tmp.join("src/helper.kara"),
+        "pub let myConfig: i64 = 5;\n\
+         let mut LocalCounter: i64 = 0;\n\n\
+         pub fn bump() -> i64 {\n    LocalCounter = LocalCounter + 1;\n    return LocalCounter;\n}\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["fix", "src/helper.kara"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rewritten = std::fs::read_to_string(tmp.join("src/helper.kara")).unwrap();
+    assert!(
+        rewritten.contains("pub let myConfig"),
+        "a `pub` binding with off-screen readers must be left alone:\n{rewritten}"
+    );
+    assert!(
+        rewritten.contains("let mut LOCAL_COUNTER") && !rewritten.contains("LocalCounter"),
+        "the module-private binding must still be renamed everywhere:\n{rewritten}"
+    );
+    // The importer still resolves — nothing under `src/` was left dangling.
+    let build = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+    assert!(
+        !combined.contains("undefined name"),
+        "package must still resolve after the fix:\n{combined}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_check_json_emits_module_binding_rename_fix_diff() {
+    // The machine-readable half. A rename that touches use sites publishes
+    // a multi-edit `fix_diff` array and NO single-edit `replacement`, so a
+    // JSON consumer either applies the whole rename or none of it — it can
+    // never reconstruct the broken declaration-only edit from this envelope.
+    let path = fix_scratch_file(
+        "binding-fix-diff",
+        "pub let myConfig: i64 = 5;\nfn main() { println(myConfig); }\n",
+    );
+    let out = karac_bin()
+        .args(["check", "--output=json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let diag = stdout
+        .split("{\"id\":")
+        .find(|s| s.contains("E_MODULE_BINDING_NAMING"))
+        .expect("naming diagnostic in JSON");
+    assert!(
+        diag.contains("\"fix_diff\":["),
+        "expected a multi-edit envelope: {diag}"
+    );
+    assert!(
+        !diag.contains("\"replacement\":"),
+        "must not also advertise the declaration-only edit: {diag}"
+    );
+    assert_eq!(
+        diag.matches("\"offset\":").count(),
+        2,
+        "declaration + one use site: {diag}"
+    );
     let _ = std::fs::remove_file(&path);
 }
 

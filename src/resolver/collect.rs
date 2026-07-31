@@ -1318,6 +1318,9 @@ impl<'a> super::Resolver<'a> {
         // diagnostic carries the named `E_MODULE_BINDING_NAMING`
         // code rather than the generic parser-side message shape.
         let actual = crate::lexer::classify_ident(&b.name);
+        // Set when the naming diagnostic fires with a usable candidate;
+        // consumed after `define` below, once the symbol id exists.
+        let mut pending_rename: Option<(usize, String)> = None;
         if actual != crate::lexer::IdentClass::Const {
             // B-2026-07-31-32 — only advertise a rename that actually lands in
             // Const-class. `suggest_const_name` is the identity on a name whose
@@ -1358,22 +1361,27 @@ impl<'a> super::Resolver<'a> {
                 span: b.span.clone(),
                 kind: ResolveErrorKind::UndefinedName,
                 suggestion: suggestion.as_ref().map(|s| format!("rename to `{s}`")),
-                // Machine-applicable rename (B-2026-07-06-3): the exact
-                // Const-cased candidate is already computed above, so wire
-                // it as a `.replacement` spanning the name identifier only
-                // (`b.name_span`, not the whole `let … = …;` statement).
-                // Withheld entirely when there is no usable candidate — an
-                // edit that cannot change the outcome is worse than none,
-                // because `karac fix` counts it as progress.
-                replacement: suggestion.as_ref().map(|s| {
-                    Box::new(crate::resolver::TextEdit {
-                        offset: b.name_span.offset,
-                        length: b.name_span.length,
-                        replacement: s.clone(),
-                    })
-                }),
+                // Machine-applicable rename (B-2026-07-06-3), deferred.
+                // The candidate is known here, but the binding's USE SITES
+                // are not — collection runs before any body resolves — and
+                // a rename that misses them breaks the program
+                // (B-2026-07-31-33). `attach_module_binding_renames` fills
+                // this in after pass 2, or leaves it empty when it cannot
+                // rewrite every reference.
+                replacement: None,
                 stub_hint: None,
             });
+            // A `pub` binding belonging to a package can be referenced from
+            // modules this session cannot see — each module resolves in its
+            // own session, with its own symbol ids, so an importer's use
+            // sites are structurally invisible from here. Renaming under
+            // those conditions fixes this file and breaks the importer, so
+            // offer the advice without the edit. A standalone file has no
+            // importers and keeps the fix.
+            let escapes_this_module = b.is_pub && self.pub_refs_may_be_external;
+            if let (Some(s), false) = (suggestion, escapes_this_module) {
+                pending_rename = Some((self.errors.len() - 1, s));
+            }
             // Continue and still attempt registration under the
             // offending name so use-site references don't double-up
             // with cascading "undefined name" diagnostics.
@@ -1387,6 +1395,17 @@ impl<'a> super::Resolver<'a> {
             Ok(id) => {
                 self.record_deprecation_if_present(id, &b.deprecation);
                 self.record_unstable_if_present(id, &b.unstable);
+                if let Some((error_index, new_name)) = pending_rename {
+                    self.pending_binding_renames
+                        .push(crate::resolver::PendingBindingRename {
+                            error_index,
+                            symbol: id,
+                            new_name,
+                            name_span: b.name_span.clone(),
+                            diag_span: b.span.clone(),
+                            name_len: b.name.len(),
+                        });
+                }
             }
             Err(mut err) => {
                 if matches!(err.kind, ResolveErrorKind::DuplicateDefinition) {

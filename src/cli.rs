@@ -1036,9 +1036,16 @@ impl Pipeline {
         // so it fires when `karac check foo_test.kara` surfaces an
         // unresolved-call site.
         let is_test_file = self.filename.ends_with("_test.kara");
+        // Checking one file that lives inside a package's `src/` still sees
+        // only that file, so its `pub` items may have readers off-screen.
+        // Rename fix-its consult this before offering to rewrite a public
+        // name (B-2026-07-31-33) — the same blind spot that makes a
+        // single-file `karac build` on a package member a refusal.
+        let in_package = is_package_member(&self.filename);
         self.resolved = Some(
             crate::resolver::Resolver::new(&self.parsed.program)
                 .with_test_file(is_test_file)
+                .with_external_pub_refs(in_package)
                 .with_target_tombstones(target_tombstones)
                 .resolve(),
         );
@@ -3082,6 +3089,35 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     json_string(&r.replacement),
                 )
             });
+            // Multi-edit fix envelope (B-2026-07-31-33), rendered exactly
+            // like the ownership channel's: `"fix_diff":[{...},{...}]`.
+            // `E_MODULE_BINDING_NAMING` uses it for a rename that spans the
+            // declaration plus every use site. Mutually exclusive with
+            // `replacement` per diagnostic — see `ResolveResult`.
+            let fix_diff_json = r
+                .error_fix_diffs
+                .get(&crate::resolver::SpanKey::from_span(&err.span))
+                .filter(|v| !v.is_empty())
+                .map(|edits| {
+                    let items: Vec<String> = edits
+                        .iter()
+                        .map(|e| {
+                            format!(
+                                "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                                e.offset,
+                                e.length,
+                                json_string(&e.replacement),
+                            )
+                        })
+                        .collect();
+                    format!("\"fix_diff\":[{}]", items.join(","))
+                });
+            let extra_json = match (replacement_json, fix_diff_json) {
+                (Some(rep), Some(f)) => Some(format!("{rep},{f}")),
+                (Some(rep), None) => Some(rep),
+                (None, Some(f)) => Some(f),
+                (None, None) => None,
+            };
             let stub_hint_json = err
                 .stub_hint
                 .as_ref()
@@ -3096,7 +3132,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 filename,
                 span: &err.span,
                 suggestion: err.suggestion.as_deref(),
-                extra_json: replacement_json,
+                extra_json,
                 lint_name: None,
                 fix_it: None,
                 class: None,
@@ -6269,13 +6305,12 @@ fn emit_build_error(msg: &str, output: OutputMode) {
     }
 }
 
-/// If `filename` is a source file inside a `kara.toml` package's `src/`
-/// directory, return an actionable refusal message: a single-file `karac build`
-/// there silently drops the package's sibling modules and produces a truncated
-/// binary (B-2026-07-08-19). `None` for a standalone file — no package root, or
-/// the file is not under the package's `src/` (a script that merely sits at or
-/// near the package root stays buildable single-file).
-fn package_member_build_refusal(filename: &str) -> Option<String> {
+/// The root of the `kara.toml` package `filename` belongs to, or `None` when
+/// it is a standalone file (no package root above it, or it sits outside the
+/// package's `src/`). Extracted so the two callers that care whether a file
+/// has unseen sibling modules — the single-file build refusal below and the
+/// resolver's `pub`-rename guard (B-2026-07-31-33) — agree on the answer.
+fn package_root_of_member(filename: &str) -> Option<PathBuf> {
     let path = std::path::Path::new(filename);
     let parent = path.parent()?;
     let file_dir = if parent.as_os_str().is_empty() {
@@ -6286,9 +6321,23 @@ fn package_member_build_refusal(filename: &str) -> Option<String> {
     let root = manifest::discover_project_root(file_dir)?;
     let abs_file = std::fs::canonicalize(path).ok()?;
     let abs_src = std::fs::canonicalize(root.join("src")).ok()?;
-    if !abs_file.starts_with(&abs_src) {
-        return None;
-    }
+    abs_file.starts_with(&abs_src).then_some(root)
+}
+
+/// Whether `filename` is a module of a multi-file package, and so may have
+/// readers of its `pub` items that a single-file check never sees.
+fn is_package_member(filename: &str) -> bool {
+    package_root_of_member(filename).is_some()
+}
+
+/// If `filename` is a source file inside a `kara.toml` package's `src/`
+/// directory, return an actionable refusal message: a single-file `karac build`
+/// there silently drops the package's sibling modules and produces a truncated
+/// binary (B-2026-07-08-19). `None` for a standalone file — no package root, or
+/// the file is not under the package's `src/` (a script that merely sits at or
+/// near the package root stays buildable single-file).
+fn package_member_build_refusal(filename: &str) -> Option<String> {
+    let root = package_root_of_member(filename)?;
     let root_disp = root.display();
     Some(format!(
         "`{filename}` is a source file of the package at `{root_disp}` — a \
@@ -8646,6 +8695,11 @@ fn print_parse_errors_text(parse_errors: &[ModuleParseErrors]) {
 struct ModuleResolveErrors {
     file: PathBuf,
     errors: Vec<ResolveError>,
+    /// Multi-edit fix envelopes for this module's diagnostics, keyed by the
+    /// owning diagnostic's span. Carried alongside `errors` so the
+    /// project-mode JSON path advertises the same fixes the single-file path
+    /// does — see [`crate::resolver::ResolveResult::error_fix_diffs`].
+    fix_diffs: std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 /// Run the resolver per module with the full `ProgramTree` attached so
@@ -8675,6 +8729,7 @@ fn resolve_modules(tree: &ProgramTree) -> Vec<ModuleResolveErrors> {
             out.push(ModuleResolveErrors {
                 file: m.file.clone(),
                 errors: result.errors,
+                fix_diffs: result.error_fix_diffs,
             });
         }
     }
@@ -8765,6 +8820,38 @@ fn replacement_json_tail(err: &crate::resolver::ResolveError) -> String {
     }
 }
 
+/// Render a multi-edit fix envelope as a `,"fix_diff":[{...}]` JSON tail
+/// (empty when the diagnostic has none). The project-mode twin of the
+/// single-file `fix_diff` emission in `collect_diagnostics`; without it a
+/// diagnostic whose fix spans several edits — today
+/// `E_MODULE_BINDING_NAMING`'s rename — would look unfixable to an IDE
+/// simply because the project was compiled as a project.
+fn fix_diff_json_tail(
+    err: &crate::resolver::ResolveError,
+    fix_diffs: &std::collections::HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+) -> String {
+    match fix_diffs
+        .get(&crate::resolver::SpanKey::from_span(&err.span))
+        .filter(|v| !v.is_empty())
+    {
+        Some(edits) => {
+            let items: Vec<String> = edits
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                        e.offset,
+                        e.length,
+                        json_string(&e.replacement),
+                    )
+                })
+                .collect();
+            format!(",\"fix_diff\":[{}]", items.join(","))
+        }
+        None => String::new(),
+    }
+}
+
 fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for re in per_module {
@@ -8776,9 +8863,10 @@ fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 None => String::new(),
             };
             let replacement = replacement_json_tail(err);
+            let fix_diff = fix_diff_json_tail(err, &re.fix_diffs);
             let hints = stub_hints_tail(&file, err);
             out.push(format!(
-                "{{\"severity\":\"error\",\"phase\":\"resolve\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}}}",
+                "{{\"severity\":\"error\",\"phase\":\"resolve\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}{}}}",
                 json_string(code),
                 json_string(&file),
                 err.span.line,
@@ -8786,6 +8874,7 @@ fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 json_string(&err.message),
                 suggestion,
                 replacement,
+                fix_diff,
                 hints,
             ));
         }
@@ -8804,9 +8893,10 @@ fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 None => String::new(),
             };
             let replacement = replacement_json_tail(err);
+            let fix_diff = fix_diff_json_tail(err, &re.fix_diffs);
             let hints = stub_hints_tail(&file, err);
             out.push(format!(
-                "{{\"type\":\"resolve_error\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}}}",
+                "{{\"type\":\"resolve_error\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}{}}}",
                 json_string(code),
                 json_string(&file),
                 err.span.line,
@@ -8814,6 +8904,7 @@ fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 json_string(&err.message),
                 suggestion,
                 replacement,
+                fix_diff,
                 hints,
             ));
         }
@@ -10880,6 +10971,12 @@ fn cmd_fix(filename: &str, dry_run: bool) {
                     .iter()
                     .filter_map(|e| e.replacement.as_deref().cloned()),
             );
+            // Multi-edit envelopes (B-2026-07-31-33). A rename that has to
+            // touch use sites as well as the declaration cannot fit the
+            // single-edit `replacement` slot, so it lands here instead —
+            // and only here, so applying just `replacement` can never leave
+            // a half-renamed program behind.
+            edits.extend(r.error_fix_diffs.values().flatten().cloned());
         }
         if let Some(ref ef) = pipeline.effects {
             edits.extend(

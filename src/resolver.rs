@@ -10,7 +10,7 @@ use crate::ast::*;
 use crate::edit_distance::suggest_similar;
 use crate::module::{self, ModuleId, ProgramTree};
 use crate::token::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod collect;
 mod resolve_block;
@@ -861,6 +861,21 @@ pub struct ResolveResult {
     /// Empty in v1; future catalogue entries push `CompilerQuery`
     /// values from the resolver here.
     pub queries: Vec<crate::queries::CompilerQuery>,
+    /// Multi-edit fix envelopes keyed by the owning diagnostic's primary
+    /// span — the resolver-side twin of `OwnershipCheckResult`'s field of
+    /// the same name. A diagnostic whose fix spans more than one byte
+    /// range cannot express itself through the single
+    /// [`ResolveError::replacement`] slot, so it parks the whole edit list
+    /// here instead; consumers apply every entry or none.
+    ///
+    /// B-2026-07-31-33: the first user is `E_MODULE_BINDING_NAMING`'s
+    /// rename, which must rewrite the binding's *use sites* alongside its
+    /// declaration. `replacement` and `error_fix_diffs` are mutually
+    /// exclusive per diagnostic: a rename with use sites publishes only the
+    /// envelope, precisely so a consumer that reads `replacement` alone
+    /// applies nothing rather than the declaration half that breaks the
+    /// program.
+    pub error_fix_diffs: HashMap<SpanKey, Vec<TextEdit>>,
 }
 
 // ── Cross-module lookup helpers (CR-24 slice 5) ─────────────────
@@ -1044,6 +1059,68 @@ pub struct Resolver<'a> {
     /// via [`Resolver::with_target_tombstones`]; project mode adopts it
     /// off the `ProgramTree` in [`Resolver::with_tree`].
     pub(crate) target_tombstones: HashMap<String, String>,
+    /// See [`ResolveResult::error_fix_diffs`].
+    pub(crate) error_fix_diffs: HashMap<SpanKey, Vec<TextEdit>>,
+    /// Renames proposed by `E_MODULE_BINDING_NAMING` that still need their
+    /// use sites counted (B-2026-07-31-33). Collection runs before any body
+    /// is resolved, so at diagnostic time the reference spans do not exist
+    /// yet; [`Resolver::attach_module_binding_renames`] revisits each entry
+    /// after pass 2 and decides then whether a complete edit can be offered.
+    pub(crate) pending_binding_renames: Vec<PendingBindingRename>,
+    /// Byte offset → symbol, for reference sites where the offset is known
+    /// to be the first byte of a bare identifier token (B-2026-07-31-33).
+    ///
+    /// This exists because `resolutions` cannot be used to *rewrite* a
+    /// name. Its keys are whatever span the recording site had in hand, and
+    /// for a method call that is the entire call expression: `MyMap.len()`
+    /// resolves to `MyMap`'s symbol under a span covering all eleven bytes.
+    /// Keying on the identifier's start offset instead — with the length
+    /// taken from the name itself — yields a range that is exactly the
+    /// identifier in both shapes.
+    ///
+    /// Populated only while a rename is pending, which is to say almost
+    /// never; the map is otherwise pure overhead on the hottest path in the
+    /// resolver.
+    pub(crate) ident_ref_offsets: HashMap<usize, SymbolId>,
+    /// True when a `pub` item declared here may be referenced by source
+    /// this resolve session cannot see — i.e. the module is part of a
+    /// multi-module package. Set for project-mode resolves (each module
+    /// gets its own `Resolver`, so an importer's references live in a
+    /// different session entirely) and by the CLI when a single file is
+    /// checked from inside a package's `src/`.
+    ///
+    /// Only the `E_MODULE_BINDING_NAMING` rename consults it: renaming a
+    /// `pub` binding under these conditions fixes this file and breaks the
+    /// importer, so the fix is withheld and the diagnostic stays advisory
+    /// (B-2026-07-31-33). Left false for a standalone file, where the
+    /// module's whole world is the source in hand.
+    pub(crate) pub_refs_may_be_external: bool,
+}
+
+/// A proposed module-binding rename, parked between collection (pass 1,
+/// where the naming diagnostic is raised) and the post-resolution sweep
+/// (after pass 2, where the binding's use sites are known).
+pub(crate) struct PendingBindingRename {
+    /// Index into `Resolver::errors` of the diagnostic this rename belongs
+    /// to. The sweep writes the edit back onto that error in place, so the
+    /// diagnostic keeps its collection-time position in the error list.
+    pub(crate) error_index: usize,
+    /// The binding's symbol. Use sites are the `resolutions` entries
+    /// pointing at it — a shadowing local resolves to a *different* symbol
+    /// and is correctly left alone.
+    pub(crate) symbol: SymbolId,
+    /// The Const-class name to rename to. Already validated by
+    /// `suggest_name_for_class`, so it is guaranteed to differ from the
+    /// current name and to classify as Const.
+    pub(crate) new_name: String,
+    /// Span of the declaration's name identifier.
+    pub(crate) name_span: Span,
+    /// The diagnostic's primary span — the key `error_fix_diffs` is
+    /// keyed by, matching how consumers look the envelope up.
+    pub(crate) diag_span: Span,
+    /// Byte length of the current name, used to confirm a recorded
+    /// reference span covers the bare identifier and nothing else.
+    pub(crate) name_len: usize,
 }
 
 impl<'a> Resolver<'a> {
@@ -1061,6 +1138,10 @@ impl<'a> Resolver<'a> {
             is_stdlib_source: false,
             is_test_file: false,
             target_tombstones: HashMap::new(),
+            error_fix_diffs: HashMap::new(),
+            pending_binding_renames: Vec::new(),
+            ident_ref_offsets: HashMap::new(),
+            pub_refs_may_be_external: false,
         }
     }
 
@@ -1072,9 +1153,23 @@ impl<'a> Resolver<'a> {
     pub fn with_tree(mut self, tree: &'a ProgramTree, module_id: ModuleId) -> Self {
         self.tree = Some(tree);
         self.current_module = Some(module_id);
+        // Sibling modules resolve in their own sessions, so this one sees
+        // none of their references to our `pub` items.
+        self.pub_refs_may_be_external = true;
         if self.target_tombstones.is_empty() {
             self.target_tombstones = tree.target_tombstones.clone();
         }
+        self
+    }
+
+    /// Declare that this module's `pub` items may be referenced from source
+    /// outside the program being resolved — the single-file counterpart to
+    /// what [`Resolver::with_tree`] implies. The CLI sets it when checking
+    /// one file that lives inside a package's `src/`, so a rename fix-it is
+    /// not offered for a name other modules can be reading
+    /// (B-2026-07-31-33). See [`Resolver::pub_refs_may_be_external`].
+    pub fn with_external_pub_refs(mut self, external: bool) -> Self {
+        self.pub_refs_may_be_external = external;
         self
     }
 
@@ -1128,6 +1223,10 @@ impl<'a> Resolver<'a> {
             ));
         // Pass 2: resolve all bodies
         self.resolve_items();
+        // Pass 3: now that every reference has resolved, decide which of
+        // the module-binding renames proposed in pass 1 can be offered as
+        // a *complete* edit (B-2026-07-31-33).
+        self.attach_module_binding_renames();
 
         ResolveResult {
             resolutions: self.resolutions,
@@ -1135,6 +1234,84 @@ impl<'a> Resolver<'a> {
             errors: self.errors,
             def_paths: crate::def_path::collect_item_def_paths(self.program),
             queries: Vec::new(),
+            error_fix_diffs: self.error_fix_diffs,
+        }
+    }
+
+    /// Turn each pending `E_MODULE_BINDING_NAMING` rename into a
+    /// machine-applicable edit — but only when every use site can be
+    /// rewritten too (B-2026-07-31-33).
+    ///
+    /// Renaming a binding's declaration alone is not a partial fix, it is a
+    /// *regression*: `let mut MyMap` with two reads becomes a program with
+    /// two `undefined name 'MyMap'` errors, so `karac fix` converges on
+    /// source that no longer resolves. The three outcomes here, in the
+    /// order they are decided:
+    ///
+    /// 1. **No use sites** — the declaration edit stands alone in
+    ///    `replacement`, exactly as before this fix.
+    /// 2. **Use sites, all rewritable** — the declaration and every
+    ///    reference go into an `error_fix_diffs` envelope and `replacement`
+    ///    is left empty, so a consumer that understands only the single-edit
+    ///    slot applies nothing instead of half a rename.
+    /// 3. **A use site that cannot be rewritten** — the whole edit is
+    ///    withheld. The diagnostic still reports; only the automated fix
+    ///    steps aside.
+    ///
+    /// Case 3 is decided by cross-checking two independent records of where
+    /// the symbol was referenced: `resolutions`, which is authoritative
+    /// about *how many* references exist, and `ident_ref_offsets`, which is
+    /// authoritative about *where each identifier starts*. Every reference
+    /// the resolver saw must appear in both, or the rename is withheld. The
+    /// point is to fail closed on any reference shape this code does not
+    /// model — a pattern position, a qualified path, some future syntax —
+    /// rather than emit a rename that silently skips it.
+    fn attach_module_binding_renames(&mut self) {
+        let pending = std::mem::take(&mut self.pending_binding_renames);
+        for p in pending {
+            // The declaration's name is edited unconditionally, so drop it
+            // from both sides — emitting it twice would leave `cmd_fix`'s
+            // overlap dedup to silently discard one copy.
+            let resolved: HashSet<usize> = self
+                .resolutions
+                .iter()
+                .filter(|(k, &id)| id == p.symbol && k.0 != p.name_span.offset)
+                .map(|(k, _)| k.0)
+                .collect();
+            let idents: HashSet<usize> = self
+                .ident_ref_offsets
+                .iter()
+                .filter(|(&off, &id)| id == p.symbol && off != p.name_span.offset)
+                .map(|(&off, _)| off)
+                .collect();
+            if resolved != idents {
+                // Case 3 — a reference this code cannot place precisely.
+                // Withhold rather than ship a rename that breaks the file.
+                continue;
+            }
+            let decl = TextEdit {
+                offset: p.name_span.offset,
+                length: p.name_span.length,
+                replacement: p.new_name.clone(),
+            };
+            if idents.is_empty() {
+                // Case 1 — the single-edit slot is complete on its own.
+                self.errors[p.error_index].replacement = Some(Box::new(decl));
+                continue;
+            }
+            // Case 2 — publish the whole rename, declaration first, then
+            // use sites in source order so a rendered diff reads top-down.
+            let mut offsets: Vec<usize> = idents.into_iter().collect();
+            offsets.sort_unstable();
+            let mut edits = Vec::with_capacity(offsets.len() + 1);
+            edits.push(decl);
+            edits.extend(offsets.into_iter().map(|offset| TextEdit {
+                offset,
+                length: p.name_len,
+                replacement: p.new_name.clone(),
+            }));
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&p.diag_span), edits);
         }
     }
 
@@ -1277,6 +1454,17 @@ impl<'a> Resolver<'a> {
 
     fn record_resolution(&mut self, span: &Span, id: SymbolId) {
         self.resolutions.insert(SpanKey::from_span(span), id);
+    }
+
+    /// Note that `span` *starts* at a bare identifier naming `id`, even if
+    /// it runs past its end. See [`Resolver::ident_ref_offsets`]; called
+    /// alongside `record_resolution` from the two sites that resolve a name
+    /// written as a plain identifier.
+    pub(crate) fn record_ident_ref(&mut self, span: &Span, id: SymbolId) {
+        if self.pending_binding_renames.is_empty() {
+            return;
+        }
+        self.ident_ref_offsets.insert(span.offset, id);
     }
 }
 
