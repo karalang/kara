@@ -924,7 +924,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **796 surfaced 
 | B-2026-07-31-23 | typecheck | high | B-2026-07-31-1 PRONG 3 — the four HTTP hardcoded arms (`Client` / `RequestBuilder` / `Response` / `HttpError`) still accepted any far-from-anything m… | 5e7c2e9 |
 | B-2026-07-31-24 | interp | high | `Client.request(m, url)` and the ENTIRE `RequestBuilder` chain (`header`/`body`/`timeout`/`send`) had no interpreter dispatch arm — typechecks clean,… | 5e7c2e9 |
 | B-2026-07-31-25 | interp | medium | Interpreter captured ONLY `content-type` off an HTTP response, so `Response.header(name)` answered `None` for every other header and `Response.header… | 5e7c2e9 |
-| B-2026-07-31-26 | codegen | low | STALE CODEGEN-GAP DIAGNOSTICS: 15 codegen error/doc sites say a deferred construct "works under `karac run`" — false since `karac run` became JIT-by-… | 9d70e52 |
+| B-2026-07-31-26 | codegen | low | STALE CODEGEN-GAP DIAGNOSTICS: 15 codegen error/doc sites say a deferred construct "works under `karac run`" — false since `karac run` became JIT-by-… | 9d70e52,a6f5df7 |
 
 </details>
 
