@@ -95,10 +95,16 @@ impl FanoutVerdict {
     }
 }
 
-/// Run the fan-out gate sequence for one recognized loop, in the same order
-/// `codegen/reduce.rs` and `codegen/disjoint_par.rs` apply it: memory-bound
-/// first (so a rejected loop never pays for cost estimation), then the const-K
-/// cost gate, then the variable-K parameter-bound floor.
+/// Run the fan-out gate sequence for one recognized loop, in the order both
+/// `codegen/reduce.rs` and `codegen/disjoint_par.rs` apply it: memory-bound,
+/// then the const-K cost gate, then the variable-K parameter-bound floor.
+///
+/// The per-iteration estimate is computed up front, for every loop. It used to
+/// be deferred until after the memory-bound gate so a rejected loop never paid
+/// for the walk, but the carve-out below needs the estimate in order to decide
+/// that gate, so there is nothing left to defer. The walk is a bounded AST
+/// traversal of one loop body — the saving was small and is not worth
+/// reintroducing a second, cheaper-but-different notion of "how much work".
 ///
 /// `program` threads free-function bodies into the estimator so a call into a
 /// known callee folds the callee's real cost instead of the opaque
@@ -128,8 +134,9 @@ impl FanoutVerdict {
 ///   converting that kernel to the natural loop form a REGRESSION against the
 ///   hand-rolled band fan-out it replaced.
 /// - **Reductions.** The reduction twin of that kernel — a 7-tap convolution
-///   whose body also has one top-level index read — measured 170.2 ms declined
-///   vs 108.2 ms fanned out over 11 runs, a **1.57x** loss to the gate.
+///   whose body also has one top-level index read — measured 172.2 ms declined
+///   vs 107.5 ms fanned out (11 runs), a **1.6x** loss to the gate. Three
+///   interleaved runs put the ratio between 1.45x and 1.60x.
 ///
 /// The carve-out cannot reach kata-153's shape: a flat body scores far below
 /// [`VARIABLE_K_PER_ITER_FLOOR_UNITS`], so it stays `DeclinedMemoryBound`.
@@ -699,10 +706,9 @@ pub(crate) const RUNTIME_NESTED_LOOP_MULTIPLIER: u64 = 64;
 /// methods (`len`, `is_empty`, `as_slice`, `as_str`, `as_bytes`) are shape
 /// queries on the collection, not compute.
 ///
-/// Callers run this **before** cost estimation so a rejected loop never pays
-/// for the estimate. See [`fanout_verdict`] for the one carve-out that lets a
-/// nested-loop body past it, and for why the detector's blindness to nested
-/// loops is kept rather than repaired.
+/// See [`fanout_verdict`] for the one carve-out that lets a nested-loop body
+/// past this gate, and for why the detector's blindness to nested loops is
+/// kept rather than repaired.
 pub(crate) fn body_is_memory_bound(body: &Block) -> bool {
     let mut detector = MemoryBoundDetector {
         memory_count: 0,
