@@ -34101,17 +34101,25 @@ fn main() {
         m3.insert(i, r);
         n = n + 1i64;
 
+        // Whole-map REBIND (B-2026-07-31-27): the move nulls m4's slot and
+        // `transfer_map_handle_on_rebind` copies the handle free onto m5 —
+        // exactly one free of the handle + arrays + values. Before the fix
+        // the ENTIRE map leaked here; the loop makes that LSan-visible (each
+        // iteration's dead map is unreachable once the allocas are
+        // overwritten by the next one — unlike the straight-line shape,
+        // whose stale slot pointer LSan's conservative stack scan finds).
+        let mut m4: Map[i64, Full] = Map.new();
+        m4.insert(i, mk(i));
+        let m5 = m4;
+        n = n + 1i64;
+
         i = i + 1i64;
     }
     println(n);
 }
 "#,
-            // 3 per iteration x 200 = 600. The whole-map REBIND shape is
-            // deliberately absent: `let m5 = m4;` leaks the ENTIRE map
-            // (handle + arrays + values) on unmodified main — a pre-existing
-            // MEMORY defect (B-2026-07-31-27), not a bodies problem; its
-            // BODY parity is pinned by the e2e/interp twins instead.
-            &["600"],
+            // 4 per iteration x 200 = 800.
+            &["800"],
             "map_value_user_drop_bodies_fire_once",
         );
     }

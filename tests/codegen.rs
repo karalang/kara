@@ -5754,6 +5754,56 @@ fn main() {
         assert_eq!(out, "91\n1\n95\n2\n97\n3\n94\n4\n89\n5\n6\n");
     }
 
+    /// B-2026-07-31-27 — a whole-map/set rebind (`let m2 = m;`) transfers
+    /// handle OWNERSHIP to the destination, not just dispatch.
+    ///
+    /// The move-out suppressor's Map/Set arm nulls the SOURCE slot (a
+    /// branch-safe runtime sentinel), which defuses the source's queued
+    /// `FreeMapHandle` — and the let-path Map/Set track is gated on a
+    /// fresh-handle RHS, so the destination was never tracked and the ENTIRE
+    /// map (handle + kv arrays + stored heap) leaked on every rebind.
+    /// `transfer_map_handle_on_rebind` now copies the source's queued free
+    /// onto the destination's slot. This test pins the BEHAVIOR half:
+    /// rebind-then-return stays readable in the caller (a wrong fix that
+    /// dropped the source-null instead would let the source's drain free the
+    /// returned handle — UAF), chained rebinds mutate through the final
+    /// binding, and a Set rebind reads back. The MEMORY half (exactly one
+    /// free) is pinned by `asan_map_value_user_drop_bodies_fire_once`'s
+    /// rebind block in `tests/memory_sanitizer.rs`.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_map_whole_rebind_transfers_ownership` on identical source and
+    /// expected output.
+    #[test]
+    fn e2e_map_whole_rebind_transfers_ownership() {
+        let Some(out) = run_program(
+            "fn make() -> Map[i64, i64] {\n\
+             \x20   let mut m: Map[i64, i64] = Map.new();\n\
+             \x20   m.insert(1, 11);\n\
+             \x20   let m2 = m;\n\
+             \x20   m2\n\
+             }\n\
+             fn main() {\n\
+             \x20   let got = make();\n\
+             \x20   println(got.get(1).unwrap());\n\
+             \x20   let mut a: Map[i64, i64] = Map.new();\n\
+             \x20   a.insert(3, 30);\n\
+             \x20   let b = a;\n\
+             \x20   let mut c = b;\n\
+             \x20   c.insert(4, 40);\n\
+             \x20   println(c.len());\n\
+             \x20   println(c.get(4).unwrap());\n\
+             \x20   let mut s: Set[i64] = Set.new();\n\
+             \x20   s.insert(9);\n\
+             \x20   let s2 = s;\n\
+             \x20   println(s2.contains(9));\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "11\n2\n40\ntrue\n");
+    }
+
     /// B-2026-07-30-11 (Vec leg) — a `Vec[T]`'s ELEMENTS run their user
     /// `impl Drop` bodies when the Vec dies.
     ///

@@ -3914,6 +3914,87 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-07-31-27 — `let m5 = m4;` (Map/Set whole-handle rebind). The
+    /// move-out suppressor's Map/Set arm
+    /// (`suppress_source_vec_cleanup_for_arg_ex`) nulls the SOURCE slot — a
+    /// branch-safe runtime sentinel that makes the source's queued
+    /// `FreeMapHandle` a no-op — but nothing tracked the DESTINATION (the
+    /// let-path Map/Set track is gated on a fresh-handle RHS), so the whole
+    /// map (handle + kv arrays + stored heap) leaked on every rebind. Copy
+    /// the source's queued `FreeMapHandle` config onto the destination's
+    /// slot in the CURRENT frame: the destination becomes the owner on the
+    /// moved path, while the source's retained null-safe drain still frees
+    /// on any branch path that never executed the move. The rebind-then-
+    /// return shape stays balanced too — `return m5` retracts the
+    /// destination's action via `suppress_map_cleanup_for_tail_identifier`
+    /// exactly as it would for a fresh-handle binding.
+    ///
+    /// No-op when the source has no queued `FreeMapHandle` (a caller-retains
+    /// alias like `let mm = s.m;` or a `ref Map` param — the container/caller
+    /// stays the sole freer, exactly as before), when either name has no
+    /// slot, on a self-alias, or when the destination already carries its
+    /// own handle free (nothing to transfer twice).
+    pub(super) fn transfer_map_handle_on_rebind(&mut self, src_name: &str, dest_name: &str) {
+        let Some(src_slot) = self.variables.get(src_name).copied() else {
+            return;
+        };
+        let Some(dest_slot) = self.variables.get(dest_name).copied() else {
+            return;
+        };
+        if src_slot.ptr == dest_slot.ptr {
+            return;
+        }
+        let mut found = None;
+        'outer: for frame in self.scope_cleanup_actions.iter().rev() {
+            for action in frame.iter().rev() {
+                if let CleanupAction::FreeMapHandle {
+                    map_alloca,
+                    key_is_vec,
+                    val_is_vec,
+                    val_shared_heap_type,
+                    key_shared_heap_type,
+                    val_drop_fn,
+                } = action
+                {
+                    if *map_alloca == src_slot.ptr {
+                        found = Some((
+                            *key_is_vec,
+                            *val_is_vec,
+                            *val_shared_heap_type,
+                            *key_shared_heap_type,
+                            *val_drop_fn,
+                        ));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let Some((key_is_vec, val_is_vec, val_shared, key_shared, val_drop_fn)) = found else {
+            return;
+        };
+        let dest_tracked = self.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(
+                    action,
+                    CleanupAction::FreeMapHandle { map_alloca, .. } if *map_alloca == dest_slot.ptr
+                )
+            })
+        });
+        if dest_tracked {
+            return;
+        }
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeMapHandle {
+                map_alloca: dest_slot.ptr,
+                key_is_vec,
+                val_is_vec,
+                val_shared_heap_type: val_shared,
+                key_shared_heap_type: key_shared,
+                val_drop_fn,
+            });
+        }
+    }
+
     /// Phase 8 `File` handle slice F4b: register a File-typed binding
     /// for scope-exit close. Pushed at the pattern-binding site in
     /// `pattern_binding.rs` when `type_name == "File"` fires the

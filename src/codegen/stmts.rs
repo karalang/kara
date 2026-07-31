@@ -5620,6 +5620,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                     shared_info.is_none(),
                                 );
                             }
+                            // B-2026-07-31-27 — Map/Set whole-handle rebind
+                            // (`let m5 = m4;`). The suppressor's Map/Set arm
+                            // just nulled the SOURCE slot (branch-safe move
+                            // sentinel), which defuses the source's queued
+                            // `FreeMapHandle` — so the destination must take
+                            // over the handle free or the whole map leaks.
+                            // Self-gating: no-ops unless the source actually
+                            // carries a queued `FreeMapHandle` (an OWNER —
+                            // a place-source alias or `ref Map` param has
+                            // none and the container stays the sole freer).
+                            if self
+                                .var_type_names
+                                .get(source_name)
+                                .is_some_and(|t| matches!(t.as_str(), "Map" | "Set"))
+                                && !self.ref_params.contains_key(source_name)
+                            {
+                                self.transfer_map_handle_on_rebind(source_name, var_name.as_str());
+                            }
                         }
                         // #27 (B-2026-06-14-8) — `let inr = h.ps.0`: a heap-bearing
                         // STRUCT moved OUT of a tuple element. `inr` is tracked
@@ -5795,8 +5813,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // method call (`clone`, `union`, `intersection`, `difference`).
                 // `Map.new()` / `Set.new()` / map-literal RHS shapes already track
                 // via their early-return paths above; `let n = m;` (move) bypasses
-                // this since it's an Identifier RHS, not a MethodCall, so the
-                // source's existing track stays the unique cleanup owner.
+                // this since it's an Identifier RHS, not a MethodCall — the
+                // destination's `FreeMapHandle` is instead COPIED from the
+                // source's by `transfer_map_handle_on_rebind` at the move-
+                // suppression site above (B-2026-07-31-27; the suppressor
+                // nulls the source slot, so the source's retained drain
+                // no-ops on the moved path and the destination is the owner).
                 //
                 // ALSO track when the RHS is a `Call` returning a Map/Set BY VALUE
                 // (`let m2 = make_map()`). An owned by-value return transfers the

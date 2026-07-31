@@ -26211,6 +26211,43 @@ fn test_map_values_run_user_drop_bodies() {
     );
 }
 
+/// B-2026-07-31-27 — a whole-map/set rebind (`let m2 = m;`) keeps the value
+/// READABLE through the destination: rebind-then-return, chained rebinds with
+/// a mutation through the final binding, and a Set rebind. The interpreter's
+/// Rc semantics were always correct here; this is the oracle half of the pair
+/// with `tests/codegen.rs`'s `e2e_map_whole_rebind_transfers_ownership`, where
+/// the move nulls the source slot and `transfer_map_handle_on_rebind` hands
+/// the scope-exit free to the destination (before the fix codegen leaked the
+/// entire map; a wrong fix that instead dropped the source-null would UAF the
+/// rebind-then-return shape — both drifts show up as output divergence here).
+#[test]
+fn test_map_whole_rebind_transfers_ownership() {
+    assert_eq!(
+        run("fn make() -> Map[i64, i64] {\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 m.insert(1, 11);\n\
+                 let m2 = m;\n\
+                 m2\n\
+             }\n\
+             fn main() {\n\
+                 let got = make();\n\
+                 println(got.get(1).unwrap());\n\
+                 let mut a: Map[i64, i64] = Map.new();\n\
+                 a.insert(3, 30);\n\
+                 let b = a;\n\
+                 let mut c = b;\n\
+                 c.insert(4, 40);\n\
+                 println(c.len());\n\
+                 println(c.get(4).unwrap());\n\
+                 let mut s: Set[i64] = Set.new();\n\
+                 s.insert(9);\n\
+                 let s2 = s;\n\
+                 println(s2.contains(9));\n\
+             }\n"),
+        "11\n2\n40\ntrue\n"
+    );
+}
+
 /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS runs
 /// its `Drop` body exactly once.
 ///
