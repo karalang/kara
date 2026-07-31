@@ -20,6 +20,16 @@ Modes:
                                 more than --drift (default 5%) from it, or
                                 when B is empty; exit 0 either way (the CI
                                 step commits only if the file changed)
+  --drift-out F                 write-baseline: write a markdown record of
+                                which ratios moved and in WHICH DIRECTION
+
+A refresh auto-merges unattended, so the direction of every move has to be
+legible after the fact: the refresh trigger (--drift, 5%) is far below the
+gate threshold (--threshold, 30%), which means a regression in between
+re-baselines itself and the gate never fires. Repeated, that ratchets the
+baseline the wrong way one sub-threshold step at a time. --drift-out records
+each move as improved/REGRESSED so the trail lands in the PR body and the
+step summary instead of only in an ephemeral job log.
 """
 
 import argparse
@@ -60,6 +70,9 @@ def main():
                     help="gate: max allowed ratio regression vs baseline")
     ap.add_argument("--drift", type=float, default=0.05,
                     help="write-baseline: min ratio movement that rewrites")
+    ap.add_argument("--drift-out",
+                    help="write-baseline: file to write the markdown drift "
+                         "record to (which ratios moved, and which direction)")
     ap.add_argument("--refresh-on", default="",
                     help="write-baseline: comma-separated workloads whose drift "
                          "may trigger a refresh (default: all). Noisy short "
@@ -91,8 +104,43 @@ def main():
                    and abs(latest[w][2] - base[w][2]) / base[w][2] > args.drift]
         stale = new + drifted
         if stale:
+            # A RISING karac/rustc ratio means karac lost ground — the direction
+            # that ratchets. Capture each move before `latest` overwrites the
+            # baseline file and the old numbers are gone.
+            moves = []
+            for w in stale:
+                if w in base:
+                    old, cur = base[w][2], latest[w][2]
+                    delta = (cur - old) / old
+                    moves.append((w, f"{old:.2f}x", f"{cur:.2f}x", f"{delta:+.1%}",
+                                  "REGRESSED" if delta > 0 else "improved"))
+                else:
+                    moves.append((w, "—", f"{latest[w][2]:.2f}x", "—", "new"))
             path.write_text(Path(args.latest).read_text())
             print(f"baseline rewritten (moved: {', '.join(stale)})")
+            for w, old, cur, d, v in moves:
+                print(f"  {w}: {old} -> {cur} ({d}) {v}")
+            if args.drift_out:
+                lines = [
+                    "### Baseline refresh — karac/rustc ratio moves",
+                    "", "| workload | baseline | new | Δ ratio | direction |",
+                    "|---|---|---|---|---|",
+                ]
+                for w, old, cur, d, v in moves:
+                    lines.append(f"| {w} | {old} | {cur} | {d} | {v} |")
+                regressed = [w for w, _, _, _, v in moves if v == "REGRESSED"]
+                lines.append("")
+                if regressed:
+                    lines.append(
+                        f"⚠️ **Regressed: {', '.join(regressed)}.** The refresh "
+                        f"trigger ({args.drift:.0%}) sits well below the gate "
+                        f"({args.threshold:.0%}), so a move in this band "
+                        f"re-baselines itself without ever failing the gate. "
+                        f"Confirm this is a real, intended shift and not one "
+                        f"more sub-threshold ratchet step.")
+                else:
+                    lines.append("_No ratio regressed._")
+                Path(args.drift_out).write_text("\n".join(lines) + "\n")
         else:
             scope = f" among {', '.join(sorted(trigger))}" if trigger else ""
             print(f"baseline unchanged (all ratios within {args.drift:.0%}{scope})")

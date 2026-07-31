@@ -54,3 +54,10 @@ bench/compile_speed/seed_kata
 bench/compile_speed/seed_kata_rs
 bench/compile_speed/latest.json
 bench/compile_speed/gate.md
+# Written by the main leg's refresh step (compare.py --drift-out, PR body).
+bench/compile_speed/drift.md
+bench/compile_speed/pr-body.md
+
+# Python bytecode caches (bench/mend/scripts helpers).
+__pycache__/
+*.pyc

@@ -106,42 +106,77 @@ jobs:
           if-no-files-found: ignore
 
       # main is a protected branch (required status checks), so the refresh
-      # rides a PR from a well-known branch instead of a direct push. The
-      # refresh trigger is scoped to `synthetic` (--refresh-on): the tiny
+      # rides a PR from a well-known branch instead of a direct push — and that
+      # PR turns on auto-merge, so it lands itself once the checks go green and
+      # nobody has to shepherd it. Direct-push was considered and rejected: it
+      # would need a protection bypass for the workflow token, and the PR leg
+      # already runs the full required-check set (verified on #4/#5), so
+      # auto-merge buys the same zero-touch refresh at no such cost.
+      #
+      # The refresh trigger is scoped to `synthetic` (--refresh-on): the tiny
       # seed_kata's between-run variance exceeds 5%, so it would otherwise
       # churn the baseline every run — it stays in the gate (30% threshold,
       # far above its noise) but doesn't drive refreshes. Every refresh still
       # writes ALL workloads' fresh numbers.
-      - name: Refresh baseline (PR on drift)
+      #
+      # Failing to open or queue the PR is a hard ERROR, never a warning. This
+      # step is the only thing keeping the gate's reference honest, and a green
+      # run over a stranded baseline branch (2026-07-30 and -31, while 'Allow
+      # GitHub Actions to create and approve pull requests' was off) reads as
+      # "nothing to do" while the gate silently measures against stale numbers.
+      - name: Refresh baseline (auto-merging PR on drift)
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           cd bench/compile_speed
           python3 compare.py --latest latest.json --write-baseline baseline.json \
-            --refresh-on synthetic
+            --refresh-on synthetic --drift-out drift.md
           if git diff --quiet baseline.json; then
             echo "baseline current — no PR needed"
             exit 0
           fi
+          cat drift.md >> "$GITHUB_STEP_SUMMARY"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B bench/compile-speed-baseline
           git add baseline.json
           git commit -m "bench(compile-speed): refresh baseline from main run ${{ github.run_id }}"
           git push -f origin bench/compile-speed-baseline
-          if ! gh pr create \
+
+          # The drift record rides in the PR body: this lands unattended, so
+          # which way each ratio moved has to survive into merged history
+          # rather than living only in this job's log.
+          {
+            echo "Automated baseline refresh from the main-leg run of commit ${{ github.sha }} — a karac/rustc ratio drifted >5% from the stored baseline. Merging keeps the compile-speed gate honest."
+            echo
+            cat drift.md
+          } > pr-body.md
+
+          url=$(gh pr create \
             --base main --head bench/compile-speed-baseline \
             --title "bench(compile-speed): refresh baseline" \
-            --body "Automated baseline refresh from the main-leg run of commit ${{ github.sha }} — a karac/rustc ratio drifted >5% from the stored baseline. Merging keeps the compile-speed gate honest." \
-            2> gh-err.txt; then
-            if grep -qi "already exists" gh-err.txt; then
-              echo "PR already open — the force-push updated it"
-            else
-              cat gh-err.txt
-              echo "::warning::Could not open the baseline PR (repo setting" \
-                "'Allow GitHub Actions to create and approve pull requests'" \
-                "is likely disabled). The refreshed baseline is waiting on" \
-                "branch bench/compile-speed-baseline."
-            fi
-          fi
+            --body-file pr-body.md 2> gh-err.txt) || {
+              if grep -qi "already exists" gh-err.txt; then
+                echo "PR already open — the force-push updated it"
+                url=$(gh pr list --head bench/compile-speed-baseline \
+                  --state open --json url --jq '.[0].url')
+              else
+                cat gh-err.txt >&2
+                echo "::error::Could not open the baseline PR — check that repo" \
+                  "setting 'Allow GitHub Actions to create and approve pull" \
+                  "requests' is enabled. The refreshed baseline is stranded on" \
+                  "branch bench/compile-speed-baseline until it is."
+                exit 1
+              fi
+            }
+
+          # --auto merges it as soon as the required checks pass, and leaves it
+          # open and visible if any of them fail.
+          gh pr merge --auto --squash "$url" || {
+            echo "::error::Opened $url but could not enable auto-merge — check" \
+              "that 'Allow auto-merge' is enabled on the repository."
+            exit 1
+          }
+          echo "baseline PR queued for auto-merge: $url"
