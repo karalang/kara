@@ -906,7 +906,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **778 surfaced 
 | B-2026-07-31-5 | codegen | low | A value enum's own `impl Drop` body fired at SCOPE EXIT under codegen but at the binding's NLL live-range end under the interpreter — `mid\|DS` vs `DS… | 09459b2 |
 | B-2026-07-31-6 | codegen | medium | A `Result[T, E]` whose payload is HEAP-BOXED got the INLINE payload cleanup registered ON TOP of the correct box drop, so the inline overlay read the… | d5f45d6 |
 | B-2026-07-31-7 | codegen | medium | An UNANNOTATED `let` of an `Option`/`Result` whose payload is heap-BOXED registered no cleanup at all and leaked the whole box, payload heap included… | d5f45d6 |
-| B-2026-07-31-8 | codegen | high | An INVERTED loop range (`for y in 5..3`) makes auto-par's `iter_total` negative, and the descriptor field is `u64` — so a loop that runs ZERO iterati… | — |
+| B-2026-07-31-8 | codegen | high | An INVERTED loop range (`for y in 5..3`) makes auto-par's `iter_total` negative, and the descriptor field is `u64` — so a loop that runs ZERO iterati… | db59de2 |
 
 </details>
 
