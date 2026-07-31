@@ -13105,6 +13105,204 @@ fn main() {
         }
     }
 
+    // ── Early exit out of a provider body (B-2026-07-31-11) ──
+    //
+    // The `karac_provider_pop` used to be emitted inline after the body, so a
+    // terminator inside the body (an early `return`, or a `break` out of an
+    // enclosing loop) left the pop unreachable: `with_provider` failed with a
+    // raw LLVM "Terminator found in the middle of a basic block" and the block
+    // form refused with a diagnostic, while `--interp` ran both. The pop is now
+    // a `CleanupAction::ProviderPop` on a dedicated frame around the body, so
+    // every exit path drains it — after body-local drops, before the
+    // terminator, which is the interpreter's order.
+
+    #[test]
+    fn e2e_with_provider_early_return_body() {
+        // The exact form-A ledger repro: tail-position `with_provider` whose
+        // closure body early-returns. Must build AND print 8 like `--interp`.
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn early() -> i64 with reads(Ctr) {\n\
+                 with_provider[Ctr](InMem { n: 8 }, || { return read(); })\n\
+             }\n\
+             fn main() with reads(Ctr) { println(f\"{early()}\"); }",
+        ) {
+            assert_eq!(out, "8\n");
+        }
+    }
+
+    #[test]
+    fn e2e_providers_block_early_return_body() {
+        // Form-B ledger repro: the block form used to REFUSE this shape with
+        // an actionable diagnostic (better than the pre-B-2026-07-31-9
+        // constant-0 silent wrong answer, but still uncompilable).
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn early2() -> i64 with reads(Ctr) {\n\
+                 providers { Ctr => InMem { n: 8 } } in { return read(); }\n\
+             }\n\
+             fn main() with reads(Ctr) { println(f\"{early2()}\"); }",
+        ) {
+            assert_eq!(out, "8\n");
+        }
+    }
+
+    #[test]
+    fn e2e_providers_block_multi_binding_early_return_pops_all() {
+        // Multi-binding block + early return: the return edge must drain BOTH
+        // pops (the cleanup frame holds one ProviderPop per pushed binding).
+        // A missed pop trips the runtime's head==frame assertion on the next
+        // provider operation or corrupts later dispatch.
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             trait Namer { fn name(ref self) -> String; }\n\
+             effect resource Ctr: Counter;\n\
+             effect resource Who: Namer;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             struct N1 { s: String }\n\
+             impl Namer for N1 { fn name(ref self) -> String { self.s.clone() } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn multi() -> String with reads(Ctr) reads(Who) {\n\
+                 providers { Ctr => InMem { n: 2 }, Who => N1 { s: \"zed\" } } in {\n\
+                     return f\"{Who.name()}-{read()}\";\n\
+                 }\n\
+             }\n\
+             fn main() with reads(Ctr) reads(Who) {\n\
+                 println(f\"{multi()}\");\n\
+                 with_provider[Ctr](InMem { n: 9 }, || { println(f\"{read()}\"); });\n\
+             }",
+        ) {
+            // The second line proves the provider stack is healthy AFTER the
+            // early-returning block: a fresh push/dispatch/pop still works.
+            assert_eq!(out, "zed-2\n9\n");
+        }
+    }
+
+    #[test]
+    fn e2e_with_provider_early_return_stack_intact_after() {
+        // Nested shape: a helper whose with_provider body early-returns is
+        // called from INSIDE an outer with_provider body. Both the inner pop
+        // (on the return edge) and the outer resolution AFTER the call must
+        // work — a dangling inner frame (an entry-block alloca of the
+        // already-returned helper) would corrupt the outer read. This is the
+        // scenario the "do not skip the pop when terminated" ledger warning
+        // describes.
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn inner_early() -> i64 with reads(Ctr) {\n\
+                 with_provider[Ctr](InMem { n: 7 }, || { return read(); })\n\
+             }\n\
+             fn nested() -> i64 with reads(Ctr) {\n\
+                 with_provider[Ctr](InMem { n: 100 }, || {\n\
+                     let inner = inner_early();\n\
+                     inner + read()\n\
+                 })\n\
+             }\n\
+             fn main() with reads(Ctr) { println(f\"{nested()}\"); }",
+        ) {
+            assert_eq!(out, "107\n");
+        }
+    }
+
+    #[test]
+    fn e2e_with_provider_enclosing_loop_break_pops_frame() {
+        // `break` out of an ENCLOSING loop from inside a with_provider body:
+        // the break edge drains the ProviderPop (it sits above the loop's
+        // cleanup depth), and the next iteration pushes a fresh frame onto a
+        // healthy stack. acc accumulates 0+1+2, breaks when read() == 3.
+        //
+        // Codegen-only assertion: the interpreter currently mis-handles this
+        // shape (returns unit from an i64 fn — filed separately), so this
+        // pins the type-sound transparent-break behaviour codegen has.
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn brk() -> i64 with reads(Ctr) {\n\
+                 let mut acc = 0;\n\
+                 for i in 0..5 {\n\
+                     acc = acc + with_provider[Ctr](InMem { n: i }, || {\n\
+                         if read() == 3 { break; }\n\
+                         read()\n\
+                     });\n\
+                 }\n\
+                 acc\n\
+             }\n\
+             fn main() with reads(Ctr) { println(f\"{brk()}\"); }",
+        ) {
+            assert_eq!(out, "3\n");
+        }
+    }
+
+    #[test]
+    fn e2e_providers_block_enclosing_loop_break_pops_frame() {
+        // Block-form sibling of the loop-break test: pop drains on the break
+        // edge, next iteration re-pushes cleanly.
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn brk2() -> i64 with reads(Ctr) {\n\
+                 let mut acc = 0;\n\
+                 for i in 0..5 {\n\
+                     providers { Ctr => InMem { n: i } } in {\n\
+                         if read() == 3 { break; }\n\
+                         acc = acc + read();\n\
+                     }\n\
+                 }\n\
+                 acc\n\
+             }\n\
+             fn main() with reads(Ctr) { println(f\"{brk2()}\"); }",
+        ) {
+            assert_eq!(out, "3\n");
+        }
+    }
+
+    #[test]
+    fn e2e_with_provider_early_return_drops_body_local_before_pop() {
+        // A heap-owning body local (f-string String) plus an early return:
+        // the return edge drains the body's own frame (freeing the String)
+        // BEFORE the ProviderPop frame — the interpreter's order. Also runs
+        // the fall-through path of the same body for both-path coverage.
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn heapy(flag: bool) -> i64 with reads(Ctr) {\n\
+                 with_provider[Ctr](InMem { n: 5 }, || {\n\
+                     let s = f\"local-{read()}\";\n\
+                     if flag { return s.len(); }\n\
+                     read()\n\
+                 })\n\
+             }\n\
+             fn main() with reads(Ctr) {\n\
+                 println(f\"{heapy(true)}\");\n\
+                 println(f\"{heapy(false)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n5\n");
+        }
+    }
+
     // ── Nested-place + compound-field assignment write-back (codegen) ──
     //
     // Regression: assignment to a value-type struct field through a projection

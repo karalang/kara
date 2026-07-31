@@ -16,6 +16,7 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 use inkwell::{AddressSpace, IntPredicate};
 
 use super::helpers::{impl_target_name, match_with_provider_call};
+use super::state::CleanupAction;
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Emit a static vtable global per `impl T for U` where `T` was
@@ -90,9 +91,15 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   %data = <pointer to provider value>
     ///   call void @karac_provider_push(%frame, <resource_id>, %data, @VT_<U>_<T>)
     ///   <body>                                    ; inlined closure body
-    ///   call void @karac_provider_pop()
+    ///   call void @karac_provider_pop()           ; via cleanup-action drain
     ///   ; result = body's value
     /// ```
+    ///
+    /// The pop is NOT emitted inline after the body — it is registered as a
+    /// [`CleanupAction::ProviderPop`] on a dedicated frame wrapped around the
+    /// body (B-2026-07-31-11), so an early `return` / `?` / enclosing-loop
+    /// `break` inside the body pops on its way out; on fall-through the drain
+    /// lands the pop exactly where the sketch shows it.
     ///
     /// The `ProviderFrame` is alloca'd on the entry block so each
     /// `with_provider` call site has its own per-invocation slot — the
@@ -167,18 +174,63 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap();
 
-        // 6. Inline the closure body. Only inline `||body` is supported in
+        // 6.+7. Inline the closure body with the matching pop registered as
+        //    a scope-cleanup action (B-2026-07-31-11) so it drains on EVERY
+        //    exit path — fall-through AND an early `return` / `?` / `break`
+        //    out of an enclosing loop. Only inline `||body` is supported in
         //    v1 — the body's free variables resolve against the outer
         //    scope, exactly as the interpreter handles a `with_provider`
         //    closure (see `Interpreter::eval_with_provider`).
-        let body_result = self.compile_with_provider_body(closure_expr, resource)?;
+        self.compile_provider_body_with_pop_frame(1, |me| {
+            me.compile_with_provider_body(closure_expr, resource)
+        })
+    }
 
-        // 7. Pop: karac_provider_pop(). Matches the push; the runtime
-        //    asserts head==frame and walks back to `frame.prev`.
-        self.builder
-            .build_call(self.karac_provider_pop_fn, &[], "")
-            .unwrap();
-
+    /// B-2026-07-31-11 — compile a provider body inside a dedicated cleanup
+    /// frame holding `n_pops` [`CleanupAction::ProviderPop`] actions, so the
+    /// `karac_provider_pop()` matching each already-emitted push fires on
+    /// EVERY exit path, not just fall-through:
+    ///
+    /// - **Fall-through** (no terminator after the body): the frame drains
+    ///   here via `drain_top_frame_with_emit`, emitting the pops exactly
+    ///   where the old inline emission put them.
+    /// - **Early `return` / `?` / `break`/`continue` out of an enclosing
+    ///   loop**: the exit site's `emit_scope_cleanup` walk already drained
+    ///   this frame (innermost-first, after the body's own frames — so
+    ///   body-local drops fire BEFORE the pop, the interpreter's order:
+    ///   `eval_providers_block` pops after `eval_block_inner` returns,
+    ///   including on `ControlFlow::Return`). The pops were emitted before
+    ///   the terminator; nothing more to emit — just discard the frame.
+    ///
+    /// The previous inline emission appended the pop after the body
+    /// unconditionally, so a terminator inside the body produced invalid IR
+    /// ("Terminator found in the middle of a basic block") for
+    /// `with_provider` and a loud refusal for `providers {} in {}`.
+    /// Deliberately NOT "skip the pop when terminated": that would leave a
+    /// frame whose storage is an entry-block alloca of the returning
+    /// function dangling on the provider stack — silent corruption.
+    fn compile_provider_body_with_pop_frame<F>(
+        &mut self,
+        n_pops: usize,
+        body: F,
+    ) -> Result<BasicValueEnum<'ctx>, String>
+    where
+        F: FnOnce(&mut Self) -> Result<BasicValueEnum<'ctx>, String>,
+    {
+        self.scope_cleanup_actions
+            .push((0..n_pops).map(|_| CleanupAction::ProviderPop).collect());
+        let body_result = body(self)?;
+        let body_has_terminator = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        if !body_has_terminator {
+            self.drain_top_frame_with_emit();
+        } else {
+            self.scope_cleanup_actions.pop();
+        }
         Ok(body_result)
     }
 
@@ -617,12 +669,14 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Alloca the ProviderFrame on the entry block (one slot reused
         // across loop iterations), then push / body / pop — identical to
-        // the user-resource path.
+        // the user-resource path, including the pop-as-cleanup-action
+        // registration (B-2026-07-31-11) so an early `return` out of the
+        // body pops on the way out instead of producing invalid IR.
         let frame_ptr = self.alloca_provider_frame("wp.amb.frame")?;
         self.emit_provider_push(frame_ptr, resource_id, data_ptr, vtable_ptr);
-        let body_result = self.compile_with_provider_body(closure_expr, resource)?;
-        self.emit_provider_pop();
-        Ok(body_result)
+        self.compile_provider_body_with_pop_frame(1, |me| {
+            me.compile_with_provider_body(closure_expr, resource)
+        })
     }
 
     /// Resolve ONE provider binding — trait-ful or ambient — to the
@@ -704,14 +758,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
-    /// `karac_provider_pop()`. Matches one push; the runtime asserts
-    /// head==frame and walks back to `frame.prev`.
-    fn emit_provider_pop(&mut self) {
-        self.builder
-            .build_call(self.karac_provider_pop_fn, &[], "")
-            .unwrap();
-    }
-
     /// B-2026-07-31-9 — lower `providers { R => v, ... } in { body }`.
     ///
     /// This form used to compile to NOTHING. `compile_expr` had no
@@ -752,53 +798,26 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_provider_push(*frame_ptr, *id, *data_ptr, *vtable_ptr);
         }
 
-        // Phase 3 — the body. `compile_block_with_frame` gives it its own
-        // lexical scope and cleanup frame, so body-local bindings are dropped
-        // before the pops below — the same order as the interpreter, whose
-        // `eval_block_inner` drains cleanup before `eval_providers_block`
-        // pops. A body with no tail value yields 0, matching the `Unsafe` arm.
-        let body_result = self
-            .compile_block_with_frame(body)?
-            .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into());
-
-        // A body that ends in a TERMINATOR (an early `return`, or a `break` /
-        // `continue` out of an enclosing loop) has already left this block, so
-        // the pops below would be appended after the terminator — invalid IR
-        // ("Terminator found in the middle of a basic block"). Refuse with an
-        // actionable message instead of letting module verification report it.
+        // Phase 3+4 — the body, then pop in reverse (each pop matches the
+        // innermost frame). `compile_block_with_frame` gives the body its own
+        // lexical scope and cleanup frame nested INSIDE the pop frame, so
+        // body-local bindings are dropped before the pops — the same order as
+        // the interpreter, whose `eval_block_inner` drains cleanup before
+        // `eval_providers_block` pops. A body with no tail value yields 0,
+        // matching the `Unsafe` arm.
         //
-        // This limitation is NOT introduced here: `with_provider`'s closure
-        // body has exactly the same hole and fails with exactly the same
-        // verifier error today (its pop is emitted after the inlined body the
-        // same way). Filed as its own entry — the correct fix is a
-        // provider-pop cleanup action that drains on every exit path, which is
-        // how user `Drop`/`defer` already reach the return path, and it fixes
-        // both surfaces at once.
-        //
-        // Before this arm existed the same program compiled to constant 0 and
-        // printed a WRONG answer silently, so a loud refusal is strictly
-        // better — but it does mean a program that previously "built" now does
-        // not.
-        if self
-            .builder
-            .get_insert_block()
-            .is_some_and(|bb| bb.get_terminator().is_some())
-        {
-            return Err(
-                "providers { } in { }: an early `return` (or `break`/`continue`) out of the \
-                 block body is not supported by codegen yet — the provider-frame pop would \
-                 be unreachable, leaving a dangling frame on the provider stack. \
-                 `with_provider` has the same limitation. Restructure the body to fall \
-                 through, or run with `--interp`."
-                    .to_string(),
-            );
-        }
-
-        // Phase 4 — pop in reverse, so each pop matches the innermost frame.
-        for _ in 0..resolved.len() {
-            self.emit_provider_pop();
-        }
-        Ok(body_result)
+        // The pops are registered as cleanup actions (B-2026-07-31-11), so a
+        // body ending in a TERMINATOR (an early `return`, or a `break` /
+        // `continue` out of an ENCLOSING loop) pops on the way out via the
+        // exit site's `emit_scope_cleanup` walk. This form used to REFUSE
+        // that shape with an actionable diagnostic (strictly better than the
+        // pre-B-2026-07-31-9 constant-0 silent wrong answer, but a program
+        // the interpreter runs still didn't build).
+        self.compile_provider_body_with_pop_frame(resolved.len(), |me| {
+            Ok(me
+                .compile_block_with_frame(body)?
+                .unwrap_or_else(|| me.context.i64_type().const_int(0, false).into()))
+        })
     }
 
     /// Lazily emit (or fetch) the override vtable for an ambient resource:

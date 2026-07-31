@@ -5585,6 +5585,7 @@ impl<'ctx> super::Codegen<'ctx> {
             p.get_name().to_str().unwrap_or("").to_string()
         };
         let place: Option<String> = match action {
+            CleanupAction::ProviderPop => None,
             CleanupAction::FreeVecBuffer { vec_alloca, .. } => Some(name_of(*vec_alloca)),
             CleanupAction::StructDrop { struct_alloca, .. } => Some(name_of(*struct_alloca)),
             CleanupAction::EnumDrop { enum_alloca, .. } => Some(name_of(*enum_alloca)),
@@ -5646,6 +5647,16 @@ impl<'ctx> super::Codegen<'ctx> {
         i64_t: inkwell::types::IntType<'ctx>,
     ) {
         match action {
+            // B-2026-07-31-11 — provider-frame pop on every exit path. One
+            // runtime call, no operands; the runtime asserts head==frame and
+            // walks back to `frame.prev`, so ordering correctness is enforced
+            // at runtime as well as by the frame's first-in/LIFO-last
+            // placement.
+            CleanupAction::ProviderPop => {
+                self.builder
+                    .build_call(self.karac_provider_pop_fn, &[], "")
+                    .unwrap();
+            }
             CleanupAction::FreeClusterWalk {
                 name,
                 ptr,

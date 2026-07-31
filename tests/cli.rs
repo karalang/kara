@@ -1984,6 +1984,92 @@ fn test_providers_block_run_build_parity() {
     );
 }
 
+/// B-2026-07-31-11 — the parity gate above, extended to an EARLY-RETURN body
+/// for BOTH provider forms (the ledger entry's validation bar).
+///
+/// The `karac_provider_pop` used to be emitted inline after the body, so a
+/// `return` inside the body left it after a terminator: `with_provider` failed
+/// module verification ("Terminator found in the middle of a basic block") and
+/// the block form refused with a diagnostic — while `--interp` printed 8 for
+/// both. The pop is now a `CleanupAction::ProviderPop` drained on every exit
+/// path, so both forms must build and match the interpreter.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_provider_early_return_run_build_parity() {
+    let tmp = scratch_project("provider-early-return-parity");
+    let src = "trait Counter { fn get(ref self) -> i64; }\n\
+               effect resource Ctr: Counter;\n\
+               struct InMem { n: i64 }\n\
+               impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+               fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+               fn early() -> i64 with reads(Ctr) {\n\
+               \x20   with_provider[Ctr](InMem { n: 8 }, || { return read(); })\n\
+               }\n\
+               fn early2() -> i64 with reads(Ctr) {\n\
+               \x20   providers { Ctr => InMem { n: 8 } } in { return read(); }\n\
+               }\n\
+               fn main() with reads(Ctr) {\n\
+               \x20   println(f\"{early()}\");\n\
+               \x20   println(f\"{early2()}\");\n\
+               }\n";
+    write(&tmp.join("provret.kara"), src);
+
+    let run_out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "provret.kara"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+
+    let build = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "provret.kara"])
+        .output();
+    // A CODEGEN failure is this bug's exact pre-fix failure mode ("Terminator
+    // found in the middle of a basic block" / the block form's refusal), so it
+    // must FAIL the test, not soft-skip it — only link-stage trouble (missing
+    // runtime archive) keeps the sibling gates' soft-skip.
+    if let Ok(o) = &build {
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            !stderr.contains("codegen failed"),
+            "early-return provider body failed codegen (the B-2026-07-31-11 \
+             failure mode):\n{stderr}"
+        );
+    }
+    let exe = tmp.join("provret");
+    let build_out = if build.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(r), Some(b)) = (run_out, build_out) else {
+        eprintln!("skip: could not produce both interp and compiled output (no runtime archive?)");
+        return;
+    };
+
+    // (1) PARITY — pre-fix, the compiled side did not exist at all (form A
+    // failed verification, form B refused), so there was nothing to compare.
+    assert_eq!(
+        r, b,
+        "run/build parity for early-return provider bodies: the interpreter \
+         and codegen must agree for both `with_provider` and `providers {{ }}`"
+    );
+
+    // (2) CORRECTNESS — the early return reads the installed provider and the
+    // pop still fires on the return edge (a missed pop would corrupt the
+    // second form's push/dispatch).
+    assert_eq!(
+        r, "8\n8\n",
+        "early return out of a provider body must yield the provider's value"
+    );
+}
+
 /// Standing run-vs-build gate for user `impl Drop` on AGGREGATE FIELDS
 /// (B-2026-07-29-39's prerequisite).
 ///

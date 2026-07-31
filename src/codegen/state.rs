@@ -930,6 +930,20 @@ pub(crate) enum CleanupAction<'ctx> {
     /// covers normal-exit semantics; error-exit dispatch (errdefer,
     /// `?`-propagation, panic) lands in slice 2.
     UserDefer(Block),
+    /// B-2026-07-31-11 — one `karac_provider_pop()` call, registered as the
+    /// FIRST action of a dedicated frame wrapped around a provider body
+    /// (`with_provider`'s inlined closure, each `providers { } in { }`
+    /// binding). Riding the cleanup stack is what makes the pop fire on
+    /// EVERY exit path — the normal fall-through drain, an early `return`'s
+    /// `emit_scope_cleanup` walk, `break`/`continue` out of an enclosing
+    /// loop, and the `?` error path — instead of being emitted inline after
+    /// the body, where a body-terminating `return` left it appended after a
+    /// terminator (invalid IR for `with_provider`; a loud refusal for the
+    /// block form). First-in means LIFO drains it LAST, i.e. after
+    /// body-local drops — the interpreter's order (`eval_providers_block`
+    /// pops after `eval_block_inner` returns, including on
+    /// `ControlFlow::Return`).
+    ProviderPop,
     /// Invoke the per-type user-Drop wrapper `karac_drop_<Type>` on a
     /// struct alloca at scope exit. The wrapper (emitted by Prereq.2's
     /// `emit_user_drop_wrappers`) (a) calls the user-defined

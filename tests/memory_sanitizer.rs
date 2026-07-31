@@ -34206,4 +34206,53 @@ fn main() {
             "json_parse_tree_freed_once",
         );
     }
+
+    // B-2026-07-31-11 — early `return` out of a provider body. The
+    // `karac_provider_pop` is now a cleanup action drained on every exit
+    // path; this gate exercises the RETURN edge with a heap-owning body
+    // local: the body's own frame must free the f-string String before the
+    // ProviderPop drains (a missed free is an LSan leak; a re-entrant or
+    // mis-ordered drain would double-free under ASAN). Looped so both the
+    // early-return and fall-through paths re-push onto a healthy provider
+    // stack — a dangling frame head from a skipped pop asserts in the
+    // runtime on the next push/dispatch. Pre-fix this program did not
+    // compile at all (verifier error), so the gate cannot pass vacuously.
+    #[test]
+    fn asan_provider_early_return_frees_body_local() {
+        assert_clean_asan_run(
+            r#"
+trait Counter { fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn heapy(flag: bool) -> i64 with reads(Ctr) {
+    with_provider[Ctr](InMem { n: 5 }, || {
+        let s = f"local-heap-payload-{read()}";
+        if flag { return s.len(); }
+        read()
+    })
+}
+fn blocky(flag: bool) -> i64 with reads(Ctr) {
+    providers { Ctr => InMem { n: 6 } } in {
+        let s = f"block-heap-payload-{read()}";
+        if flag { return s.len(); }
+        read()
+    }
+}
+fn main() with reads(Ctr) {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        n = n + heapy(true) + heapy(false) + blocky(true) + blocky(false);
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // (20 + 5 + 20 + 6) x 200 = 10200.
+            &["10200"],
+            "provider_early_return_frees_body_local",
+        );
+    }
 }
