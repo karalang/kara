@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 1 |
-| false-positive | 51 | 0 |
-| run-vs-build | 46 | 0 |
+| false-positive | 52 | 0 |
+| run-vs-build | 47 | 1 |
 | perf | 39 | 2 |
 | crash | 32 | 0 |
 | soundness | 30 | 1 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 555 | 4 |
-| typecheck | 103 | 1 |
-| interp | 80 | 2 |
+| typecheck | 104 | 1 |
+| interp | 81 | 3 |
 | ownership | 33 | 0 |
 | autopar | 24 | 0 |
 | other | 21 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **771 surfaced · 5 open · 758 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **773 surfaced · 6 open · 759 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,10 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **771 surfaced 
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231). Still silent: Map values, Option/Result payloads, enum payloads, non-let tuple positions. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-30-15 | 2026-07-30 | codegen+interp | high | `Json` has no integer variant — every i64 serializes through f64, so whole numbers emit `1.0` (which Go's encoding/json REFUSES into an int field) and any value past 2^53 is silently corrupted. Both defects survive a `Json.parse` round-trip, so a service cannot echo an integer field unchanged. | — |
 | B-2026-07-31-1 | 2026-07-31 | typecheck | high | NO METHOD-NAME CHECKING on baked-stdlib handle types — `f.totally_bogus_method_xyz()` on a `File`, `TcpStream`, `Mutex`, `Regex`, `Pool`, … typechecks clean, while the same call on `String`/`Vec`/`Map` is correctly rejected. 11 of 11 resolvable types affected, so every typo on those surfaces escapes `karac check` and fails later at codegen or runtime. | — |
+| B-2026-07-31-4 | 2026-07-31 | interp | high | INTERPRETER LOSES PROVIDER MUTATIONS: a `mut ref self` provider method called inside `with_provider` has no visible effect — two `bump()` calls read back 0, not 2. Codegen gets it right (prints 2), so this is a silent WRONG ANSWER that diverges from the backend it is meant to preview. | — |
 
-### Fixed (758)
+### Fixed (759)
 
-<details><summary>758 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>759 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -900,6 +901,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **771 surfaced 
 | B-2026-07-30-16 | typecheck+codegen+interp | high | `File.sync_all()` / `sync_data()` — the durability API design.md:9150 mandates — TYPECHECKS CLEAN but is unimplemented in codegen AND the interpreter… | 38808e0 |
 | B-2026-07-30-17 | typecheck | medium | Map LOOKUP (`get` / `get_or` / `contains_key` / `remove`) rejected a borrowed key: `m.get(key)` where `key: ref String` failed with `expected 'String… | 097f0a4 |
 | B-2026-07-31-2 | typecheck | medium | `Ok(x)` / `Err(x)` / `Some(x)` did not push the expected PAYLOAD type inward, so a type-inferred constructor in the payload never resolved: `fn f() -… | dcdc9e1 |
+| B-2026-07-31-3 | typecheck | high | CONTRADICTORY RULES: E_ENUM_NESTED_ENUM_PAYLOAD said to mark a nested inner enum `shared`, while E_NOT_CROSS_TASK said a `shared enum` cannot cross a… | 895d4da |
 
 </details>
 
