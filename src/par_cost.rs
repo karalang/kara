@@ -149,7 +149,7 @@ impl FanoutVerdict {
 /// place — the carve-out only changes bodies that ALSO read memory at the top
 /// level. Making the detector nest-aware was measured and rejected: it
 /// reclassifies genuinely-winning loops as memory-bound (a 32 MiB strided sum
-/// measured 68.8 ms sequential vs 42.3 ms fanned out, 1.63x; at 128 MiB,
+/// measured 73.2 ms sequential vs 34.6 ms fanned out, 2.12x; at 128 MiB,
 /// 156.2 ms vs 104.1 ms, 1.50x — more cores extract more bandwidth than one).
 pub fn fanout_verdict(
     body: &Block,
