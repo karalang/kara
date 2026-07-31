@@ -973,8 +973,9 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// A stable, LLVM-name-safe signature of a tuple's element types, keying the
-    /// memoization of [`Self::synthesize_tuple_drop_fn_te`].
-    fn tuple_te_sig(elems: &[crate::ast::TypeExpr]) -> String {
+    /// memoization of [`Self::synthesize_tuple_drop_fn_te`] (and its bodies-only
+    /// sibling `emit_tuple_elem_user_drop_bodies_fn`).
+    pub(super) fn tuple_te_sig(elems: &[crate::ast::TypeExpr]) -> String {
         elems
             .iter()
             .map(Self::type_expr_sig)

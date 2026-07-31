@@ -26316,6 +26316,105 @@ fn test_match_arm_moved_payload_runs_drop_body() {
     );
 }
 
+/// B-2026-07-30-11 (discarded-temp leg) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_wildcard_let_discard_runs_drop_bodies`, same
+/// source and expected string. `let _ = <owned temp>;` fires the discarded
+/// value's Drop work at the `;` via `run_discarded_value_user_drops`.
+#[test]
+fn test_wildcard_let_discard_runs_drop_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+                 Res { id: n }\n\
+             }\n\
+             fn mkopt(n: i64) -> Option[Res] {\n\
+                 Option.Some(Res { id: n })\n\
+             }\n\
+             fn main() {\n\
+                 println(\"s1\");\n\
+                 let _ = Res { id: 1 };\n\
+                 println(\"s2\");\n\
+                 let _ = mk(2);\n\
+                 println(\"s3\");\n\
+                 mk(3);\n\
+                 println(\"s4\");\n\
+                 let _ = (Res { id: 4 }, 40);\n\
+                 println(\"s5\");\n\
+                 let _ = Option.Some(Res { id: 5 });\n\
+                 println(\"s6\");\n\
+                 let _ = mkopt(6);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "s1\ndrop 1\ns2\ndrop 2\ns3\ndrop 3\ns4\ndrop 4\ns5\ndrop 5\ns6\ndrop 6\nend\n"
+    );
+}
+
+/// B-2026-07-30-11 (discarded-temp leg, insert-displacement shape) —
+/// interpreter twin of `tests/codegen.rs`'s
+/// `e2e_wildcard_let_insert_displaced_payload_drop`, same source and
+/// expected string.
+#[test]
+fn test_wildcard_let_insert_displaced_payload_drop() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut m: Map[i64, Res] = Map.new();\n\
+                 let _ = m.insert(1, Res { id: 7 });\n\
+                 println(\"first insert done\");\n\
+                 let _ = m.insert(1, Res { id: 8 });\n\
+                 println(\"displacing insert done\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "first insert done\ndrop 7\ndrop 8\ndisplacing insert done\nend\n"
+    );
+}
+
+/// B-2026-07-30-11 (discarded-temp leg, place-shape pins) — interpreter twin
+/// of `tests/codegen.rs`'s `e2e_wildcard_let_discard_place_shapes_single_fire`,
+/// same source and expected string: moved-binding discard shapes fire the
+/// body exactly once.
+#[test]
+fn test_wildcard_let_discard_place_shapes_single_fire() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             struct W { r: Res }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let r = Res { id: 31 };\n\
+                 println(\"a\");\n\
+                 let _ = (r, 1);\n\
+                 println(\"b\");\n\
+                 let s = Res { id: 32 };\n\
+                 let _ = Option.Some(s);\n\
+                 println(\"c\");\n\
+                 let r0 = Res { id: 33 };\n\
+                 let _ = W { r: r0 };\n\
+                 println(\"d\");\n\
+                 let t = Res { id: 34 };\n\
+                 let _ = t;\n\
+                 println(\"e\");\n\
+                 let k = 5;\n\
+                 let _ = Res { id: k };\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 31\nb\ndrop 32\nc\ndrop 33\nd\ndrop 34\ne\ndrop 5\nend\n"
+    );
+}
+
 /// B-2026-07-31-37 (heap face) — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_assign_move_heap_body_once`, same source and expected string.
 /// The interpreter's pre-fix behavior was `D7 D7 x` (double body, right

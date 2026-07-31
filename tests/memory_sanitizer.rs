@@ -34183,6 +34183,48 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (discarded-temp leg) — `let _ = <owned temp>;` now
+    /// registers the discarded temp's cleanup (Drop bodies + heap frees) at
+    /// the `;` for struct-literal / user-fn-call / tuple / Option-ctor
+    /// shapes, and the displaced `Some(old)` of a discarded `m.insert`.
+    /// This test is the DOUBLE-FREE-direction gate over heap `String`
+    /// fields (body walks read the fields the frees then release, LIFO);
+    /// the leak direction is pinned by the E2E body-output tests — a
+    /// regression that drops the registration makes the allocations dead
+    /// again, and LLVM DCE'd dead allocation chains are invisible to LSan.
+    #[test]
+    fn asan_wildcard_let_discard_temps_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct G { id: i64, s: String }
+impl Drop for G {
+    fn drop(mut ref self) {
+        if self.id < 0i64 { println(self.id); }
+    }
+}
+fn mk(n: i64) -> G {
+    G { id: n, s: f"call-{n}" }
+}
+fn main() {
+    let mut it = 0i64;
+    while it < 200i64 {
+        let _ = G { id: it, s: f"lit-{it}" };
+        let _ = mk(it);
+        let _ = (G { id: it, s: f"tup-{it}" }, 40i64);
+        let _ = Option.Some(G { id: it, s: f"opt-{it}" });
+        it = it + 1i64;
+    }
+    let mut m: Map[i64, G] = Map.new();
+    let _ = m.insert(1i64, G { id: 7i64, s: f"seven-{7i64}" });
+    let _ = m.insert(1i64, G { id: 8i64, s: f"eight-{8i64}" });
+    println("done");
+}
+"#,
+            &["done"],
+            "wildcard_let_discard_temps_freed_once",
+        );
+    }
+
     // B-2026-07-30-5 — the VecDeque head-index lowering frees the malloc
     // base, exactly once, on every exit shape. The header's data pointer
     // never moves (only `head` advances, in a frame-local alloca), so the

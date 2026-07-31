@@ -5970,6 +5970,130 @@ fn main() {
         assert_eq!(out, "arm sees 4\ndrop 4\nbetween\n9\ndrop 9\nend\n");
     }
 
+    /// B-2026-07-30-11 (discarded-temp leg) — `let _ = <owned temp>;` runs
+    /// the discarded value's user Drop work at the `;`, for every fresh
+    /// shape: struct literal, user-fn call, tuple temp, Option ctor, and
+    /// Option-returning call. Bare-call discard (s3) was the only shape
+    /// that fired before this leg. Twin of `tests/interpreter.rs`'s
+    /// `test_wildcard_let_discard_runs_drop_bodies` on identical source.
+    #[test]
+    fn e2e_wildcard_let_discard_runs_drop_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+             \x20   Res { id: n }\n\
+             }\n\
+             fn mkopt(n: i64) -> Option[Res] {\n\
+             \x20   Option.Some(Res { id: n })\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"s1\");\n\
+             \x20   let _ = Res { id: 1 };\n\
+             \x20   println(\"s2\");\n\
+             \x20   let _ = mk(2);\n\
+             \x20   println(\"s3\");\n\
+             \x20   mk(3);\n\
+             \x20   println(\"s4\");\n\
+             \x20   let _ = (Res { id: 4 }, 40);\n\
+             \x20   println(\"s5\");\n\
+             \x20   let _ = Option.Some(Res { id: 5 });\n\
+             \x20   println(\"s6\");\n\
+             \x20   let _ = mkopt(6);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "s1\ndrop 1\ns2\ndrop 2\ns3\ndrop 3\ns4\ndrop 4\ns5\ndrop 5\ns6\ndrop 6\nend\n"
+        );
+    }
+
+    /// B-2026-07-30-11 (discarded-temp leg, insert-displacement shape) —
+    /// `let _ = m.insert(k, v2)` over an existing key returns `Some(old)`;
+    /// the discarded temp owns the displaced value, so its Drop body fires
+    /// at the `;` (drop 7), before the map's own value walk at `m`'s NLL
+    /// death (drop 8). Twin of `tests/interpreter.rs`'s
+    /// `test_wildcard_let_insert_displaced_payload_drop`.
+    #[test]
+    fn e2e_wildcard_let_insert_displaced_payload_drop() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut m: Map[i64, Res] = Map.new();\n\
+             \x20   let _ = m.insert(1, Res { id: 7 });\n\
+             \x20   println(\"first insert done\");\n\
+             \x20   let _ = m.insert(1, Res { id: 8 });\n\
+             \x20   println(\"displacing insert done\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "first insert done\ndrop 7\ndrop 8\ndisplacing insert done\nend\n"
+        );
+    }
+
+    /// B-2026-07-30-11 (discarded-temp leg, place-shape pins) — discard
+    /// shapes that move an EXISTING binding must fire its body exactly
+    /// once: a moved binding in a tuple (`let _ = (r, 1)` — the tuple gate
+    /// declines, the source's own slot fires), a binding moved into an
+    /// Option ctor (`Option.Some(s)` — the ctor move retracts the source,
+    /// the discard walk is the single fire), an identifier-field literal
+    /// (`W { r: r0 }`), a bare moved identifier (`let _ = t`), and a
+    /// scalar-place field (`Res { id: k }` — `k` is a copy, so the temp
+    /// registers and fires). Twin of `tests/interpreter.rs`'s
+    /// `test_wildcard_let_discard_place_shapes_single_fire`.
+    #[test]
+    fn e2e_wildcard_let_discard_place_shapes_single_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             struct W { r: Res }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let r = Res { id: 31 };\n\
+             \x20   println(\"a\");\n\
+             \x20   let _ = (r, 1);\n\
+             \x20   println(\"b\");\n\
+             \x20   let s = Res { id: 32 };\n\
+             \x20   let _ = Option.Some(s);\n\
+             \x20   println(\"c\");\n\
+             \x20   let r0 = Res { id: 33 };\n\
+             \x20   let _ = W { r: r0 };\n\
+             \x20   println(\"d\");\n\
+             \x20   let t = Res { id: 34 };\n\
+             \x20   let _ = t;\n\
+             \x20   println(\"e\");\n\
+             \x20   let k = 5;\n\
+             \x20   let _ = Res { id: k };\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ndrop 31\nb\ndrop 32\nc\ndrop 33\nd\ndrop 34\ne\ndrop 5\nend\n"
+        );
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///

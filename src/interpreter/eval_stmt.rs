@@ -1231,6 +1231,151 @@ impl<'a> super::Interpreter<'a> {
         });
     }
 
+    /// B-2026-07-30-11 (discarded-temp leg) — does a `let _ = <rhs>;` RHS
+    /// provably produce an OWNED value this discard site is responsible for?
+    /// Struct/tuple literals, enum-variant constructors, calls to
+    /// user-declared functions, a moved identifier (whose own Drop slot the
+    /// let-rebind hook retracts — the discard fire is then the single body),
+    /// and the owning container methods (`insert`/`remove`/`pop*`/`take`,
+    /// which return a displaced/extracted value the caller owns). Everything
+    /// else — `get`/`first`/`last`/`peek` borrows, unknown methods, arbitrary
+    /// expressions — stays silent: uncertain ⇒ silent, and firing a body on a
+    /// borrowed view would double it against the real owner. Codegen twin:
+    /// the same match in `compile_stmt`'s wildcard-let path; the two must
+    /// stay identical or the backends fire on different shapes.
+    fn discard_rhs_produces_owned_value(&self, rhs: &Expr, val: &Value) -> bool {
+        match &rhs.kind {
+            ExprKind::StructLiteral { .. } | ExprKind::Identifier(_) => true,
+            // A tuple LITERAL only when every element is itself a fresh
+            // temporary or a scalar copy: a heap/Drop-carrying PLACE element
+            // (`let _ = (r, 1)`) moves a binding whose own Drop slot stays
+            // armed (tuple-literal moves have no retraction hook, unlike the
+            // top-level `let _ = r` rebind hook), so a value-walk fire here
+            // would double its body. The codegen twin applies the identical
+            // rule (scalar-ness there is the element's inferred TypeExpr;
+            // here it is the evaluated element value).
+            ExprKind::Tuple(elems) => {
+                matches!(val, Value::Tuple(items) if self.discard_tuple_all_elems_safe(elems, items))
+            }
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { .. } => true,
+                ExprKind::Identifier(n) => self
+                    .program
+                    .items
+                    .iter()
+                    .any(|it| matches!(it, Item::Function(f) if &f.name == n)),
+                _ => false,
+            },
+            ExprKind::MethodCall { method, .. } => matches!(
+                method.as_str(),
+                "insert" | "remove" | "pop" | "pop_back" | "pop_front" | "take"
+            ),
+            _ => false,
+        }
+    }
+
+    /// Zip-walk of a discarded tuple literal's element exprs against the
+    /// evaluated element values: every element must be FRESH
+    /// (`discard_tuple_elem_is_fresh`), a scalar copy (Int/Float/Bool/
+    /// Char/Unit — no cleanup can alias it), or a nested tuple that
+    /// satisfies the same rule.
+    fn discard_tuple_all_elems_safe(&self, elems: &[Expr], items: &[Value]) -> bool {
+        if elems.len() != items.len() {
+            return false;
+        }
+        elems.iter().zip(items).all(|(e, v)| {
+            if self.discard_tuple_elem_is_fresh(e) {
+                return true;
+            }
+            match (&e.kind, v) {
+                (ExprKind::Tuple(ie), Value::Tuple(iv)) => {
+                    self.discard_tuple_all_elems_safe(ie, iv)
+                }
+                _ => matches!(
+                    v,
+                    Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Char(_) | Value::Unit
+                ),
+            }
+        })
+    }
+
+    /// Tuple-element gate for the discard fire above: is this element a
+    /// FRESH value (literal / constructor / owning call), i.e. provably not
+    /// a place expression aliasing a live binding? Scalar literals are fresh
+    /// (they just carry no Drop work); `Identifier` / field / index / any
+    /// unknown shape is not. Mirrors `discard_rhs_produces_owned_value`
+    /// minus the top-level-only `Identifier` arm.
+    fn discard_tuple_elem_is_fresh(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(_)
+            | ExprKind::CharLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::InterpolatedStringLit(_)
+            | ExprKind::StructLiteral { .. } => true,
+            ExprKind::Tuple(elems) => elems.iter().all(|el| self.discard_tuple_elem_is_fresh(el)),
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { .. } => true,
+                ExprKind::Identifier(n) => self
+                    .program
+                    .items
+                    .iter()
+                    .any(|it| matches!(it, Item::Function(f) if &f.name == n)),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// B-2026-07-30-11 (discarded-temp leg) — run the user Drop work a
+    /// discarded owned value carries: a Drop struct's body (+ Drop-bearing
+    /// field bodies, via the shared funnel), a tuple's elements, an enum /
+    /// Option / Result temp's own body (when declared) and its payloads.
+    /// Value-shape recursion mirrors the container-element loop in
+    /// `run_array_element_user_drops`.
+    fn run_discarded_value_user_drops(&mut self, val: Value) {
+        match val {
+            Value::Struct { ref name, .. } => {
+                if self.program.drop_method_keys.contains_key(name) {
+                    let tn = name.clone();
+                    self.run_user_drop_body_on_value(&tn, val);
+                } else if self.value_runs_user_drop(&val) {
+                    self.drop_user_drop_fields_of_value(&val);
+                }
+            }
+            Value::Tuple(items) => {
+                for e in items {
+                    self.run_discarded_value_user_drops(e);
+                }
+            }
+            Value::EnumVariant {
+                ref enum_name,
+                ref data,
+                ..
+            } => {
+                if self.program.drop_method_keys.contains_key(enum_name) {
+                    let tn = enum_name.clone();
+                    self.run_user_drop_body_on_value(&tn, val.clone());
+                }
+                match data {
+                    EnumData::Unit => {}
+                    EnumData::Tuple(vs) => {
+                        for v in vs.clone() {
+                            self.run_discarded_value_user_drops(v);
+                        }
+                    }
+                    EnumData::Struct(m) => {
+                        for v in m.values().cloned().collect::<Vec<_>>() {
+                            self.run_discarded_value_user_drops(v);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Move-suppression for `forget(x);` statements (design.md § Exported
     /// C ABI, Slice 4). `forget` consumes its argument and suppresses the
     /// destructor; the tree-walk analogue is to remove the source
@@ -1647,6 +1792,21 @@ impl<'a> super::Interpreter<'a> {
                 // stale record from a prior same-named binding can't silence
                 // the new one.
                 self.record_container_bodies_move_sources(value);
+                // B-2026-07-30-11 (discarded-temp leg): `let _ = <owned>;`
+                // throws the value away with no binding, so no Drop slot ever
+                // ran its user Drop work — a Drop struct literal, a tuple
+                // carrying Drop elements, an Option/Result temp with a Drop
+                // payload (the discarded displacing-insert return) were all
+                // silent. Fire here, at the discard point, gated on the
+                // ownership shape of the RHS. Fired before `bind_pattern`
+                // consumes `val`; for an Identifier RHS the let-rebind hook
+                // retracts the source's own slot right after this statement,
+                // so the body still runs exactly once.
+                if matches!(pattern.kind, crate::ast::PatternKind::Wildcard)
+                    && self.discard_rhs_produces_owned_value(value, &val)
+                {
+                    self.run_discarded_value_user_drops(val.clone());
+                }
                 self.bind_pattern(pattern, val);
                 for bound in pattern.binding_names() {
                     self.rearm_container_bodies_for_name(&bound);

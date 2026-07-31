@@ -3181,8 +3181,10 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Build the `Option[inner]` `TypeExpr` wrapping `inner`. Used to reconstruct
-    /// a `pop()` result type (`Option[element]`) from the element type.
-    fn option_wrapping_type_expr(inner: &TypeExpr) -> TypeExpr {
+    /// a `pop()` result type (`Option[element]`) from the element type, and an
+    /// `insert`/`remove` result type (`Option[value]`) from a Map receiver's
+    /// value type (`track_discarded_optres_payload_bodies`).
+    pub(super) fn option_wrapping_type_expr(inner: &TypeExpr) -> TypeExpr {
         TypeExpr {
             kind: TypeKind::Path(crate::ast::PathExpr {
                 segments: vec!["Option".to_string()],

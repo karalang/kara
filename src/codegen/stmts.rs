@@ -2285,11 +2285,93 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 let tail = Self::discarded_owned_temp_tail(value)
                     .expect("guard guarantees a discarded owned-temp tail");
-                let tail_key = (tail.span.offset, tail.span.length);
+                // `let _ = m.insert(k, v)` over an owned-heap/shared-V map:
+                // the insert LOWERING reclaims the displaced value inline
+                // (`pending_map_insert_old_dec`, consumed inside
+                // `compile_expr`) — the Option trackers in the battery below
+                // would free/dec it a SECOND time (the ASAN
+                // map_string_value_overwrite_discard case). Snapshot the flag
+                // before the compile consumes it and keep the pre-leg
+                // behavior (generic chokepoint only) for that shape.
+                let insert_reclaims_displaced = self.pending_map_insert_old_dec;
                 self.scope_cleanup_actions.push(Vec::new());
                 let val = self.compile_expr(value)?;
                 self.free_discarded_request_builder_temp(value, val);
-                self.materialize_owned_temp(val, tail_key);
+                if insert_reclaims_displaced {
+                    self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+                    self.drain_top_frame_with_emit();
+                    return Ok(());
+                }
+                // B-2026-07-30-11 (discarded-temp leg): run the SAME cleanup
+                // battery as the bare-statement discard arm — previously this
+                // arm only hit the generic chokepoint, so `let _ = make();`
+                // neither ran a user-Drop temp's body nor freed an
+                // Option/Result payload the way `make();` did.
+                self.track_discarded_temp_cleanup(tail, val);
+                // A discarded USER-ENUM constructor temp (`let _ = Sig.A(g);`)
+                // — the battery's fn-call registrar only resolves bare-
+                // identifier callees, so route ctor Calls through the
+                // arg-position aggregate registrar (its enum arm: the
+                // `karac_drop_<E>` wrapper + payload walk). Option/Result
+                // ctors are excluded — their payload cleanup belongs to the
+                // trackers above and the bodies walk below.
+                if let ExprKind::Call { .. } = &tail.kind {
+                    if let Some(en) = self.enum_name_of_expr(tail) {
+                        if en != "Option" && en != "Result" {
+                            self.track_inline_owned_aggregate_arg(val, tail, false);
+                            if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&en) {
+                                if let Some(cur_fn) = self
+                                    .builder
+                                    .get_insert_block()
+                                    .and_then(|bb| bb.get_parent())
+                                {
+                                    let slot = self.create_entry_alloca(
+                                        cur_fn,
+                                        "__disc_enum_tmp",
+                                        val.get_type(),
+                                    );
+                                    self.builder.build_store(slot, val).unwrap();
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        "__disc_enum_tmp",
+                                        slot,
+                                        bodies,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                // Payload bodies for a discarded Option/Result temp — pushed
+                // AFTER the battery so the LIFO drain runs them before the
+                // battery's frees.
+                self.track_discarded_optres_payload_bodies(tail, val);
+                self.drain_top_frame_with_emit();
+                Ok(())
+            }
+            // B-2026-07-30-11 (discarded-temp leg), literal tails: `let _ =
+            // S { .. };` / `let _ = (fresh, fresh);` discard a fresh
+            // aggregate that nothing tracked — no user-Drop body ever ran
+            // and heap fields silently leaked (masked in trivial programs by
+            // LLVM DCE'ing the dead allocation chains). Route through the
+            // arg-position aggregate registrar (memory + wrapper bodies)
+            // inside a one-shot frame, plus the tuple-element bodies walk
+            // the memory-only tuple drop lacks. Gated to all-fresh
+            // element/field exprs — see `discarded_owned_literal_tail`.
+            StmtKind::Let { pattern, value, .. }
+                if matches!(&pattern.kind, PatternKind::Wildcard)
+                    && self.discarded_owned_literal_tail(value).is_some() =>
+            {
+                let tail = self
+                    .discarded_owned_literal_tail(value)
+                    .expect("guard guarantees a discarded literal tail")
+                    .clone();
+                self.scope_cleanup_actions.push(Vec::new());
+                let val = self.compile_expr(value)?;
+                self.track_inline_owned_aggregate_arg(val, &tail, false);
+                if let ExprKind::Tuple(elems) = &tail.kind {
+                    self.track_discarded_tuple_elem_bodies(elems, val);
+                }
                 self.drain_top_frame_with_emit();
                 Ok(())
             }
@@ -6071,67 +6153,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // already-sent chains).
                 self.free_discarded_request_builder_temp(expr, val);
                 if let Some(tail) = tail {
-                    // B-2026-06-10-6: a discarded inline-`Option` temp
-                    // (`v.pop();`, `make_opt();`) leaks its `String`/`Vec`
-                    // payload — the erased Option drop switch can't free it
-                    // and there's no binding to. Free it here, but NOT when
-                    // the producer returns a borrow (`get`/`first`/`last`/
-                    // `Map.get` alias the container's storage — freeing would
-                    // corrupt it). Falls back to the generic owned-temp
-                    // chokepoint (Vec/String/Map/RC) for everything else.
-                    // Same treatment for a discarded inline-`Result` temp
-                    // (`Result` follow-on); the two registrars are mutually
-                    // exclusive on the producer's instantiated type.
-                    let not_borrow = !self.scrutinee_is_borrow_call(tail);
-                    let handled_option =
-                        not_borrow && self.try_track_discarded_inline_option(tail, val);
-                    let handled_result = !handled_option
-                        && not_borrow
-                        && self.try_track_discarded_inline_result(tail, val);
-                    let handled_option_map = !handled_option
-                        && !handled_result
-                        && not_borrow
-                        && self.try_track_discarded_inline_option_map(tail, val);
-                    // B-2026-07-19-16: a discarded `Option[shared T]` temp
-                    // (`m.remove(k);` on a `Map[K, shared V]` — the moved-out
-                    // value's ref lives in the discarded `Some`). Release the
-                    // Some payload's ref at the `;` — the trackers above and
-                    // below all decline a shared payload, and the generic
-                    // chokepoint has no Option arm, so this leaked one RC box
-                    // per discarded remove.
-                    let handled_shared_option = !handled_option
-                        && !handled_result
-                        && !handled_option_map
-                        && not_borrow
-                        && self.try_track_discarded_shared_option(tail, val);
-                    // Slice 3r: a discarded BOXED-payload Option temp
-                    // (`m.insert(k, v2);` displacing a struct value,
-                    // `m.remove(k);` moving one out) owns both the box and
-                    // the payload's interior heap — the inline trackers
-                    // above all decline wide payloads.
-                    let handled_boxed_option = !handled_option
-                        && !handled_result
-                        && !handled_option_map
-                        && !handled_shared_option
-                        && not_borrow
-                        && self.try_track_discarded_boxed_option(tail, val);
-                    // B-2026-07-01-7 (discard position): `make();` where
-                    // `make() -> Guard`/`-> Sig` with a user Drop — the
-                    // discarded temp is caller-owned and its body must fire
-                    // (both surfaces were silent). Complementary to the
-                    // heap-content trackers above; its registration is
-                    // type-gated internally.
-                    if not_borrow {
-                        self.try_track_discarded_user_drop_temp(tail, val);
-                    }
-                    if !handled_option
-                        && !handled_result
-                        && !handled_option_map
-                        && !handled_shared_option
-                        && !handled_boxed_option
-                    {
-                        self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
-                    }
+                    self.track_discarded_temp_cleanup(tail, val);
                     self.drain_top_frame_with_emit();
                 }
                 Ok(())
@@ -8847,6 +8869,428 @@ impl<'ctx> super::Codegen<'ctx> {
                 .and_then(Self::discarded_owned_temp_tail),
             _ => None,
         }
+    }
+
+    /// The discard-position cleanup battery shared by the bare-statement arm
+    /// (`make();`) and the wildcard-let arm (`let _ = make();`): inline /
+    /// shared / boxed Option and Result payload frees, the user-Drop temp
+    /// registration, and the generic owned-temp chokepoint fallback. The
+    /// caller has already pushed the one-shot discard frame and compiled
+    /// `tail` to `val`; every registration lands on that frame and fires at
+    /// the `;` when the caller drains it.
+    pub(super) fn track_discarded_temp_cleanup(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+        // B-2026-06-10-6: a discarded inline-`Option` temp
+        // (`v.pop();`, `make_opt();`) leaks its `String`/`Vec`
+        // payload — the erased Option drop switch can't free it
+        // and there's no binding to. Free it here, but NOT when
+        // the producer returns a borrow (`get`/`first`/`last`/
+        // `Map.get` alias the container's storage — freeing would
+        // corrupt it). Falls back to the generic owned-temp
+        // chokepoint (Vec/String/Map/RC) for everything else.
+        // Same treatment for a discarded inline-`Result` temp
+        // (`Result` follow-on); the two registrars are mutually
+        // exclusive on the producer's instantiated type.
+        let not_borrow = !self.scrutinee_is_borrow_call(tail);
+        let handled_option = not_borrow && self.try_track_discarded_inline_option(tail, val);
+        let handled_result =
+            !handled_option && not_borrow && self.try_track_discarded_inline_result(tail, val);
+        let handled_option_map = !handled_option
+            && !handled_result
+            && not_borrow
+            && self.try_track_discarded_inline_option_map(tail, val);
+        // B-2026-07-19-16: a discarded `Option[shared T]` temp
+        // (`m.remove(k);` on a `Map[K, shared V]` — the moved-out
+        // value's ref lives in the discarded `Some`). Release the
+        // Some payload's ref at the `;` — the trackers above and
+        // below all decline a shared payload, and the generic
+        // chokepoint has no Option arm, so this leaked one RC box
+        // per discarded remove.
+        let handled_shared_option = !handled_option
+            && !handled_result
+            && !handled_option_map
+            && not_borrow
+            && self.try_track_discarded_shared_option(tail, val);
+        // Slice 3r: a discarded BOXED-payload Option temp
+        // (`m.insert(k, v2);` displacing a struct value,
+        // `m.remove(k);` moving one out) owns both the box and
+        // the payload's interior heap — the inline trackers
+        // above all decline wide payloads.
+        let handled_boxed_option = !handled_option
+            && !handled_result
+            && !handled_option_map
+            && !handled_shared_option
+            && not_borrow
+            && self.try_track_discarded_boxed_option(tail, val);
+        // B-2026-07-01-7 (discard position): `make();` where
+        // `make() -> Guard`/`-> Sig` with a user Drop — the
+        // discarded temp is caller-owned and its body must fire
+        // (both surfaces were silent). Complementary to the
+        // heap-content trackers above; its registration is
+        // type-gated internally.
+        if not_borrow {
+            self.try_track_discarded_user_drop_temp(tail, val);
+        }
+        if !handled_option
+            && !handled_result
+            && !handled_option_map
+            && !handled_shared_option
+            && !handled_boxed_option
+        {
+            self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+        }
+    }
+
+    /// B-2026-07-30-11 (discarded-temp leg) — payload user-Drop BODIES for a
+    /// discarded `Option`/`Result` temporary (`let _ = Option.Some(g);`,
+    /// `let _ = mkopt(6);`, `let _ = m.insert(k, v2);` displacing a Drop
+    /// value). The memory side is the battery's business
+    /// (`track_discarded_temp_cleanup`); this registers ONLY the tag-guarded
+    /// body walk (`emit_optres_payload_user_drop_bodies_fn` — `<T>.drop` +
+    /// the field-bodies walk, no frees), on the same one-shot frame. Push
+    /// AFTER the battery: the frame drains LIFO, so the bodies fire before
+    /// the frees that would invalidate the fields they read. Interp twin:
+    /// `run_discarded_value_user_drops`' `EnumVariant` arm.
+    ///
+    /// The instantiated `Option[T]`/`Result[T, E]` comes from the span table
+    /// (ctor / typed producer), the untyped-let derivation (fn returns,
+    /// `pop` family), or — because a `MethodCall` reuses its receiver-side
+    /// span, so the table misses it — from the Map receiver's value te for
+    /// `insert`/`remove` (the same fallback
+    /// `try_track_discarded_shared_option` uses). Borrow producers are
+    /// excluded exactly as the memory side excludes them.
+    pub(super) fn track_discarded_optres_payload_bodies(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if self.scrutinee_is_borrow_call(tail) {
+            return;
+        }
+        let key = (tail.span.offset, tail.span.length);
+        let te = self
+            .enum_inst_type_exprs
+            .get(&key)
+            .cloned()
+            .or_else(|| self.untyped_let_boxed_enum_te(tail))
+            .or_else(|| match &tail.kind {
+                ExprKind::MethodCall { object, method, .. }
+                    if matches!(method.as_str(), "insert" | "remove") =>
+                {
+                    match &object.kind {
+                        ExprKind::Identifier(m) if self.map_val_types.contains_key(m.as_str()) => {
+                            self.var_elem_type_exprs
+                                .get(m.as_str())
+                                .map(Self::option_wrapping_type_expr)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            });
+        let Some(te) = te else {
+            return;
+        };
+        let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&te) else {
+            return;
+        };
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__disc_optres_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_user_drop_var_with_fn("", "__disc_optres_tmp", slot, bodies);
+    }
+
+    /// B-2026-07-30-11 (discarded-temp leg) — the wildcard-let literal tail:
+    /// `let _ = S { .. };` / `let _ = (fresh, fresh);`, peeled through
+    /// single-tail block wrappers exactly like `discarded_owned_temp_tail`.
+    /// A tuple qualifies only when EVERY element is itself fresh
+    /// (`discard_tuple_elem_is_fresh_expr`): a PLACE element (`let _ =
+    /// (r, 1)`) moves a binding whose own cleanup stays armed, so
+    /// registering the temp would double both body and frees — those shapes
+    /// keep today's behavior (the source's own NLL fire). A struct literal
+    /// qualifies under the same all-fresh-fields rule: an identifier-field
+    /// literal (`let _ = W { r: r0 };`) already fires exactly once via the
+    /// moved source's still-armed slot on this backend, and the interpreter
+    /// retracts the source and fires via its discard walk — one body each,
+    /// so neither backend registers the temp for it.
+    pub(super) fn discarded_owned_literal_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+        match &expr.kind {
+            ExprKind::StructLiteral { fields, spread, .. }
+                if spread.is_none()
+                    && fields
+                        .iter()
+                        .all(|f| self.discard_tuple_elem_is_fresh_expr(&f.value)) =>
+            {
+                Some(expr)
+            }
+            ExprKind::Tuple(elems)
+                if elems
+                    .iter()
+                    .all(|e| self.discard_tuple_elem_is_fresh_expr(e)) =>
+            {
+                Some(expr)
+            }
+            ExprKind::Block(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::LabeledBlock { body: block, .. } => block
+                .final_expr
+                .as_deref()
+                .and_then(|e| self.discarded_owned_literal_tail(e)),
+            _ => None,
+        }
+    }
+
+    /// B-2026-07-30-11 (discarded-temp leg) — BODY-ONLY walk over a
+    /// discarded tuple temp's elements (`let _ = (Res { .. }, 40);`): each
+    /// Drop-carrying element's `<T>.drop` + field-bodies walk, plus
+    /// Option/Result elements' tag-guarded payload bodies and nested-tuple
+    /// recursion. The memory side is `track_inline_owned_aggregate_arg`'s
+    /// business (the TypeExpr tuple drop frees heap but runs no bodies);
+    /// this is its bodies complement, registered AFTER it so the LIFO drain
+    /// runs bodies before frees. A heapless Drop element (`Res { id }`) has
+    /// no memory registration at all — this walk is then the only work.
+    pub(super) fn track_discarded_tuple_elem_bodies(
+        &mut self,
+        elems: &[Expr],
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return;
+        };
+        let elem_tes: Vec<crate::ast::TypeExpr> =
+            elems.iter().map(|e| self.infer_arg_elem_te(e)).collect();
+        let Some(bodies) = self.emit_discarded_tuple_elem_bodies_fn(agg_ty, &elem_tes) else {
+            return;
+        };
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__disc_tup_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_user_drop_var_with_fn("", "__disc_tup_tmp", slot, bodies);
+    }
+
+    /// The `__karac_dropbodies_tuple_te_<sig>` walker backing
+    /// [`Self::track_discarded_tuple_elem_bodies`]: per Drop-carrying
+    /// element, `<T>.drop` (when the type declares one) + the field-bodies
+    /// walk; Option/Result elements route through their tag-guarded payload
+    /// walker; user-enum elements run their own body + payload-bodies walk;
+    /// nested tuples recurse. Frees NOTHING. `None` when no element carries
+    /// user-Drop work. Memoized by the element-type signature, like its
+    /// memory sibling `synthesize_tuple_drop_fn_te`.
+    fn emit_discarded_tuple_elem_bodies_fn(
+        &mut self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        elem_tes: &[crate::ast::TypeExpr],
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        use crate::ast::TypeKind;
+        enum ElemWork<'ctx2> {
+            Struct(String),
+            UserEnum(String),
+            Walker(inkwell::values::FunctionValue<'ctx2>),
+        }
+        let mut work: Vec<(u32, ElemWork<'ctx>)> = Vec::new();
+        for (i, te) in elem_tes.iter().enumerate() {
+            let i = i as u32;
+            match &te.kind {
+                TypeKind::Tuple(inner) => {
+                    let Some(inner_ty) = agg_ty
+                        .get_field_type_at_index(i)
+                        .and_then(|t| t.try_into().ok())
+                    else {
+                        continue;
+                    };
+                    if let Some(f) = self.emit_discarded_tuple_elem_bodies_fn(inner_ty, inner) {
+                        work.push((i, ElemWork::Walker(f)));
+                    }
+                }
+                TypeKind::Path(p) => {
+                    let Some(name) = p.segments.first().cloned() else {
+                        continue;
+                    };
+                    if self.shared_types.contains_key(&name) {
+                        continue;
+                    }
+                    if matches!(name.as_str(), "Option" | "Result") {
+                        if let Some(f) = self.emit_optres_payload_user_drop_bodies_fn(te) {
+                            work.push((i, ElemWork::Walker(f)));
+                        }
+                    } else if self.struct_types.contains_key(&name) {
+                        if self.type_runs_user_drop(&name, &mut Vec::new()) {
+                            work.push((i, ElemWork::Struct(name)));
+                        }
+                    } else if self.enum_layouts.contains_key(&name) {
+                        let owns_body = self
+                            .program_snapshot
+                            .as_deref()
+                            .is_some_and(|pr| pr.drop_method_keys.contains_key(&name));
+                        let payload_bodies = self.emit_enum_payload_user_drop_bodies_fn(&name);
+                        if owns_body || payload_bodies.is_some() {
+                            work.push((i, ElemWork::UserEnum(name)));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if work.is_empty() {
+            return None;
+        }
+        let fn_name = format!(
+            "__karac_dropbodies_tuple_te_{}",
+            Self::tuple_te_sig(elem_tes)
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        self.builder.position_at_end(entry);
+        let p = walker.get_nth_param(0).unwrap().into_pointer_value();
+        for (i, w) in work {
+            let elem_ptr = self
+                .builder
+                .build_struct_gep(agg_ty, p, i, &format!("tupbody.e{i}"))
+                .unwrap();
+            match w {
+                ElemWork::Struct(sname) => {
+                    let owns_body = self
+                        .program_snapshot
+                        .as_deref()
+                        .is_some_and(|pr| pr.drop_method_keys.contains_key(&sname));
+                    if owns_body {
+                        if let Some(f) = self.module.get_function(&format!("{sname}.drop")) {
+                            self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                        }
+                    }
+                    if let Some(f) = self
+                        .emit_user_drop_field_bodies_fn(&sname, &std::collections::HashMap::new())
+                    {
+                        self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                    }
+                }
+                ElemWork::UserEnum(en) => {
+                    let owns_body = self
+                        .program_snapshot
+                        .as_deref()
+                        .is_some_and(|pr| pr.drop_method_keys.contains_key(&en));
+                    if owns_body {
+                        if let Some(f) = self.module.get_function(&format!("{en}.drop")) {
+                            self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                        }
+                    }
+                    if let Some(f) = self.emit_enum_payload_user_drop_bodies_fn(&en) {
+                        self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                    }
+                }
+                ElemWork::Walker(f) => {
+                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                }
+            }
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
+    /// Codegen twin of the interpreter's tuple-element discard gate (the two
+    /// must stay in step — parity by construction): is this literal/tuple
+    /// element SAFE to register the discarded temp over — a FRESH value
+    /// (literal / constructor / owning user-fn call), or a place whose type
+    /// is a scalar primitive (a copy, so no cleanup aliases it)? A
+    /// heap/Drop-carrying place element (`(r, 1)`, `(v, 1)`) keeps its own
+    /// binding's cleanup armed, so registering the temp would double both
+    /// body and frees — those shapes disqualify the whole literal.
+    fn discard_tuple_elem_is_fresh_expr(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(_)
+            | ExprKind::CharLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::InterpolatedStringLit(_)
+            | ExprKind::StructLiteral { .. } => true,
+            ExprKind::Tuple(elems) => elems
+                .iter()
+                .all(|el| self.discard_tuple_elem_is_fresh_expr(el)),
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { .. } => true,
+                ExprKind::Identifier(n) => self.fn_return_type_names.contains_key(n.as_str()),
+                _ => false,
+            },
+            // A place / unknown shape: safe only when its type is a scalar
+            // primitive (`Res { id: k }`, `(Res { .. }, n)` — `k`/`n` are
+            // copies no cleanup can alias). A local's LLVM slot type is the
+            // authoritative scalar test (an int/float slot is never a
+            // struct/handle/RC value); `infer_arg_elem_te` yields an empty
+            // path for anything unresolved, which fails the te test —
+            // unknown stays unsafe.
+            _ => {
+                if let ExprKind::Identifier(n) = &e.kind {
+                    if let Some(slot) = self.variables.get(n.as_str()) {
+                        if matches!(
+                            slot.ty,
+                            inkwell::types::BasicTypeEnum::IntType(_)
+                                | inkwell::types::BasicTypeEnum::FloatType(_)
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+                Self::te_head_is_scalar_primitive(&self.infer_arg_elem_te(e))
+            }
+        }
+    }
+
+    /// Is `te` a bare scalar-primitive path (integer/float/bool/char, no
+    /// generic args)? Used by the discard gates to admit COPY-semantics
+    /// place fields/elements that no cleanup can alias.
+    fn te_head_is_scalar_primitive(te: &crate::ast::TypeExpr) -> bool {
+        let crate::ast::TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if p.generic_args.as_ref().is_some_and(|a| !a.is_empty()) {
+            return false;
+        }
+        matches!(
+            p.segments.last().map(|s| s.as_str()),
+            Some(
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "f16"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "char"
+            )
+        )
     }
 
     /// Phase-8 line 39 follow-up — does `expr` evaluate to a live
