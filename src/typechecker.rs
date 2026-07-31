@@ -1098,6 +1098,14 @@ pub struct TypeCheckResult {
     /// `enum_inst_type_exprs` recording can't distinguish from a mistakenly
     /// recorded wrapper (B-2026-07-13-19).
     pub question_ok_payload_types: HashMap<SpanKey, TypeExpr>,
+    /// B-2026-07-31-20 — result type of each `with_provider[R](p, || ...)`
+    /// call appearing as a `let` RHS, keyed by the CALL expression's span.
+    /// A wp call has no callee fn whose declared return type codegen could
+    /// consult, so an unannotated heap-typed binding (`let s = wp(..., ||
+    /// { f"..." })`) never registered its String/Vec metadata and method
+    /// dispatch on it loud-bailed. Codegen's Let arm treats an entry here
+    /// as an implicit type annotation (the annotated form already works).
+    pub wp_result_types: HashMap<SpanKey, TypeExpr>,
     /// `(trait_name, target_type_name)` pairs for every impl registered at
     /// typecheck time. The lowering pass consults this to decide whether a
     /// non-primitive operand has an applicable trait impl (e.g. user
@@ -1562,6 +1570,10 @@ pub struct TypeChecker<'a> {
     /// `?` unwrapped Ok/Some payload type (span → payload `TypeExpr`). See the
     /// public copy on `TypeCheckResult`. B-2026-07-13-19.
     pub(super) question_ok_payload_types: HashMap<SpanKey, TypeExpr>,
+    /// B-2026-07-31-20 — `let`-RHS with_provider call result types
+    /// (span of the wp CALL -> TypeExpr). See the public copy on
+    /// `TypeCheckResult`.
+    pub(super) wp_result_types: HashMap<SpanKey, TypeExpr>,
     /// `x.into()` conversions (span of the MethodCall → target type name).
     pub(super) into_conversions: HashMap<SpanKey, String>,
     /// `x.try_into()` conversions (span of the MethodCall → target type name,
@@ -1855,6 +1867,7 @@ impl<'a> TypeChecker<'a> {
             neg_validated_suffixed_literal: None,
             question_conversions: HashMap::new(),
             question_ok_payload_types: HashMap::new(),
+            wp_result_types: HashMap::new(),
             into_conversions: HashMap::new(),
             parse_conversions: HashMap::new(),
             try_into_conversions: HashMap::new(),
@@ -2047,6 +2060,7 @@ impl<'a> TypeChecker<'a> {
             distinct_type_traits,
             question_conversions: self.question_conversions,
             question_ok_payload_types: self.question_ok_payload_types,
+            wp_result_types: self.wp_result_types,
             trait_impls,
             drop_method_keys,
             into_conversions: self.into_conversions,

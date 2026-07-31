@@ -13577,6 +13577,62 @@ fn main() {
     }
 
     #[test]
+    fn e2e_wp_result_binding_string_method_dispatch_tail() {
+        // B-2026-07-31-20: a heap-typed wp-result binding must register its
+        // method-dispatch metadata. The wp call used to type as a silent
+        // `Error`, so codegen had nothing to register and `s.len()`
+        // loud-bailed ("no handler for method 'len'"). Tail-String shape —
+        // no `return` involved.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn f() -> i64 with reads(Ctr) {{\n\
+                 let s = with_provider[Ctr](InMem {{ n: 42 }}, || {{ f\"v-{{read()}}\" }});\n\
+                 s.len()\n\
+             }}\n\
+             fn main() with reads(Ctr) {{ println(f\"{{f()}}\"); }}",
+        )) {
+            assert_eq!(out, "4\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_result_binding_string_method_dispatch_return() {
+        // The closure-return sibling: the String arrives via a retargeted
+        // closure-scoped `return` (B-2026-07-31-16) and dispatch on the
+        // binding must still work.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn f() -> i64 with reads(Ctr) {{\n\
+                 let s = with_provider[Ctr](InMem {{ n: 42 }}, || {{ return f\"v-{{read()}}\"; }});\n\
+                 s.len()\n\
+             }}\n\
+             fn main() with reads(Ctr) {{ println(f\"{{f()}}\"); }}",
+        )) {
+            assert_eq!(out, "4\n");
+        }
+    }
+
+    #[test]
+    fn e2e_wp_result_binding_vec_method_dispatch() {
+        // Vec sibling: element access + len on a wp-result Vec binding.
+        if let Some(out) = run_program(&format!(
+            "{WP_PREAMBLE}\
+             fn f() -> i64 with reads(Ctr) {{\n\
+                 let v = with_provider[Ctr](InMem {{ n: 3 }}, || {{\n\
+                     let mut out = Vec.new();\n\
+                     out.push(read());\n\
+                     out.push(read() * 2);\n\
+                     out\n\
+                 }});\n\
+                 v.len() * 100 + v[0] + v[1]\n\
+             }}\n\
+             fn main() with reads(Ctr) {{ println(f\"{{f()}}\"); }}",
+        )) {
+            assert_eq!(out, "209\n");
+        }
+    }
+
+    #[test]
     fn e2e_wp_closure_return_provider_stack_healthy_after() {
         // The retargeted return must still pop the provider frame: a second
         // with_provider after the first must resolve its own provider, and

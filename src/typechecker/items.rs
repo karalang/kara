@@ -3307,6 +3307,28 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Returns the statement's *flow type*: `Type::Never` when the
     /// statement diverges (a trailing `return x;` / `break;` /
+    /// True when `expr` is a `with_provider[R](provider, closure)` call —
+    /// `Call(Index(Ident|Path("with_provider"), R), [_, _])`, the same shape
+    /// the cross-task check in `infer_call` and the interpreter's
+    /// `match_with_provider` recognize. Used to key the
+    /// `wp_result_types` recording (B-2026-07-31-20).
+    fn is_with_provider_call_shape(expr: &Expr) -> bool {
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            return false;
+        };
+        if args.len() != 2 {
+            return false;
+        }
+        let ExprKind::Index { object, .. } = &callee.kind else {
+            return false;
+        };
+        match &object.kind {
+            ExprKind::Identifier(n) => n == "with_provider",
+            ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
+            _ => false,
+        }
+    }
+
     /// `continue;`, or a call to a `-> !` function like `panic(..)` /
     /// `process.exit(..)` in statement position), else `Type::Unit`.
     /// `infer_block` / `check_block_against` consume this so a tail-less
@@ -3342,6 +3364,21 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_unsolved_type_param(&inferred, &value.span);
                     inferred
                 };
+                // B-2026-07-31-20 — record the result type of a
+                // `with_provider[R](p, || ...)` RHS. A wp call has no callee
+                // fn whose declared return type codegen could consult, so an
+                // unannotated heap-typed binding never registered its
+                // String/Vec metadata and method dispatch on it loud-bailed.
+                // Codegen's Let arm reads this as an implicit annotation.
+                if Self::is_with_provider_call_shape(value)
+                    && expected_ty != Type::Error
+                    && expected_ty != Type::Never
+                {
+                    self.wp_result_types.insert(
+                        SpanKey::from_span(&value.span),
+                        Self::type_to_type_expr(&expected_ty),
+                    );
+                }
                 // Per design.md: `let PAT = expr;` requires `PAT` to be
                 // irrefutable (the binding has no else-arm; a missed
                 // pattern would have nowhere to dispatch). Refutable

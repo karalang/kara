@@ -419,6 +419,47 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// True when `ty` (recursively, through the substitution map) contains
+    /// no unresolved inference vars, unbound type params, or `Error` — the
+    /// gate for committing a `with_provider` call to its closure's return
+    /// type (B-2026-07-31-20). Conservative on unknown container shapes
+    /// (defaults to concrete for leaf scalars and unmodeled variants).
+    fn wp_ret_is_fully_concrete(
+        ty: &Type,
+        subs: &std::collections::HashMap<super::TypeVarId, Type>,
+    ) -> bool {
+        let t = resolve_type_var_top(ty, subs);
+        match &t {
+            Type::TypeVar(_) | Type::TypeParam(_) | Type::Error => false,
+            Type::Named { args, .. } => {
+                args.iter().all(|a| Self::wp_ret_is_fully_concrete(a, subs))
+            }
+            Type::Tuple(elems) => elems
+                .iter()
+                .all(|e| Self::wp_ret_is_fully_concrete(e, subs)),
+            Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => {
+                Self::wp_ret_is_fully_concrete(inner, subs)
+            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                Self::wp_ret_is_fully_concrete(element, subs)
+            }
+            Type::Function {
+                params,
+                return_type,
+            }
+            | Type::OnceFunction {
+                params,
+                return_type,
+            } => {
+                params
+                    .iter()
+                    .all(|p| Self::wp_ret_is_fully_concrete(p, subs))
+                    && Self::wp_ret_is_fully_concrete(return_type, subs)
+            }
+            _ => true,
+        }
+    }
+
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
         // Comptime `Type` reflection in the path-call form. `MyType.name()`,
         // `MyType.fields()`, … parse as `Call(Path([Type, method]))` (the
@@ -552,6 +593,36 @@ impl<'a> super::TypeChecker<'a> {
                         &path,
                         &provider_expr.span,
                     );
+                }
+                // B-2026-07-31-20 — type the with_provider call itself.
+                // `with_provider` has no ordinary env signature the generic
+                // dispatch can resolve (it is a recognized form), so the
+                // call used to silently type as `Error` — tolerated
+                // downstream, which meant a wp-result binding carried no
+                // real type: codegen had nothing to register, and even
+                // annotation mismatches (`let x: i64 = wp(..., || f"s")`)
+                // slid through. Per design.md § with_provider signature
+                // (`f: Fn() -> T with R, E` and the call returns `T`),
+                // infer the closure argument (its own inference already
+                // handles closure-scoped returns, B-2026-07-31-18) and
+                // take its return type as the call's type. A non-closure
+                // second argument falls through to the old dispatch path.
+                let clo_ty = self.infer_expr(&args[1].value);
+                if let Type::Function { return_type, .. } | Type::OnceFunction { return_type, .. } =
+                    &clo_ty
+                {
+                    let ret = resolve_type_var_top(return_type, &self.env.substitutions);
+                    // Only commit to the closure's return type when it is
+                    // fully concrete. A bare `Ok(v)` tail leaves the Err
+                    // side an unbound param (`Result[i64, E]`); committing
+                    // that would break the established `wp(...)?`
+                    // propagation shapes, so those fall through to the old
+                    // tolerant dispatch (which types the call `Error`)
+                    // until wp grows real bidirectional inference.
+                    if Self::wp_ret_is_fully_concrete(&ret, &self.env.substitutions) {
+                        self.record_expr_type(span, &ret);
+                        return ret;
+                    }
                 }
             }
         }

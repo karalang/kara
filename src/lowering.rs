@@ -91,6 +91,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // `with_provider`-call `let`-RHS result types — codegen's Let arm reads
+    // an entry as an implicit type annotation so a heap-typed wp-result
+    // binding registers its method-dispatch metadata (B-2026-07-31-20).
+    program.wp_result_types = tc
+        .wp_result_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the method-call → `Type.method` callee key table so codegen
     // can narrow the par-branch cancel check at instance method sites.
     // The typechecker populates this directly because the parser sets

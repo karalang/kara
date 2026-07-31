@@ -2626,6 +2626,11 @@ pub(super) struct Codegen<'ctx> {
     /// span-collision wrapper ambiguity of `enum_inst_type_exprs`
     /// (B-2026-07-13-19).
     pub(crate) question_ok_payload_types: HashMap<(usize, usize), TypeExpr>,
+    /// `with_provider`-call `let`-RHS result types (from
+    /// `Program.wp_result_types`, lowering-pass derived). The Let arm reads
+    /// an entry as an implicit type annotation so a heap-typed wp-result
+    /// binding registers its method-dispatch metadata (B-2026-07-31-20).
+    pub(crate) wp_result_types: HashMap<(usize, usize), TypeExpr>,
     /// Per-callee effectfulness side-table — populated from
     /// `Program.callee_effectful` (set by the cli pipeline after effectcheck).
     /// Key: callable's canonical name (free fn `name`, assoc/method
@@ -7561,6 +7566,7 @@ impl<'ctx> Codegen<'ctx> {
             rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             question_ok_payload_types: HashMap::new(),
+            wp_result_types: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
@@ -8751,6 +8757,7 @@ impl<'ctx> Codegen<'ctx> {
         // Ok/Some payload type, so `reconstruct_question_ok_payload` rebuilds a
         // multi-word payload of any shape (B-2026-07-13-19).
         self.question_ok_payload_types = program.question_ok_payload_types.clone();
+        self.wp_result_types = program.wp_result_types.clone();
 
         // Side-table set by the cli pipeline after effectcheck: per-callee
         // boolean indicating whether the callee carries any observable
@@ -10024,6 +10031,7 @@ impl<'ctx> Codegen<'ctx> {
         // them, emit the bodies, then `swap_all!` again to restore.
         let mut t_question_conversions = tp.question_conversions.clone();
         let mut t_question_ok_payload_types = tp.question_ok_payload_types.clone();
+        let mut t_wp_result_types = tp.wp_result_types.clone();
         let mut t_callee_effectful = tp.callee_effectful.clone();
         let mut t_method_callee_types = tp.method_callee_types.clone();
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
@@ -10056,6 +10064,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut self.question_ok_payload_types,
                     &mut t_question_ok_payload_types,
                 );
+                std::mem::swap(&mut self.wp_result_types, &mut t_wp_result_types);
                 std::mem::swap(&mut self.callee_effectful, &mut t_callee_effectful);
                 std::mem::swap(&mut self.method_callee_types, &mut t_method_callee_types);
                 std::mem::swap(&mut self.string_typed_exprs, &mut t_string_typed_exprs);

@@ -2296,6 +2296,24 @@ impl<'ctx> super::Codegen<'ctx> {
             StmtKind::Let {
                 pattern, value, ty, ..
             } => {
+                // B-2026-07-31-20 — a `with_provider(...)` RHS has no callee
+                // fn whose declared return type the derivations below could
+                // consult, so an unannotated heap-typed binding
+                // (`let s = with_provider[R](p, || { f"..." }); s.len()`)
+                // never registered its String/Vec metadata and method
+                // dispatch loud-bailed. The typechecker records the wp
+                // call's result type (`wp_result_types`, Let-RHS sites
+                // only); treat it as an implicit annotation — the annotated
+                // form of the same binding already compiles correctly, so
+                // this path is behavior-identical to `let s: T = wp(...)`.
+                let wp_implicit_ty = if ty.is_none() {
+                    self.wp_result_types
+                        .get(&(value.span.offset, value.span.length))
+                        .cloned()
+                } else {
+                    None
+                };
+                let ty = &ty.clone().or(wp_implicit_ty);
                 // Materialized iterator binding (B-2026-07-11-19): `let it =
                 // <iter-chain>` where the RHS is a fusable iterator chain
                 // (`v.iter()...`, a range) — codegen has no runtime iterator

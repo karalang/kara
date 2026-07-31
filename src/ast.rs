@@ -624,6 +624,12 @@ pub struct Program {
     /// empty otherwise. `?` span → unwrapped Ok/Some payload `TypeExpr`
     /// (B-2026-07-13-19).
     pub question_ok_payload_types: QuestionOkPayloadTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.wp_result_types`;
+    /// empty otherwise. `with_provider` call span (as a `let` RHS) → the
+    /// call's result `TypeExpr`, read by codegen's Let arm as an implicit
+    /// type annotation so heap-typed wp-result bindings register their
+    /// method-dispatch metadata (B-2026-07-31-20).
+    pub wp_result_types: QuestionOkPayloadTypesTable,
     /// Set by the cli pipeline after effectcheck; empty otherwise.
     pub callee_effectful: CalleeEffectfulTable,
     /// Set by the cli pipeline after effectcheck; empty otherwise. Identifies
