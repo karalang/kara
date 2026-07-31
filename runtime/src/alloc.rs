@@ -228,6 +228,39 @@ mod buf_cache {
         fn platform_malloc_usable(ptr: *const core::ffi::c_void) -> usize;
     }
 
+    // glibc only. `target_env = "gnu"` (not merely `target_os = "linux"`)
+    // because musl does not provide `malloc_trim`, and CI builds this crate
+    // under `rust:alpine`. See `put` for why the park path calls it.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    extern "C" {
+        fn malloc_trim(pad: usize) -> i32;
+    }
+
+    /// Free arena bytes `malloc_trim` may leave unreleased at the top of the
+    /// heap. See the call site in [`put`].
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    const TRIM_PAD: usize = 64 << 20;
+
+    /// Set by the small-buffer fast path in [`super::karac_free_buf`] to record
+    /// that the program has been doing ordinary small-allocation work. Read and
+    /// cleared by [`put`], so the `malloc_trim` compensation is paid only when
+    /// there is small-chunk churn for glibc to consolidate — a pure
+    /// large-buffer ping-pong (the shape the cache exists for) never pays it.
+    ///
+    /// Load-then-store, never an unconditional store: after the first set the
+    /// line stays shared-clean, so the multi-threaded hot path does not
+    /// ping-pong a cacheline. The park side uses `swap` — an RMW, but parks are
+    /// rare multi-MB events.
+    pub(super) static SMALL_CHURN: AtomicU8 = AtomicU8::new(0);
+
+    /// Hot path — keep this to one relaxed load in the common (already-set)
+    /// case. See [`SMALL_CHURN`].
+    pub(super) fn note_small_free() {
+        if SMALL_CHURN.load(Ordering::Relaxed) == 0 {
+            SMALL_CHURN.store(1, Ordering::Relaxed);
+        }
+    }
+
     #[derive(Clone, Copy)]
     struct Slot {
         /// Parked buffer address (`0` = empty slot). Stored as `usize` only
@@ -322,6 +355,10 @@ mod buf_cache {
         pub static TAKE_MISS: AtomicU64 = AtomicU64::new(0);
         pub static PUT_PARKED: AtomicU64 = AtomicU64::new(0);
         pub static PUT_REJECTED: AtomicU64 = AtomicU64::new(0);
+        /// Summed `usable` bytes over parked buffers. With PUT_PARKED this
+        /// gives the mean parked size, which is what identifies WHICH buffer
+        /// a program is recycling (B-2026-07-30-4 diagnosis).
+        pub static PUT_BYTES: AtomicU64 = AtomicU64::new(0);
 
         pub fn on() -> bool {
             static ON: AtomicU8 = AtomicU8::new(0);
@@ -340,9 +377,9 @@ mod buf_cache {
                 // Caught by e2e_vec_binary_stays_lean_no_heavy_runtime_floor.
                 extern "C" fn dump() {
                     use core::sync::atomic::Ordering::Relaxed;
-                    let mut buf = [0u8; 160];
+                    let mut buf = [0u8; 224];
                     let mut pos = 0usize;
-                    fn put(buf: &mut [u8; 160], pos: &mut usize, bytes: &[u8]) {
+                    fn put(buf: &mut [u8; 224], pos: &mut usize, bytes: &[u8]) {
                         for &b in bytes {
                             if let Some(slot) = buf.get_mut(*pos) {
                                 *slot = b;
@@ -350,7 +387,7 @@ mod buf_cache {
                             }
                         }
                     }
-                    fn put_u64(buf: &mut [u8; 160], pos: &mut usize, mut v: u64) {
+                    fn put_u64(buf: &mut [u8; 224], pos: &mut usize, mut v: u64) {
                         let mut tmp = [0u8; 20];
                         let mut n = 0usize;
                         loop {
@@ -378,6 +415,8 @@ mod buf_cache {
                     put_u64(&mut buf, &mut pos, super::stats::PUT_PARKED.load(Relaxed));
                     put(&mut buf, &mut pos, b" rejected=");
                     put_u64(&mut buf, &mut pos, super::stats::PUT_REJECTED.load(Relaxed));
+                    put(&mut buf, &mut pos, b" parked_bytes=");
+                    put_u64(&mut buf, &mut pos, super::stats::PUT_BYTES.load(Relaxed));
                     put(&mut buf, &mut pos, b"\n");
                     crate::fatal::write_stderr(buf.get(..pos).unwrap_or(&[]));
                 }
@@ -392,6 +431,12 @@ mod buf_cache {
         pub fn bump(c: &AtomicU64) {
             if on() {
                 c.fetch_add(1, Relaxed);
+            }
+        }
+
+        pub fn add(c: &AtomicU64, v: u64) {
+            if on() {
+                c.fetch_add(v, Relaxed);
             }
         }
     }
@@ -477,6 +522,44 @@ mod buf_cache {
             });
         if parked {
             stats::bump(&stats::PUT_PARKED);
+            stats::add(&stats::PUT_BYTES, usable as u64);
+            // B-2026-07-30-4. Parking withholds a multi-MB chunk that the
+            // program just finished with. Measured consequence on glibc: the
+            // program's SUBSEQUENT SMALL allocations get dramatically slower —
+            // the #3629 sieve's ~1e6 small allocs per round go 5.28 s -> 11.39 s
+            // (2.15x) purely from holding the 24 MB outer buffer instead of
+            // freeing it. The effect is not kara-specific: a pure-C mirror that
+            // retains the same array across iterations reproduces it at 1.82x,
+            // so it is a property of the allocator, not of this cache.
+            //
+            // `malloc_trim` asks glibc for the consolidation housekeeping that
+            // a large `free` would have prompted, which recovers the loss and
+            // then some (build 11.39 -> 6.96 s, inner-buffer frees 3.04 ->
+            // 0.83 s). It runs once per PARK — a rare, multi-MB event, never on
+            // the small-alloc fast path — and deliberately AFTER the spinlock is
+            // released, so glibc's arena lock is never taken while holding ours.
+            //
+            // Not a tunable substitute: `MALLOC_MMAP_THRESHOLD_` /
+            // `MALLOC_TRIM_THRESHOLD_` were both measured and change nothing
+            // here (bigbuf stays at ~2.1 s with the cache off either way).
+            //
+            // Gated on SMALL_CHURN so the compensation is paid only by programs
+            // that actually interleave small allocations with the parked
+            // buffer. An unconditional trim costs the pure large-buffer
+            // ping-pong ~30% (306 -> 398 ms on bigbuf) for no benefit, since
+            // there are no small chunks to consolidate.
+            //
+            // `TRIM_PAD` (not 0) keeps that much free arena at the top rather
+            // than returning it to the kernel: the consolidation is what fixes
+            // the small-alloc path, while releasing the pages only buys a
+            // re-fault storm on the next round (measured: pad 0 pushed the
+            // sieve's system time 0.04 s -> 1.17 s).
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            if SMALL_CHURN.swap(0, Ordering::Relaxed) != 0 {
+                unsafe {
+                    malloc_trim(TRIM_PAD);
+                }
+            }
         } else {
             stats::bump(&stats::PUT_REJECTED);
         }
@@ -523,10 +606,12 @@ pub extern "C" fn karac_free_buf(ptr: *mut u8, bytes_hint: usize) {
         return;
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    if (bytes_hint == 0 || bytes_hint >= BUF_CACHE_MIN_BYTES)
-        && buf_cache::enabled()
-        && buf_cache::put(ptr)
-    {
+    if bytes_hint != 0 && bytes_hint < BUF_CACHE_MIN_BYTES {
+        // Small-buffer fast path — unchanged (straight to `free`, no lock, no
+        // allocator query), plus the one relaxed load that records small-chunk
+        // churn for the park-side `malloc_trim` decision (B-2026-07-30-4).
+        buf_cache::note_small_free();
+    } else if buf_cache::enabled() && buf_cache::put(ptr) {
         return;
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
