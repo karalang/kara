@@ -917,7 +917,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **790 surfaced 
 | B-2026-07-31-16 | codegen | low | `return` inside a `with_provider` CLOSURE body is closure-scoped per the typechecker and interpreter (`let x = with_provider[R](v, \|\| { return 8; });… | 7cd69b0 |
 | B-2026-07-31-17 | codegen | low | A let-bound value expression that TERMINATES (`let x = { return 5; }; tail`) fails module verification under codegen — the let-site emits its store a… | e92c16b |
 | B-2026-07-31-18 | typecheck | low | The typechecker types a `return E` inside a `with_provider(p, \|\| { .. | 64c4df5 |
-| B-2026-07-31-19 | codegen | medium | `?` inside a `with_provider` CLOSURE body lowers as a FN-LEVEL early return of the Err, but per design.md (body is `Fn() -> T`) and the interpreter i… | — |
+| B-2026-07-31-19 | codegen | medium | `?` inside a `with_provider` CLOSURE body lowers as a FN-LEVEL early return of the Err, but per design.md (body is `Fn() -> T`) and the interpreter i… | 7190a77 |
 | B-2026-07-31-20 | codegen | medium | codegen never registers heap-type metadata (string_vars / vec_elem_types / var_type_names) for a `let` binding whose RHS is a with_provider call, so… | a710d6c |
 
 </details>
