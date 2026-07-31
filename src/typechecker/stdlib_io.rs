@@ -165,13 +165,30 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![],
                 }
             }
-            _ => self.handle_unknown_method(
-                "Client",
-                method,
-                &["get", "post", "request"],
-                args,
-                span,
-            ),
+            // B-2026-07-31-1 follow-up — the four HTTP types (`Client`,
+            // `RequestBuilder`, `Response`, `HttpError`) dispatch through
+            // these hardcoded arms rather than the impl-table path, so the
+            // baked-nominal check that fixed the other handle types never
+            // sees them. They were the last four `handle_unknown_method`
+            // call sites in the compiler, and that helper is SILENT unless
+            // the name is edit-distance close: `c.gett(u)` was caught,
+            // `c.totally_bogus_xyz()` typechecked clean and fell through to
+            // `Type::Error` (universally assignable), detonating later as a
+            // codegen "no handler for method" or an interpreter dispatch
+            // miss. The enumerations here are at parity with codegen — see
+            // `codegen/method_call.rs` (`Client` get/post/request,
+            // `RequestBuilder` header/body/timeout/send, `Response`
+            // status/body/bytes/header/headers, `HttpError` message) — so an
+            // unknown method reaching these arms is genuinely absent and
+            // `require_known_method` (always emits, `did you mean` when
+            // close) is correct. With these four converted,
+            // `handle_unknown_method` had no callers left and was removed
+            // along with its `maybe_emit_method_typo` helper, so the
+            // silent-fall-through pattern is now structurally absent rather
+            // than merely unused.
+            _ => {
+                self.require_known_method("Client", method, &["get", "post", "request"], args, span)
+            }
         }
     }
 
@@ -252,7 +269,7 @@ impl<'a> super::TypeChecker<'a> {
                     ],
                 }
             }
-            _ => self.handle_unknown_method(
+            _ => self.require_known_method(
                 "RequestBuilder",
                 method,
                 &["header", "body", "timeout", "send"],
@@ -336,7 +353,7 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Tuple(vec![Type::Str, Type::Str])],
                 }
             }
-            _ => self.handle_unknown_method(
+            _ => self.require_known_method(
                 "Response",
                 method,
                 &["body", "bytes", "header", "headers", "status"],
@@ -363,7 +380,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
-            _ => self.handle_unknown_method("HttpError", method, &["message"], args, span),
+            _ => self.require_known_method("HttpError", method, &["message"], args, span),
         }
     }
 

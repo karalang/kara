@@ -3267,61 +3267,6 @@ impl<'a> TypeChecker<'a> {
         self.type_error(msg, span.clone(), TypeErrorKind::TypeMismatch);
     }
 
-    /// Emit `NoMethodFound` for an unknown stdlib method only when a close
-    /// candidate exists in `known_methods` (edit distance ≤ 2 via
-    /// `edit_distance::suggest_similar`). Used by per-type `infer_*_method`
-    /// arms to surface typos without breaking the silent fallback for
-    /// runtime-only methods that the typechecker has not yet enumerated.
-    /// Each arm's `KNOWN_METHODS` constant is the typechecker's current
-    /// enumeration of that type's surface — it grows as stdlib enumeration
-    /// catches up to the interpreter, at which point the arm's `_` case
-    /// can flip from "typo-only" to "always-error". See
-    /// phase-4-interpreter.md § Method Resolution Step 7.
-    fn maybe_emit_method_typo(
-        &mut self,
-        type_name: &str,
-        method: &str,
-        known_methods: &[&str],
-        span: &Span,
-    ) {
-        if let Some(suggestion) = crate::edit_distance::suggest_similar(method, known_methods) {
-            self.type_error(
-                format!(
-                    "no method '{}' on type '{}', did you mean '{}'?",
-                    method, type_name, suggestion
-                ),
-                span.clone(),
-                TypeErrorKind::NoMethodFound,
-            );
-        }
-    }
-
-    /// Default `_` arm body for per-type `infer_*_method` dispatch: emit a
-    /// typo-suggestion diagnostic when the typed name is close to a known
-    /// method, type-check the arguments, and return `Type::Error`. The
-    /// silent fallback for far-from-anything names preserves the historical
-    /// permissive behavior for runtime-only methods that the typechecker
-    /// has not yet enumerated.
-    ///
-    /// Reserved for arms whose typechecker enumeration has *not yet* reached
-    /// parity with the interpreter (currently the four phase-11 arms — Regex
-    /// and the three HTTP types). Phase-8-floor arms have flipped to
-    /// `require_known_method` so unknown methods on those types fail loudly.
-    fn handle_unknown_method(
-        &mut self,
-        type_name: &str,
-        method: &str,
-        known_methods: &[&str],
-        args: &[CallArg],
-        span: &Span,
-    ) -> Type {
-        self.maybe_emit_method_typo(type_name, method, known_methods, span);
-        for arg in args {
-            self.infer_expr(&arg.value);
-        }
-        Type::Error
-    }
-
     /// Default `_` arm body for per-type `infer_*_method` dispatch on arms
     /// whose typechecker enumeration has reached parity with the interpreter:
     /// **always** emit `NoMethodFound`, type-check the arguments, and return
@@ -3330,9 +3275,18 @@ impl<'a> TypeChecker<'a> {
     /// otherwise it reports the unknown name plainly. Either way the
     /// diagnostic fires — there is no silent fall-through.
     ///
-    /// Used by phase-8-floor arms (String, Slice, Map, Entry, SortedSet,
-    /// SortedMap, Set, Iterator, Sender, Receiver). Phase-11 arms keep using
-    /// `handle_unknown_method` until their floor lands.
+    /// This is now the ONLY unknown-method fallback. It replaced
+    /// `handle_unknown_method`, which emitted a diagnostic only when the
+    /// typed name was edit-distance close and otherwise returned
+    /// `Type::Error` silently — so a far-from-anything name like
+    /// `c.totally_bogus_xyz()` typechecked clean and detonated later at
+    /// codegen or in the interpreter. Its last four call sites (the `Client`
+    /// / `RequestBuilder` / `Response` / `HttpError` arms in `stdlib_io.rs`)
+    /// flipped here in the B-2026-07-31-1 follow-up, after confirming each
+    /// enumeration matches codegen's dispatch; the helper and its
+    /// `maybe_emit_method_typo` companion were then deleted, so the
+    /// silent-fall-through pattern is structurally absent and cannot be
+    /// reintroduced by a new arm copying an existing one.
     /// See phase-4-interpreter.md § Method Resolution Step 7(d).
     fn require_known_method(
         &mut self,

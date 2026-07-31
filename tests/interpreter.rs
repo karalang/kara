@@ -14653,6 +14653,167 @@ fn main() {
     assert_eq!(output, "error\n");
 }
 
+/// One-shot loopback HTTP origin for the `RequestBuilder` tests. Reads the
+/// request head (and any body indicated by `Content-Length`), then replies
+/// with a canned response that echoes back the request line, two named
+/// request headers, and the body — so a single assertion can pin that the
+/// method, both headers, the payload, and the response-header capture all
+/// survived the round trip. Returns the bound port. Ephemeral port + one
+/// accept, matching the origin pattern in `tests/http_server.rs`.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_echo_origin() -> u16 {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral origin port");
+    let port = listener.local_addr().expect("local_addr").port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            // Read the head, then exactly `Content-Length` more bytes. A
+            // read-to-EOF would deadlock: ureq holds the connection open
+            // waiting for our response.
+            loop {
+                let n = match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(head_end) = text.find("\r\n\r\n") {
+                    let head = &text[..head_end];
+                    let want: usize = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse().ok())?
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= head_end + 4 + want {
+                        break;
+                    }
+                }
+            }
+            let text = String::from_utf8_lossy(&buf).to_string();
+            let head_end = text.find("\r\n\r\n").unwrap_or(text.len());
+            let head = &text[..head_end];
+            let body = text.get(head_end + 4..).unwrap_or("");
+            let verb = head.split_whitespace().next().unwrap_or("?").to_string();
+            let pick = |name: &str| -> String {
+                head.lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        k.trim()
+                            .eq_ignore_ascii_case(name)
+                            .then(|| v.trim().to_string())
+                    })
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            let payload = format!("m={verb};xa={};xb={};body={body}", pick("X-A"), pick("X-B"));
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Echo: yes\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn test_http_request_builder_chain_applies_method_headers_and_body() {
+    // B-2026-07-31 follow-up — `Client.request(m, url)` and the whole
+    // `RequestBuilder` chain (`header` / `body` / `timeout` / `send`) had NO
+    // interpreter dispatch arm: codegen backed it since phase-8 line 24 and
+    // `karac check` passed, so the chain built and ran under AOT and JIT but
+    // died on `karac run --interp` with "method 'request' not found on type
+    // 'Client'". Same check-green/run-red split as the `File.sync_all`
+    // durability gap. This pins that all four builder steps take effect —
+    // a chain that dispatched but dropped its configuration would still
+    // return 200 and hide the bug.
+    let port = spawn_echo_origin();
+    let output = run(&format!(
+        r#"
+fn main() with sends(Network) receives(Network) {{
+    let c = Client.new();
+    match c.request("PUT", "http://127.0.0.1:{port}/p")
+           .header("X-A", "one")
+           .header("X-B", "two")
+           .body("payload42")
+           .timeout(5000)
+           .send() {{
+        Ok(r) => {{
+            println(r.status());
+            println(r.body());
+        }}
+        Err(e) => println("err " + e.message()),
+    }}
+}}
+"#
+    ));
+    assert_eq!(output, "200\nm=PUT;xa=one;xb=two;body=payload42\n");
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn test_http_response_captures_all_headers_not_just_content_type() {
+    // `wrap_ok_response` captured ONLY `content-type`, so on the interpreter
+    // lane `Response.header(name)` answered `None` for every other header and
+    // `Response.headers()` answered a 1-element list — while codegen returned
+    // the full set. That is a WRONG ANSWER rather than a failure: a program
+    // reading `Location` / `ETag` / a rate-limit header ran clean and silently
+    // took the not-present branch. The origin sends Content-Type, X-Echo,
+    // Content-Length and Connection, so a correct capture sees X-Echo and
+    // strictly more than one header.
+    let port = spawn_echo_origin();
+    let output = run(&format!(
+        r#"
+fn main() with sends(Network) receives(Network) {{
+    let c = Client.new();
+    match c.get("http://127.0.0.1:{port}/g") {{
+        Ok(r) => {{
+            match r.header("X-Echo") {{
+                Some(v) => println("xecho " + v),
+                None => println("xecho MISSING"),
+            }}
+            match r.header("content-type") {{
+                Some(v) => println("ct " + v),
+                None => println("ct MISSING"),
+            }}
+            println(r.headers().len() > 1);
+        }}
+        Err(e) => println("err " + e.message()),
+    }}
+}}
+"#
+    ));
+    assert_eq!(output, "xecho yes\nct text/plain\ntrue\n");
+}
+
+#[test]
+fn test_http_request_builder_dispatches_without_network() {
+    // Hermetic companion to the loopback tests above: an invalid URL must
+    // reach the send path and come back as `Err`. Pre-fix this was not an
+    // `Err` at all — it was a runtime "method 'request' not found" abort, so
+    // this distinguishes "dispatch arm exists" from "request happened to
+    // fail" without binding a port.
+    let output = run(r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    match c.request("GET", "not-a-url").timeout(100).send() {
+        Ok(_) => println("ok"),
+        Err(_) => println("err"),
+    }
+}
+"#);
+    assert_eq!(output, "err\n");
+}
+
 // ── Trait associated function dispatch (List 1, item 5) ─────────
 
 #[test]

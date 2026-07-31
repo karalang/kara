@@ -953,13 +953,25 @@ pub(super) fn make_http_error(message: String) -> Value {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn wrap_ok_response(resp: ureq::Response) -> Value {
     let status = resp.status();
-    // Collect headers before consuming the response.
-    let content_type = resp.header("content-type").unwrap_or("").to_string();
+    // Collect headers before consuming the response (`into_string` takes
+    // `self`). This captured ONLY `content-type` until 2026-07-31, which made
+    // `Response.header(name)` answer `None` and `Response.headers()` answer a
+    // 1-element list for every other header on the interpreter lane, while
+    // codegen returned the full set through the `karac_runtime_http_response_
+    // headers_*` side table. That divergence was worse than a missing method:
+    // it returned a WRONG ANSWER rather than failing, so a program reading
+    // `Location`, `ETag`, `Content-Length`, or a rate-limit header ran clean
+    // under `karac run --interp` and silently took the not-present branch.
+    // `headers_names()` is ureq's full name list; a name with repeated values
+    // yields the first (`Response.header` is a single-value lookup on both
+    // lanes, so this matches codegen rather than inventing multi-value
+    // semantics the surface cannot express).
+    let headers: Vec<(String, String)> = resp
+        .headers_names()
+        .into_iter()
+        .filter_map(|name| resp.header(&name).map(|v| (name, v.to_string())))
+        .collect();
     let body = resp.into_string().unwrap_or_default();
-    let mut headers = Vec::new();
-    if !content_type.is_empty() {
-        headers.push(("content-type".to_string(), content_type));
-    }
     Value::EnumVariant {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
@@ -1149,4 +1161,50 @@ pub(super) fn eval_http_post(url: &str, body: &str) -> Value {
 #[cfg(target_arch = "wasm32")]
 pub(super) fn eval_http_post(_url: &str, _body: &str) -> Value {
     make_http_error("Http.post is not available in the browser playground".to_string())
+}
+
+/// Terminal for the `Client.request(...).header(...).body(...).timeout(...)
+/// .send()` chain (phase-8 line 24). Mirrors `karac_runtime_http_builder_send`
+/// step for step so the interpreter and codegen lanes agree: headers applied
+/// in insertion order, timeout applied only when positive, and an empty body
+/// selecting `call()` over a body-bearing send. Codegen's builder keeps its
+/// state in the runtime-side `HTTP_BUILDERS` side table keyed by an i64
+/// handle; the interpreter carries the same fields inline on the
+/// `RequestBuilder` struct value, so no handle bookkeeping is needed and
+/// there is no "unknown request-builder handle" failure mode on this lane.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn eval_http_builder_send(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: &str,
+    timeout_ms: i64,
+) -> Value {
+    let mut req = ureq::request(method, url);
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    if timeout_ms > 0 {
+        req = req.timeout(std::time::Duration::from_millis(timeout_ms as u64));
+    }
+    let result = if body.is_empty() {
+        req.call()
+    } else {
+        req.send_string(body)
+    };
+    match result {
+        Ok(resp) => wrap_ok_response(resp),
+        Err(e) => make_http_error(e.to_string()),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn eval_http_builder_send(
+    _method: &str,
+    _url: &str,
+    _headers: &[(String, String)],
+    _body: &str,
+    _timeout_ms: i64,
+) -> Value {
+    make_http_error("Client.request is not available in the browser playground".to_string())
 }

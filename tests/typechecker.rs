@@ -10373,14 +10373,14 @@ fn baked_stdlib_handle_types_accept_real_methods() {
 }
 
 #[test]
-fn test_method_resolution_stdlib_phase11_arms_silent_for_runtime_only() {
+fn test_method_resolution_stdlib_phase11_arms_reject_unknown_methods() {
     // B-2026-07-31-1 flipped the `Regex` arm to always-error: its four-method
     // surface (`find`/`find_all`/`is_match`/`replace_all`) is at interpreter +
-    // codegen parity, so an unknown method is genuinely absent. The HTTP arms
-    // (Client / Response / HttpError / RequestBuilder) still use
-    // `handle_unknown_method` (typo-only) — their enumeration has not been
-    // parity-audited, so they remain the known-remaining instance of this hole,
-    // recorded in the ledger.
+    // codegen parity, so an unknown method is genuinely absent. The follow-up
+    // flipped the four HTTP arms (Client / Response / HttpError /
+    // RequestBuilder) after parity-auditing each enumeration against
+    // `codegen/method_call.rs`, which retired the last
+    // `handle_unknown_method` call sites — so no arm is silent any more.
     //
     // Phase-8 arms (String / Slice / Map / Entry / SortedSet / Set /
     // Iterator / Sender / Receiver) flipped to always-error in slice 7(d) —
@@ -10398,11 +10398,58 @@ fn test_method_resolution_stdlib_phase11_arms_silent_for_runtime_only() {
         "Regex should reject an unknown method; got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
-    // The HTTP arms stay silent for now — a far-off name does not error.
-    typecheck_ok(
+    // The HTTP arms reject too, for a far-off name as well as a near typo.
+    // Pre-fix, `handle_unknown_method` emitted only on an edit-distance-close
+    // name, so `c.gett(url)` was caught while `c.completely_unrelated_*()`
+    // typechecked clean and became `Type::Error` — universally assignable, so
+    // it survived to codegen ("no handler for method") or to an interpreter
+    // dispatch miss. Both forms must now error at check time.
+    for (ty, recv, bogus) in [
+        (
+            "Client",
+            "let c = Client.new();",
+            "c.completely_unrelated_xyz()",
+        ),
+        (
+            "RequestBuilder",
+            "let c = Client.new();\n             let b = c.request(\"GET\", \"u\");",
+            "b.completely_unrelated_xyz()",
+        ),
+    ] {
+        let src = format!("fn main() {{\n             {recv}\n             {bogus};\n         }}");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("no method 'completely_unrelated_xyz'")),
+            "{ty} should reject a far-off unknown method; got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    // A near typo still gets the `did you mean` suggestion — flipping to
+    // always-error must not cost the actionable hint.
+    let errors = typecheck_errors(
         "fn main() {\n\
              let c = Client.new();\n\
-             c.completely_unrelated_http_method();\n\
+             c.gett(\"http://x\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("did you mean 'get'?")),
+        "expected a did-you-mean suggestion for `gett`; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // Must not over-reject: the real surface still resolves on every arm.
+    typecheck_ok(
+        "fn main() with sends(Network) receives(Network) {\n\
+             let c = Client.new();\n\
+             match c.request(\"GET\", \"http://x\").header(\"A\", \"1\").timeout(10).send() {\n\
+                 Ok(r) => { let _ = r.status(); let _ = r.body(); let _ = r.bytes();\n\
+                            let _ = r.header(\"A\"); let _ = r.headers(); }\n\
+                 Err(e) => { let _ = e.message(); }\n\
+             }\n\
          }",
     );
 }
