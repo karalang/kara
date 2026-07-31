@@ -2505,6 +2505,14 @@ pub(super) struct Codegen<'ctx> {
     /// double-free against the Option's own free. Gates the user-struct arm of
     /// the pattern-binding struct-drop registration.
     pub(crate) pattern_binding_scrutinee_is_option_result: bool,
+    /// B-2026-07-30-11 (boxed-payload bodies): true while binding a
+    /// pattern whose scrutinee is a FRESH OWNING temp (a call, or a
+    /// non-borrow method call like `v.pop()`). The boxed-payload
+    /// bodies-only registration fires ONLY then — a BOUND scrutinee's
+    /// moved-out payload already runs its body through the binding-side
+    /// channel, and a second registration double-ran a mutating body
+    /// (`self.buf.clear()` freed the buffer twice).
+    pub(crate) pattern_binding_scrutinee_is_fresh_owning_temp: bool,
     /// B-2026-07-10-3 — the inline payload-area word budget of the
     /// `Option`/`Result` scrutinee currently being compiled: 3 for `Option`,
     /// 5 for `Result`, 0 when the scrutinee is neither (the same fixed areas
@@ -7604,6 +7612,7 @@ impl<'ctx> Codegen<'ctx> {
             deep_copy_rc_inc_bare_shared: false,
             copy_support_for_loop_shared_mode: false,
             pattern_binding_scrutinee_is_option_result: false,
+            pattern_binding_scrutinee_is_fresh_owning_temp: false,
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,
             match_scrutinee_enum_hint: None,

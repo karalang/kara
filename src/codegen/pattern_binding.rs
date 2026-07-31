@@ -846,6 +846,42 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.track_struct_var(tn, alloca);
                                 }
                             }
+                            // B-2026-07-30-11 (boxed-payload bodies): a
+                            // heap-BOXED `Option`/`Result` struct payload's
+                            // MEMORY is owned by the box drop — the exclusion
+                            // above is what keeps `if let Some(r) = v.pop()`
+                            // from double-freeing — but its user Drop BODY
+                            // still has to run when the binding dies (the
+                            // interpreter fires it; codegen was silent for a
+                            // >area payload). Register a BODIES-ONLY walker
+                            // (`<T>.drop` + the field-bodies walk, no frees)
+                            // on the UserDrop channel: the NLL fire reads the
+                            // fields before the box drop's scope-exit
+                            // interior free, and every move hook retracts it
+                            // by name like any UserDrop entry.
+                            let is_boxed_optres_drop_payload = self
+                                .pattern_binding_scrutinee_is_option_result
+                                && self.pattern_binding_scrutinee_is_fresh_owning_temp
+                                && !self.pattern_binding_scrutinee_is_shared_enum
+                                && self.struct_types.contains_key(tn)
+                                && !self.shared_types.contains_key(tn)
+                                && self.pattern_binding_scrutinee_optres_area > 0
+                                && self.struct_types.get(tn).is_some_and(|st| {
+                                    Self::llvm_type_word_count((*st).into())
+                                        > self.pattern_binding_scrutinee_optres_area
+                                })
+                                && self
+                                    .current_variant_payload_bindings
+                                    .contains(name.as_str());
+                            if is_boxed_optres_drop_payload {
+                                let tn_owned = tn.to_string();
+                                if let Some(f) =
+                                    self.emit_struct_user_drop_bodies_only_fn(&tn_owned)
+                                {
+                                    let name_owned = name.clone();
+                                    self.track_user_drop_var_with_fn("", &name_owned, alloca, f);
+                                }
+                            }
                             // B-2026-07-31-12 — the ENUM sibling of the
                             // B-2026-07-10-3 struct arm above: an
                             // `Option`/`Result` scrutinee whose INLINE payload

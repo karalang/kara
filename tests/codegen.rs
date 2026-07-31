@@ -6250,6 +6250,117 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
+    /// while-let arm binding over an OWNING fresh-temp scrutinee
+    /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a
+    /// BORROW accessor scrutinee (`m.get(k)`, `v.first()`) fires exactly
+    /// once via the container's own walk (the stash must stay silent — the
+    /// interp side of this gate double-fired when it admitted any
+    /// MethodCall). Twin of `tests/interpreter.rs`'s
+    /// `test_arm_channel_owning_temp_vs_borrow_scrutinees`.
+    #[test]
+    fn e2e_arm_channel_owning_temp_vs_borrow_scrutinees() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[Res] = Vec.new();\n\
+             \x20   v.push(Res { id: 61 });\n\
+             \x20   println(\"a\");\n\
+             \x20   match v.pop() {\n\
+             \x20       Option.Some(r) => { println(f\"got {r.id}\"); }\n\
+             \x20       Option.None => { println(\"none\"); }\n\
+             \x20   }\n\
+             \x20   println(\"b\");\n\
+             \x20   let mut w: Vec[Res] = Vec.new();\n\
+             \x20   w.push(Res { id: 62 });\n\
+             \x20   if let Option.Some(r) = w.pop() {\n\
+             \x20       println(f\"iflet got {r.id}\");\n\
+             \x20   }\n\
+             \x20   println(\"c\");\n\
+             \x20   let mut u: Vec[Res] = Vec.new();\n\
+             \x20   u.push(Res { id: 63 });\n\
+             \x20   while let Option.Some(r) = u.pop() {\n\
+             \x20       println(f\"wlet got {r.id}\");\n\
+             \x20   }\n\
+             \x20   println(\"d\");\n\
+             \x20   let mut m: Map[i64, Res] = Map.new();\n\
+             \x20   m.insert(1, Res { id: 81 });\n\
+             \x20   if let Option.Some(r) = m.get(1) {\n\
+             \x20       println(f\"see {r.id}\");\n\
+             \x20   }\n\
+             \x20   println(\"e\");\n\
+             \x20   let mut f: Vec[Res] = Vec.new();\n\
+             \x20   f.push(Res { id: 82 });\n\
+             \x20   if let Option.Some(r) = f.first() {\n\
+             \x20       println(f\"first {r.id}\");\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ngot 61\ndrop 61\nb\niflet got 62\ndrop 62\nc\nwlet got 63\ndrop 63\nd\n\
+             see 81\ndrop 81\ne\nfirst 82\ndrop 82\nend\n"
+        );
+    }
+
+    /// B-2026-07-30-11 (boxed-payload bodies) — a heap-BOXED Option payload
+    /// (a >3-word struct popped from a Vec) fires its Drop body exactly
+    /// ONCE: the box drop owns the memory, the bodies-only walker runs the
+    /// body at the binding's NLL end. The naive UserDrop-wrapper routing
+    /// double-freed the payload's String buffer at all three bind sites
+    /// (caught by valgrind mid-development — `free(): double free`), and
+    /// before that the body never ran at all under codegen. Twin of
+    /// `tests/interpreter.rs`'s `test_boxed_option_payload_body_once`.
+    #[test]
+    fn e2e_boxed_option_payload_body_once() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, s: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[Res] = Vec.new();\n\
+             \x20   v.push(Res { id: 1, s: f\"one-{1}\" });\n\
+             \x20   v.push(Res { id: 2, s: f\"two-{2}\" });\n\
+             \x20   println(\"a\");\n\
+             \x20   while let Option.Some(r) = v.pop() {\n\
+             \x20       println(f\"got {r.id} len {r.s.len()}\");\n\
+             \x20   }\n\
+             \x20   println(\"b\");\n\
+             \x20   let mut w: Vec[Res] = Vec.new();\n\
+             \x20   w.push(Res { id: 3, s: f\"three-{3}\" });\n\
+             \x20   if let Option.Some(r) = w.pop() {\n\
+             \x20       println(f\"iflet {r.id} len {r.s.len()}\");\n\
+             \x20   }\n\
+             \x20   println(\"c\");\n\
+             \x20   let mut u: Vec[Res] = Vec.new();\n\
+             \x20   u.push(Res { id: 4, s: f\"four-{4}\" });\n\
+             \x20   match u.pop() {\n\
+             \x20       Option.Some(r) => { println(f\"match {r.id} len {r.s.len()}\"); }\n\
+             \x20       Option.None => { println(\"none\"); }\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ngot 2 len 5\ndrop 2\ngot 1 len 5\ndrop 1\nb\niflet 3 len 7\ndrop 3\nc\n\
+             match 4 len 6\ndrop 4\nend\n"
+        );
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///

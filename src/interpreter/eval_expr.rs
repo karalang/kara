@@ -760,17 +760,15 @@ impl<'a> super::Interpreter<'a> {
                     // stash): the then-block's executor adopts them at entry,
                     // so NLL placement and every move hook apply. Consuming =
                     // an EnumVariant value from an identifier/`self` place
-                    // (whose walk the disarm above retracted) or a fresh
-                    // temp; a projection place is a view whose owner still
-                    // walks.
+                    // (whose walk the disarm above retracted) or an OWNING
+                    // fresh temp; a projection place is a view whose owner
+                    // still walks, and a borrow accessor (`m.get(k)` /
+                    // `v.first()` / `.last()`) yields an Option whose payload
+                    // ALIASES the container's element — firing here doubled
+                    // the body against the container's own walk (the same
+                    // exclusion codegen's `scrutinee_is_borrow_call` makes).
                     let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
-                        && matches!(
-                            &value.kind,
-                            ExprKind::Identifier(_)
-                                | ExprKind::SelfValue
-                                | ExprKind::Call { .. }
-                                | ExprKind::MethodCall { .. }
-                        );
+                        && Self::scrutinee_expr_is_consuming(value);
                     let stash_names: Vec<String> = if consuming_scrutinee {
                         if let Value::EnumVariant { ref enum_name, .. } = val {
                             self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
@@ -903,8 +901,37 @@ impl<'a> super::Interpreter<'a> {
                         break;
                     }
                     let drop_snapshot = scrut_drop.map(|tn| (tn, val.clone()));
+                    // B-2026-07-30-11 (while-let leg): the per-iteration
+                    // consuming scrutinee's moved-out Drop-bearing payload
+                    // binding gets a REAL Drop slot, exactly like the match /
+                    // if-let stashes — `while let Some(r) = v.pop()` over a
+                    // `Vec[Res]` never ran r's body on this backend. Same
+                    // gate: owning fresh temps and identifier/`self` places;
+                    // borrow accessors excluded.
+                    let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
+                        && Self::scrutinee_expr_is_consuming(value);
+                    let stash_names: Vec<String> = if consuming_scrutinee {
+                        if let Value::EnumVariant { ref enum_name, .. } = val {
+                            self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    };
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
+                    for n in stash_names {
+                        let is_drop_struct = match self.env.get(&n) {
+                            Some(Value::Struct { name: tn, .. }) => {
+                                self.program.drop_method_keys.contains_key(&tn)
+                            }
+                            _ => false,
+                        };
+                        if is_drop_struct {
+                            self.pending_arm_drop_bindings.push(n);
+                        }
+                    }
                     let body_result = self.eval_block_inner(body);
                     self.env.pop_scope();
                     if let Some((tn, dv)) = drop_snapshot {

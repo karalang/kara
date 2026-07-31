@@ -26545,6 +26545,99 @@ fn test_let_else_moved_payload_single_drop() {
     );
 }
 
+/// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
+/// same source and expected string. The pre-fix interpreter never stashed
+/// fresh-temp scrutinees (match-over-pop was silent), and the first if-let
+/// gate admitted borrow accessors — `m.get(k)` / `v.first()` double-fired.
+#[test]
+fn test_arm_channel_owning_temp_vs_borrow_scrutinees() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[Res] = Vec.new();\n\
+                 v.push(Res { id: 61 });\n\
+                 println(\"a\");\n\
+                 match v.pop() {\n\
+                     Option.Some(r) => { println(f\"got {r.id}\"); }\n\
+                     Option.None => { println(\"none\"); }\n\
+                 }\n\
+                 println(\"b\");\n\
+                 let mut w: Vec[Res] = Vec.new();\n\
+                 w.push(Res { id: 62 });\n\
+                 if let Option.Some(r) = w.pop() {\n\
+                     println(f\"iflet got {r.id}\");\n\
+                 }\n\
+                 println(\"c\");\n\
+                 let mut u: Vec[Res] = Vec.new();\n\
+                 u.push(Res { id: 63 });\n\
+                 while let Option.Some(r) = u.pop() {\n\
+                     println(f\"wlet got {r.id}\");\n\
+                 }\n\
+                 println(\"d\");\n\
+                 let mut m: Map[i64, Res] = Map.new();\n\
+                 m.insert(1, Res { id: 81 });\n\
+                 if let Option.Some(r) = m.get(1) {\n\
+                     println(f\"see {r.id}\");\n\
+                 }\n\
+                 println(\"e\");\n\
+                 let mut f: Vec[Res] = Vec.new();\n\
+                 f.push(Res { id: 82 });\n\
+                 if let Option.Some(r) = f.first() {\n\
+                     println(f\"first {r.id}\");\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ngot 61\ndrop 61\nb\niflet got 62\ndrop 62\nc\nwlet got 63\ndrop 63\nd\n\
+         see 81\ndrop 81\ne\nfirst 82\ndrop 82\nend\n"
+    );
+}
+
+/// B-2026-07-30-11 (boxed-payload bodies) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_boxed_option_payload_body_once`, same source
+/// and expected string.
+#[test]
+fn test_boxed_option_payload_body_once() {
+    assert_eq!(
+        run("struct Res { id: i64, s: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[Res] = Vec.new();\n\
+                 v.push(Res { id: 1, s: f\"one-{1}\" });\n\
+                 v.push(Res { id: 2, s: f\"two-{2}\" });\n\
+                 println(\"a\");\n\
+                 while let Option.Some(r) = v.pop() {\n\
+                     println(f\"got {r.id} len {r.s.len()}\");\n\
+                 }\n\
+                 println(\"b\");\n\
+                 let mut w: Vec[Res] = Vec.new();\n\
+                 w.push(Res { id: 3, s: f\"three-{3}\" });\n\
+                 if let Option.Some(r) = w.pop() {\n\
+                     println(f\"iflet {r.id} len {r.s.len()}\");\n\
+                 }\n\
+                 println(\"c\");\n\
+                 let mut u: Vec[Res] = Vec.new();\n\
+                 u.push(Res { id: 4, s: f\"four-{4}\" });\n\
+                 match u.pop() {\n\
+                     Option.Some(r) => { println(f\"match {r.id} len {r.s.len()}\"); }\n\
+                     Option.None => { println(\"none\"); }\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ngot 2 len 5\ndrop 2\ngot 1 len 5\ndrop 1\nb\niflet 3 len 7\ndrop 3\nc\n\
+         match 4 len 6\ndrop 4\nend\n"
+    );
+}
+
 /// B-2026-07-31-37 (heap face) — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_assign_move_heap_body_once`, same source and expected string.
 /// The interpreter's pre-fix behavior was `D7 D7 x` (double body, right

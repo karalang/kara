@@ -247,6 +247,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some("Option") | Some("Result")
             )
         });
+        // B-2026-07-30-11 (boxed-payload bodies): fresh owning temps
+        // (`match v.pop() { … }`) are the only scrutinees whose boxed
+        // payload bodies fire via the bind-site bodies-only walker — a
+        // bound scrutinee's arm move already runs the body through the
+        // binding-side channel.
+        let saved_fresh_temp_flag = self.pattern_binding_scrutinee_is_fresh_owning_temp;
+        self.pattern_binding_scrutinee_is_fresh_owning_temp =
+            self.scrutinee_expr_is_owning_fresh_temp(scrutinee);
         // B-2026-07-10-3 — record the seed enum's inline payload-area budget
         // (Option = 3, Result = 5) so `bind_pattern_values` can tell an INLINE
         // struct payload (safe to `track_struct_var`) from a heap-BOXED one
@@ -760,6 +768,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
         self.pattern_binding_scrutinee_optres_area = saved_optres_area;
         self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
+        self.pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
         self.match_scrutinee_enum_hint = saved_scrut_enum_hint;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of

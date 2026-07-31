@@ -34183,6 +34183,59 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (boxed-payload bodies) — the double-free-direction
+    /// gate for the arm-channel Drop routing over heap-BOXED Option
+    /// payloads: `while let / if let / match Some(r) = v.pop()` where the
+    /// payload struct exceeds the inline area. The box drop owns the
+    /// interior; the bodies-only walker must free nothing (the naive
+    /// wrapper routing crashed with `free(): double free` at all three
+    /// sites), and a borrow accessor's aliased payload must register no
+    /// owned track.
+    #[test]
+    fn asan_arm_channel_boxed_payload_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct G { id: i64, s: String }
+impl Drop for G {
+    fn drop(mut ref self) {
+        if self.id < 0i64 { println(self.id); }
+    }
+}
+fn main() {
+    let mut it = 0i64;
+    while it < 200i64 {
+        let mut v: Vec[G] = Vec.new();
+        v.push(G { id: it, s: f"one-{it}" });
+        v.push(G { id: it + 1i64, s: f"two-{it}" });
+        while let Option.Some(r) = v.pop() {
+            let _ = r.s.len();
+        }
+        let mut w: Vec[G] = Vec.new();
+        w.push(G { id: it, s: f"three-{it}" });
+        if let Option.Some(r) = w.pop() {
+            let _ = r.s.len();
+        }
+        let mut u: Vec[G] = Vec.new();
+        u.push(G { id: it, s: f"four-{it}" });
+        match u.pop() {
+            Option.Some(r) => { let _ = r.s.len(); }
+            Option.None => {}
+        }
+        let mut m: Map[i64, G] = Map.new();
+        m.insert(1i64, G { id: it, s: f"five-{it}" });
+        if let Option.Some(r) = m.get(1i64) {
+            let _ = r.s.len();
+        }
+        it = it + 1i64;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "arm_channel_boxed_payload_freed_once",
+        );
+    }
+
     /// B-2026-07-30-11 (discarded-temp leg) — `let _ = <owned temp>;` now
     /// registers the discarded temp's cleanup (Drop bodies + heap frees) at
     /// the `;` for struct-literal / user-fn-call / tuple / Option-ctor

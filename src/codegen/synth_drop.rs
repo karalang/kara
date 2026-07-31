@@ -2344,6 +2344,54 @@ impl<'ctx> super::Codegen<'ctx> {
     /// its param to a wider heap type shifts every following field's offset, so
     /// the GEPs run against the mono layout and the symbol carries a mono
     /// suffix (B-2026-07-11-35 / B-2026-07-15-24).
+    /// `__karac_dropbodies_only_<T>` — a struct's user `Drop` BODY (when it
+    /// declares one) plus the Drop-bearing-field bodies walk, and NOTHING
+    /// else: no field frees, no memory. For a binding whose MEMORY another
+    /// owner holds (a heap-boxed `Option`/`Result` payload owned by the box
+    /// drop), this is the only registration that cannot double-free.
+    /// `None` when the type carries no user Drop work at all.
+    pub(super) fn emit_struct_user_drop_bodies_only_fn(
+        &mut self,
+        struct_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(struct_name));
+        let field_bodies =
+            self.emit_user_drop_field_bodies_fn(struct_name, &std::collections::HashMap::new());
+        if !owns_body && field_bodies.is_none() {
+            return None;
+        }
+        let fn_name = format!("__karac_dropbodies_only_{struct_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        self.builder.position_at_end(entry);
+        let p = walker.get_nth_param(0).unwrap().into_pointer_value();
+        if owns_body {
+            if let Some(f) = self.module.get_function(&format!("{struct_name}.drop")) {
+                self.builder.build_call(f, &[p.into()], "").unwrap();
+            }
+        }
+        if let Some(f) = field_bodies {
+            self.builder.build_call(f, &[p.into()], "").unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     pub(super) fn emit_user_drop_field_bodies_fn(
         &mut self,
         struct_name: &str,

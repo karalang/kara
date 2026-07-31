@@ -154,7 +154,9 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
             self.current_variant_payload_bindings.extend(vp_names);
         }
+        let saved_shape_flags = self.set_scrutinee_shape_flags_for_pattern(pattern, value);
         let bind_res = self.bind_pattern_values(pattern, val);
+        self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.current_variant_payload_bindings.clear();
         bind_res?;
         // Slice 3s (B-2026-07-01-12): clone an ESCAPING borrow-mode payload
@@ -454,7 +456,21 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value);
-        self.bind_pattern_values(pattern, val)?;
+        // B-2026-07-30-11 (while-let leg): route a Drop-declaring variant
+        // payload binding to the UserDrop channel — the match/if-let sites'
+        // mirror. The binding lives in the per-iteration body frame, so the
+        // body fires once per matched iteration at the binding's NLL end.
+        self.current_variant_payload_bindings.clear();
+        {
+            let mut vp_names: Vec<String> = Vec::new();
+            Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
+            self.current_variant_payload_bindings.extend(vp_names);
+        }
+        let saved_shape_flags = self.set_scrutinee_shape_flags_for_pattern(pattern, value);
+        let bind_res = self.bind_pattern_values(pattern, val);
+        self.restore_scrutinee_shape_flags(saved_shape_flags);
+        self.current_variant_payload_bindings.clear();
+        bind_res?;
         if self.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[body])?;
         }
@@ -511,6 +527,64 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Set the scrutinee-shape flags `bind_pattern_values` consults
+    /// (`pattern_binding_scrutinee_is_option_result` / `_optres_area` /
+    /// `_is_shared_enum`) from a SINGLE variant pattern — the if-let /
+    /// while-let / let-else twin of `compile_match`'s per-arms derivation.
+    /// Without these, `bind_pattern_values` classified an `Option`/`Result`
+    /// payload binding as a plain user struct: a heap-BOXED payload
+    /// (`if let Some(r) = v.pop()` with a >3-word struct) then got its own
+    /// owned track on top of the box drop that already owns the interior —
+    /// a double-free the match path has excluded since B-2026-06-13-13.
+    /// Returns the saved triple for `restore_scrutinee_shape_flags`.
+    pub(super) fn set_scrutinee_shape_flags_for_pattern(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &Expr,
+    ) -> (bool, usize, bool, bool) {
+        let saved = (
+            self.pattern_binding_scrutinee_is_option_result,
+            self.pattern_binding_scrutinee_optres_area,
+            self.pattern_binding_scrutinee_is_shared_enum,
+            self.pattern_binding_scrutinee_is_fresh_owning_temp,
+        );
+        self.pattern_binding_scrutinee_is_fresh_owning_temp =
+            self.scrutinee_expr_is_owning_fresh_temp(scrutinee);
+        let en = self.variant_pattern_enum_name(pattern);
+        self.pattern_binding_scrutinee_is_option_result =
+            matches!(en.as_deref(), Some("Option") | Some("Result"));
+        self.pattern_binding_scrutinee_optres_area = match en.as_deref() {
+            Some("Option") => 3,
+            Some("Result") => 5,
+            _ => 0,
+        };
+        self.pattern_binding_scrutinee_is_shared_enum = en
+            .and_then(|n| self.shared_types.get(&n).cloned())
+            .is_some_and(|i| i.is_enum);
+        saved
+    }
+
+    /// Restore the quadruple saved by `set_scrutinee_shape_flags_for_pattern`.
+    pub(super) fn restore_scrutinee_shape_flags(&mut self, saved: (bool, usize, bool, bool)) {
+        self.pattern_binding_scrutinee_is_option_result = saved.0;
+        self.pattern_binding_scrutinee_optres_area = saved.1;
+        self.pattern_binding_scrutinee_is_shared_enum = saved.2;
+        self.pattern_binding_scrutinee_is_fresh_owning_temp = saved.3;
+    }
+
+    /// Is this scrutinee expression a FRESH OWNING temp — a call, or a
+    /// method call that isn't a borrow accessor (`scrutinee_is_borrow_call`)?
+    /// The codegen twin of the interpreter's `scrutinee_expr_is_consuming`
+    /// fresh-temp half; identifier/`self` places are NOT fresh (their moved
+    /// payload's body rides the binding-side channel).
+    pub(super) fn scrutinee_expr_is_owning_fresh_temp(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Call { .. } => true,
+            ExprKind::MethodCall { .. } => !self.scrutinee_is_borrow_call(e),
+            _ => false,
+        }
     }
 
     // ── LetElse ──────────────────────────────────────────────────
@@ -632,7 +706,9 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
             self.current_variant_payload_bindings.extend(vp_names);
         }
+        let saved_shape_flags = self.set_scrutinee_shape_flags_for_pattern(pattern, value);
         let bind_res = self.bind_pattern_values(pattern, val);
+        self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.current_variant_payload_bindings.clear();
         bind_res?;
         if self.pattern_binding_is_borrow {

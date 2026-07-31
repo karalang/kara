@@ -51,12 +51,14 @@ impl<'a> super::Interpreter<'a> {
                 // cleanup vec at entry, so NLL placement and every move hook
                 // apply exactly as for `let` bindings. Only for a consuming
                 // scrutinee — an owned binding/`self` (whose walk the disarm
-                // above retracted) or a temp (which registered no walk); a
-                // field-access place is a view whose owner still walks.
+                // above retracted) or an OWNING fresh temp (`match v.pop()`,
+                // `match mk()` — the value is the match's to drop, and
+                // codegen already fired these via the same arm-channel
+                // routing); a field-access place is a view whose owner still
+                // walks, and a borrow accessor's payload aliases the
+                // container's element (see `scrutinee_expr_is_consuming`).
                 let consuming_scrutinee = matches!(scrutinee, Value::EnumVariant { .. })
-                    && scrutinee_place.is_none_or(|p| {
-                        matches!(&p.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
-                    });
+                    && scrutinee_place.is_none_or(Self::scrutinee_expr_is_consuming);
                 if consuming_scrutinee {
                     if let Value::EnumVariant { enum_name, .. } = scrutinee {
                         for n in self.arm_moved_user_drop_payload_bindings(enum_name, &arm.pattern)
@@ -240,6 +242,24 @@ impl<'a> super::Interpreter<'a> {
     /// payload positions only; a bare `Tuple` pattern is deliberately not a
     /// collector (a tuple scrutinee's element walk stays armed and fires, the
     /// shape-B behavior pinned by `b3011_nonlet1`).
+    /// Shared consuming-scrutinee shape gate for the match / if-let /
+    /// while-let arm-drop stashes: an identifier or `self` place (whose
+    /// payload walk the disarm retracted), or an OWNING fresh temp (a call,
+    /// or a method call that isn't a borrow accessor). `get`/`first`/`last`
+    /// yield an Option whose payload ALIASES the container's element — the
+    /// container's own walk runs the body, so a stash fire would double it;
+    /// the exclusion set mirrors codegen's `scrutinee_is_borrow_call`.
+    /// Projections and unknown shapes stay non-consuming.
+    pub(super) fn scrutinee_expr_is_consuming(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue | ExprKind::Call { .. } => true,
+            ExprKind::MethodCall { method, .. } => {
+                !matches!(method.as_str(), "get" | "first" | "last")
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn arm_moved_user_drop_payload_bindings(
         &self,
         enum_name: &str,
