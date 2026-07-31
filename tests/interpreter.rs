@@ -26638,6 +26638,32 @@ fn test_boxed_option_payload_body_once() {
     );
 }
 
+/// B-2026-07-30-11 (SortedMap-values leg) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_sortedmap_value_drop_bodies_fire`, same source
+/// and expected string. Both walks emit in key order for a SortedMap, so
+/// unlike the plain-Map twin this expectation is order-exact.
+#[test]
+fn test_sortedmap_value_drop_bodies_fire() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut sm: SortedMap[i64, Res] = SortedMap.new();\n\
+                 sm.insert(2, Res { id: 72 });\n\
+                 sm.insert(1, Res { id: 71 });\n\
+                 println(\"a\");\n\
+                 let _ = sm.insert(1, Res { id: 73 });\n\
+                 println(\"b\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 71\ndrop 73\ndrop 72\nb\nend\n"
+    );
+}
+
 /// B-2026-07-31-37 (heap face) — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_assign_move_heap_body_once`, same source and expected string.
 /// The interpreter's pre-fix behavior was `D7 D7 x` (double body, right

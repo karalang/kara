@@ -1607,7 +1607,10 @@ impl<'a> super::Interpreter<'a> {
             let TypeKind::Path(p) = &te.kind else {
                 return false;
             };
-            if p.segments.last().map(String::as_str) != Some("Map") {
+            if !matches!(
+                p.segments.last().map(String::as_str),
+                Some("Map") | Some("SortedMap")
+            ) {
                 return false;
             }
             matches!(
@@ -1630,8 +1633,13 @@ impl<'a> super::Interpreter<'a> {
     /// Returns `true` when the binding resolved to a Map (walked or not) so
     /// the caller stops — a Map is not a `drop_target` shape.
     fn run_map_val_user_drops(&mut self, name: &str) -> bool {
-        let entries = match self.env.get(name) {
-            Some(Value::Map(entries)) => entries,
+        // SortedMap shares the walk (same declared-V gate); its values come
+        // out in key order vs the Map's insertion order — the same
+        // ordered-vs-unordered difference `for (k, v) in m` already has, so
+        // parity tests stay order-insensitive.
+        let vals: Vec<Value> = match self.env.get(name) {
+            Some(Value::Map(entries)) => entries.into_iter().map(|(_, v)| v).collect(),
+            Some(Value::SortedMap(entries)) => entries.into_values().collect(),
             _ => return false,
         };
         if self.moved_out_container_bodies_bindings.contains(name) {
@@ -1649,7 +1657,7 @@ impl<'a> super::Interpreter<'a> {
             return true;
         };
         let declared_head = Self::declared_field_type_head(val_te);
-        for (_, v) in entries {
+        for v in vals {
             let Value::Struct { name: tn, .. } = &v else {
                 continue;
             };

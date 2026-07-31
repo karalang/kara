@@ -6361,6 +6361,38 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (SortedMap-values leg) — a `SortedMap[K, V]` whose V
+    /// runs a user Drop fires each stored value's body at the binding's NLL
+    /// death, exactly like `Map` (they share the KaracMap lowering; the
+    /// registration head-gates just never admitted "SortedMap"). Values
+    /// walk in key order here; composition with the displaced-insert
+    /// discard (`let _ = sm.insert(existing, …)`) pins the whole chain.
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_sortedmap_value_drop_bodies_fire`.
+    #[test]
+    fn e2e_sortedmap_value_drop_bodies_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut sm: SortedMap[i64, Res] = SortedMap.new();\n\
+             \x20   sm.insert(2, Res { id: 72 });\n\
+             \x20   sm.insert(1, Res { id: 71 });\n\
+             \x20   println(\"a\");\n\
+             \x20   let _ = sm.insert(1, Res { id: 73 });\n\
+             \x20   println(\"b\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 71\ndrop 73\ndrop 72\nb\nend\n");
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///

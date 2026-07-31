@@ -5826,7 +5826,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let TypeKind::Path(p) = &map_te.kind else {
             return None;
         };
-        if p.segments.last().map(|s| s.as_str()) != Some("Map") {
+        if !matches!(
+            p.segments.last().map(|s| s.as_str()),
+            Some("Map") | Some("SortedMap")
+        ) {
             return None;
         }
         let args = p.generic_args.as_ref()?;
