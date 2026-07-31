@@ -33979,6 +33979,51 @@ fn main() {
         );
     }
 
+    // B-2026-07-31-7 — an UNANNOTATED `let` of an `Option`/`Result` whose
+    // payload is heap-BOXED registered no cleanup at all and leaked the whole
+    // box, payload heap included.
+    //
+    // The box-drop registration resolved the binding's type from the
+    // annotation, else from `fn_return_type_exprs` keyed on a bare-`Identifier`
+    // callee. `Option.Some(mkres())`'s callee is the PATH `Option.Some`, so
+    // neither source fired. The annotated sibling (`a`) always worked, which is
+    // why this hid: the natural way to write the test is with the annotation.
+    //
+    // Unlike the bodies-only tests above, LSan CAN witness this one directly —
+    // it is a genuine leak of a malloc'd box plus its String and Vec buffers.
+    // Both bindings are kept so a fix that swings too far and double-frees the
+    // annotated case shows up here as an ASAN error rather than silently.
+    #[test]
+    fn asan_unannotated_boxed_optres_let_frees_its_box() {
+        assert_clean_asan_run(
+            r#"
+struct Res { name: String, buf: Vec[i64] }
+
+fn mkres(tag: i64) -> Res {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(tag);
+    return Res { name: "boxed-payload-wide-enough-to-spill", buf: b };
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        let a: Option[Res] = Option.Some(mkres(i));   // annotated — always worked
+        let b = Option.Some(mkres(i));                // unannotated — leaked
+        let c: Result[Res, i64] = Result.Ok(mkres(i));
+        let d = Result.Ok(mkres(i));
+        n = n + 4i64;
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            &["800"],
+            "unannotated_boxed_optres_let_frees_its_box",
+        );
+    }
+
     // B-2026-07-30-11 SHAPE 2 — the same glue for an owned aggregate TEMP
     // (`consume(H { .. })`, and the return-passthrough `pass(H { .. })`).
     //

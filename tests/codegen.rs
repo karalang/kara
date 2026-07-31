@@ -5753,6 +5753,44 @@ fn main() {
         assert_eq!(out, "1\n50\n2\n41\n51\n999\n");
     }
 
+    /// B-2026-07-31-6 — a `Result[T, E]` whose `Ok` payload is HEAP-BOXED must
+    /// not also get the INLINE payload cleanup.
+    ///
+    /// `coerce_to_payload_words` spills a too-wide payload behind a pointer in
+    /// word 0, and `BoxedEnumDrop` walks it correctly through the box. The
+    /// inline overlay was registered on top, and it reads word 1 — the box
+    /// POINTER — as the first word of the payload struct. For `Res { name:
+    /// String, buf: Vec[i64] }` that made `karac_drop_Res` run over
+    /// `{box_ptr, 0, 0}`: an empty-`Res` body `karac run` never printed, and a
+    /// free of whatever those words held (benign only because they were zero).
+    ///
+    /// `Res` needs TWO heap fields so the payload exceeds the inline word
+    /// budget and is actually boxed — a single-heap-field payload stays inline,
+    /// the overlay is then correct, and the test pins nothing.
+    #[test]
+    fn e2e_boxed_result_payload_runs_no_inline_overlay_drop() {
+        let Some(out) = run_program(
+            "struct Res { name: String, buf: Vec[i64] }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(f\"D {self.buf.len()}\"); } }\n\
+             fn mkres() -> Res {\n\
+             \x20   let mut b: Vec[i64] = Vec.new();\n\
+             \x20   b.push(1i64);\n\
+             \x20   return Res { name: \"payload\", buf: b };\n\
+             }\n\
+             fn main() {\n\
+             \x20   let d: Result[Res, i64] = Result.Ok(mkres());\n\
+             \x20   println(\"d\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // No `D 0` line: the box's own drop is memory-only (running the payload
+        // BODY through the box is the still-open Option/Result half of
+        // B-2026-07-30-11), and the interpreter prints nothing here either.
+        assert_eq!(out, "d\nend\n");
+    }
+
     /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS
     /// runs its `Drop` body exactly ONCE, and its buffer is freed exactly once.
     ///

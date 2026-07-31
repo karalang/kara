@@ -4409,6 +4409,19 @@ impl<'ctx> super::Codegen<'ctx> {
         result_slot: PointerValue<'ctx>,
         result_te: &TypeExpr,
     ) {
+        // The payload is HEAP-BOXED (`coerce_to_payload_words` spilled a
+        // too-wide payload behind a pointer in word 0), so `BoxedEnumDrop` —
+        // registered just before this at the same binding — already owns it and
+        // walks it correctly through the box. Registering the INLINE overlay too
+        // would read word 1 (the box POINTER) as the first word of the payload
+        // struct: for `Result[Res, i64]` with `Res { name: String, buf: Vec }`
+        // it ran `karac_drop_Res` over `{box_ptr, 0, 0}`, printing an empty
+        // `Res` body that `karac run` never printed and freeing whatever those
+        // words happened to hold. Benign only because the trailing words were
+        // zero, so every `cap > 0` guard skipped.
+        if self.boxed_enum_payload_vars.contains(var_name) {
+            return;
+        }
         let (ok_payload_elem_ty, err_payload_elem_ty) = self
             .result_inline_payload_elems(result_te)
             .unwrap_or((None, None));

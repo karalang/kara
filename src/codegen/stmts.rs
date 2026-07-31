@@ -4424,8 +4424,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // shared payload is a 1-word RC pointer and is never boxed.
                 if shared_option_info.is_none() {
                     if let PatternKind::Binding(var_name) = &pattern.kind {
-                        let boxed_te: Option<TypeExpr> =
-                            ty.clone().or_else(|| self.untyped_let_boxed_enum_te(value));
+                        // B-2026-07-31 (Option/Result payload leg) — the
+                        // annotation, then the typechecker's recorded
+                        // INSTANTIATION for this expression, then the
+                        // call-return fallback. The middle source was missing:
+                        // `untyped_let_boxed_enum_te` only reads
+                        // `fn_return_type_exprs` for a bare-`Identifier` callee,
+                        // so an unannotated `let b = Option.Some(mk());` — whose
+                        // callee is the PATH `Option.Some` — resolved to `None`
+                        // and registered no box drop at all, leaking the whole
+                        // payload box. `enum_inst_type_exprs` is the same
+                        // span-keyed map the sibling inline-payload registration
+                        // two blocks below already consults.
+                        let boxed_te: Option<TypeExpr> = ty
+                            .clone()
+                            .or_else(|| {
+                                self.enum_inst_type_exprs
+                                    .get(&(value.span.offset, value.span.length))
+                                    .cloned()
+                            })
+                            .or_else(|| self.untyped_let_boxed_enum_te(value));
                         if let Some(te) = boxed_te.as_ref() {
                             let boxed = self.boxed_enum_payload_variants(te);
                             if let Some(slot) = (!boxed.is_empty())
