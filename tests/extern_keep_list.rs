@@ -26,15 +26,27 @@
 //!
 //! # The pinned exceptions
 //!
-//! 17 declared symbols are absent from the keep-list today. They are all in the
-//! async / net / TLS families, whose definitions live behind `cfg`-gated
-//! modules (`runtime/src/event_loop.rs`, the `tls`-gated builder surface), so
-//! whether each is genuinely at strip risk needs per-symbol triage rather than
-//! a blanket assertion. They are pinned in `KNOWN_ABSENT` rather than ignored,
-//! and the pin is two-sided: adding a pinned symbol to the keep-list turns this
-//! test RED and forces the entry to be removed, exactly like
+//! 17 declared symbols are absent from the keep-list, all in the async / net /
+//! TLS families. They were triaged in B-2026-07-31-34 and are verified not at
+//! strip risk; they stay pinned in `KNOWN_ABSENT` as documentation and as the
+//! baseline for drift. The pin is two-sided: adding a pinned symbol to the
+//! keep-list turns this test RED and forces the stale entry out, exactly like
 //! `tests/example_corpus.rs`'s known-broken pins. New drift — a symbol in
 //! neither the keep-list nor this list — fails immediately.
+//!
+//! # What this test does NOT prove
+//!
+//! It compares two *source-level* sets: what codegen declares, and what the
+//! keep-list names. It cannot tell you whether a symbol survives linking —
+//! that is a property of a built binary under `lto = "fat"`, and the triage
+//! above needed `nm -g target/release/karac_jit_runner` to settle it. Two
+//! plausible-looking checks answer nothing here, and both were tried first:
+//! `nm` on the runtime *archive* (members retain their symbols by
+//! construction, so a strip can never show), and `nm` on a *debug* binary (no
+//! LTO, so nothing is stripped). Any future strip-risk claim needs a release
+//! binary AND a negative control — some symbol known to be absent — or an
+//! all-KEPT result is indistinguishable from a check that cannot detect
+//! absence at all.
 
 #![cfg(feature = "llvm")]
 
@@ -43,9 +55,16 @@ use std::path::PathBuf;
 
 /// Declared-but-not-preserved symbols as of 2026-07-31.
 ///
-/// NOT an approval list. Each entry is an open question ("is this reachable
-/// from other runtime code, or is it one LTO pass away from disappearing?"),
-/// recorded so that the *set* stops growing silently.
+/// These 17 were triaged empirically (B-2026-07-31-34) and are **verified not
+/// at strip risk**: each is present in `target/release/karac_jit_runner` built
+/// under `lto = "fat"` — the one configuration the keep-list actually guards —
+/// and in both runtime archives. The `http_builder_*` six are absent from the
+/// LEAN archive by design (TLS-only; codegen links the full archive for any
+/// program referencing them), which is correct, not drift.
+///
+/// Still not an approval list for anything NEW. A symbol arriving here without
+/// that verification is unexamined, and the check that matters is narrower than
+/// it looks — see the note on `known_absent_entries_are_still_absent`.
 const KNOWN_ABSENT: &[&str] = &[
     "karac_runtime_event_loop_register_fd_cancel",
     "karac_runtime_http_builder_add_header",

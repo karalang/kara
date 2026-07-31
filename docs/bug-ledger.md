@@ -104,39 +104,38 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 32 | 0 |
 | diagnostics | 30 | 0 |
 | use-after-free | 11 | 0 |
-| other | 8 | 1 |
+| other | 8 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 574 | 3 |
+| codegen | 574 | 2 |
 | typecheck | 108 | 0 |
 | interp | 85 | 1 |
 | ownership | 35 | 0 |
 | autopar | 27 | 0 |
 | cli | 23 | 0 |
 | other | 21 | 0 |
-| runtime | 18 | 1 |
+| runtime | 18 | 0 |
 | resolver | 15 | 0 |
 | parser | 8 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced · 3 open · 795 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced · 2 open · 796 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-4 | 2026-07-30 | codegen | medium | #3629 bfs_sieve trails C/Rust on the sequential lane — now measured at 1.40-1.44x (not 2.5-2.9x), and localized to build_factors: the sieve alone is 1.65x vs C and accounts for MORE than the whole kata's deficit | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
-| B-2026-07-31-34 | 2026-07-31 | codegen+runtime | low | 17 codegen-declared runtime symbols are absent from `__preserve_no_mangle_symbols` — each needs a per-symbol strip-risk verdict (async/net/TLS families). Pinned by tests/extern_keep_list.rs so the set cannot grow silently, but the pin is a placeholder for triage, NOT an approval. | — |
 
-### Fixed (795)
+### Fixed (796)
 
-<details><summary>795 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>796 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -933,6 +932,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **806 surfaced 
 | B-2026-07-31-31 | parser+typecheck | medium | Mechanical diagnostics that name their own replacement carry no `karac fix` payload (`!` -> `not`, String -> StringSlice) | 49dc24c |
 | B-2026-07-31-32 | resolver+parser | medium | E_MODULE_BINDING_NAMING suggests renaming a single-uppercase-letter binding to itself | 41cb78a |
 | B-2026-07-31-33 | resolver+cli | medium | `karac fix` renames a module binding's DECLARATION only, breaking every use site | 0c1c599 |
+| B-2026-07-31-34 | codegen+runtime | low | 17 codegen-declared runtime symbols are absent from `__preserve_no_mangle_symbols` — each needs a per-symbol strip-risk verdict (async/net/TLS famili… | (no code change — verified not at risk) |
 | B-2026-07-31-35 | autopar+codegen | high | An eligible head-index deque in a function auto-par splits fails the BUILD: the __par_branch_* compile inherits the outer function's name-keyed head… | 6ed7439 |
 | B-2026-07-31-36 | cli | medium | `karac build -o <path>` / `--out <path>` was PARSED BUT SILENTLY IGNORED for executable builds — the artifact always landed at `<stem>` in the CWD | — |
 
