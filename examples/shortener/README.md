@@ -45,6 +45,23 @@ Codegen detects the third field and lowers each pair through
 are applied in order; `content-type` defaults to `application/json`
 unless a pair overrides it. The two-field form keeps working unchanged.
 
+## Oracle
+
+`tests/http_server.rs::test_shortener_example_end_to_end` compiles this
+file, spawns it, and pins every route above — including the `302`'s
+`location` header and the `/stats` hit counts. It substitutes
+`127.0.0.1:0` for the hardcoded `:8080` so it binds an ephemeral port
+like every other test in that file; the routing and responses are this
+example's own code.
+
+The `/stats` assertion is the one with teeth: it is the automated form
+of the manual read that surfaced `B-2026-07-31-30`. Neuter the `HITS`
+loop and the test fails with `"hits":{}` — the bug's exact symptom.
+
+`examples/mend/examples/link_registry/` is the Mend task+oracle pair for
+the same state layer with the HTTP surface removed, so it has the
+deterministic stdout oracle a server cannot.
+
 ## Why it exists
 
 This was written as a dogfooding exercise, developed through the Mend

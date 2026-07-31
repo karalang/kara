@@ -1,0 +1,95 @@
+// Link registry — the state layer of a URL shortener, with the HTTP
+// surface removed so the unit has a deterministic stdout oracle.
+//
+// Exercises the shape that produced B-2026-07-31-30: MUTABLE MODULE-LEVEL
+// containers (`Map`, `Vec`) read, written, and ITERATED from functions.
+// That bug compiled `for x in <module-level container>` to a zero-iteration
+// loop, so a service reported empty stats while `len()` on the same map was
+// correct — silent, and invisible to a compile-only check.
+//
+// The iteration below folds into a SUM rather than printing per entry:
+// interpreter and codegen walk a `Map` in different orders (insertion vs
+// bucket), so an order-dependent oracle would fail the interp == compiled
+// gate for a reason that is not a bug.
+
+let mut LINKS: Map[String, String] = Map.new();
+let mut HITS: Map[String, i64] = Map.new();
+let mut ORDER: Vec[String] = Vec.new();
+let mut SEQ: i64 = 0;
+
+let CODE_ALPHABET: StringSlice = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+// Base-36 encode `n` over CODE_ALPHABET. Always at least one character.
+fn encode_code(n: i64) -> String {
+    if n == 0 {
+        return "a";
+    }
+    let mut out = "";
+    let mut v = n;
+    while v > 0 {
+        let digit = v % 36;
+        match CODE_ALPHABET.char_at(digit) {
+            Some(c) => { out = c.to_string() + out; }
+            None => { }
+        }
+        v = v / 36;
+    }
+    out
+}
+
+// Register `url`, returning its freshly minted code.
+fn shorten(url: String) -> String {
+    let code = encode_code(SEQ);
+    SEQ = SEQ + 1;
+    LINKS.insert(code.clone(), url);
+    HITS.insert(code.clone(), 0);
+    ORDER.push(code.clone());
+    code
+}
+
+// Resolve `code`, bumping its hit count. Empty string when unknown.
+fn follow(code: String) -> String {
+    match LINKS.get(code.clone()) {
+        Some(target) => {
+            let seen = match HITS.get(code.clone()) {
+                Some(n) => n,
+                None => 0,
+            };
+            HITS.insert(code, seen + 1);
+            target
+        }
+        None => "",
+    }
+}
+
+fn main() {
+    let a = shorten("https://example.com/one");
+    let b = shorten("https://example.com/two");
+    let c = shorten("https://example.com/three");
+    println(f"codes: {a} {b} {c}");
+    println(f"seq 37: {encode_code(37)}");
+
+    println(follow(a.clone()));
+    println(follow(a.clone()));
+    println(follow(b.clone()));
+    let missing = follow("zz");
+    println(f"missing is empty: {missing.len() == 0}");
+
+    // Module-level Map iteration — the B-2026-07-31-30 shape. Folded into
+    // order-independent totals so both backends agree.
+    let mut entries = 0;
+    let mut total = 0;
+    for (code, n) in HITS {
+        entries = entries + 1;
+        total = total + n;
+    }
+    println(f"links: {LINKS.len()} entries: {entries} hits: {total}");
+
+    // Module-level Vec iteration — the same bug's sibling arm.
+    let mut codes = "";
+    for code in ORDER {
+        codes = codes + code;
+    }
+    println(f"order: {codes}");
+    println(f"unused: {c.len() > 0}");
+}

@@ -291,7 +291,18 @@ jobs:
         # ran on dev machines — where a Darwin toolchain drift silently broke
         # it. Linux static-LLVM is the authoritative leg for the descriptor
         # observation; keep it enforced here.
-        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype
+        #
+        # http_server added for the same reason, one target later: its 29 tests
+        # are `#[cfg(feature = "llvm")]`, so `cargo test --all` compiles the
+        # module to nothing and reports green without running any of it. That
+        # covered the whole `Server.serve` handler surface — HTTP/1.1 and h2c
+        # routing, the response-header field, WebSocket upgrade, the TLS/ALPN
+        # legs, and `examples/shortener`'s end-to-end oracle. Measured before
+        # adding: 27/27 green on two runs, ~12 s warm and ~53 s cold, against a
+        # job that already runs 2 690 codegen cases plus a full JIT rerun. Every
+        # server in the file binds `127.0.0.1:0` and reads back `BOUND_PORT`, so
+        # no test claims a fixed port on a contended runner.
+        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server
 
       # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
       # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and

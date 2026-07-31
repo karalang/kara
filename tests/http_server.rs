@@ -3288,4 +3288,112 @@ fn main() with sends(Network) receives(Network) {{
             panic!("serve_ws_tls E2E failed: {e}");
         }
     }
+
+    /// ORACLE for `examples/shortener/shortener.kara` — the dogfooding URL
+    /// shortener. Drives every route its README documents and pins the
+    /// response, so the example is verified rather than merely known to
+    /// compile ("it compiles" is explicitly not the bar — CLAUDE.md §
+    /// Developing Kāra code).
+    ///
+    /// WHY AN E2E AND NOT A STDOUT DIFF. Sibling examples pin themselves with
+    /// `assert_eq!(run_program(include_str!(...)), include_str!("*.expected"))`
+    /// in `tests/codegen.rs`. A server never terminates, so that shape cannot
+    /// express it; the oracle has to be "spawn it and speak HTTP", which is
+    /// what this file already knows how to do.
+    ///
+    /// WHAT IT IS ACTUALLY GUARDING. The bug this example found —
+    /// B-2026-07-31-30, `for (code, n) in HITS` over a MODULE-LEVEL `Map`
+    /// compiling to a zero-iteration loop — was a silent wrong answer:
+    /// `/stats` reported `"hits":{}` while `LINKS.len()` on the sibling map was
+    /// right and the interpreter iterated fine. Nothing about that is visible
+    /// from a compile. It surfaced because a human ran the service and read the
+    /// output, and the `/stats` assertion below is the automated form of that
+    /// read. The two-link setup is deliberate: one link cannot distinguish a
+    /// working iteration from a lucky single-entry path.
+    ///
+    /// LISTEN ADDRESS SUBSTITUTED. The example hardcodes `127.0.0.1:8080`
+    /// because it is meant to be run by hand; every test in this file binds
+    /// `127.0.0.1:0` and reads `BOUND_PORT`, which is what keeps them from
+    /// colliding under a parallel or contended runner. The oracle rewrites the
+    /// address for that reason alone — routing, status codes, JSON bodies, and
+    /// the redirect header all remain exactly the example's own code.
+    #[test]
+    fn test_shortener_example_end_to_end() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = include_str!("../examples/shortener/shortener.kara")
+            .replace("127.0.0.1:8080", "127.0.0.1:0");
+        let Some((mut child, port, exe_path)) = spawn_kara_server(&src, "karac_shortener") else {
+            return;
+        };
+        let run = || -> Result<(), String> {
+            // `GET /` — usage text, and the first request doubles as the
+            // listener-warm-up retry (BOUND_PORT prints just before accept).
+            let (status, body) = retry_until_ok(|| http_get(port, "/"))?;
+            if status != 200 || !body.contains("POST /shorten") {
+                return Err(format!("GET / expected 200 + usage; got {status} {body:?}"));
+            }
+
+            // Two shortens: codes are base-36 of a module-level counter, so
+            // they must come back "a" then "b" — which also pins that `SEQ`
+            // survives across requests as mutable module state.
+            let (status, body) = http_post(port, "/shorten", "https://example.com/one")?;
+            if status != 201 || body != "{\"code\":\"a\",\"short\":\"/a\"}" {
+                return Err(format!("first shorten: got {status} {body:?}"));
+            }
+            let (status, body) = http_post(port, "/shorten", "https://example.com/two")?;
+            if status != 201 || body != "{\"code\":\"b\",\"short\":\"/b\"}" {
+                return Err(format!("second shorten: got {status} {body:?}"));
+            }
+
+            // `GET /a` — the redirect. This is the one route the two-field
+            // `Response { status, body }` shape cannot express, so it is also
+            // the regression pin for the optional third `headers` field
+            // (codegen lowers each pair through
+            // `karac_runtime_http_response_set_header`).
+            let (status, headers, _) = http_get_with_response_headers(port, "/a")?;
+            if status != 302 {
+                return Err(format!("GET /a expected 302; got {status}"));
+            }
+            let loc = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+                .map(|(_, v)| v.clone())
+                .ok_or_else(|| format!("no location header; got {headers:?}"))?;
+            if loc != "https://example.com/one" {
+                return Err(format!("location mismatch: {loc:?}"));
+            }
+            // The documented default: `content-type` stays JSON unless a pair
+            // overrides it, so setting `location` must not have displaced it.
+            if !headers.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case("content-type") && v.contains("application/json")
+            }) {
+                return Err(format!("content-type default lost; got {headers:?}"));
+            }
+
+            // `/stats` — B-2026-07-31-30's regression pin. `a` was followed
+            // once, `b` never, and both must appear.
+            let (status, body) = http_get(port, "/stats")?;
+            if status != 200 || body != "{\"links\":2,\"hits\":{\"a\":1,\"b\":0}}" {
+                return Err(format!("GET /stats: got {status} {body:?}"));
+            }
+
+            // Unknown code, and the method guard on /shorten.
+            let (status, body) = http_get(port, "/zz")?;
+            if status != 404 || !body.contains("no such code") {
+                return Err(format!("GET /zz expected 404; got {status} {body:?}"));
+            }
+            let (status, body) = http_get(port, "/shorten")?;
+            if status != 405 || !body.contains("use POST") {
+                return Err(format!("GET /shorten expected 405; got {status} {body:?}"));
+            }
+            Ok(())
+        };
+        let outcome = run();
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        if let Err(e) = outcome {
+            panic!("shortener example E2E failed: {e}");
+        }
+    }
 }
