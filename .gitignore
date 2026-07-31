@@ -3,18 +3,27 @@ target/
 
 # Binaries
 a.out
-# Stray `karac build` outputs accidentally committed from the repo root
-# (the AOT compiler emits `<stem>` into the cwd). Ignore the scratch ones
-# that have leaked in; the real fix is to build into a scratch dir.
+# Stray `karac build` outputs accidentally committed from the repo root: the
+# AOT compiler emits the executable as `<stem>` into the cwd, so building from
+# here drops it beside Cargo.toml where `git add -A` sweeps it up.
+#
+# The entries below are the names that have actually leaked (tup_vec; then
+# blockmin/pan/t; then dc/uam, all 2026-07-31). They keep `git status` quiet,
+# but they are NOT the guard — the output name is whatever the `.kara` file was
+# called, so a name list can only ever catch a repeat offender, never the next
+# one. `tests/no_tracked_binaries.rs` is the real backstop: it rejects any
+# tracked file carrying executable magic, under the plain `cargo test --all` CI
+# job. When a new stray appears, prefer building into a scratch dir
+# (`-o /tmp/prog`) over extending this list.
+#
+# Root-anchored: `t`, `dc` and `pan` are short enough that a bare pattern would
+# also ignore any same-named file or directory deeper in the tree.
 tup_vec
-# Same class, untracked 2026-07-31: repro binaries from bug-hunting sessions
-# whose `.kara` sources were already dropped (`blockmin.kara` in db32610), so
-# these were orphaned artifacts with no source and no build-system reference.
-# Root-anchored: `t` and `pan` are short enough that a bare pattern would also
-# ignore any same-named file or directory deeper in the tree.
 /blockmin
 /pan
 /t
+/dc
+/uam
 
 # IDX
 .idx/
