@@ -935,9 +935,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **809 surfaced 
 | B-2026-07-31-34 | codegen+runtime | low | 17 codegen-declared runtime symbols are absent from `__preserve_no_mangle_symbols` — each needs a per-symbol strip-risk verdict (async/net/TLS famili… | (no code change — verified not at risk) |
 | B-2026-07-31-35 | autopar+codegen | high | An eligible head-index deque in a function auto-par splits fails the BUILD: the __par_branch_* compile inherits the outer function's name-keyed head… | 6ed7439 |
 | B-2026-07-31-36 | cli | medium | `karac build -o <path>` / `--out <path>` was PARSED BUT SILENTLY IGNORED for executable builds — the artifact always landed at `<stem>` in the CWD | — |
-| B-2026-07-31-37 | interp+codegen | high | `a = b` on a struct binding runs b's user `impl Drop` body TWICE on every backend — and on a heap-bearing type codegen's second run reads the MOVED-F… | — |
-| B-2026-07-31-38 | codegen | medium | A binding moved into a variant constructor and then REASSIGNED never drops again on codegen: the ctor move retracts its UserDrop action permanently a… | — |
-| B-2026-07-31-39 | codegen | medium | Reassigning a struct binding never frees the OLD value's field heap — `let mut a = S{..String..}; a = S{..};` orphans the first String on every execu… | — |
+| B-2026-07-31-37 | interp+codegen | high | `a = b` on a struct binding runs b's user `impl Drop` body TWICE on every backend — and on a heap-bearing type codegen's second run reads the MOVED-F… | 1276227 |
+| B-2026-07-31-38 | codegen | medium | A binding moved into a variant constructor and then REASSIGNED never drops again on codegen: the ctor move retracts its UserDrop action permanently a… | 1276227 |
+| B-2026-07-31-39 | codegen | medium | Reassigning a struct binding never frees the OLD value's field heap — `let mut a = S{..String..}; a = S{..};` orphans the first String on every execu… | 1276227 |
 
 </details>
 
