@@ -26248,6 +26248,98 @@ fn test_map_whole_rebind_transfers_ownership() {
     );
 }
 
+/// B-2026-07-30-11 (displaced-value leg) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_struct_reassign_displaced_drop_semantics`, same
+/// source and expected string. The displaced old value's body fires at the
+/// assignment (reading the OLD id — the pre-fix interpreter ran one body
+/// AFTER the store and printed the new id), a moved identifier source fires
+/// exactly once, and a consumed-by-the-RHS old value fires nothing at the
+/// assignment.
+#[test]
+fn test_struct_reassign_displaced_drop_semantics() {
+    assert_eq!(
+        run("struct G { id: i64, s: String }\n\
+             impl Drop for G {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn consume(g: G) -> G {\n\
+                 G { id: g.id + 10, s: g.s }\n\
+             }\n\
+             fn main() {\n\
+                 let mut a = G { id: 1, s: \"first\".to_string() };\n\
+                 a = G { id: 2, s: \"second\".to_string() };\n\
+                 println(\"after overwrite\");\n\
+                 let mut x = G { id: 3, s: \"xxx\".to_string() };\n\
+                 let y = G { id: 4, s: \"yyy\".to_string() };\n\
+                 x = y;\n\
+                 println(\"after move\");\n\
+                 let mut c = G { id: 5, s: \"ccc\".to_string() };\n\
+                 c = consume(c);\n\
+                 println(\"after consume\");\n\
+             }\n"),
+        "drop 1\ndrop 2\nafter overwrite\ndrop 3\ndrop 4\nafter move\ndrop 15\nafter consume\n"
+    );
+}
+
+/// B-2026-07-31-37 (heap face) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_struct_assign_move_heap_body_once`, same source and expected string.
+/// The interpreter's pre-fix behavior was `D7 D7 x` (double body, right
+/// length both times — codegen's first firing additionally read a zeroed
+/// length); the assign-move suppression makes it `D3 D7 x` everywhere.
+#[test]
+fn test_struct_assign_move_heap_body_once() {
+    assert_eq!(
+        run("struct Res { data: Vec[i64] }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"D{self.data.len()}\")\n\
+                 }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let mut i = 0;\n\
+                 while i < n {\n\
+                     v.push(i);\n\
+                     i = i + 1;\n\
+                 }\n\
+                 Res { data: v }\n\
+             }\n\
+             fn main() {\n\
+                 let mut a = mk(3);\n\
+                 let b = mk(7);\n\
+                 a = b;\n\
+                 println(\"x\");\n\
+             }\n"),
+        "D3\nD7\nx\n"
+    );
+}
+
+/// B-2026-07-31-38 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_ctor_moved_binding_reassign_rearms_drop`, same source and expected
+/// string. The interpreter was already correct on this shape (`D1 D2 x`) —
+/// it is the oracle half; codegen lost D2 entirely pre-fix.
+#[test]
+fn test_ctor_moved_binding_reassign_rearms_drop() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"D{self.id}\")\n\
+                 }\n\
+             }\n\
+             enum Slot { Empty, Held(Res) }\n\
+             fn main() {\n\
+                 let mut r = Res { id: 1 };\n\
+                 let s = Slot.Held(r);\n\
+                 r = Res { id: 2 };\n\
+                 println(\"x\");\n\
+             }\n"),
+        "D1\nD2\nx\n"
+    );
+}
+
 /// B-2026-07-30-5 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deque_head_fifo_semantics`, same source and expected string. The
 /// interpreter's VecDeque is untouched by the codegen head-index lowering;

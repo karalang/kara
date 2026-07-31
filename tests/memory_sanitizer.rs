@@ -34124,6 +34124,65 @@ fn main() {
         );
     }
 
+    // B-2026-07-30-11 (displaced-value leg) — reassigning a struct binding
+    // must FREE the displaced old value's field heap exactly once. Before
+    // the fix nothing on the reassign path touched the old value: its
+    // String field was definitely-lost whenever LLVM couldn't dead-code the
+    // allocation (13 bytes/iteration, valgrind-verified on the probe). This
+    // case guards the DOUBLE-FREE direction: a displaced-value cleanup
+    // emitted on the wrong side of the store (or a moved source left armed)
+    // frees the survivor's buffer twice and aborts loudly under ASAN. The
+    // LEAK direction is NOT loud here — verified: this test passes with the
+    // fix reverted, because LSan's conservative stack scan keeps the loop's
+    // orphaned buffers "reachable" (the same LSan blind spot
+    // B-2026-07-31-27 documented; valgrind is the authoritative tool for
+    // this shape). The leak-direction gate is the valgrind-verified E2E
+    // `e2e_struct_reassign_displaced_drop_semantics`, which fails without
+    // the fix on the body side.
+    #[test]
+    fn asan_struct_reassign_displaced_value_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct G { id: i64, s: String }
+impl Drop for G {
+    fn drop(mut ref self) {
+        if self.id < 0i64 { println(self.id); }
+    }
+}
+fn main() {
+    let mut n = 0i64;
+    let mut it = 0i64;
+    while it < 200i64 {
+        let mut a = G { id: it, s: f"payload-a-{it}" };
+        n = n + a.s.len();
+        a = G { id: it + 1i64, s: f"payload-b-{it}" };
+        n = n + a.s.len();
+
+        let mut x = G { id: it, s: f"payload-x-{it}" };
+        n = n + x.s.len();
+        let y = G { id: it + 2i64, s: f"payload-y-{it}" };
+        x = y;
+        n = n + x.s.len();
+
+        let mut h = G { id: it, s: f"plain-{it}" };
+        n = n + h.s.len();
+        h = G { id: it + 3i64, s: f"plain2-{it}" };
+        n = n + h.s.len();
+
+        it = it + 1i64;
+    }
+    println(n);
+}
+"#,
+            // Sum of the six per-iteration payload lengths: bases
+            // ("payload-a-" x4 = 40, "plain-" = 6, "plain2-" = 7) = 53, plus
+            // 6 x digits(it) — 10 one-digit + 90 two-digit + 100 three-digit
+            // iterations: 200*53 + 6*(10 + 180 + 300) = 13540.
+            &["13540"],
+            "struct_reassign_displaced_value_freed_once",
+        );
+    }
+
     // B-2026-07-30-5 — the VecDeque head-index lowering frees the malloc
     // base, exactly once, on every exit shape. The header's data pointer
     // never moves (only `head` advances, in a frame-local alloca), so the

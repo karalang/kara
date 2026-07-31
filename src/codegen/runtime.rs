@@ -5153,6 +5153,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// for moves out of nested scopes — though the v1 caller in
     /// `stmts.rs` only ever suppresses within the current frame
     /// because that's where the source binding lives.
+    /// True when `name` currently has an armed `UserDrop` cleanup action in
+    /// any live frame — i.e. the binding still OWNS a Drop-bearing value.
+    /// The displaced-value leg (B-2026-07-30-11) keys on this: a reassign
+    /// runs the old value's body only when the binding owns it; a value
+    /// moved out earlier (variant ctor, `let g = f`) had its action
+    /// retracted, and firing on the stale slot would read moved-from bits
+    /// (B-2026-07-31-38's repro shape prints the payload's body twice).
+    pub(super) fn has_armed_user_drop(&self, name: &str) -> bool {
+        self.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(action, CleanupAction::UserDrop { binding_name, .. } if binding_name == name)
+            })
+        })
+    }
+
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
         for frame in self.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {

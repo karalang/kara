@@ -149,6 +149,22 @@ pub fn names_mentioned_in_stmt(stmt: &Stmt, cands: &HashSet<String>, bad: &mut H
     }
 }
 
+/// Deep mention test: does `expr` reference `name` ANYWHERE — any
+/// sub-expression, including bodies of nested blocks, closures, `par`
+/// regions, loops, and match arms? Reuses this module's exhaustive
+/// disqualification walk (under `isolated` every mention inserts, safe
+/// method receivers included), which is what makes it trustworthy as a
+/// conservative move guard: the displaced-value drop legs
+/// (B-2026-07-30-11) must NOT run a body for an overwritten binding when
+/// the assignment's RHS might have consumed that binding's value.
+pub fn expr_mentions_name_deep(expr: &Expr, name: &str) -> bool {
+    let mut cands = HashSet::new();
+    cands.insert(name.to_string());
+    let mut bad = HashSet::new();
+    walk_expr(expr, true, &cands, &mut bad);
+    bad.contains(name)
+}
+
 // ── Candidate collection ────────────────────────────────────────────
 
 fn collect_candidate_stmt_shallow(stmt: &Stmt, out: &mut HashSet<String>) {

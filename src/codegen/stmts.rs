@@ -6663,6 +6663,65 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap();
                         }
                     }
+                    // B-2026-07-30-11 (displaced-value leg): reassigning a
+                    // struct binding discarded the OLD value entirely — no user
+                    // `impl Drop` body ran and no heap field was freed (the
+                    // binding's own UserDrop/StructDrop fire reads the slot
+                    // AFTER the store, so it covers the new value; the old
+                    // one's String field is a hard leak the moment LLVM can't
+                    // dead-code it away). Run the same cleanup the scope exit
+                    // would have run — the `karac_drop_<T>` wrapper when the
+                    // type declares `impl Drop`, else the per-struct field
+                    // synthesizer — on the old slot contents, BEFORE the store.
+                    // Guards: never for a self-alias, never when the RHS
+                    // mentions the target (`a = consume(a)` moved the old value
+                    // into the callee — uncertain ⇒ silent, today's behavior),
+                    // and never for a generic struct (its cleanup is
+                    // per-instantiation, B-2026-07-11-35 — a base-name
+                    // synthesis could free through the wrong element type;
+                    // documented residual).
+                    if lhs_is_tracked_struct
+                        && !rhs_is_self_alias
+                        && self.var_type_names.get(name.as_str()).is_some_and(|tn| {
+                            self.struct_generic_params
+                                .get(tn.as_str())
+                                .is_none_or(|ps| ps.is_empty())
+                        })
+                        && !crate::deque_head::expr_mentions_name_deep(value, name)
+                    {
+                        if let (Some(tn), Some(slot)) = (
+                            self.var_type_names.get(name.as_str()).cloned(),
+                            self.variables.get(name).copied(),
+                        ) {
+                            match self.user_drop_wrapper_fns.get(tn.as_str()).copied() {
+                                // A Drop-declaring type fires only while the
+                                // binding still OWNS a value — a value moved
+                                // out earlier (variant ctor, `let g = f`) had
+                                // its UserDrop action retracted, and running
+                                // the wrapper on the stale slot replays the
+                                // moved payload's body (B-2026-07-31-38's
+                                // shape) and frees through moved-from bits.
+                                Some(wrapper) => {
+                                    if self.has_armed_user_drop(name.as_str()) {
+                                        self.builder
+                                            .build_call(wrapper, &[slot.ptr.into()], "")
+                                            .unwrap();
+                                    }
+                                }
+                                // No `impl Drop`: field-heap cleanup only. A
+                                // moved-out source already has its caps
+                                // zeroed (`zero_struct_move_caps`), so the
+                                // synthesizer's frees no-op — safe without an
+                                // armed-action test (StructDrop actions are
+                                // not name-keyed the way UserDrop is).
+                                None => {
+                                    if let Some(f) = self.emit_struct_drop_synthesis(&tn) {
+                                        self.builder.build_call(f, &[slot.ptr.into()], "").unwrap();
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if let Some(slot) = self.variables.get(name).copied() {
                         // Coerce a scalar RHS to the slot's width before
                         // storing — narrow-int arithmetic computes at i64
@@ -6673,6 +6732,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         // is non-scalar. Mirrors the let-binding boundary.
                         let cval = self.coerce_scalar_to_type(val, slot.ty);
                         self.builder.build_store(slot.ptr, cval).unwrap();
+                    }
+                    // B-2026-07-31-38: a binding whose value moved out (variant
+                    // ctor, `let g = f`) had its UserDrop action RETRACTED, and
+                    // nothing re-armed it — so the fresh value a later reassign
+                    // stores had no registered drop for the rest of the scope
+                    // (`let s = Slot.Held(r); r = Res{2};` never ran D2 under
+                    // codegen while the interpreter did). The slot now holds a
+                    // new, owned value: re-register. No-op when an action is
+                    // already armed (the normal reassign path — the existing
+                    // action reads the slot and covers the new value), and
+                    // registration lands in the innermost live frame, which
+                    // matches same-scope reassign; a cross-scope reassign
+                    // firing at the inner exit instead of the outer is the
+                    // documented residual (was: never firing at all).
+                    if lhs_is_tracked_struct && !rhs_is_self_alias {
+                        if let Some(tn) = self.var_type_names.get(name.as_str()).cloned() {
+                            if self.user_drop_wrapper_fns.contains_key(tn.as_str())
+                                && !self.has_armed_user_drop(name.as_str())
+                            {
+                                if let Some(slot) = self.variables.get(name).copied() {
+                                    let name = name.clone();
+                                    self.track_user_drop_var(&tn, &name, slot.ptr);
+                                }
+                            }
+                        }
                     }
                     // Tensor move (`w = other`, an owned tensor binding moved
                     // into `w`): after the store both slots hold the same block
@@ -6737,6 +6821,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // or a self-alias.
                     if lhs_is_tracked_struct && !rhs_is_self_alias {
                         self.suppress_source_vec_cleanup_for_arg(value);
+                        // B-2026-07-30-11 (displaced-value leg): the memory
+                        // suppression above zeroes the source's field caps,
+                        // but an identifier source with a user `impl Drop`
+                        // ALSO carries a UserDrop action — left armed, its
+                        // body fires a second time on the value now owned by
+                        // the LHS (whose own fire covers it). Retract it, the
+                        // exact rule `suppress_let_rebind_user_drop` applies
+                        // on the interpreter and the Let arm applies here.
+                        if let ExprKind::Identifier(rhs_name) = &value.kind {
+                            self.suppress_user_drop_for_var(rhs_name);
+                        }
                     }
                     // B-2026-07-21-16 (assign leg): `x = <ownedplace>.optresfield;`
                     // — a field MOVE into an existing binding. Zero the source

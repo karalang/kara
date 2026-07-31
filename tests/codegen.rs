@@ -5804,6 +5804,131 @@ fn main() {
         assert_eq!(out, "11\n2\n40\ntrue\n");
     }
 
+    /// B-2026-07-30-11 (displaced-value leg) — overwriting a struct binding
+    /// runs the OLD value's user `impl Drop` body (and frees its field heap)
+    /// at the assignment, and a moved source fires exactly once.
+    ///
+    /// Three shapes, one program: `a = G{..}` fires the displaced value's
+    /// body BEFORE the store (drop 1, reading the old id) and the survivor's
+    /// at its own NLL end (drop 2); `x = y` (identifier move) fires the
+    /// displaced old x once and the moved value once — y's own UserDrop
+    /// action is retracted, the double body this leg found; and
+    /// `c = consume(c)` fires nothing at the assignment (the old value moved
+    /// into the callee — the RHS-mentions-target guard) and once for the
+    /// final value. The old value's field heap used to be a hard leak too
+    /// (13 bytes definitely lost on the un-elidable-payload probe): nothing
+    /// on the reassign path freed it, only LLVM DCE hid it in trivial
+    /// programs.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_struct_reassign_displaced_drop_semantics`.
+    #[test]
+    fn e2e_struct_reassign_displaced_drop_semantics() {
+        let Some(out) = run_program(
+            "struct G { id: i64, s: String }\n\
+             impl Drop for G {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn consume(g: G) -> G {\n\
+             \x20   G { id: g.id + 10, s: g.s }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut a = G { id: 1, s: \"first\".to_string() };\n\
+             \x20   a = G { id: 2, s: \"second\".to_string() };\n\
+             \x20   println(\"after overwrite\");\n\
+             \x20   let mut x = G { id: 3, s: \"xxx\".to_string() };\n\
+             \x20   let y = G { id: 4, s: \"yyy\".to_string() };\n\
+             \x20   x = y;\n\
+             \x20   println(\"after move\");\n\
+             \x20   let mut c = G { id: 5, s: \"ccc\".to_string() };\n\
+             \x20   c = consume(c);\n\
+             \x20   println(\"after consume\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "drop 1\ndrop 2\nafter overwrite\ndrop 3\ndrop 4\nafter move\ndrop 15\nafter consume\n"
+        );
+    }
+
+    /// B-2026-07-31-37 (sibling filing; heap face) — `a = b` on a struct
+    /// whose Drop body reads a heap field must fire that body ONCE with the
+    /// real length. Pre-fix the moved source's UserDrop action stayed armed
+    /// after `zero_struct_move_caps` zeroed its caps, so the body ran twice
+    /// — and the first firing read a ZEROED length under AOT (`D0 D7`) while
+    /// the interpreter printed `D7 D7`: a run-vs-build divergence on top of
+    /// the double body. Now: `D3` (the displaced old value, the
+    /// B-2026-07-30-11 leg) then `D7`, once, everywhere.
+    ///
+    /// Twin of `tests/interpreter.rs`'s `test_struct_assign_move_heap_body_once`.
+    #[test]
+    fn e2e_struct_assign_move_heap_body_once() {
+        let Some(out) = run_program(
+            "struct Res { data: Vec[i64] }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"D{self.data.len()}\")\n\
+             \x20   }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < n {\n\
+             \x20       v.push(i);\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   Res { data: v }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut a = mk(3);\n\
+             \x20   let b = mk(7);\n\
+             \x20   a = b;\n\
+             \x20   println(\"x\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "D3\nD7\nx\n");
+    }
+
+    /// B-2026-07-31-38 (sibling filing) — a binding moved into a variant
+    /// constructor and then REASSIGNED gets a drop for its fresh value.
+    /// The ctor move correctly retracted r's UserDrop action, but nothing
+    /// re-armed it, so `let s = Slot.Held(r); r = Res{2};` never ran D2
+    /// under codegen while the interpreter did. The reassign path now
+    /// re-registers when the type declares `impl Drop` and no action is
+    /// armed — and the displaced-value fire is gated on an ARMED action, so
+    /// the moved-from slot's stale payload is not replayed (this exact
+    /// shape printed `D1 D1 x` under an ungated displaced fire).
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_ctor_moved_binding_reassign_rearms_drop`.
+    #[test]
+    fn e2e_ctor_moved_binding_reassign_rearms_drop() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"D{self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Slot { Empty, Held(Res) }\n\
+             fn main() {\n\
+             \x20   let mut r = Res { id: 1 };\n\
+             \x20   let s = Slot.Held(r);\n\
+             \x20   r = Res { id: 2 };\n\
+             \x20   println(\"x\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "D1\nD2\nx\n");
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///

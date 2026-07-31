@@ -181,6 +181,13 @@ impl<'a> super::Interpreter<'a> {
             // NLL placement / scope-exit ordering tests for plain
             // bindings stay unchanged.
             self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
+            // B-2026-07-30-11 (displaced-value leg): `a = b;` moves b's value
+            // into `a` exactly as the let-rebind above does — the source's
+            // Drop slot must be retracted or its body fires a second time on
+            // the value now owned by `a`. Same identifier-RHS rule, same
+            // user-Drop gate; the Assign arm itself already ran the DISPLACED
+            // old `a` value's body before the store.
+            self.suppress_assign_move_user_drop(stmt, &mut cleanup);
             // B-2026-07-29-39 — `let x = h.a;` moves a Drop-bearing FIELD out
             // of `h`, so `h` must stop running that field's body (`x` runs it
             // now). Mirrors codegen's
@@ -1184,6 +1191,36 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-07-30-11 (displaced-value leg) — the ASSIGN sibling of
+    /// [`Self::suppress_let_rebind_user_drop`]: `a = b;` moves `b`'s value
+    /// into `a`, so `b`'s own Drop slot must be retracted (the value's body
+    /// now fires through `a`, exactly once). Identifier RHS only — any other
+    /// RHS constructs a fresh value and moves no binding. Runs with the other
+    /// post-statement hooks; `b`'s env slot still holds the (now moved-from)
+    /// value, which is all the type lookup needs. The retain is a no-op when
+    /// `b`'s Drop slot lives in an outer scope's cleanup vec, the same
+    /// (accepted) limitation as the let-rebind hook.
+    fn suppress_assign_move_user_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
+        let StmtKind::Assign { value, .. } = &stmt.kind else {
+            return;
+        };
+        let ExprKind::Identifier(source_name) = &value.kind else {
+            return;
+        };
+        let type_name = match self.env.get(source_name) {
+            Some(Value::Struct { name, .. }) => name,
+            Some(Value::EnumVariant { enum_name, .. }) => enum_name,
+            _ => return,
+        };
+        if !self.program.drop_method_keys.contains_key(&type_name) {
+            return;
+        }
+        cleanup.retain(|action| match action {
+            CleanupAction::Drop { name } => name != source_name,
+            _ => true,
+        });
+    }
+
     /// Move-suppression for `forget(x);` statements (design.md § Exported
     /// C ABI, Slice 4). `forget` consumes its argument and suppresses the
     /// destructor; the tree-walk analogue is to remove the source
@@ -1678,6 +1715,35 @@ impl<'a> super::Interpreter<'a> {
                 // machinery ever saw the `break`.
                 if let Some(cf) = self.pending_cf.take() {
                     return Err(cf);
+                }
+                // B-2026-07-30-11 (displaced-value leg): overwriting a binding
+                // whose CURRENT value carries user `impl Drop` work silently
+                // discarded that work — `x = Res { .. }` never ran the old
+                // value's body (the binding's own NLL fire reads the slot
+                // AFTER the store, so it covers the new value). Run the old
+                // value's body + Drop-bearing field bodies here, before the
+                // store, exactly the container-element treatment. Guards:
+                // identifier targets only (field/index displacement has its
+                // own machinery), a value already moved out runs nothing, and
+                // an RHS that mentions the target at all is skipped —
+                // `x = consume(x)` hands the old value to the callee, whose
+                // own drop discipline covers it (uncertain ⇒ silent, which is
+                // today's behavior, never a double body).
+                if let ExprKind::Identifier(t) = &target.kind {
+                    if !self.moved_out_user_drop_bindings.contains(t.as_str())
+                        && !crate::deque_head::expr_mentions_name_deep(value, t)
+                    {
+                        if let Some(old) = self.env.get(t) {
+                            if let Value::Struct { name: tn, .. } = &old {
+                                if self.program.drop_method_keys.contains_key(tn) {
+                                    let tn = tn.clone();
+                                    self.run_user_drop_body_on_value(&tn, old);
+                                } else if self.value_runs_user_drop(&old) {
+                                    self.drop_user_drop_fields_of_value(&old);
+                                }
+                            }
+                        }
+                    }
                 }
                 if !self.assign_to_place(target, val) {
                     unreachable!(
