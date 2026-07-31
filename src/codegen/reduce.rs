@@ -226,12 +226,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(acc_slot) = self.variables.get(&reduction.accumulator).copied() else {
             return Ok(None);
         };
-        let BasicTypeEnum::IntType(acc_int_ty) = acc_slot.ty else {
-            return Ok(None);
+        // The pass/fail DECISION routes through the shared verdict below
+        // (`accumulator_fans_out`), so `karac query concurrency` answers
+        // identically (B-2026-07-31-14); the IntType itself is still needed
+        // here for the identity element and combine-instruction synthesis.
+        let acc_int: Option<inkwell::types::IntType> = match acc_slot.ty {
+            BasicTypeEnum::IntType(t) if matches!(t.get_bit_width(), 8 | 16 | 32 | 64) => Some(t),
+            _ => None,
         };
-        if !matches!(acc_int_ty.get_bit_width(), 8 | 16 | 32 | 64) {
-            return Ok(None);
-        }
 
         // Early exits in the (post-stripped) body would cross the worker-fn
         // boundary and generate `ret <T>` inside a void worker fn → invalid
@@ -259,10 +261,13 @@ impl<'ctx> super::Codegen<'ctx> {
             shape.lo_expr.as_ref(),
             self.program_snapshot.as_deref(),
             self.reduction_bound_references_param(&shape),
+            acc_int.is_some(),
         );
         if !verdict.is_fanout() {
             return Ok(None);
         }
+        let acc_int_ty =
+            acc_int.expect("verdict is Fanout only when the accumulator type gate passed");
 
         // Compile the end bound (and `lo`, if present) in the parent
         // context. `iter_total = end - lo` is what the runtime sees;

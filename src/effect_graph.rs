@@ -422,6 +422,9 @@ fn disjoint_loop_verdict(
         shape.lo_expr.as_ref(),
         program,
         refs_param,
+        // Indexed-write loops have no scalar accumulator; the type gate
+        // does not apply (B-2026-07-31-14).
+        true,
     ))
 }
 
@@ -517,6 +520,11 @@ fn reduction_loop_verdict(
         shape.lo_expr.as_ref(),
         program,
         refs_param,
+        // The accumulator TYPE gate (B-2026-07-31-14): codegen refuses
+        // non-integer scalar accumulators (float reductions need an
+        // #[fp_reassoc] opt-in that does not exist in v1), so the query
+        // must decline them too. Collect entries record no type and pass.
+        crate::par_cost::accumulator_type_fans_out(r.accumulator_type.as_deref()),
     ))
 }
 

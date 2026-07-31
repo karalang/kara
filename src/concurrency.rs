@@ -838,6 +838,15 @@ pub struct LoopReduction {
     /// CPU-codegen-gap entry, 2026-07-16 forensics). Only ever true
     /// with `op == Collect && collect_tabulate`.
     pub seq: bool,
+    /// Source-type display of the SCALAR accumulator, resolved from the
+    /// typed AST (`expr_types` at an identifier use of the accumulator in
+    /// the loop body). `None` when the analysis ran without a
+    /// `TypeCheckResult`, when no typed use was found, or for
+    /// `Collect`/`seq` entries (a `Vec` accumulator takes its own lowering
+    /// and never consults the scalar type gate). Drives the query side of
+    /// the non-integer-accumulator fan-out gate
+    /// (`par_cost::accumulator_type_fans_out`, B-2026-07-31-14).
+    pub accumulator_type: Option<String>,
 }
 
 /// A loop whose body writes a collection at a computed index — the third
@@ -2009,6 +2018,105 @@ impl<'a> ConcurrencyChecker<'a> {
     /// `acc = acc <op> expr` / `acc op= expr` shape (with op in the
     /// allow-list) returns no recognition. Codegen will re-validate the
     /// shape against type information before emitting the fan-out.
+    /// Resolve the SOURCE type of the named scalar accumulator from the
+    /// typed AST: find an `Identifier(name)` expression inside the loop
+    /// body whose span has an `expr_types` entry (the reduction body always
+    /// reads the accumulator — `acc = acc + x` / `acc += x`), and render it
+    /// with `type_display`. `None` when the analysis ran untyped or no
+    /// typed use resolves — the fan-out gate treats that as eligible
+    /// (`par_cost::accumulator_type_fans_out`), preserving pre-gate
+    /// behavior rather than inventing a decline codegen might not apply.
+    /// B-2026-07-31-14.
+    fn accumulator_source_type(&self, body: &Block, name: &str) -> Option<String> {
+        let types = self.types?;
+        fn find_in_expr(
+            e: &Expr,
+            name: &str,
+            types: &crate::typechecker::TypeCheckResult,
+        ) -> Option<String> {
+            if let ExprKind::Identifier(n) = &e.kind {
+                if n == name {
+                    if let Some(t) = types
+                        .expr_types
+                        .get(&crate::resolver::SpanKey::from_span(&e.span))
+                    {
+                        return Some(crate::typechecker::types::type_display(t));
+                    }
+                }
+            }
+            match &e.kind {
+                ExprKind::Binary { left, right, .. } => {
+                    find_in_expr(left, name, types).or_else(|| find_in_expr(right, name, types))
+                }
+                ExprKind::Unary { operand, .. } => find_in_expr(operand, name, types),
+                ExprKind::Call { callee, args } => {
+                    find_in_expr(callee, name, types).or_else(|| {
+                        args.iter()
+                            .find_map(|a| find_in_expr(&a.value, name, types))
+                    })
+                }
+                ExprKind::MethodCall { object, args, .. } => find_in_expr(object, name, types)
+                    .or_else(|| {
+                        args.iter()
+                            .find_map(|a| find_in_expr(&a.value, name, types))
+                    }),
+                ExprKind::Index { object, index } => {
+                    find_in_expr(object, name, types).or_else(|| find_in_expr(index, name, types))
+                }
+                ExprKind::FieldAccess { object, .. } => find_in_expr(object, name, types),
+                ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } => find_in_expr(condition, name, types)
+                    .or_else(|| find_in_block(then_block, name, types))
+                    .or_else(|| {
+                        else_branch
+                            .as_ref()
+                            .and_then(|b| find_in_expr(b, name, types))
+                    }),
+                ExprKind::Block(b) | ExprKind::Seq(b) => find_in_block(b, name, types),
+                ExprKind::While {
+                    body, condition, ..
+                } => find_in_expr(condition, name, types)
+                    .or_else(|| find_in_block(body, name, types)),
+                ExprKind::For { body, iterable, .. } => {
+                    find_in_expr(iterable, name, types).or_else(|| find_in_block(body, name, types))
+                }
+                ExprKind::Loop { body, .. } => find_in_block(body, name, types),
+                _ => None,
+            }
+        }
+        fn find_in_block(
+            b: &Block,
+            name: &str,
+            types: &crate::typechecker::TypeCheckResult,
+        ) -> Option<String> {
+            for stmt in &b.stmts {
+                let hit = match &stmt.kind {
+                    StmtKind::Expr(e) => find_in_expr(e, name, types),
+                    StmtKind::Assign { target, value } => find_in_expr(target, name, types)
+                        .or_else(|| find_in_expr(value, name, types)),
+                    StmtKind::CompoundAssign { target, value, .. } => {
+                        find_in_expr(target, name, types)
+                            .or_else(|| find_in_expr(value, name, types))
+                    }
+                    StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                        find_in_expr(value, name, types)
+                    }
+                    _ => None,
+                };
+                if hit.is_some() {
+                    return hit;
+                }
+            }
+            b.final_expr
+                .as_ref()
+                .and_then(|e| find_in_expr(e, name, types))
+        }
+        find_in_block(body, name, types)
+    }
+
     fn recognize_reductions(&self, func: &Function) -> Vec<LoopReduction> {
         let mut out = Vec::new();
         self.recognize_reductions_in_block(&func.body, &mut out);
@@ -2435,6 +2543,13 @@ impl<'a> ConcurrencyChecker<'a> {
                 // branches. The cost/shape gates in codegen still apply.
                 let collect_tabulate = op == ReductionOp::Collect
                     && self.collect_is_tabulate_shape(body, &accumulator);
+                // Scalar accumulators only: the Collect lowering's Vec
+                // accumulator never consults the integer type gate.
+                let accumulator_type = if op == ReductionOp::Collect {
+                    None
+                } else {
+                    self.accumulator_source_type(body, &accumulator)
+                };
                 out.push(LoopReduction {
                     accumulator,
                     op,
@@ -2442,6 +2557,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     loop_line: expr.span.line,
                     collect_tabulate,
                     seq: false,
+                    accumulator_type,
                 });
             } else if !attributes.iter().any(|a| a.is_par_order_free()) {
                 // No reduction classified and no par opt-in: try the
@@ -2461,6 +2577,7 @@ impl<'a> ConcurrencyChecker<'a> {
                         loop_line: expr.span.line,
                         collect_tabulate: true,
                         seq: true,
+                        accumulator_type: None,
                     });
                 }
             }

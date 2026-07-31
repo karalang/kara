@@ -1466,6 +1466,59 @@ fn test_query_concurrency_nested_loop_body_escapes_memory_bound_gate() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// The float twin of the test above (B-2026-07-31-14): the identical
+/// convolution with `f64` accumulators must report `fanned_out:false` with
+/// the `declined_non_integer_accumulator` gate for BOTH loops — codegen
+/// always refuses to fan out a float reduction (reassociation needs an
+/// `#[fp_reassoc]` opt-in that does not exist in v1), and the query used to
+/// claim `fanned_out:true` anyway. The `par_codegen` twin
+/// (`test_ir_float_accumulator_reduction_never_fans_out`) pins that the
+/// binary emits no `karac_par_reduce` for the same source.
+#[test]
+fn test_query_concurrency_float_accumulator_reduction_declines() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-float-acc-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("float_acc.kara");
+    std::fs::write(
+        &path,
+        "fn main() {\n    let kn: i64 = 7i64;\n    let sig: Vec[f64] = Vec.filled(1100i64, 3.0);\n    let kern: Vec[f64] = Vec.filled(7i64, 2.0);\n    let gain: Vec[f64] = Vec.filled(1000i64, 1.0);\n    let mut total: f64 = 0.0;\n    for x in 0i64..1000i64 {\n        let g = gain[x];\n        let mut acc: f64 = 0.0;\n        let mut j: i64 = 0i64;\n        while j < kn {\n            acc = acc + sig[x + j] * kern[j];\n            j = j + 1i64;\n        }\n        total = total + acc * g;\n    }\n    println(total);\n}\n",
+    )
+    .unwrap();
+    let target = format!("{}.main", path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "concurrency", &target])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(r#""accumulator":"total","op":"+","lowering":"parallel_fanout","collect_tabulate":false,"fanned_out":false,"cost_gate":"declined_non_integer_accumulator""#),
+        "outer f64 reduction must decline on the accumulator type gate; got: {stdout}",
+    );
+    assert!(
+        stdout.contains(r#""accumulator":"acc","op":"+","lowering":"parallel_fanout","collect_tabulate":false,"fanned_out":false,"cost_gate":"declined_non_integer_accumulator""#),
+        "inner f64 reduction must decline on the accumulator type gate too \
+         (the TYPE gate fires before the memory-bound cost gate); got: {stdout}",
+    );
+    assert!(
+        !stdout.contains(r#""fanned_out":true"#),
+        "no loop in the f64 program may claim fan-out; got: {stdout}",
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 #[test]
 fn test_query_effects_whole_program_emits_nodes_and_call_edges() {
     // A bare `<file>.kara` target (no trailing `.function`) emits the

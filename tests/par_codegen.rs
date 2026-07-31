@@ -5738,6 +5738,70 @@ fn main() {
         assert_eq!(out.trim(), "42000");
     }
 
+    /// The FLOAT twin of `MEMORY_BOUND_NESTED_LOOP_SRC` — identical shape and
+    /// values, `f64` accumulators. Codegen always refuses to fan out a float
+    /// reduction (reassociation needs an `#[fp_reassoc]` opt-in that does not
+    /// exist in v1), and since B-2026-07-31-14 the shared verdict declines it
+    /// too (`DeclinedNonIntegerAccumulator`), so `karac query concurrency`
+    /// agrees with the binary. The cli twin asserts the query side.
+    const FLOAT_ACC_NESTED_LOOP_SRC: &str = r#"
+fn main() {
+    let kn: i64 = 7i64;
+    let sig: Vec[f64] = Vec.filled(1100i64, 3.0);
+    let kern: Vec[f64] = Vec.filled(7i64, 2.0);
+    let gain: Vec[f64] = Vec.filled(1000i64, 1.0);
+    let mut total: f64 = 0.0;
+    for x in 0i64..1000i64 {
+        let g = gain[x];
+        let mut acc: f64 = 0.0;
+        let mut j: i64 = 0i64;
+        while j < kn {
+            acc = acc + sig[x + j] * kern[j];
+            j = j + 1i64;
+        }
+        total = total + acc * g;
+    }
+    println(total);
+}
+"#;
+
+    #[test]
+    fn test_ir_float_accumulator_reduction_never_fans_out() {
+        // Same pipeline as the i64 fire-path test above; the only change is
+        // the accumulator type, and it must flip the verdict: no
+        // karac_par_reduce in the module.
+        let src = FLOAT_ACC_NESTED_LOOP_SRC;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "a float-accumulator reduction must lower sequentially (no \
+             #[fp_reassoc] opt-in exists in v1); got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_float_accumulator_reduction_matches_serial_value() {
+        // 7 * 3.0 * 2.0 = 42 per output, x 1000 = 42000 (integral f64).
+        let Some(out) = run_program(FLOAT_ACC_NESTED_LOOP_SRC) else {
+            return;
+        };
+        assert_eq!(out.trim(), "42000");
+    }
+
     // ── Const-prop into par-reduce captured env ──────────────────────
     //
     // When a captured variable is initialized from a literal integer

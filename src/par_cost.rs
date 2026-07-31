@@ -57,6 +57,14 @@ pub enum FanoutVerdict {
     /// work, AND a bound that references a function parameter — the
     /// reusable-helper shape of B-2026-07-23-25.
     DeclinedVariableKParamBound,
+    /// The accumulator's type is not one of the supported integer widths
+    /// (i8/i16/i32/i64 and their unsigned twins). Float reductions need an
+    /// `#[fp_reassoc]` reassociation opt-in that does not exist in v1, so
+    /// codegen always lowers them sequentially — a TYPE gate, checked before
+    /// any cost gate (B-2026-07-31-14). Scalar reductions only; a Collect
+    /// reduction's `Vec` accumulator takes its own lowering and never
+    /// consults this gate.
+    DeclinedNonIntegerAccumulator,
 }
 
 impl FanoutVerdict {
@@ -72,6 +80,7 @@ impl FanoutVerdict {
             FanoutVerdict::DeclinedMemoryBound => "declined_memory_bound",
             FanoutVerdict::DeclinedBelowCostThreshold => "declined_below_cost_threshold",
             FanoutVerdict::DeclinedVariableKParamBound => "declined_variable_k_param_bound",
+            FanoutVerdict::DeclinedNonIntegerAccumulator => "declined_non_integer_accumulator",
         }
     }
 
@@ -91,6 +100,31 @@ impl FanoutVerdict {
                 "variable trip count with a cheap body and a parameter-referencing bound: ",
                 "the reusable-helper shape where per-call dispatch cost is unrecoverable"
             ),
+            FanoutVerdict::DeclinedNonIntegerAccumulator => concat!(
+                "accumulator is not a supported integer type: float reductions need an ",
+                "#[fp_reassoc] reassociation opt-in that does not exist in v1, so the loop ",
+                "lowers sequentially"
+            ),
+        }
+    }
+}
+
+/// Whether a SCALAR reduction accumulator of the named source type is
+/// eligible for the parallel fan-out. The authoritative check in
+/// `codegen/reduce.rs` is on the LOWERED type (an LLVM integer of width
+/// 8/16/32/64); this is the source-type mirror the query side uses
+/// (B-2026-07-31-14). `None` — the accumulator's type could not be resolved
+/// from the typed AST — is treated as eligible, preserving the pre-gate
+/// behavior rather than inventing a decline codegen might not apply.
+pub fn accumulator_type_fans_out(type_name: Option<&str>) -> bool {
+    match type_name {
+        None => true,
+        Some(n) => {
+            let head = n.split(['[', ' ']).next().unwrap_or("");
+            matches!(
+                head,
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
+            )
         }
     }
 }
@@ -157,8 +191,17 @@ pub fn fanout_verdict(
     lo_expr: Option<&Expr>,
     program: Option<&Program>,
     bound_references_param: bool,
+    accumulator_fans_out: bool,
 ) -> FanoutVerdict {
-    fanout_verdict_with_cost(body, end_expr, lo_expr, program, bound_references_param).0
+    fanout_verdict_with_cost(
+        body,
+        end_expr,
+        lo_expr,
+        program,
+        bound_references_param,
+        accumulator_fans_out,
+    )
+    .0
 }
 
 /// [`fanout_verdict`], also returning the per-iteration body cost estimate it
@@ -177,11 +220,19 @@ pub fn fanout_verdict_with_cost(
     lo_expr: Option<&Expr>,
     program: Option<&Program>,
     bound_references_param: bool,
+    accumulator_fans_out: bool,
 ) -> (FanoutVerdict, u64) {
     let per_iter_cost = match program {
         Some(prog) => CostEstimator::new(prog).estimate_body(body),
         None => estimate_body_cost_units(body),
     };
+    // The accumulator TYPE gate fires before any cost gate: a float
+    // accumulator can never fan out in v1 regardless of how much work the
+    // body does (B-2026-07-31-14). Callers with no scalar accumulator
+    // (indexed-write loops, Collect reductions) pass `true`.
+    if !accumulator_fans_out {
+        return (FanoutVerdict::DeclinedNonIntegerAccumulator, per_iter_cost);
+    }
     let substantial = per_iter_cost >= VARIABLE_K_PER_ITER_FLOOR_UNITS;
     if !substantial && body_is_memory_bound(body) {
         return (FanoutVerdict::DeclinedMemoryBound, per_iter_cost);
