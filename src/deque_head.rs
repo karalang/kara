@@ -31,7 +31,9 @@
 //!
 //! That is only sound when nothing but the rewritten methods ever looks at the
 //! deque, because for an eligible deque `data[0..len]` is *not* the live range
-//! — the live range is `data[head..head+len]`. Hence the eligibility rules
+//! — the landed lowering reinterprets `len` as the END INDEX of the live range
+//! `data[head..len]` (count = `len - head`), which is what lets `push_back`
+//! keep its existing lowering verbatim. Hence the eligibility rules
 //! below, which are deliberately strict: a candidate must be
 //!
 //! 1. a `let mut` local of the function being compiled, initialized in place
@@ -67,8 +69,8 @@ use std::collections::{HashMap, HashSet};
 
 /// The deque methods the head-index rewrite implements. A candidate that
 /// receives any *other* method is rejected — `len` and `is_empty` are listed
-/// because they read the `len` field only, which the rewrite leaves alone
-/// (`len` stays the live count; `head` is where the live range starts).
+/// because the rewrite must intercept them too: with `len` reinterpreted as
+/// the end index, the live count is `len - head` and empty is `len == head`.
 pub const HEAD_INDEX_METHODS: &[&str] = &["push_back", "pop_front", "len", "is_empty"];
 
 /// Element type names that carry no drop glue, so a deque of them cleans up
@@ -121,6 +123,30 @@ fn analyze_fn(body: &Block) -> HashSet<String> {
     walk_block(body, false, &candidates, &mut rejected);
     candidates.retain(|c| !rejected.contains(c));
     candidates
+}
+
+/// Collect into `bad` every name from `cands` mentioned ANYWHERE in `stmt`,
+/// including as the receiver of a safe head-index method. Consumed by the
+/// codegen materialization gate (B-2026-07-31-35): a top-level statement that
+/// auto-par compiles into a `__par_branch_*` / fan-out worker function
+/// executes with the memmove lowering there, so any deque it mentions must
+/// not be on the head-index path in the sequential lane either — otherwise
+/// the two lanes disagree on whether `len` is a count or an end index for
+/// the same deque header once `head > 0`. Mentions only: a `let` pattern
+/// that (re-)introduces the name inside the statement is not a mention, and
+/// is safe — a group-local intro reaches the join with `head == 0`, where
+/// the two readings coincide.
+pub fn names_mentioned_in_stmt(stmt: &Stmt, cands: &HashSet<String>, bad: &mut HashSet<String>) {
+    crate::rc_elide::walk_stmt_children_pub(stmt, &mut |e| walk_expr(e, true, cands, bad));
+    if let crate::ast::StmtKind::Assign { target, .. }
+    | crate::ast::StmtKind::CompoundAssign { target, .. } = &stmt.kind
+    {
+        if let ExprKind::Identifier(n) = &target.kind {
+            if cands.contains(n) {
+                bad.insert(n.clone());
+            }
+        }
+    }
 }
 
 // ── Candidate collection ────────────────────────────────────────────

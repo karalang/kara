@@ -26248,6 +26248,119 @@ fn test_map_whole_rebind_transfers_ownership() {
     );
 }
 
+/// B-2026-07-30-5 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_deque_head_fifo_semantics`, same source and expected string. The
+/// interpreter's VecDeque is untouched by the codegen head-index lowering;
+/// this is the ORACLE half that pins the FIFO semantics codegen's rewritten
+/// pop/len/is_empty arms must keep matching.
+#[test]
+fn test_deque_head_fifo_semantics() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut q: VecDeque[i64] = VecDeque.new();\n\
+                 let mut i = 0;\n\
+                 while i < 1000 {\n\
+                     q.push_back(i);\n\
+                     i = i + 1;\n\
+                 }\n\
+                 let mut acc = 0;\n\
+                 while not q.is_empty() {\n\
+                     match q.pop_front() { Some(x) => { acc = acc + x; } None => {} }\n\
+                 }\n\
+                 println(acc);\n\
+                 let mut p: VecDeque[i64] = VecDeque.new();\n\
+                 let mut j = 0;\n\
+                 while j < 10 {\n\
+                     p.push_back(j * 10);\n\
+                     j = j + 1;\n\
+                 }\n\
+                 match p.pop_front() { Some(x) => { println(x); } None => {} }\n\
+                 match p.pop_front() { Some(x) => { println(x); } None => {} }\n\
+                 p.push_back(999);\n\
+                 println(p.len());\n\
+                 let mut d: VecDeque[i64] = VecDeque.new();\n\
+                 let mut k = 0;\n\
+                 while k < 4 {\n\
+                     d.push_back(k);\n\
+                     k = k + 1;\n\
+                 }\n\
+                 while not d.is_empty() {\n\
+                     match d.pop_front() { Some(_) => {} None => {} }\n\
+                 }\n\
+                 d.push_back(77);\n\
+                 match d.pop_front() { Some(x) => { println(x); } None => {} }\n\
+                 println(d.len());\n\
+             }\n"),
+        "499500\n0\n10\n9\n77\n0\n"
+    );
+}
+
+/// B-2026-07-30-5 (ineligible leg) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_deque_ineligible_shapes_slow_path`, same source and expected string.
+#[test]
+fn test_deque_ineligible_shapes_slow_path() {
+    assert_eq!(
+        run("fn make() -> VecDeque[i64] {\n\
+                 let mut q: VecDeque[i64] = VecDeque.new();\n\
+                 q.push_back(5);\n\
+                 q.push_back(6);\n\
+                 q\n\
+             }\n\
+             fn total(d: VecDeque[i64]) -> i64 {\n\
+                 let mut acc = 0;\n\
+                 let mut d2 = d;\n\
+                 while not d2.is_empty() {\n\
+                     match d2.pop_front() { Some(x) => { acc = acc + x; } None => {} }\n\
+                 }\n\
+                 acc\n\
+             }\n\
+             fn main() {\n\
+                 let got = make();\n\
+                 println(total(got));\n\
+                 let mut r: VecDeque[i64] = VecDeque.new();\n\
+                 r.push_back(7);\n\
+                 r.push_back(8);\n\
+                 println(r[0]);\n\
+                 match r.pop_front() { Some(x) => { println(x); } None => {} }\n\
+             }\n"),
+        "11\n7\n7\n"
+    );
+}
+
+/// B-2026-07-31-35 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_deque_head_read_group_lane_consistency`, same source and expected
+/// string. The interpreter is the oracle for what `q.len()` must report
+/// after 50 pops, whatever lane auto-par picks under codegen.
+#[test]
+fn test_deque_head_read_group_lane_consistency() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut q: VecDeque[i64] = VecDeque.new();\n\
+                 let mut i = 0;\n\
+                 while i < 100 {\n\
+                     q.push_back(i);\n\
+                     i = i + 1;\n\
+                 }\n\
+                 let mut drained = 0;\n\
+                 while drained < 50 {\n\
+                     match q.pop_front() {\n\
+                         Some(x) => {\n\
+                             drained = drained + 1;\n\
+                             if x > 1000 { println(x); }\n\
+                         }\n\
+                         None => {}\n\
+                     }\n\
+                 }\n\
+                 let a = q.len();\n\
+                 let b = q.len();\n\
+                 println(a);\n\
+                 println(b);\n\
+                 println(drained);\n\
+             }\n"),
+        "50\n50\n50\n"
+    );
+}
+
 /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS runs
 /// its `Drop` body exactly once.
 ///

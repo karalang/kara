@@ -23743,3 +23743,74 @@ fn fix_reports_no_progress_on_unfixable_naming_diagnostic() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// B-2026-07-31-35 — `karac build` must not ICE on an eligible head-index
+/// deque in a function auto-par splits.
+///
+/// The B-2026-07-30-5 lowering minted name-keyed head slots in
+/// `compile_function`, but `emit_par_branch_fn` rebound neither
+/// `deque_head_slots` nor `current_fn_name`, so a `__par_branch_*` compile
+/// inherited `main`'s slots and its `pop_front` arm loaded `main`'s
+/// `%a.deque.head` alloca — `Module verification failed: "Instruction does
+/// not dominate all uses"`, a BUILD failure on this exact two-deque shape.
+/// Only the real CLI reproduces it: the in-process E2E harnesses do not
+/// drive the auto-par emission the same way (verified empirically — the
+/// same source passes there with the fix reverted), which is why this
+/// regression test lives here and spawns the actual binary.
+#[test]
+fn build_deque_head_in_auto_par_split_fn_does_not_ice() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-b34-deque-autopar-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    // The minimal ICE shape: `e` is eligible (its one use, `e.len()`, is a
+    // safe head-index method) and that read sits in a statement auto-par can
+    // group with the independent `q` tail — whose only mutations are of a
+    // binding INTRODUCED in-group, so `captured_mutations` is empty and the
+    // group really is emitted as `__par_branch_*` functions. Big independent
+    // push/drain loops do NOT reproduce this: their groups carry captured
+    // mutations and are dropped before emission.
+    let path = tmp.join("two_deques.kara");
+    std::fs::write(
+        &path,
+        r#"fn main() {
+    let mut e: VecDeque[i64] = VecDeque.new();
+    println(e.len());
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(1);
+    match q.pop_front() { Some(x) => { println(x); } None => {} }
+}
+"#,
+    )
+    .unwrap();
+
+    let build = karac_bin()
+        .current_dir(&tmp)
+        .arg("build")
+        .arg("two_deques.kara")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&build.stderr);
+    // The ICE is a codegen failure, which must never happen regardless of
+    // link environment. A missing runtime archive fails later, at link, with
+    // a different message — that case soft-skips the execution half below.
+    assert!(
+        !stderr.contains("Module verification failed"),
+        "karac build ICE'd on the auto-par two-deque shape:\n{stderr}"
+    );
+    let exe = tmp.join("two_deques");
+    if build.status.success() && exe.exists() {
+        let run = std::process::Command::new(&exe).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "0\n1\n",
+            "auto-par two-deque output"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}

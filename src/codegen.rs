@@ -13,7 +13,7 @@ use inkwell::module::Linkage;
 use inkwell::module::Module;
 use inkwell::targets::{FileType, TargetData};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, StructType};
-use inkwell::values::{BasicValueEnum, FunctionValue, GlobalValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue};
 use inkwell::AddressSpace;
 
 use crate::ast::*;
@@ -7851,13 +7851,6 @@ impl<'ctx> Codegen<'ctx> {
     ///   identical for both — the heap shape is `{ refcount: i64, payload: T }`
     ///   regardless of flavor and the initial `refcount = 1` store happens
     ///   before the value is shared.
-    /// Load the head-index deque eligibility set (`crate::deque_head`).
-    /// Computed from the AST, plain data — no LLVM type crosses the boundary,
-    /// so codegen containment holds (CLAUDE.md § Codegen architecture).
-    fn load_deque_head_locals(&mut self, program: &crate::ast::Program) {
-        self.deque_head_locals = crate::deque_head::eligible_deque_locals(program);
-    }
-
     fn load_rc_fallback(&mut self, ownership: Option<&OwnershipCheckResult>) {
         let Some(ow) = ownership else { return };
         for (fn_name, rc_map) in &ow.rc_values {
@@ -7996,6 +7989,13 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    /// Load the head-index deque eligibility set (`crate::deque_head`).
+    /// Computed from the AST, plain data — no LLVM type crosses the boundary,
+    /// so codegen containment holds (CLAUDE.md § Codegen architecture).
+    fn load_deque_head_locals(&mut self, program: &crate::ast::Program) {
+        self.deque_head_locals = crate::deque_head::eligible_deque_locals(program);
+    }
+
     /// Set the source filename used for `karac_error_trace_push` calls at
     /// `?` failure sites. See the field doc on `source_filename`.
     fn set_source_filename(&mut self, filename: Option<&str>) {
@@ -8131,11 +8131,26 @@ impl<'ctx> Codegen<'ctx> {
     /// the same binding name without an entry in `deque_head_slots`, and the
     /// method arms must fall back to the memmove lowering there.
     pub(super) fn is_head_index_deque(&self, name: &str) -> bool {
-        self.deque_head_slots.contains_key(name)
-            && self
-                .deque_head_locals
-                .get(&self.current_fn_name)
-                .is_some_and(|set| set.contains(name))
+        // The slot must live in the function whose body is being emitted
+        // RIGHT NOW (B-2026-07-31-35). The name-keyed table plus
+        // `current_fn_name` is not enough: out-of-line emitters — par-branch
+        // functions, closures, reduction/disjoint-write workers, sort
+        // comparators — compile statements into a different LLVM function
+        // without rebinding `current_fn_name`, and a head-aware method arm
+        // emitted there would reference an alloca from another function
+        // ("Instruction does not dominate all uses"). Comparing the alloca's
+        // parent function against `current_fn` makes every such lane fall
+        // back to the memmove lowering structurally, whatever emitter it is.
+        self.deque_head_slots.get(name).is_some_and(|slot| {
+            let parent_fn = slot
+                .as_instruction_value()
+                .and_then(|inst| inst.get_parent())
+                .and_then(|bb| bb.get_parent());
+            parent_fn.is_some() && parent_fn == self.current_fn
+        }) && self
+            .deque_head_locals
+            .get(&self.current_fn_name)
+            .is_some_and(|set| set.contains(name))
     }
 
     /// The `head` alloca for an eligible deque local, or `None` when the
@@ -9555,9 +9570,16 @@ impl<'ctx> Codegen<'ctx> {
         // No-op unless debug info is enabled.
         self.di_finalize();
 
-        self.module
-            .verify()
-            .map_err(|e| format!("Module verification failed: {}", e))
+        self.module.verify().map_err(|e| {
+            // A verifier failure is otherwise a one-line ICE with no module to
+            // inspect. `KARAC_DUMP_IR_ON_VERIFY_FAIL=<path>` writes the full
+            // IR so cross-function references (the "Instruction does not
+            // dominate all uses" class, e.g. B-2026-07-31-35) can be located.
+            if let Ok(path) = std::env::var("KARAC_DUMP_IR_ON_VERIFY_FAIL") {
+                let _ = std::fs::write(&path, self.module.print_to_string().to_string());
+            }
+            format!("Module verification failed: {}", e)
+        })
     }
 
     /// Slice 4 structural self-check (`KARAC_ORACLE_DROP_CHECK`): report any

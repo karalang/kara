@@ -5804,6 +5804,105 @@ fn main() {
         assert_eq!(out, "11\n2\n40\ntrue\n");
     }
 
+    /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
+    /// semantics across every shape it rewrites.
+    ///
+    /// An eligible local deque (see `crate::deque_head`) reinterprets the
+    /// header's `len` as the END INDEX of the live range `data[head..len]`:
+    /// `pop_front` reads at `head` and bumps it (no tail memmove — the O(n)
+    /// per pop that made drains O(n²)), with amortized compaction sliding
+    /// the live range back once the dead prefix dominates. Shapes pinned
+    /// here: a full 1000-element drain past several growths (sum 499500), a
+    /// PARTIAL drain whose binding dies with `head > 0` (scope-exit free
+    /// must still see the untouched malloc base), a push after partial
+    /// drain, and pop-to-empty-then-push.
+    ///
+    /// Twin of `tests/interpreter.rs`'s `test_deque_head_fifo_semantics`
+    /// on identical source and expected output.
+    #[test]
+    fn e2e_deque_head_fifo_semantics() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let mut q: VecDeque[i64] = VecDeque.new();\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < 1000 {\n\
+             \x20       q.push_back(i);\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   let mut acc = 0;\n\
+             \x20   while not q.is_empty() {\n\
+             \x20       match q.pop_front() { Some(x) => { acc = acc + x; } None => {} }\n\
+             \x20   }\n\
+             \x20   println(acc);\n\
+             \x20   let mut p: VecDeque[i64] = VecDeque.new();\n\
+             \x20   let mut j = 0;\n\
+             \x20   while j < 10 {\n\
+             \x20       p.push_back(j * 10);\n\
+             \x20       j = j + 1;\n\
+             \x20   }\n\
+             \x20   match p.pop_front() { Some(x) => { println(x); } None => {} }\n\
+             \x20   match p.pop_front() { Some(x) => { println(x); } None => {} }\n\
+             \x20   p.push_back(999);\n\
+             \x20   println(p.len());\n\
+             \x20   let mut d: VecDeque[i64] = VecDeque.new();\n\
+             \x20   let mut k = 0;\n\
+             \x20   while k < 4 {\n\
+             \x20       d.push_back(k);\n\
+             \x20       k = k + 1;\n\
+             \x20   }\n\
+             \x20   while not d.is_empty() {\n\
+             \x20       match d.pop_front() { Some(_) => {} None => {} }\n\
+             \x20   }\n\
+             \x20   d.push_back(77);\n\
+             \x20   match d.pop_front() { Some(x) => { println(x); } None => {} }\n\
+             \x20   println(d.len());\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "499500\n0\n10\n9\n77\n0\n");
+    }
+
+    /// B-2026-07-30-5 (ineligible leg) — deques OUTSIDE the head-index
+    /// eligibility rule (returned from a fn, passed by value, indexed) keep
+    /// the memmove lowering and stay correct. A returned deque's header must
+    /// keep `len` meaning COUNT (the caller and every generic Vec path read
+    /// it that way), so eligibility refusing these shapes is load-bearing —
+    /// this pins the behavior side of that refusal.
+    ///
+    /// Twin of `tests/interpreter.rs`'s `test_deque_ineligible_shapes_slow_path`.
+    #[test]
+    fn e2e_deque_ineligible_shapes_slow_path() {
+        let Some(out) = run_program(
+            "fn make() -> VecDeque[i64] {\n\
+             \x20   let mut q: VecDeque[i64] = VecDeque.new();\n\
+             \x20   q.push_back(5);\n\
+             \x20   q.push_back(6);\n\
+             \x20   q\n\
+             }\n\
+             fn total(d: VecDeque[i64]) -> i64 {\n\
+             \x20   let mut acc = 0;\n\
+             \x20   let mut d2 = d;\n\
+             \x20   while not d2.is_empty() {\n\
+             \x20       match d2.pop_front() { Some(x) => { acc = acc + x; } None => {} }\n\
+             \x20   }\n\
+             \x20   acc\n\
+             }\n\
+             fn main() {\n\
+             \x20   let got = make();\n\
+             \x20   println(total(got));\n\
+             \x20   let mut r: VecDeque[i64] = VecDeque.new();\n\
+             \x20   r.push_back(7);\n\
+             \x20   r.push_back(8);\n\
+             \x20   println(r[0]);\n\
+             \x20   match r.pop_front() { Some(x) => { println(x); } None => {} }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "11\n7\n7\n");
+    }
+
     /// B-2026-07-30-11 (Vec leg) — a `Vec[T]`'s ELEMENTS run their user
     /// `impl Drop` bodies when the Vec dies.
     ///

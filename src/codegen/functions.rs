@@ -1441,7 +1441,79 @@ impl<'ctx> super::Codegen<'ctx> {
         // on entry is correct and no re-zeroing is needed. An eligible deque's
         // `len` field then means the END INDEX (live range `data[head..len]`),
         // which is what lets `push_back` keep its existing lowering verbatim.
-        if let Some(names) = self.deque_head_locals.get(&func.name).cloned() {
+        //
+        // Auto-par gate (B-2026-07-31-35): when auto-par splits this function,
+        // fan-out statements are compiled twice — into `__par_branch_*` /
+        // worker functions AND into the in-main sequential lane — and the
+        // AST-level eligibility walk cannot see that rewrite (the duplicated
+        // statements are not inside any `par` block it could reject). Minting
+        // a head slot for a deque mentioned in a fan-out statement then breaks
+        // two ways: the branch compile inherits this function's name-keyed
+        // slots and loads an alloca that lives in another function
+        // (module-verifier dominance failure), and even with per-lane fallback
+        // the two lanes would disagree on whether `len` is a count or an end
+        // index for the same deque header (a silent split-brain miscompile
+        // once `head > 0`). The gate is per-NAME, not per-function: only
+        // candidates mentioned in a fan-out statement are dropped, so a deque
+        // whose statements all stay in the sequential lane keeps the O(1)
+        // path even when unrelated statements parallelize (dropping the whole
+        // function resurrects the B-2026-07-30-5 quadratic for exactly the
+        // drain shapes the fast path exists for). Analysis ordinals are
+        // positions in the top-level body statement list; the span check
+        // verifies that alignment and any desync conservatively drops every
+        // candidate (uncertain ⇒ ineligible). `concurrency_decisions` is
+        // populated even when auto-par is disabled (the analysis always
+        // runs), hence the explicit `auto_par_disabled` check.
+        let mut head_index_names = self.deque_head_locals.get(&func.name).cloned();
+        if let Some(names) = head_index_names.as_mut() {
+            if !self.auto_par_disabled {
+                if let Some(dec) = self.concurrency_decisions.get(&func.name) {
+                    // Groups with a captured-container mutation are skipped:
+                    // codegen unconditionally runs those sequentially
+                    // (B-2026-07-15-2 — the branch would mutate its by-value
+                    // copy and orphan the realloc'd buffer), so their
+                    // statements never execute in a worker lane and a deque
+                    // they mention keeps the O(1) path. This is what keeps
+                    // the canonical push-then-drain shape fast: its push
+                    // loop mutates the captured deque, which both forces the
+                    // group sequential and (with VecDeque in the container
+                    // classifier) marks it skippable here.
+                    let fan_out_indices: std::collections::HashSet<usize> = dec
+                        .parallel_groups
+                        .iter()
+                        .filter(|g| g.captured_container_mutations.is_empty())
+                        .flat_map(|g| g.statement_indices.iter().copied())
+                        .chain(dec.loop_reductions.iter().map(|r| r.stmt_index))
+                        .chain(dec.disjoint_write_loops.iter().map(|d| d.stmt_index))
+                        .collect();
+                    if !fan_out_indices.is_empty() {
+                        let aligned = fan_out_indices.iter().all(|&i| {
+                            func.body
+                                .stmts
+                                .get(i)
+                                .zip(dec.statement_spans.get(i))
+                                .is_some_and(|(s, sp)| {
+                                    s.span.offset == sp.offset && s.span.length == sp.length
+                                })
+                        });
+                        if aligned {
+                            let mut mentioned = std::collections::HashSet::new();
+                            for &i in &fan_out_indices {
+                                crate::deque_head::names_mentioned_in_stmt(
+                                    &func.body.stmts[i],
+                                    names,
+                                    &mut mentioned,
+                                );
+                            }
+                            names.retain(|n| !mentioned.contains(n));
+                        } else {
+                            names.clear();
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(names) = head_index_names.filter(|n| !n.is_empty()) {
             let i64_t = self.context.i64_type();
             for name in names {
                 let slot = self

@@ -34124,6 +34124,65 @@ fn main() {
         );
     }
 
+    // B-2026-07-30-5 — the VecDeque head-index lowering frees the malloc
+    // base, exactly once, on every exit shape. The header's data pointer
+    // never moves (only `head` advances, in a frame-local alloca), so the
+    // scope-exit free is correct by construction — this pins that invariant
+    // against a future formulation change: a lowering that advanced the data
+    // pointer and freed it raw with head > 0 is an instant ASAN
+    // invalid-free, and one that leaked the buffer is LSan-visible through
+    // the loop (each iteration's buffer is unreachable once the allocas are
+    // overwritten). Shapes per iteration: a full drain past growth and
+    // amortized compaction slides, a PARTIAL drain that dies with head > 0,
+    // and pop-to-empty-then-push.
+    #[test]
+    fn asan_deque_head_frees_base_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut n = 0i64;
+    let mut it = 0i64;
+    while it < 200i64 {
+        let mut q: VecDeque[i64] = VecDeque.new();
+        let mut i = 0i64;
+        while i < 64i64 {
+            q.push_back(i);
+            i = i + 1i64;
+        }
+        while not q.is_empty() {
+            match q.pop_front() { Some(_) => {} None => {} }
+        }
+        n = n + 1i64;
+
+        let mut p: VecDeque[i64] = VecDeque.new();
+        let mut j = 0i64;
+        while j < 32i64 {
+            p.push_back(j);
+            j = j + 1i64;
+        }
+        match p.pop_front() { Some(_) => {} None => {} }
+        match p.pop_front() { Some(_) => {} None => {} }
+        n = n + 1i64;
+
+        let mut d: VecDeque[i64] = VecDeque.new();
+        d.push_back(1i64);
+        d.push_back(2i64);
+        while not d.is_empty() {
+            match d.pop_front() { Some(_) => {} None => {} }
+        }
+        d.push_back(3i64);
+        n = n + 1i64;
+
+        it = it + 1i64;
+    }
+    println(n);
+}
+"#,
+            &["600"],
+            "deque_head_frees_base_once",
+        );
+    }
+
     // B-2026-07-31-7 — an UNANNOTATED `let` of an `Option`/`Result` whose
     // payload is heap-BOXED registered no cleanup at all and leaked the whole
     // box, payload heap included.

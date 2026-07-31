@@ -9061,4 +9061,96 @@ fn main() {
             assert_eq!(out.trim(), "15\n25", "got {out:?}");
         }
     }
+
+    /// B-2026-07-31-35 — eligible head-index deques in a function auto-par
+    /// splits must not reference another lane's head alloca.
+    ///
+    /// Auto-par compiles fan-out statements into `__par_branch_*` functions
+    /// AND the in-main sequential lane. Head slots minted for `main`
+    /// (B-2026-07-30-5) used to leak into the branch compile — neither
+    /// `deque_head_slots` nor `current_fn_name` was rebound there — so the
+    /// branch's `pop_front` arm loaded `main`'s `%a.deque.head` alloca:
+    /// "Instruction does not dominate all uses", a BUILD failure on this
+    /// exact two-deque shape (this harness runs the real concurrency
+    /// analysis and panics on codegen failure, so pre-fix this test dies in
+    /// `compile_to_object`). Now `is_head_index_deque` requires the slot's
+    /// parent function to be the one being emitted, branch emission
+    /// takes/restores the slot table, and the materialization gate drops
+    /// candidates mentioned in genuinely fan-out-able statements.
+    #[test]
+    fn test_e2e_deque_head_auto_par_split_function_compiles() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut a: VecDeque[i64] = VecDeque.new();
+    let mut b: VecDeque[i64] = VecDeque.new();
+    let mut i = 0;
+    while i < 200 {
+        a.push_back(i);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 200 {
+        b.push_back(j * 2);
+        j = j + 1;
+    }
+    let mut sa = 0;
+    while not a.is_empty() {
+        match a.pop_front() { Some(x) => { sa = sa + x; } None => {} }
+    }
+    let mut sb = 0;
+    while not b.is_empty() {
+        match b.pop_front() { Some(x) => { sb = sb + x; } None => {} }
+    }
+    println(sa);
+    println(sb);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "19900\n39800", "got {out:?}");
+        }
+    }
+
+    /// B-2026-07-31-35 (split-brain leg) — a deque mentioned by a statement
+    /// group that genuinely fans out (read-only mentions, so no captured
+    /// container mutation forces it sequential) must NOT be on the
+    /// head-index path: a worker lane reads the header with `len`-as-count
+    /// semantics, and after 50 fast-path pops it would report 100 instead
+    /// of 50. The materialization gate drops the candidate, so both lanes
+    /// keep memmove semantics and the interpreter-oracle answer (50) holds
+    /// whichever lane runs.
+    #[test]
+    fn test_e2e_deque_head_read_group_lane_consistency() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let mut i = 0;
+    while i < 100 {
+        q.push_back(i);
+        i = i + 1;
+    }
+    let mut drained = 0;
+    while drained < 50 {
+        match q.pop_front() {
+            Some(x) => {
+                drained = drained + 1;
+                if x > 1000 { println(x); }
+            }
+            None => {}
+        }
+    }
+    let a = q.len();
+    let b = q.len();
+    println(a);
+    println(b);
+    println(drained);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "50\n50\n50", "got {out:?}");
+        }
+    }
 }

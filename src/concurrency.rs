@@ -3741,9 +3741,16 @@ impl<'a> ConcurrencyChecker<'a> {
     fn collect_container_locals(&self, block: &Block) -> HashSet<String> {
         fn type_name_is_container(name: &str) -> bool {
             let head = name.split(['[', ' ']).next().unwrap_or("");
+            // VecDeque added for B-2026-07-31-35: it shares Vec's
+            // `{ptr, len, cap}` header, so a lost branch-local mutation
+            // orphans the realloc'd buffer exactly like the write-only
+            // `Vec[shared]` push (B-2026-07-15-2), and the head-index
+            // pop_front lowering additionally relies on deque-mutating
+            // groups being forced sequential so the two auto-par lanes
+            // never disagree on what the header's `len` field means.
             matches!(
                 head,
-                "Vec" | "String" | "Map" | "Set" | "SortedMap" | "SortedSet"
+                "Vec" | "String" | "Map" | "Set" | "SortedMap" | "SortedSet" | "VecDeque"
             )
         }
         fn type_expr_is_container(te: &TypeExpr) -> bool {

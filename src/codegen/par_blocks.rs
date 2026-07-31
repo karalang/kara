@@ -1590,6 +1590,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_fn = self.current_fn;
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
+        // Head-index deque slots (B-2026-07-30-5) are entry-block allocas of
+        // the OUTER function; a branch body referencing one would be a
+        // cross-function use (module-verifier dominance failure). Taken here —
+        // not just cleared — for the same reason as `variables`: the branch
+        // compile must fall back to the memmove lowering, and the outer
+        // sequential lane needs its table back afterwards. The materialization
+        // gate in `compile_function` (B-2026-07-31-35) already mints no slots
+        // for auto-par-split functions; this take is the defense-in-depth for
+        // explicit `par` blocks and any future analysis/emission drift.
+        let saved_deque_head_slots = std::mem::take(&mut self.deque_head_slots);
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
         let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
         // Branch body needs its own root cleanup frame so the
@@ -2343,6 +2353,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
+        self.deque_head_slots = saved_deque_head_slots;
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
