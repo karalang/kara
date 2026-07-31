@@ -900,7 +900,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **778 surfaced 
 | B-2026-07-30-16 | typecheck+codegen+interp | high | `File.sync_all()` / `sync_data()` — the durability API design.md:9150 mandates — TYPECHECKS CLEAN but is unimplemented in codegen AND the interpreter… | 38808e0 |
 | B-2026-07-30-17 | typecheck | medium | Map LOOKUP (`get` / `get_or` / `contains_key` / `remove`) rejected a borrowed key: `m.get(key)` where `key: ref String` failed with `expected 'String… | 097f0a4 |
 | B-2026-07-30-18 | codegen | high | SILENT WRONG OUTPUT + OUT-OF-BOUNDS READ (run-vs-build): a `ref Slice[T]` / `ref Vec[T]` PARAM forwarded to a BY-VALUE `Slice[T]` parameter is read a… | ccf4053a |
-| B-2026-07-31-1 | typecheck | high | NO METHOD-NAME CHECKING on baked-stdlib handle types — `f.totally_bogus_method_xyz()` on a `File`, `TcpStream`, `Mutex`, `Regex`, `Pool`, … typecheck… | PENDING |
+| B-2026-07-31-1 | typecheck | high | NO METHOD-NAME CHECKING on baked-stdlib handle types — `f.totally_bogus_method_xyz()` on a `File`, `TcpStream`, `Mutex`, `Regex`, `Pool`, … typecheck… | 103fbe4 |
 | B-2026-07-31-2 | typecheck | medium | `Ok(x)` / `Err(x)` / `Some(x)` did not push the expected PAYLOAD type inward, so a type-inferred constructor in the payload never resolved: `fn f() -… | dcdc9e1 |
 | B-2026-07-31-3 | typecheck | high | CONTRADICTORY RULES: E_ENUM_NESTED_ENUM_PAYLOAD said to mark a nested inner enum `shared`, while E_NOT_CROSS_TASK said a `shared enum` cannot cross a… | 895d4da |
 | B-2026-07-31-5 | codegen | low | A value enum's own `impl Drop` body fired at SCOPE EXIT under codegen but at the binding's NLL live-range end under the interpreter — `mid\|DS` vs `DS… | 09459b2 |
