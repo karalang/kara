@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 196 | 0 |
-| leak | 107 | 2 |
+| leak | 108 | 3 |
 | codegen-gap | 88 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 579 | 4 |
+| codegen | 580 | 5 |
 | typecheck | 108 | 0 |
 | interp | 86 | 1 |
 | ownership | 35 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **812 surfaced · 5 open · 799 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **813 surfaced · 6 open · 799 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **812 surfaced 
 | B-2026-07-31-40 | 2026-07-31 | autopar+codegen | medium | A Map introduced INSIDE an auto-par parallel group leaks whole (handle + buckets) at branch write-back — 344 bytes definitely lost per execution of the probe shape | — |
 | B-2026-07-31-41 | 2026-07-31 | autopar+codegen | medium | User Drop timing diverges in auto-par lanes: under the DEFAULT build a displaced struct binding's body fires with the wrong id/time (drop 6 at the assignment, drop 5 after scope exit) while the sequential lanes on all three backends agree (drop 5 then drop 6) | — |
 | B-2026-07-31-42 | 2026-07-31 | autopar | medium | The auto-par cost model has no notion of memory ACCESS PATTERN, only of statement count. Prism's `rotate` — the least arithmetic-heavy of its kernels — is the biggest fan-out win measured (3.52x) because its reads are transposed and latency-bound, and nothing in the model knows that. It cleared the gate by accident. | src/par_cost.rs::CostEstimator / body_is_memory_bound |
+| B-2026-07-31-43 | 2026-07-31 | codegen | low | A chained method call on a fresh container-returning builtin receiver leaks the receiver temp: `let k = Env.args().len();` leaks the args Vec[String]'s element string(s) every execution — the receiver temporary is never registered for cleanup. | docs/bug-ledger.md |
 
 ### Fixed (799)
 
