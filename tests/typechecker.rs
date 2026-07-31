@@ -4120,6 +4120,88 @@ fn test_closure_pushdown_body_return_mismatch() {
     );
 }
 
+// ── Closure-scoped `return` typing (B-2026-07-31-18) ────────────
+//
+// A `return E` inside a closure literal body returns from the CLOSURE
+// (design.md § with_provider signature: the body is `Fn() -> T`), so its
+// type belongs to the closure's return type — NOT the enclosing function's.
+// Pre-fix the Return arm checked E against `current_return_type` (the fn),
+// rejecting spec-valid divergent shapes and never checking return-vs-tail
+// consistency within the closure.
+
+#[test]
+fn test_closure_return_divergent_from_enclosing_fn_accepted() {
+    // The closure returns String inside an i64 fn — legal: the return is
+    // closure-scoped and `g()` is a String.
+    typecheck_ok(
+        "fn f() -> i64 {\n\
+             let g = || {\n\
+                 if 1 == 2 { return f\"never\"; }\n\
+                 f\"always\"\n\
+             };\n\
+             g().len()\n\
+         }\n\
+         fn main() { println(f\"{f()}\"); }",
+    );
+}
+
+#[test]
+fn test_closure_bare_return_in_unit_closure_accepted() {
+    // `return;` in a unit closure inside a non-unit fn — closure-scoped, so
+    // no 'expected return value' error.
+    typecheck_ok(
+        "fn f() -> i64 {\n\
+             let g = |x: i64| {\n\
+                 if x == 3 { return; }\n\
+                 println(f\"{x}\");\n\
+             };\n\
+             g(3);\n\
+             7\n\
+         }\n\
+         fn main() { println(f\"{f()}\"); }",
+    );
+}
+
+#[test]
+fn test_closure_conflicting_return_types_rejected() {
+    // Returns of two different concrete types (via return + tail) inside one
+    // closure are a hard error at the closure.
+    let errors = typecheck_errors(
+        "fn f(c: bool) -> i64 {\n\
+             let g = || {\n\
+                 if c { return 1; }\n\
+                 f\"str\"\n\
+             };\n\
+             5\n\
+         }\n\
+         fn main() { println(f\"{f(true)}\"); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ReturnTypeMismatch)),
+        "expected ReturnTypeMismatch for conflicting closure returns, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_wp_closure_return_divergent_from_enclosing_fn_accepted() {
+    // The with_provider body is `Fn() -> T` — a String-returning body inside
+    // an i64 fn is legal; the wp call's value is the String.
+    typecheck_ok(
+        "trait Counter { fn get(ref self) -> i64; }\n\
+         effect resource Ctr: Counter;\n\
+         struct InMem { n: i64 }\n\
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }\n\
+         fn heap() -> i64 with reads(Ctr) {\n\
+             let s = with_provider[Ctr](InMem { n: 42 }, || { return f\"v-{read()}\"; });\n\
+             s.len()\n\
+         }\n\
+         fn main() with reads(Ctr) { println(f\"{heap()}\"); }",
+    );
+}
+
 // ── Method-call analogue of round 10.1 closure pushdown ────────
 //
 // The closure-pushdown logic in `infer_call`'s generic branch was lifted

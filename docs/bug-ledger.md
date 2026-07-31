@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 88 | 0 |
 | double-free | 83 | 0 |
 | missing-feature | 72 | 0 |
-| false-positive | 53 | 1 |
-| run-vs-build | 49 | 0 |
+| false-positive | 53 | 0 |
+| run-vs-build | 50 | 1 |
 | perf | 40 | 2 |
 | crash | 32 | 0 |
 | soundness | 31 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 567 | 4 |
-| typecheck | 106 | 1 |
+| codegen | 568 | 5 |
+| typecheck | 106 | 0 |
 | interp | 82 | 1 |
 | ownership | 33 | 0 |
 | autopar | 26 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **789 surfaced · 6 open · 775 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **790 surfaced · 6 open · 776 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -134,12 +134,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **789 surfaced 
 | B-2026-07-30-5 | 2026-07-30 | codegen | medium | VecDeque.pop_front is O(n) (memmove per pop), making a DEEP queue drain O(n^2) — real, but NOT the cause of B-2026-07-30-4 | — |
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site. Still silent: Map values, Option/Result payloads, non-let tuple positions. | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-31-14 | 2026-07-31 | autopar+cli | medium | `karac query concurrency` reports `fanned_out: true` / `cost_gate: "fanout"` for a reduction with a FLOAT accumulator, which codegen always refuses to fan out (float reassociation needs an `#[fp_reassoc]` opt-in that does not exist in v1). The query is confidently wrong about the binary. | src/effect_graph.rs::loop_reductions_json / src/par_cost.rs::FanoutVerdict |
-| B-2026-07-31-18 | 2026-07-31 | typecheck | low | The typechecker types a `return E` inside a `with_provider(p, || { ... })` closure body against the ENCLOSING FUNCTION's return type, not the closure's. design.md § with_provider signature types the body as `f: Fn() -> T with R, E` (a genuine closure), so returns are closure-scoped — the interpreter and (since B-2026-07-31-16) codegen both evaluate them that way. Spec-valid divergent shapes are rejected: `fn f() -> i64 { let s = with_provider[R](p, || { return f"x"; }); s.len() }` errors 'expected i64, found String' at the return, and a bare `return;` in a unit closure inside a non-unit fn errors 'expected return value of type i64'. | src/typechecker.rs (return-type check inside with_provider closure bodies) |
 | B-2026-07-31-19 | 2026-07-31 | codegen | medium | `?` inside a `with_provider` CLOSURE body lowers as a FN-LEVEL early return of the Err, but per design.md (body is `Fn() -> T`) and the interpreter it is closure-scoped: the Err becomes the with_provider call's VALUE. Observable silent miscompile when the wp result is handled locally instead of propagated: `fn probe(n) -> Result[i64,String] { let r = wp(p(n), || { let v = might_fail(read())?; Ok(v*10) }); match r { Ok(v) => Ok(v), Err(_) => Ok(-1) } }` — interp prints -1 on the failing input (match handles the Err), JIT/AOT return Err from the whole fn (unwrap_or prints -99). Repro: scratchpad b16_question.kara, verified 2026-07-31. | src/codegen/exprs.rs (compile_question fail path); src/codegen/provider.rs (ReturnRetarget) |
+| B-2026-07-31-20 | 2026-07-31 | codegen | medium | codegen never registers heap-type metadata (string_vars / vec_elem_types / var_type_names) for a `let` binding whose RHS is a with_provider call, so method dispatch on the result loud-bails under build/JIT while check+interp run fine: `let s = with_provider[Ctr](p, || { f"v-{read()}" }); s.len()` dies with 'codegen: no handler for method len on variable s'. PRE-EXISTING and independent of the closure-return work — the closure's TAIL being a String (no `return` anywhere) reproduces on pre-B-2026-07-31-18 main ('All checks passed' + the same codegen bail). | src/codegen/stmts.rs (Let arm binding registration); src/codegen/provider.rs |
 
-### Fixed (775)
+### Fixed (776)
 
-<details><summary>775 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>776 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -918,6 +918,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **789 surfaced 
 | B-2026-07-31-15 | interp+typecheck | medium | `break` out of an enclosing loop from inside a `with_provider` closure body makes the interpreter return UNIT from an i64 function — the Break contro… | c18c457 |
 | B-2026-07-31-16 | codegen | low | `return` inside a `with_provider` CLOSURE body is closure-scoped per the typechecker and interpreter (`let x = with_provider[R](v, \|\| { return 8; });… | 7cd69b0 |
 | B-2026-07-31-17 | codegen | low | A let-bound value expression that TERMINATES (`let x = { return 5; }; tail`) fails module verification under codegen — the let-site emits its store a… | e92c16b |
+| B-2026-07-31-18 | typecheck | low | The typechecker types a `return E` inside a `with_provider(p, \|\| { .. | — |
 
 </details>
 

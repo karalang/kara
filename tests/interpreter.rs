@@ -7905,6 +7905,47 @@ fn test_break_through_provider_body_let_else_does_not_run_else() {
 }
 
 #[test]
+fn test_wp_closure_string_return_in_i64_fn_runs() {
+    // B-2026-07-31-18: a String-returning wp closure inside an i64 fn is
+    // spec-valid (the body is `Fn() -> T`); pre-fix the typechecker rejected
+    // it against the fn's return type. "v-42".len() = 4.
+    let output = run("trait Counter { fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }
+         fn heap() -> i64 with reads(Ctr) {
+             let s = with_provider[Ctr](InMem { n: 42 }, || { return f\"v-{read()}\"; });
+             s.len()
+         }
+         fn main() with reads(Ctr) { println(f\"{heap()}\"); }");
+    assert_eq!(output, "4\n");
+}
+
+#[test]
+fn test_wp_closure_bare_return_gates_side_effect() {
+    // B-2026-07-31-18: `return;` in a unit wp closure inside an i64 fn —
+    // closure-scoped, so it skips the println without exiting the fn.
+    let output = run("trait Counter { fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }
+         fn quiet(n: i64) -> i64 with reads(Ctr) {
+             with_provider[Ctr](InMem { n: n }, || {
+                 if read() == 3 { return; }
+                 println(f\"seen-{read()}\");
+             });
+             7
+         }
+         fn main() with reads(Ctr) {
+             println(f\"{quiet(3)}\");
+             println(f\"{quiet(5)}\");
+         }");
+    assert_eq!(output, "7\nseen-5\n7\n");
+}
+
+#[test]
 fn test_break_out_of_block_expr_assign_rhs_no_providers() {
     // The provider-free minimal shape of the same statement-level bug: a
     // `break` escaping a block expression in an Assign RHS. No closures, no

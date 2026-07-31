@@ -1533,6 +1533,16 @@ pub struct TypeChecker<'a> {
     /// will reuse the same machinery once the design entry promotes
     /// (out-of-scope here).
     pub(super) break_value_types: Vec<(String, Vec<Type>)>,
+    /// B-2026-07-31-18 — closure-scoped `return` collector. One frame per
+    /// closure literal currently being inferred (innermost last); each
+    /// `return E` inside a closure body pushes E's type here instead of
+    /// checking against `current_return_type` (the ENCLOSING FN's return
+    /// type — the wrong scope: per design.md § with_provider signature and
+    /// ordinary closure semantics, `return` inside a closure returns from
+    /// the closure). The closure arm pops its frame after body inference
+    /// and unifies the collected types with the body's tail type to
+    /// produce the closure's return type.
+    pub(super) closure_return_types: Vec<Vec<Type>>,
     pub(super) current_self_type: Option<Type>,
     /// FE-3c — true while type-checking the body of a `#[gpu]` function, so
     /// the closure-capture hook (`closure_type_with_capture_inference`) can
@@ -1839,6 +1849,7 @@ impl<'a> TypeChecker<'a> {
             return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
             break_value_types: Vec::new(),
+            closure_return_types: Vec::new(),
             current_self_type: None,
             in_defer: false,
             neg_validated_suffixed_literal: None,

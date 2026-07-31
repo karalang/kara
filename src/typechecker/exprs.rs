@@ -3471,7 +3471,19 @@ impl<'a> super::TypeChecker<'a> {
                         ty
                     })
                     .collect();
+                // B-2026-07-31-18 — closure-scoped `return`: push a collector
+                // frame so `return E` inside THIS body records E's type here
+                // (the Return arm's collector path) instead of checking
+                // against the enclosing FN's return type. Per design.md
+                // (§ with_provider signature: the body is `Fn() -> T`) and
+                // the interpreter/codegen, a closure's `return` exits the
+                // closure — its type belongs to the closure's return type.
+                self.closure_return_types.push(Vec::new());
                 let body_ty = self.infer_expr(body);
+                let collected_returns = self
+                    .closure_return_types
+                    .pop()
+                    .expect("closure return collector pushed above");
                 self.local_scope.pop();
                 self.break_value_types = saved_break_values;
                 // Resolve any closure param inference vars the body solved
@@ -3484,6 +3496,40 @@ impl<'a> super::TypeChecker<'a> {
                     .map(|t| resolve_type_var_top(t, &self.env.substitutions))
                     .collect();
                 let body_ty = resolve_type_var_top(&body_ty, &self.env.substitutions);
+                // B-2026-07-31-18 — the closure's return type is the
+                // unification of its tail type with every closure-scoped
+                // `return E` collected above. A `!`-typed tail (the body
+                // ends in a return/break) contributes nothing; conflicting
+                // concrete types are a hard error at the closure, matching
+                // how a fn body's tail-vs-return mismatch reports.
+                let body_ty = {
+                    let mut ret_ty = match body_ty {
+                        Type::Never => None,
+                        ref t => Some(t.clone()),
+                    };
+                    for t in collected_returns {
+                        let t = resolve_type_var_top(&t, &self.env.substitutions);
+                        if matches!(t, Type::Never | Type::Error) {
+                            continue;
+                        }
+                        match &ret_ty {
+                            None => ret_ty = Some(t),
+                            Some(cur) if *cur != t && *cur != Type::Error => {
+                                self.type_error(
+                                    format!(
+                                        "closure returns conflicting types: '{}' vs '{}'",
+                                        type_display(cur),
+                                        type_display(&t)
+                                    ),
+                                    expr.span.clone(),
+                                    TypeErrorKind::ReturnTypeMismatch,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    ret_ty.unwrap_or(Type::Never)
+                };
                 self.closure_type_with_capture_inference(
                     &expr.span,
                     *capture_mode,
@@ -3496,6 +3542,25 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             ExprKind::Return(inner) => {
+                // B-2026-07-31-18 — inside a closure literal body, `return E`
+                // returns from the CLOSURE (design.md § with_provider
+                // signature: the body is `Fn() -> T`; the interpreter and
+                // codegen both scope it to the closure). Record E's type in
+                // the innermost collector for post-body unification instead
+                // of checking against the enclosing FN's return type.
+                // (`?` deliberately stays on the fn-level path below —
+                // its closure-scoped typing is B-2026-07-31-19's scope.)
+                if !self.closure_return_types.is_empty() {
+                    let t = match inner {
+                        Some(ref expr) => self.infer_expr(expr),
+                        None => Type::Unit,
+                    };
+                    self.closure_return_types
+                        .last_mut()
+                        .expect("checked non-empty above")
+                        .push(t);
+                    return Type::Never;
+                }
                 if let Some(ref expr) = inner {
                     if let Some(ref ret_ty) = self.current_return_type.clone() {
                         self.check_expr(expr, ret_ty);
