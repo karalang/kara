@@ -95,10 +95,10 @@ impl FanoutVerdict {
     }
 }
 
-/// Run the fan-out gate sequence for one recognized reduction loop, in the
-/// same order `codegen/reduce.rs` applies it: memory-bound first (so a
-/// rejected loop never pays for cost estimation), then the const-K cost gate,
-/// then the variable-K parameter-bound floor.
+/// Run the fan-out gate sequence for one recognized loop, in the same order
+/// `codegen/reduce.rs` and `codegen/disjoint_par.rs` apply it: memory-bound
+/// first (so a rejected loop never pays for cost estimation), then the const-K
+/// cost gate, then the variable-K parameter-bound floor.
 ///
 /// `program` threads free-function bodies into the estimator so a call into a
 /// known callee folds the callee's real cost instead of the opaque
@@ -107,6 +107,43 @@ impl FanoutVerdict {
 /// `bound_references_param` is supplied by the caller because the two callers
 /// resolve "is this a parameter of the enclosing function" differently —
 /// codegen from its current-function context, the query side from the AST.
+///
+/// ## The nested-loop carve-out on the memory-bound gate
+///
+/// `body_is_memory_bound` asks "does the body read memory and make no
+/// substantial CALL", and it is right for the scalar reduction it was
+/// calibrated on (kata-153's `let x = nums[i]; if x < m { m = x; }`). It has no
+/// notion of a body whose work is a runtime-bounded nested LOOP, so it
+/// classifies a convolution as memory-streaming. The gate is therefore skipped
+/// when the body already scores at least one nested loop's worth of work —
+/// reusing [`VARIABLE_K_PER_ITER_FLOOR_UNITS`], the constant the cost model
+/// already uses to mean exactly that, rather than inventing a second threshold.
+///
+/// Measured on both fan-out shapes, 4 cores, medians:
+///
+/// - **Indexed writes.** Prism's Lanczos vertical pass — a ~7-tap
+///   `Vector[f64,2]` FMA per output pixel — the gate cost 21% of wall time
+///   (1600x1200 -> 800x600, 9 runs: 43.8 ms declined vs 34.5 ms fanned out,
+///   user-CPU flat, so the parallel work was not being wasted). It also made
+///   converting that kernel to the natural loop form a REGRESSION against the
+///   hand-rolled band fan-out it replaced.
+/// - **Reductions.** The reduction twin of that kernel — a 7-tap convolution
+///   whose body also has one top-level index read — measured 170.2 ms declined
+///   vs 108.2 ms fanned out over 11 runs, a **1.57x** loss to the gate.
+///
+/// The carve-out cannot reach kata-153's shape: a flat body scores far below
+/// [`VARIABLE_K_PER_ITER_FLOOR_UNITS`], so it stays `DeclinedMemoryBound`.
+///
+/// ## What the gate does and does not still cover
+///
+/// [`MemoryBoundDetector`] deliberately does **not** descend into nested loops
+/// (`While` / `For` / `Loop` fall through its `_` arm), so a body whose loads
+/// all live inside an inner loop was never classified memory-bound in the first
+/// place — the carve-out only changes bodies that ALSO read memory at the top
+/// level. Making the detector nest-aware was measured and rejected: it
+/// reclassifies genuinely-winning loops as memory-bound (a 32 MiB strided sum
+/// measured 68.8 ms sequential vs 42.3 ms fanned out, 1.63x; at 128 MiB,
+/// 156.2 ms vs 104.1 ms, 1.50x — more cores extract more bandwidth than one).
 pub fn fanout_verdict(
     body: &Block,
     end_expr: &Expr,
@@ -114,81 +151,42 @@ pub fn fanout_verdict(
     program: Option<&Program>,
     bound_references_param: bool,
 ) -> FanoutVerdict {
-    fanout_verdict_inner(
-        body,
-        end_expr,
-        lo_expr,
-        program,
-        bound_references_param,
-        false,
-    )
+    fanout_verdict_with_cost(body, end_expr, lo_expr, program, bound_references_param).0
 }
 
-/// [`fanout_verdict`] for the **indexed-write** fan-out shape
-/// (`codegen/disjoint_par.rs`), which differs in one gate.
+/// [`fanout_verdict`], also returning the per-iteration body cost estimate it
+/// computed.
 ///
-/// `body_is_memory_bound` asks "does the body read memory and make no
-/// substantial CALL", and it is right for the scalar reduction it was
-/// calibrated on (kata-153's `let x = nums[i]; if x < m { m = x; }`). It has no
-/// notion of a body whose work is a runtime-bounded nested LOOP, so it
-/// classifies a convolution as memory-streaming. Measured on Prism's Lanczos
-/// vertical pass — a ~7-tap `Vector[f64,2]` FMA per output pixel — the gate
-/// cost 21% of wall time (1600x1200 -> 800x600, 4 cores, 9 runs, median:
-/// 43.8 ms declined vs 34.5 ms fanned out, with user-CPU flat, so the parallel
-/// work was not being wasted). It also made converting that kernel to the
-/// natural loop form a REGRESSION against the hand-rolled band fan-out it
-/// replaced, which is not something to ship to a live app.
-///
-/// So for this shape the memory-bound gate is skipped when the body already
-/// scores at least one nested loop's worth of work — reusing
-/// [`VARIABLE_K_PER_ITER_FLOOR_UNITS`], the constant the cost model already
-/// uses to mean exactly that, rather than inventing a second threshold.
-///
-/// Deliberately NOT applied to the reduction path: that calibration was set
-/// against reduction benchmarks, and re-tuning it belongs in a slice that can
-/// re-run them. `B-2026-07-31-10` tracks the general fix.
-pub fn fanout_verdict_indexed_writes(
+/// Codegen needs that number twice: once to decide the gate and once to stamp
+/// the descriptor's `per_iter_cost_units` field for the runtime-side gate.
+/// Handing it back avoids estimating the body a second time, and — more
+/// importantly — stops codegen from open-coding its own copy of the gate
+/// sequence to keep the estimate in scope. A second copy of a calibrated cost
+/// model drifts from the first, which is the failure this module exists to
+/// prevent (see the module docs).
+pub fn fanout_verdict_with_cost(
     body: &Block,
     end_expr: &Expr,
     lo_expr: Option<&Expr>,
     program: Option<&Program>,
     bound_references_param: bool,
-) -> FanoutVerdict {
-    fanout_verdict_inner(
-        body,
-        end_expr,
-        lo_expr,
-        program,
-        bound_references_param,
-        true,
-    )
-}
-
-fn fanout_verdict_inner(
-    body: &Block,
-    end_expr: &Expr,
-    lo_expr: Option<&Expr>,
-    program: Option<&Program>,
-    bound_references_param: bool,
-    nested_loop_beats_memory_bound: bool,
-) -> FanoutVerdict {
+) -> (FanoutVerdict, u64) {
     let per_iter_cost = match program {
         Some(prog) => CostEstimator::new(prog).estimate_body(body),
         None => estimate_body_cost_units(body),
     };
-    let substantial =
-        nested_loop_beats_memory_bound && per_iter_cost >= VARIABLE_K_PER_ITER_FLOOR_UNITS;
+    let substantial = per_iter_cost >= VARIABLE_K_PER_ITER_FLOOR_UNITS;
     if !substantial && body_is_memory_bound(body) {
-        return FanoutVerdict::DeclinedMemoryBound;
+        return (FanoutVerdict::DeclinedMemoryBound, per_iter_cost);
     }
     if let Some(k) = const_eval_iter_count(end_expr, lo_expr) {
         if k.saturating_mul(per_iter_cost) < REDUCE_DISPATCH_THRESHOLD_UNITS {
-            return FanoutVerdict::DeclinedBelowCostThreshold;
+            return (FanoutVerdict::DeclinedBelowCostThreshold, per_iter_cost);
         }
     } else if per_iter_cost < VARIABLE_K_PER_ITER_FLOOR_UNITS && bound_references_param {
-        return FanoutVerdict::DeclinedVariableKParamBound;
+        return (FanoutVerdict::DeclinedVariableKParamBound, per_iter_cost);
     }
-    FanoutVerdict::Fanout
+    (FanoutVerdict::Fanout, per_iter_cost)
 }
 
 /// Per-call overhead of dispatching to `karac_par_reduce`, in
@@ -683,6 +681,28 @@ pub(crate) const CALL_COST_UNITS: u64 = 10;
 /// "function-call body-cost estimation" slice deferred "when needed".
 pub(crate) const RUNTIME_NESTED_LOOP_MULTIPLIER: u64 = 64;
 
+/// The memory-bandwidth gate: true when the body has at least one
+/// Index/FieldAccess and no substantial function/method call.
+///
+/// The cost gates elsewhere in this module are compute-units-aware but not
+/// bandwidth-aware. For a body that is mostly memory-streaming
+/// (`let x = nums[i]; if x < m { m = x; }`) the compute-unit estimate looks
+/// parallelizable — ~10M units against an 80k threshold at N=2M — while the
+/// wall clock is pinned to memory bandwidth. Measured on kata-153 before this
+/// gate existed: User-CPU 3.5 ms -> 11.8 ms for **no** wall improvement, and
+/// the binary grew 49 KiB -> 311.9 KiB just to link `par_reduce`.
+///
+/// "Substantial" excludes two things, both load-bearing. Lowered primitive-op
+/// calls (`Call(Path([type, op_method]), ..)`) are intrinsic operator
+/// dispatches, not real callees — counting them would defeat the gate for
+/// every body, since post-lowering every body has arithmetic. Trivial accessor
+/// methods (`len`, `is_empty`, `as_slice`, `as_str`, `as_bytes`) are shape
+/// queries on the collection, not compute.
+///
+/// Callers run this **before** cost estimation so a rejected loop never pays
+/// for the estimate. See [`fanout_verdict`] for the one carve-out that lets a
+/// nested-loop body past it, and for why the detector's blindness to nested
+/// loops is kept rather than repaired.
 pub(crate) fn body_is_memory_bound(body: &Block) -> bool {
     let mut detector = MemoryBoundDetector {
         memory_count: 0,
@@ -796,6 +816,15 @@ impl MemoryBoundDetector {
             | ExprKind::Par(b) => self.visit_body(b),
             // Other shapes (literals, identifiers, paths, etc.) contribute
             // no memory access or call signal.
+            //
+            // `While` / `For` / `Loop` land here too, so reads inside a NESTED
+            // loop are invisible to this walk and a body whose loads all live
+            // in an inner loop is never classified memory-bound. That is not an
+            // oversight left standing by accident — making the walk nest-aware
+            // was implemented, measured, and rejected, because it reclassifies
+            // loops that measurably win from fanning out. The measurements and
+            // the reasoning are on [`fanout_verdict`]; read them before
+            // "fixing" this.
             _ => {}
         }
     }

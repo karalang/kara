@@ -5664,6 +5664,80 @@ fn main() {
         );
     }
 
+    /// Shared source for the nested-loop memory-bound carve-out pair below.
+    /// `Vec.filled` keeps the program free of any other candidate loop, so the
+    /// only reductions are the outer `total` (must fan out) and the inner
+    /// `acc` (flat body, must stay declined).
+    const MEMORY_BOUND_NESTED_LOOP_SRC: &str = r#"
+fn main() {
+    let kn: i64 = 7i64;
+    let sig: Vec[i64] = Vec.filled(1100i64, 3i64);
+    let kern: Vec[i64] = Vec.filled(7i64, 2i64);
+    let gain: Vec[i64] = Vec.filled(1000i64, 1i64);
+    let mut total: i64 = 0i64;
+    for x in 0i64..1000i64 {
+        let g = gain[x];
+        let mut acc: i64 = 0i64;
+        let mut j: i64 = 0i64;
+        while j < kn {
+            acc = acc + sig[x + j] * kern[j];
+            j = j + 1i64;
+        }
+        total = total + acc * g;
+    }
+    println(total);
+}
+"#;
+
+    /// The nested-loop carve-out on the memory-bound gate, reduction side
+    /// (B-2026-07-31-10). Body shape: one top-level index read (which is what
+    /// makes `body_is_memory_bound` fire — the detector does NOT descend into
+    /// nested loops, so an inner loop's reads are invisible to it) plus a
+    /// runtime-bounded inner loop doing a 7-tap convolution. That is the
+    /// reduction twin of Prism's Lanczos vertical pass.
+    ///
+    /// Before the carve-out this declined as memory-bound and ran sequential.
+    /// Measured cost of that decline on a 4-core box, 2M samples x 24 reps,
+    /// 11 runs, medians: 172.2 ms sequential vs 107.5 ms fanned out — a 1.6x
+    /// loss. `test_ir_memory_bound_body_skips_par_reduce` above pins the other
+    /// side: a FLAT memory-bound body scores far below
+    /// `VARIABLE_K_PER_ITER_FLOOR_UNITS` and still declines.
+    #[test]
+    fn test_ir_memory_bound_gate_nested_loop_body_fans_out() {
+        let src = MEMORY_BOUND_NESTED_LOOP_SRC;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "a body with a runtime-bounded nested loop does at least one nested loop's \
+             worth of work per iteration, so the memory-bound gate must not claim it; got:\n{ir}"
+        );
+    }
+
+    /// Sink-correctness for the fire path above: the fanned-out result must
+    /// equal the sequential one. sig = 3, kern = 2, gain = 1, 7 taps ->
+    /// 7 * 3 * 2 = 42 per output, x 1000 = 42000.
+    #[test]
+    fn test_e2e_memory_bound_gate_nested_loop_body_par_matches_serial() {
+        let Some(out) = run_program(MEMORY_BOUND_NESTED_LOOP_SRC) else {
+            return;
+        };
+        assert_eq!(out.trim(), "42000");
+    }
+
     // ── Const-prop into par-reduce captured env ──────────────────────
     //
     // When a captured variable is initialized from a literal integer

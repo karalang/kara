@@ -52,7 +52,7 @@
 //! that is the A/B lever the differential harness sub-slice drives.
 
 use crate::ast::{Block, StmtKind};
-use crate::par_cost::{extract_loop_shape, fanout_verdict_indexed_writes};
+use crate::par_cost::{extract_loop_shape, fanout_verdict_with_cost};
 
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -121,7 +121,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 .lo_expr
                 .as_ref()
                 .is_some_and(|e| self.expr_references_current_param(e));
-        let verdict = fanout_verdict_indexed_writes(
+        // `per_iter_cost` also stamps the descriptor's runtime-gate field
+        // below; taking it from the verdict call keeps the body from being
+        // walked by the estimator twice.
+        let (verdict, per_iter_cost) = fanout_verdict_with_cost(
             &shape.body,
             &shape.end_expr,
             shape.lo_expr.as_ref(),
@@ -168,8 +171,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(None);
             }
         }
-
-        let per_iter_cost = self.disjoint_per_iter_cost(&shape.body);
 
         // ── Past this point the lowering is committed and emits IR. ──
         let end_val = self.compile_expr(&shape.end_expr)?.into_int_value();
@@ -260,15 +261,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // Slice params/locals register their element type; their LLVM shape is
         // the 2-field `{ptr, i64}` struct.
         self.slice_elem_types.contains_key(name) && matches!(ty, BasicTypeEnum::StructType(_))
-    }
-
-    /// Per-iteration cost estimate for the descriptor's runtime gate. Same
-    /// units and same estimator as the reduction path.
-    fn disjoint_per_iter_cost(&self, body: &Block) -> u64 {
-        match self.program_snapshot.as_deref() {
-            Some(prog) => crate::par_cost::CostEstimator::new(prog).estimate_body(body),
-            None => crate::par_cost::estimate_body_cost_units(body),
-        }
     }
 
     /// Capture set for a disjoint-write worker: every outer binding the body

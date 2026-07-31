@@ -1410,6 +1410,62 @@ fn test_query_concurrency_reports_fanout_verdict_and_declining_gate() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// The nested-loop carve-out on the memory-bound gate, query side
+/// (B-2026-07-31-10). Same source as `par_codegen`'s
+/// `test_ir_memory_bound_gate_nested_loop_body_fans_out`, which pins that
+/// codegen emits `karac_par_reduce` for it — this pins that the query agrees.
+///
+/// Both halves matter and the source is built so each is discriminating:
+/// `Vec.filled` leaves exactly two reduction loops, so `"fanned_out":true`
+/// can only be the OUTER `total` (a top-level index read plus a
+/// runtime-bounded inner loop — the shape the carve-out is for), and the
+/// inner `acc` is the flat memory-bound body that must still decline. A
+/// regression in either direction moves one of these strings.
+///
+/// The agreement is not decorative. Codegen used to open-code its own copy
+/// of this gate sequence, the copies drifted, and the query then reported
+/// `fanned_out: true` for a loop the binary ran sequentially
+/// (B-2026-07-31-13). Both sides now call `par_cost::fanout_verdict_with_cost`.
+#[test]
+fn test_query_concurrency_nested_loop_body_escapes_memory_bound_gate() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-nested-membound-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("nested_membound.kara");
+    std::fs::write(
+        &path,
+        "fn main() {\n    let kn: i64 = 7i64;\n    let sig: Vec[i64] = Vec.filled(1100i64, 3i64);\n    let kern: Vec[i64] = Vec.filled(7i64, 2i64);\n    let gain: Vec[i64] = Vec.filled(1000i64, 1i64);\n    let mut total: i64 = 0i64;\n    for x in 0i64..1000i64 {\n        let g = gain[x];\n        let mut acc: i64 = 0i64;\n        let mut j: i64 = 0i64;\n        while j < kn {\n            acc = acc + sig[x + j] * kern[j];\n            j = j + 1i64;\n        }\n        total = total + acc * g;\n    }\n    println(total);\n}\n",
+    )
+    .unwrap();
+    let target = format!("{}.main", path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "concurrency", &target])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(r#""accumulator":"total","op":"+","lowering":"parallel_fanout","collect_tabulate":false,"fanned_out":true,"cost_gate":"fanout""#),
+        "outer convolution reduction must escape the memory-bound gate; got: {stdout}",
+    );
+    assert!(
+        stdout.contains(r#""accumulator":"acc","op":"+","lowering":"parallel_fanout","collect_tabulate":false,"fanned_out":false,"cost_gate":"declined_memory_bound""#),
+        "inner flat body must STILL be declined as memory-bound; got: {stdout}",
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 #[test]
 fn test_query_effects_whole_program_emits_nodes_and_call_edges() {
     // A bare `<file>.kara` target (no trailing `.function`) emits the

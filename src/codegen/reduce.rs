@@ -45,11 +45,7 @@ use crate::concurrency::{LoopReduction, ReductionOp};
 // side can reach the same gates (B-2026-07-29-33). One definition, two
 // callers — a second calibrated copy would drift and make the query
 // confidently wrong.
-use crate::par_cost::{
-    body_is_memory_bound, const_eval_iter_count, estimate_body_cost_units, extract_loop_shape,
-    is_named_identifier, CostEstimator, LoopShape, REDUCE_DISPATCH_THRESHOLD_UNITS,
-    VARIABLE_K_PER_ITER_FLOOR_UNITS,
-};
+use crate::par_cost::{extract_loop_shape, is_named_identifier, CostEstimator, LoopShape};
 use crate::token::IntSuffix;
 
 use inkwell::intrinsics::Intrinsic;
@@ -245,77 +241,26 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        // Memory-bound gate (slice: memory-bound rejection, 2026-05-20).
-        // Surfaced by the Min/Max slice's kata-153 measurement: the
-        // existing cost gates (3b.5 compile-time + 3b.8 runtime-time)
-        // are compute-units-aware but not memory-bandwidth-aware. For
-        // a body that's mostly memory-streaming (`let x = nums[i]; if
-        // x < m { m = x; }`), the compute-unit estimate looks
-        // parallelizable (10M units >> 180k threshold for N=2M) but the
-        // wall-clock is bottlenecked on memory bandwidth — splitting the
-        // work across workers doesn't reduce wall, but does pay the
-        // dispatch overhead + extra User-CPU (kata-153 saw 3.5ms → 11.8ms
-        // User-CPU with no wall improvement, plus a +262 KiB binary
-        // from linking par_reduce). Heuristic: skip the lowering when
-        // the body has at least one Index/FieldAccess (memory access)
-        // AND no substantial function/method call (a substantial call
-        // suggests compute work beyond the memory access). Trivial
-        // accessor MethodCalls — `len`, `is_empty`, `as_slice`,
-        // `as_str` — don't count as substantial; they're just shape
-        // queries on the collection. The gate fires *before* the
-        // cost-model gates so the per-iter estimate isn't wasted on a
-        // loop we'll reject anyway.
-        if body_is_memory_bound(&shape.body) {
-            return Ok(None);
-        }
-
-        // Estimate per-iter body cost once — used for both the codegen-
-        // time gate (literal-K loops) below and the runtime-time gate
-        // (slice 3b.8) via the descriptor's `per_iter_cost_units` field.
-        // The body walker bottoms at 1, never 0, so a sentinel-0 in the
-        // emitted descriptor only happens if codegen-side estimation is
-        // intentionally skipped (it isn't here). Uses `program_snapshot`
-        // to thread a free-fn body lookup into the estimator so calls
-        // into known callees fold the callee's body cost into the per-
-        // iter total instead of counting them as the opaque CALL_COST_UNITS
-        // constant (slice: cost-gate fn-call body cost, 2026-05-20).
-        let per_iter_cost = match &self.program_snapshot {
-            Some(prog) => CostEstimator::new(prog).estimate_body(&shape.body),
-            None => estimate_body_cost_units(&shape.body),
-        };
-
-        // Cost-model gate (slice 3b.5, 2026-05-20). When the iteration
-        // count is statically known and the per-iter cost estimate puts
-        // total work below `REDUCE_DISPATCH_THRESHOLD_UNITS`, the
-        // par_reduce dispatch overhead (Box alloc + queue push + Condvar
-        // wake/wait + N-way combine) would dominate the actual loop
-        // work — sequential codegen wins by ~µs to ~ms. Variable-K
-        // loops (including variable-lo loops) bypass this compile-time
-        // gate (in practice they're typically large, like the kata-7
-        // bench's `k_iters = 50_000_000`); the runtime-side gate
-        // (slice 3b.8) catches the rare small variable-K case at run
-        // time using the same `per_iter_cost` threaded into the
-        // descriptor below.
-        if let Some(k) = const_eval_iter_count(&shape.end_expr, shape.lo_expr.as_ref()) {
-            let total = k.saturating_mul(per_iter_cost);
-            if total < REDUCE_DISPATCH_THRESHOLD_UNITS {
-                return Ok(None);
-            }
-        } else if per_iter_cost < VARIABLE_K_PER_ITER_FLOOR_UNITS
-            && self.reduction_bound_references_param(&shape)
-        {
-            // B-2026-07-23-25: a VARIABLE-K reduction whose per-iter body is only
-            // a few scalar ops (< one nested-loop's worth of work) AND whose
-            // trip-count bound references a FUNCTION PARAMETER must NOT lower to
-            // par_reduce. The const-K gate above can't fire (the bound isn't a
-            // literal), and the runtime gate still pays the per-call dispatch
-            // cost — unrecoverable when this is a tiny param-bounded hot-path
-            // helper (`fn pow10(n) { while i < n { r = r * 10 } }`) invoked
-            // millions of times inside an O(n²) sort comparator (~1000x
-            // slowdown, output correct). The param-bound signal targets exactly
-            // that reusable-helper shape; a local/literal-bounded loop (a
-            // one-shot compute loop in `main`) is left eligible. See
-            // `VARIABLE_K_PER_ITER_FLOOR_UNITS`.
+        // The whole gate sequence — memory-bound, then the const-K cost
+        // threshold, then the variable-K parameter-bound floor — lives in
+        // `par_cost::fanout_verdict_with_cost`, which `karac query
+        // concurrency` calls too. Both must answer identically: a query that
+        // reports `fanned_out` where the binary is sequential is worse than no
+        // query at all. This used to be open-coded here so that
+        // `per_iter_cost` stayed in scope for the descriptor below, and the two
+        // copies had already drifted (B-2026-07-31-13) — the `_with_cost`
+        // variant hands the estimate back so one definition serves both.
+        //
+        // Each verdict's rationale is documented on its `FanoutVerdict`
+        // variant and on the constant it thresholds against.
+        let (verdict, per_iter_cost) = crate::par_cost::fanout_verdict_with_cost(
+            &shape.body,
+            &shape.end_expr,
+            shape.lo_expr.as_ref(),
+            self.program_snapshot.as_deref(),
+            self.reduction_bound_references_param(&shape),
+        );
+        if !verdict.is_fanout() {
             return Ok(None);
         }
 
