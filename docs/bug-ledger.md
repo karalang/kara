@@ -931,7 +931,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **803 surfaced 
 | B-2026-07-31-29 | ownership+cli | high | `karac build` and `karac run` DO NOT GATE on ownership errors: a use-after-move that `karac check` reports as `error[ownership]` (exit 1) still compi… | ef7e209 |
 | B-2026-07-31-30 | codegen | high | `for x in <module-level Vec/Map/Set/String>` compiled to a zero-iteration loop (run-vs-build divergence) | e0fdc44 |
 | B-2026-07-31-31 | parser+typecheck | medium | Mechanical diagnostics that name their own replacement carry no `karac fix` payload (`!` -> `not`, String -> StringSlice) | 49dc24c |
-| B-2026-07-31-32 | resolver+parser | medium | E_MODULE_BINDING_NAMING suggests renaming a single-uppercase-letter binding to itself | — |
+| B-2026-07-31-32 | resolver+parser | medium | E_MODULE_BINDING_NAMING suggests renaming a single-uppercase-letter binding to itself | 41cb78a |
 
 </details>
 
