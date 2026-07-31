@@ -41,6 +41,19 @@
 //! one core read as parallelized. The machine-readable twin of this
 //! distinction is the `lowering` field of `query concurrency`'s
 //! `loop_reductions` array (`effect_graph::loop_reductions_json`).
+//!
+//! Loops whose indexed writes were proven per-iteration disjoint follow, under
+//! their own label:
+//!
+//! ```text
+//!   disjoint_writes { loop_var: dy, targets: out[4 * dw per iteration], line: 3 }
+//! ```
+//!
+//! The label is deliberately not `parallel_*`: the proof is a memory-footprint
+//! fact, and the fan-out lowering for that shape is a separate sub-slice. Only
+//! *proven* loops appear; the declines (and the obligation each failed) live in
+//! `query concurrency`'s `disjoint_write_loops` array, which is where the
+//! "why isn't my loop parallel" question gets asked.
 
 use crate::ast::{
     EffectVerbKind, Expr, ExprKind, Function, ImplBlock, ImplItem, Item, Program, Stmt, StmtKind,
@@ -126,7 +139,16 @@ fn render_function(
         .filter(|g| !g.is_trivial)
         .collect();
     let reductions = &decision.loop_reductions;
-    if groups.is_empty() && reductions.is_empty() {
+    // Only PROVEN disjoint-write loops are report-worthy. The declines belong
+    // in `karac query concurrency`, where a developer goes to ask "why isn't
+    // my loop parallel"; listing every declined loop in the human report would
+    // bury the opportunities it exists to show.
+    let disjoint: Vec<&_> = decision
+        .disjoint_write_loops
+        .iter()
+        .filter(|d| d.proven())
+        .collect();
+    if groups.is_empty() && reductions.is_empty() && disjoint.is_empty() {
         return false;
     }
 
@@ -184,6 +206,27 @@ fn render_function(
             red.op.symbol(),
             red.accumulator,
             red.loop_line,
+        ));
+    }
+
+    // Loops over provably-disjoint indexed writes — the third fan-out shape.
+    // Labelled `disjoint_writes`, not `parallel_*`, because the proof is a
+    // memory-footprint fact: the fan-out lowering for this shape is a separate
+    // sub-slice, and a `parallel_` label would claim an emission that no code
+    // performs yet.
+    let mut sorted_disjoint = disjoint;
+    sorted_disjoint.sort_by_key(|d| d.loop_line);
+    for d in sorted_disjoint {
+        let targets: Vec<String> = d
+            .targets
+            .iter()
+            .map(|t| format!("{}[{} per iteration]", t.target, t.stride))
+            .collect();
+        out.push_str(&format!(
+            "  disjoint_writes {{ loop_var: {}, targets: {}, line: {} }}\n",
+            d.loop_var,
+            targets.join(", "),
+            d.loop_line,
         ));
     }
 
@@ -411,6 +454,7 @@ mod tests {
                 total_statements: 2,
                 statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
+                disjoint_write_loops: Vec::new(),
                 serialization_points: Vec::new(),
                 reorder_opportunities: Vec::new(),
             },

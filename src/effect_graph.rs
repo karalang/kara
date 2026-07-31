@@ -302,6 +302,69 @@ pub(crate) fn loop_reductions_json(
     format!("[{}]", entries.join(","))
 }
 
+/// Render a function's `disjoint_write_loops` as a JSON array — the **indexed
+/// write** fan-out shape (`out[f(i)] = ...`), which is neither a statement-level
+/// `parallel_group` nor a `loop_reduction`, and so was invisible in this
+/// surface until the disjointness proof landed.
+///
+/// Field contract, again named so no field over-promises:
+///
+/// - `loop_var` — the candidate parallel dimension.
+/// - `disjoint_writes` — did the per-iteration footprint proof discharge? True
+///   means no two iterations of `loop_var` can write the same slot in any
+///   listed target.
+/// - `gate` — `"proven"`, or the machine tag of the obligation that failed
+///   (`indirect_index`, `footprint_overlap`, `reads_written_target`, …). This
+///   field is the point of the surface: "the compiler silently didn't
+///   parallelize" is the failure mode a queryable decline replaces.
+/// - `reason` — the same decision in prose. On a proof it names the interval,
+///   e.g. ``iteration `dy` writes `out` only within [dy * (4 * dw), (dy + 1) *
+///   (4 * dw))``.
+/// - `targets` — per written collection, its `stride` and `base`, so a reader
+///   can check the interval the compiler believes in against the one they meant.
+///
+/// ## There is deliberately no `fanned_out` field
+///
+/// The proof is a *memory-footprint* fact. Fan-out lowering for this shape,
+/// its cost gate, and the differential harness that gates enabling it are
+/// separate sub-slices of the same entry
+/// (`implementation_checklist/phase-6-runtime.md`). Emitting `fanned_out` now
+/// would assert an emission decision no code makes yet — precisely the
+/// over-promise B-2026-07-29-29 was filed for on the reduction side. It lands
+/// with the lowering, next to `loop_reductions`' own `fanned_out`.
+pub(crate) fn disjoint_write_loops_json(fc: &FunctionConcurrency) -> String {
+    let entries: Vec<String> = fc
+        .disjoint_write_loops
+        .iter()
+        .map(|d| {
+            let targets: Vec<String> = d
+                .targets
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{{\"name\":{},\"stride\":{},\"base\":{},\"writes\":{}}}",
+                        json_string(&t.target),
+                        json_string(&t.stride),
+                        json_string(&t.base),
+                        t.writes,
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"statement\":{},\"loop_line\":{},\"loop_var\":{},\"disjoint_writes\":{},\"gate\":{},\"targets\":[{}],\"reason\":{}}}",
+                d.stmt_index,
+                d.loop_line,
+                json_string(&d.loop_var),
+                d.proven(),
+                json_string(d.tag()),
+                targets.join(","),
+                json_string(&d.reason),
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
 /// Find the AST of the function a concurrency decision is keyed under.
 ///
 /// Mirrors `ConcurrencyChecker::collect_functions`' keying convention exactly:
@@ -501,7 +564,7 @@ pub(crate) fn build_concurrency_graph_json(
         .filter_map(|(key, node)| {
             analysis.function_decisions.get(key).map(|fc| {
                 format!(
-                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
+                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"disjoint_write_loops\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
                     json_string(key),
                     node.line,
                     fc.total_statements,
@@ -512,6 +575,7 @@ pub(crate) fn build_concurrency_graph_json(
                         program.and_then(|p| function_by_decision_key(p, key)),
                         program,
                     ),
+                    disjoint_write_loops_json(fc),
                     serialization_points_json(fc),
                     reorder_opportunities_json(fc),
                 )

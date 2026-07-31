@@ -12,6 +12,9 @@
 
 use crate::ast::*;
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectSet};
+use crate::index_disjoint::{
+    prove_disjoint_indexed_writes, DisjointDecline, DisjointWriteProof, TargetFootprint,
+};
 use crate::resolver::SpanKey;
 use crate::typechecker::TypeCheckResult;
 use std::collections::{HashMap, HashSet};
@@ -607,6 +610,10 @@ pub struct FunctionConcurrency {
     /// See `docs/implementation_checklist/phase-7-codegen.md` — "Auto-par
     /// reduction recognition" — for the policy and slicing plan.
     pub loop_reductions: Vec<LoopReduction>,
+    /// Loops whose body writes a collection at a computed index, with the
+    /// per-iteration disjointness proof (or the obligation that failed). The
+    /// third compute-fan-out shape; see [`DisjointWriteLoop`].
+    pub disjoint_write_loops: Vec<DisjointWriteLoop>,
     /// The statement pairs that *can't* run in parallel, and why — the
     /// inverse of `parallel_groups`. Each records the conflicting
     /// statement indices, a human reason, the resource at issue (empty
@@ -831,6 +838,57 @@ pub struct LoopReduction {
     /// CPU-codegen-gap entry, 2026-07-16 forensics). Only ever true
     /// with `op == Collect && collect_tabulate`.
     pub seq: bool,
+}
+
+/// A loop whose body writes a collection at a computed index — the third
+/// compute-fan-out shape, alongside parallel `let`-groups and associative
+/// reductions (`design.md § 8876`).
+///
+/// One record per candidate loop, **whether or not the proof discharged**: the
+/// declined case is the whole point of the surface. `karac query concurrency`
+/// renders these so the answer to "why isn't my loop parallel" is a compiler
+/// explanation naming the failed obligation, which is what the slice design
+/// accepted *in place of* a `par for` keyword.
+///
+/// ## This is a footprint proof, not a fan-out decision
+///
+/// `decline == None` means: every iteration of `loop_var` writes each target
+/// only inside its own contiguous range, so no two iterations can touch the
+/// same slot. It does **not** mean the loop fans out — the fan-out lowering,
+/// its cost gate, and the differential harness that gates enabling it are
+/// separate sub-slices. There is deliberately no `fanned_out` field here yet;
+/// adding one before the lowering exists would repeat exactly the
+/// over-promise B-2026-07-29-29 was filed for.
+#[derive(Debug, Clone)]
+pub struct DisjointWriteLoop {
+    /// The loop's index within its own block (same convention as
+    /// [`LoopReduction::stmt_index`]).
+    pub stmt_index: usize,
+    /// 1-indexed source line of the loop expression.
+    pub loop_line: usize,
+    /// The candidate parallel dimension.
+    pub loop_var: String,
+    /// `None` when the proof discharged; otherwise the obligation that failed.
+    pub decline: Option<DisjointDecline>,
+    /// Per-target footprints. Empty on a decline.
+    pub targets: Vec<TargetFootprint>,
+    /// Prose for the query `reason` field and the concurrency report.
+    pub reason: String,
+}
+
+impl DisjointWriteLoop {
+    /// True when every iteration's write footprint was proven disjoint.
+    pub fn proven(&self) -> bool {
+        self.decline.is_none()
+    }
+
+    /// Stable machine tag: `"proven"`, or the declining obligation's name.
+    pub fn tag(&self) -> &'static str {
+        match self.decline {
+            None => "proven",
+            Some(d) => d.tag(),
+        }
+    }
 }
 
 /// A set of statements that can safely run in parallel.
@@ -1519,6 +1577,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 total_statements,
                 statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
+                disjoint_write_loops: Vec::new(),
                 serialization_points: Vec::new(),
                 reorder_opportunities: Vec::new(),
             };
@@ -1613,6 +1672,12 @@ impl<'a> ConcurrencyChecker<'a> {
         // be split across workers when the op is associative + commutative.
         let loop_reductions = self.recognize_reductions(func);
 
+        // Step 4b: Recognize loops over provably-disjoint indexed writes — the
+        // third compute-fan-out shape. Independent of both the parallel-group
+        // machinery and the reduction classifier: `out[f(i)] = ...` has no
+        // accumulator, so the reduction shapes never see it.
+        let disjoint_write_loops = self.recognize_disjoint_write_loops(func);
+
         // Step 5: Flag parallelism left on the table purely by source
         // ordering — independent statements the contiguous-only grouper
         // could not co-group because they are non-adjacent, but a legal
@@ -1631,6 +1696,7 @@ impl<'a> ConcurrencyChecker<'a> {
             total_statements,
             statement_spans,
             loop_reductions,
+            disjoint_write_loops,
             serialization_points,
             reorder_opportunities,
         }
@@ -1928,6 +1994,133 @@ impl<'a> ConcurrencyChecker<'a> {
         let mut out = Vec::new();
         self.recognize_reductions_in_block(&func.body, &mut out);
         out
+    }
+
+    /// Walk the function body for loops over indexed writes and run the
+    /// per-iteration disjointness proof
+    /// ([`crate::index_disjoint::prove_disjoint_indexed_writes`]) on each.
+    ///
+    /// See [`DisjointWriteLoop`] for what a discharged proof does and does not
+    /// claim.
+    fn recognize_disjoint_write_loops(&self, func: &Function) -> Vec<DisjointWriteLoop> {
+        let mut out = Vec::new();
+        self.recognize_disjoint_writes_in_block(&func.body, &mut out);
+        out
+    }
+
+    /// Mirrors [`Self::recognize_reductions_in_block`]'s traversal (top-level
+    /// statements, recursing into `if`-arms and loop bodies), with one
+    /// difference that follows from the slice scope: once a loop's proof
+    /// discharges, its body is **not** re-walked.
+    ///
+    /// The scope is "parallelize the OUTER loop", and every inner loop of a
+    /// disjoint nest is trivially disjoint too (`for c in 0..4 { out[base+c] }`
+    /// writes stride-1 slots). Reporting all of them would bury the decision
+    /// that matters under its own corollaries. A *declined* loop still recurses,
+    /// so an inner candidate stays visible when the outer one is what failed.
+    fn recognize_disjoint_writes_in_block(&self, block: &Block, out: &mut Vec<DisjointWriteLoop>) {
+        for (idx, stmt) in block.stmts.iter().enumerate() {
+            let StmtKind::Expr(expr) = &stmt.kind else {
+                continue;
+            };
+            match &expr.kind {
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    self.recognize_disjoint_writes_in_block(then_block, out);
+                    if let Some(else_expr) = else_branch {
+                        if let ExprKind::Block(else_block) = &else_expr.kind {
+                            self.recognize_disjoint_writes_in_block(else_block, out);
+                        }
+                    }
+                    continue;
+                }
+                ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. } => {}
+                _ => continue,
+            }
+            let body = match &expr.kind {
+                ExprKind::For { body, .. }
+                | ExprKind::While { body, .. }
+                | ExprKind::Loop { body, .. } => body,
+                _ => unreachable!("filtered above"),
+            };
+            match self.classify_disjoint_write_loop(expr, body, idx) {
+                // Not a candidate at all — no indexed write to an outer
+                // collection. Keep walking inward.
+                None => self.recognize_disjoint_writes_in_block(body, out),
+                Some(record) => {
+                    let proven = record.proven();
+                    out.push(record);
+                    if !proven {
+                        self.recognize_disjoint_writes_in_block(body, out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Run the proof on one loop, then apply the two soundness gates the proof
+    /// deliberately does not model. Returns `None` when the loop is not a
+    /// candidate (no indexed write to an outside-the-loop collection).
+    ///
+    /// The gates are the same ones the reduction classifier applies, for the
+    /// same reasons, and they belong here rather than in `index_disjoint`
+    /// because both need signature/type knowledge the plain-AST proof does not
+    /// have:
+    ///
+    /// - **B-2026-07-16-6** — a body touching a plain (non-`par`) `shared`
+    ///   value carries a NON-ATOMIC refcount header. Racing rc-inc/rc-dec
+    ///   across workers under-counts it and frees a live object. Disjoint
+    ///   *element* writes do not make the refcount traffic disjoint.
+    /// - **B-2026-07-23-20** — a callee taking `mut ref` / `mut Slice` (or a
+    ///   `mut ref self` method) writes memory this walk never sees, so a
+    ///   loop-invariant scratch buffer threaded through a helper is a race the
+    ///   footprint proof cannot observe.
+    fn classify_disjoint_write_loop(
+        &self,
+        loop_expr: &Expr,
+        body: &Block,
+        stmt_index: usize,
+    ) -> Option<DisjointWriteLoop> {
+        let loop_line = loop_expr.span.line;
+        let mk = |loop_var: String,
+                  decline: Option<DisjointDecline>,
+                  targets: Vec<TargetFootprint>,
+                  reason: String| {
+            Some(DisjointWriteLoop {
+                stmt_index,
+                loop_line,
+                loop_var,
+                decline,
+                targets,
+                reason,
+            })
+        };
+        let loop_var = disjoint_candidate_loop_var(loop_expr).unwrap_or_default();
+        match prove_disjoint_indexed_writes(loop_expr) {
+            Err(DisjointDecline::NoIndexedWrite) => None,
+            Err(decline) => mk(
+                loop_var,
+                Some(decline),
+                Vec::new(),
+                decline.reason().to_string(),
+            ),
+            Ok(proof) => {
+                if !self.loop_body_types_cross_task_safe(body) {
+                    let d = DisjointDecline::NotCrossTaskSafe;
+                    return mk(proof.loop_var, Some(d), Vec::new(), d.reason().to_string());
+                }
+                if self.loop_body_shares_outer_mut_borrow(body) {
+                    let d = DisjointDecline::SharesOuterMutBorrow;
+                    return mk(proof.loop_var, Some(d), Vec::new(), d.reason().to_string());
+                }
+                let reason = proof.reason();
+                let DisjointWriteProof { loop_var, targets } = proof;
+                mk(loop_var, None, targets, reason)
+            }
+        }
     }
 
     /// Walk one block's statements for reduction-shaped loops, recursing
@@ -5686,6 +5879,20 @@ fn is_acc_plus_int_literal(left: &ExprKind, right: &ExprKind, acc_name: &str) ->
 /// Like `induction_step_via_assign`, this checks both the pre-lowered
 /// `Binary` and the lowered `Call(Path([type, op_method]), [a, b])`
 /// shapes — see that function's doc comment for context.
+/// The loop variable name to report for a disjoint-write candidate, for the
+/// declined case where the proof never got far enough to return one. Empty
+/// string when the loop has no simple binding (a `while`, a destructuring
+/// `for`), which is itself one of the decline reasons.
+fn disjoint_candidate_loop_var(loop_expr: &Expr) -> Option<String> {
+    let ExprKind::For { pattern, .. } = &loop_expr.kind else {
+        return None;
+    };
+    match &pattern.kind {
+        PatternKind::Binding(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 fn reduction_binary_shape(value: &Expr, acc_name: &str) -> Option<ReductionOp> {
     match &value.kind {
         ExprKind::Binary { op, left, right } => {
