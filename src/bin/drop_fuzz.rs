@@ -19,15 +19,34 @@
 //! the same pipeline `tests/memory_sanitizer.rs` trusts. See
 //! `docs/spikes/ownership-model-mechanization.md`.
 //!
-//! ## Two build surfaces (the spike's "build alone + auto-par")
+//! ## Three surfaces
 //!
-//! Every generated program is compiled and run twice:
+//! Every generated program is run three ways:
 //!   - **seq**     — `concurrency = None`  → auto-par codegen dormant
 //!   - **autopar** — `concurrency = Some(analysis)` → inferred parallel groups
 //!     lowered (the default-`karac build` posture)
+//!   - **interp**  — the tree-walk interpreter, in-process via
+//!     `Interpreter::captured_output`. Compiles nothing and links no sanitizer,
+//!     so it contributes only a drop log — but `run-vs-build` is a 56-entry
+//!     ledger class that no pair of AOT surfaces can see by construction.
 //!
 //! Some drop bugs diverge only under auto-par ([[auto-par-is-third-ab-surface]]),
-//! so a finding on *either* surface is a finding.
+//! so a finding on *any* surface is a finding, and a *disagreement* between two
+//! of them is a finding in its own right.
+//!
+//! ## Two oracles
+//!
+//! **The sanitizer**, for anything that touches memory: ASan catches
+//! double-free / UAF, LSan catches leaks. No model required.
+//!
+//! **The drop log**, for user `impl Drop` bodies — which the sanitizers cannot
+//! see at all. A body that runs twice, or never, but touches no freed pointer
+//! is invisible to both: the memory is fine, only the side effect is wrong.
+//! That is not a corner case. It is what most of the ledger's recent drop bugs
+//! were, and with no `impl Drop` anywhere in the corpus this fuzzer could
+//! report zero findings while they kept landing. `new_tracked` prints
+//! `N<tag>`, the Drop body prints `D<tag>`, and the invariant is per-tag
+//! balance. See `DropLog` for why balance rather than an expected schedule.
 //!
 //! ## Gotchas honored (do not re-discover — see the spike's Gotchas section)
 //!   - **≥36-byte payloads.** LSan misses *reachable* short-String leaks
@@ -123,6 +142,16 @@ mod llvm_main {
         VecPayload, // Vec[Payload]
         MapStr,     // Map[String, i64]
         SetStr,     // Set[String]
+        // ── user-`impl Drop` shapes (the drop-log oracle's subjects) ──
+        // Everything above drops *implicitly*: codegen frees the heap and the
+        // sanitizer judges. These four carry a user `impl Drop` body whose
+        // execution is observable in stdout, which is a strictly harder
+        // contract — a body that runs twice but only prints is invisible to
+        // ASan and LSan alike. See `DropLog`.
+        Tracked,    // struct Tracked { tag: i64, name: String } + impl Drop
+        VecTracked, // Vec[Tracked]
+        OptTracked, // Option[Tracked]
+        CrateT,     // struct Crate { lid: i64, item: Tracked } — Drop one level down
     }
 
     // A live binding in the generated `main` body.
@@ -146,6 +175,11 @@ mod llvm_main {
         // and long enough — ≥40 bytes — to defeat short-String LSan blindness).
         payload_id: usize,
         used_par: bool,
+        /// Distinct `Tracked.tag` per construction *site*. The oracle counts
+        /// `N<tag>` / `D<tag>` tokens per tag rather than per value, so a site
+        /// inside the round loop legitimately contributes many of each — what
+        /// must hold is that they balance.
+        tracked_tag: i64,
     }
 
     impl Gen {
@@ -157,7 +191,14 @@ mod llvm_main {
                 counter: 0,
                 payload_id: 0,
                 used_par: false,
+                tracked_tag: 0,
             }
+        }
+
+        /// A fresh `Tracked` construction-site tag.
+        fn fresh_tag(&mut self) -> i64 {
+            self.tracked_tag += 1;
+            self.tracked_tag
         }
 
         fn fresh(&mut self, prefix: &str) -> String {
@@ -425,6 +466,57 @@ mod llvm_main {
             self.add_var(n, Ty::OptStr);
         }
 
+        // ── producers: values carrying a user `impl Drop` body ────────────
+        //
+        // Always `let mut`: the displacement transforms below need to reassign
+        // them, and that is the shape most of the recent ledger bugs live in.
+
+        fn make_tracked(&mut self) {
+            let n = self.fresh("t");
+            let tag = self.fresh_tag();
+            let lit = self.str_literal();
+            self.emit(format!(
+                "        let mut {n}: Tracked = new_tracked({tag}i64, {lit});"
+            ));
+            self.add_var_mut(n, Ty::Tracked);
+        }
+
+        fn make_vec_tracked(&mut self) {
+            let n = self.fresh("vt");
+            self.emit(format!("        let mut {n}: Vec[Tracked] = Vec.new();"));
+            let pushes = 1 + self.rng.below(3);
+            for _ in 0..pushes {
+                let tag = self.fresh_tag();
+                let lit = self.str_literal();
+                self.emit(format!("        {n}.push(new_tracked({tag}i64, {lit}));"));
+            }
+            self.add_var_mut(n, Ty::VecTracked);
+        }
+
+        fn make_opt_tracked(&mut self) {
+            let n = self.fresh("ot");
+            if self.rng.chance(3, 4) {
+                let tag = self.fresh_tag();
+                let lit = self.str_literal();
+                self.emit(format!(
+                    "        let mut {n}: Option[Tracked] = Some(new_tracked({tag}i64, {lit}));"
+                ));
+            } else {
+                self.emit(format!("        let mut {n}: Option[Tracked] = None;"));
+            }
+            self.add_var_mut(n, Ty::OptTracked);
+        }
+
+        fn make_crate(&mut self) {
+            let n = self.fresh("cr");
+            let tag = self.fresh_tag();
+            let lit = self.str_literal();
+            self.emit(format!(
+                "        let mut {n}: Crate = new_crate({tag}i64, {lit});"
+            ));
+            self.add_var_mut(n, Ty::CrateT);
+        }
+
         // ── transforms: consume live bindings, exercise drop-prone shapes ──
 
         /// Move a live String into a fresh Vec[String] via push, then read an
@@ -653,6 +745,159 @@ mod llvm_main {
             true
         }
 
+        // ── transforms: displacement of a user-`impl Drop` value ──────────
+        //
+        // The shapes every recent drop bug in the ledger actually took. What
+        // they share is that a live binding's value is *displaced* — overwritten,
+        // reassigned, or moved through a variant — rather than simply going out
+        // of scope at the end of a block. The straight-line corpus above never
+        // produces that, which is why it ran clean while the ledger filled up.
+
+        /// `t = new_tracked(..)` over a live `Tracked`. The displaced value must
+        /// run its Drop body exactly once and free its field heap exactly once.
+        /// B-2026-07-31-37 ran the body twice here; B-2026-07-31-39 never freed
+        /// the old field heap.
+        fn reassign_tracked(&mut self) -> bool {
+            let Some(v) = self.live_mut_of(Ty::Tracked) else {
+                return false;
+            };
+            let tag = self.fresh_tag();
+            let lit = self.str_literal();
+            self.emit(format!(
+                "        {} = new_tracked({tag}i64, {lit});",
+                v.name
+            ));
+            true
+        }
+
+        /// Reassign a `Tracked` that lives one level down, inside a struct
+        /// field. Same displacement, but codegen reaches it through a
+        /// projection rather than a local slot.
+        fn reassign_crate_field(&mut self) -> bool {
+            let Some(v) = self.live_mut_of(Ty::CrateT) else {
+                return false;
+            };
+            let tag = self.fresh_tag();
+            let lit = self.str_literal();
+            self.emit(format!(
+                "        {}.item = new_tracked({tag}i64, {lit});",
+                v.name
+            ));
+            true
+        }
+
+        /// Displace an `Option[Tracked]` — either to `None` or to a fresh
+        /// `Some`. B-2026-07-31-38's shape: a binding moved into a variant
+        /// constructor and then reassigned never dropped at all.
+        fn reassign_opt_tracked(&mut self) -> bool {
+            let Some(v) = self.live_mut_of(Ty::OptTracked) else {
+                return false;
+            };
+            if self.rng.chance(1, 2) {
+                self.emit(format!("        {} = None;", v.name));
+            } else {
+                let tag = self.fresh_tag();
+                let lit = self.str_literal();
+                self.emit(format!(
+                    "        {} = Some(new_tracked({tag}i64, {lit}));",
+                    v.name
+                ));
+            }
+            true
+        }
+
+        /// Move a live `Tracked` into a fresh `Option`, then displace it. The
+        /// two-step version of the above: the value is inside a variant payload
+        /// when it gets overwritten.
+        fn tracked_into_opt_then_displace(&mut self) -> bool {
+            let Some(t) = self.take(Ty::Tracked) else {
+                return false;
+            };
+            let n = self.fresh("ot");
+            self.emit(format!("        let mut {n}: Option[Tracked] = Some({t});"));
+            if self.rng.chance(1, 2) {
+                self.emit(format!("        {n} = None;"));
+                self.emit(format!("        acc = acc + {n}.is_none().to_i64();"));
+            } else {
+                self.add_var_mut(n, Ty::OptTracked);
+            }
+            true
+        }
+
+        /// Consume an `Option[Tracked]` through a match arm binding — the
+        /// B-2026-07-30-11 match-arm leg, where the moved payload's Drop body
+        /// ran for a value the arm had already taken ownership of.
+        fn match_opt_tracked(&mut self) -> bool {
+            let Some(o) = self.take(Ty::OptTracked) else {
+                return false;
+            };
+            let x = self.fresh("mt");
+            self.emit(format!(
+                "        match {o} {{ Some({x}) => {{ acc = acc + tracked_len({x}); }}, None => {{}} }}"
+            ));
+            true
+        }
+
+        /// Move a live `Tracked` into a `Vec[Tracked]`. Element drop inside a
+        /// container is a distinct codegen path from a local slot's drop.
+        fn tracked_into_vec(&mut self) -> bool {
+            let Some(t) = self.take(Ty::Tracked) else {
+                return false;
+            };
+            let n = self.fresh("vt");
+            self.emit(format!("        let mut {n}: Vec[Tracked] = Vec.new();"));
+            self.emit(format!("        {n}.push({t});"));
+            self.add_var_mut(n, Ty::VecTracked);
+            true
+        }
+
+        /// Consume a `Vec[Tracked]` by owned for-loop: every element's Drop body
+        /// must run exactly once as the loop takes it.
+        fn for_owned_vec_tracked(&mut self) -> bool {
+            let Some(v) = self.take(Ty::VecTracked) else {
+                return false;
+            };
+            let e = self.fresh("et");
+            self.emit(format!(
+                "        for {e} in {v} {{ acc = acc + tracked_len({e}); }}"
+            ));
+            true
+        }
+
+        /// Borrow a live `Tracked` through a `ref` param. The callee must not
+        /// drop it; the binding stays live and drops later, exactly once.
+        fn ref_peek_tracked(&mut self) -> bool {
+            let Some(v) = self.live_of(Ty::Tracked) else {
+                return false;
+            };
+            self.emit(format!("        acc = acc + tracked_peek({});", v.name));
+            true
+        }
+
+        /// Move two `Tracked` values into a `par {}` block. B-2026-07-31-41
+        /// found user-Drop *timing* diverging between the default build and the
+        /// auto-par lanes; B-2026-07-31-40 found a whole value leaking when it
+        /// was introduced inside a parallel group.
+        fn par_capture_tracked(&mut self) -> bool {
+            if self.used_par {
+                return false;
+            }
+            let Some(a) = self.take(Ty::Tracked) else {
+                return false;
+            };
+            let Some(b) = self.take(Ty::Tracked) else {
+                // Only one available — still consume it so the tag balances.
+                self.emit(format!("        acc = acc + tracked_len({a});"));
+                return true;
+            };
+            self.used_par = true;
+            self.emit("        par {".to_string());
+            self.emit(format!("            acc = acc + tracked_len({a});"));
+            self.emit(format!("            acc = acc + tracked_len({b});"));
+            self.emit("        }".to_string());
+            true
+        }
+
         // ── sinks: drain every remaining live binding into `acc` ──────────
 
         fn sink_all(&mut self) {
@@ -706,6 +951,31 @@ mod llvm_main {
                     }
                     Ty::MapStr => format!("        acc = acc + {}.len();", v.name),
                     Ty::SetStr => format!("        acc = acc + {}.len();", v.name),
+                    // Owned sinks for the Drop-carrying types: moving into
+                    // `tracked_len` makes the callee the drop site, which is a
+                    // different codegen path from an end-of-scope drop and is
+                    // where several of the ledger's double-run bodies lived.
+                    Ty::Tracked => format!("        acc = acc + tracked_len({});", v.name),
+                    Ty::VecTracked => {
+                        let e = self.fresh("et");
+                        format!(
+                            "        for {e} in {} {{ acc = acc + tracked_len({e}); }}",
+                            v.name
+                        )
+                    }
+                    Ty::OptTracked => {
+                        let x = self.fresh("xt");
+                        format!(
+                            "        match {} {{ Some({x}) => {{ acc = acc + tracked_len({x}); }}, None => {{}} }}",
+                            v.name
+                        )
+                    }
+                    // Borrowed: the Crate itself drops at end of scope, which is
+                    // what must cascade into its `item` field exactly once.
+                    Ty::CrateT => format!(
+                        "        acc = acc + {}.lid + tracked_peek({}.item);",
+                        v.name, v.name
+                    ),
                 };
                 self.emit(line);
             }
@@ -732,7 +1002,11 @@ mod llvm_main {
         }
 
         fn produce_one(&mut self) {
-            match self.rng.below(11) {
+            // The four Drop-carrying producers get roughly a third of the
+            // weight. They are the only ones the drop-log oracle can judge, and
+            // the displacement transforms all need one live to apply at all —
+            // too thin a share and most programs never reach the new shapes.
+            match self.rng.below(15) {
                 0 => self.make_str(),
                 1 => self.make_vecstr(),
                 2 => self.make_pair(),
@@ -743,14 +1017,20 @@ mod llvm_main {
                 7 => self.make_payload_vec(),
                 8 => self.make_map(),
                 9 => self.make_set(),
-                _ => self.make_tree(),
+                10 => self.make_tree(),
+                11 => self.make_tracked(),
+                12 => self.make_vec_tracked(),
+                13 => self.make_opt_tracked(),
+                _ => self.make_crate(),
             }
         }
 
         fn step_one(&mut self) {
             // Try transforms in a random order until one applies; if none does
             // (nothing live of the needed type), produce fresh material.
-            let mut order: [u8; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+            let mut order: [u8; 23] = [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+            ];
             // Fisher-Yates on the fixed array.
             for i in (1..order.len()).rev() {
                 let j = self.rng.below(i + 1);
@@ -771,7 +1051,17 @@ mod llvm_main {
                     10 => self.ref_peek_str(),
                     11 => self.mut_grow_vec(),
                     12 => self.conditional_move_str_into_vec(),
-                    _ => false, // slot 13: fall through to a producer
+                    // ── displacement of a user-`impl Drop` value ──
+                    13 => self.reassign_tracked(),
+                    14 => self.reassign_crate_field(),
+                    15 => self.reassign_opt_tracked(),
+                    16 => self.tracked_into_opt_then_displace(),
+                    17 => self.match_opt_tracked(),
+                    18 => self.tracked_into_vec(),
+                    19 => self.for_owned_vec_tracked(),
+                    20 => self.ref_peek_tracked(),
+                    21 => self.par_capture_tracked(),
+                    _ => false, // slot 22: fall through to a producer
                 };
                 if applied {
                     return;
@@ -811,6 +1101,27 @@ fn tree_len(t: Tree) -> i64 {
         Leaf(s) => s.len(),
         Node(inner) => tree_len(inner),
     }
+}
+
+struct Tracked { tag: i64, name: String }
+
+impl Drop for Tracked {
+    fn drop(mut ref self) { println(f"D{self.tag}"); }
+}
+
+fn new_tracked(tag: i64, name: String) -> Tracked {
+    println(f"N{tag}");
+    return Tracked { tag: tag, name: name };
+}
+
+fn tracked_len(t: Tracked) -> i64 { return t.name.len(); }
+
+fn tracked_peek(t: ref Tracked) -> i64 { return t.name.len(); }
+
+struct Crate { lid: i64, item: Tracked }
+
+fn new_crate(tag: i64, name: String) -> Crate {
+    return Crate { lid: tag, item: new_tracked(tag, name) };
 }"#;
 
     // ───────────────────────── compile + run under ASan ──────────────────
@@ -820,13 +1131,120 @@ fn tree_len(t: Tree) -> i64 {
     enum Surface {
         Seq,
         AutoPar,
+        /// The tree-walk interpreter — `karac run --interp`, and the oracle
+        /// `karac build` is supposed to agree with. It compiles nothing and
+        /// links no sanitizer, so it can only ever contribute a drop log; its
+        /// value is entirely in the cross-surface comparison. `run-vs-build`
+        /// is a 56-entry ledger class, and two of the drop bugs this widening
+        /// targets (B-2026-07-31-38, -41) are in it — a divergence no
+        /// AOT-only pair of surfaces can see by construction.
+        Interp,
     }
+
+    /// Every surface each generated program is run on.
+    const SURFACES: [Surface; 3] = [Surface::Seq, Surface::AutoPar, Surface::Interp];
+
     impl Surface {
         fn tag(self) -> &'static str {
             match self {
                 Surface::Seq => "seq",
                 Surface::AutoPar => "autopar",
+                Surface::Interp => "interp",
             }
+        }
+    }
+
+    // ───────────────────────── the drop-log oracle ───────────────────────
+    //
+    // ASan and LSan judge *memory*. They are silent on a user `impl Drop` body
+    // that runs the wrong number of times but touches no freed pointer — a body
+    // that only prints is invisible to both. That is not a hypothetical: it is
+    // most of what the ledger's recent drop bugs actually were (B-2026-07-31-37
+    // ran a body twice, B-2026-07-31-38 never ran it at all), and it is why the
+    // straight-line corpus could measure zero findings while those kept landing.
+    //
+    // The protocol is deliberately the weakest thing that still catches them.
+    // `new_tracked(tag, …)` prints `N<tag>` before constructing; the `impl Drop`
+    // body prints `D<tag>`. The invariant is per-tag **balance**: over the whole
+    // run, every construction is matched by exactly one drop.
+    //
+    // Balance, rather than an expected schedule, is the point. It needs no model
+    // of the generated control flow — the round loop, conditional moves, early
+    // returns and par lanes all reuse a construction site an unpredictable
+    // number of times, and any count-based expectation would have to re-derive
+    // that. Balance holds regardless: N != D is a bug no matter how the program
+    // got there. The cost is that it cannot see a *reordering* that keeps counts
+    // intact, which is what the cross-surface comparison covers instead.
+    #[derive(Clone, Default, PartialEq, Eq)]
+    struct DropLog {
+        /// tag → (times constructed, times the Drop body ran)
+        counts: BTreeMap<i64, (u64, u64)>,
+    }
+
+    impl DropLog {
+        fn parse(stdout: &str) -> DropLog {
+            let mut counts: BTreeMap<i64, (u64, u64)> = BTreeMap::new();
+            for line in stdout.lines() {
+                let line = line.trim();
+                let mut chars = line.chars();
+                let kind = chars.next();
+                if !matches!(kind, Some('N') | Some('D')) {
+                    continue;
+                }
+                // The rest must be exactly a tag. `parse` rejects anything else,
+                // which is what discards a torn par-lane write rather than
+                // letting it count as a token.
+                let Ok(tag) = chars.as_str().parse::<i64>() else {
+                    continue;
+                };
+                let e = counts.entry(tag).or_insert((0, 0));
+                if kind == Some('N') {
+                    e.0 += 1;
+                } else {
+                    e.1 += 1;
+                }
+            }
+            DropLog { counts }
+        }
+
+        fn constructions(&self) -> u64 {
+            self.counts.values().map(|(n, _)| *n).sum()
+        }
+
+        /// Tags whose construct / drop counts disagree, worst first.
+        fn imbalances(&self) -> Vec<(i64, u64, u64)> {
+            let mut out: Vec<(i64, u64, u64)> = self
+                .counts
+                .iter()
+                .filter(|(_, (n, d))| n != d)
+                .map(|(t, (n, d))| (*t, *n, *d))
+                .collect();
+            out.sort_by_key(|(t, n, d)| (-((*n as i64 - *d as i64).abs()), *t));
+            out
+        }
+
+        /// A stable signature fragment: which *direction* each bad tag went.
+        /// Buckets "body ran twice" apart from "body never ran" without
+        /// splitting the corpus on the tag number or the exact count.
+        fn imbalance_kind(&self) -> &'static str {
+            let bad = self.imbalances();
+            let over = bad.iter().any(|(_, n, d)| d > n);
+            let under = bad.iter().any(|(_, n, d)| n > d);
+            match (over, under) {
+                (true, true) => "drop-imbalance-both",
+                (true, false) => "drop-ran-too-often",
+                (false, true) => "drop-never-ran",
+                (false, false) => "drop-balanced",
+            }
+        }
+
+        fn detail(&self) -> String {
+            let bad = self.imbalances();
+            let mut s = String::from("user `impl Drop` body count != construction count\n");
+            for (tag, n, d) in bad.iter().take(6) {
+                s.push_str(&format!("  tag {tag}: constructed {n}x, dropped {d}x\n"));
+            }
+            s
         }
     }
 
@@ -835,8 +1253,10 @@ fn tree_len(t: Tree) -> i64 {
         /// Program did not parse / typecheck / ownership-check cleanly, or
         /// codegen/link failed — uninteresting, discarded (not a finding).
         Invalid(&'static str),
-        /// Compiled, linked, ran, and exited cleanly under ASan+LSan.
-        Clean,
+        /// Compiled, linked, ran, and exited cleanly under ASan+LSan, with a
+        /// balanced drop log. Carries the log so the driver can compare it
+        /// across surfaces.
+        Clean { log: DropLog },
         /// Sanitizer (or a crash) flagged a memory error. `signature` is the
         /// bucket key; `detail` is a short excerpt of the sanitizer report.
         Finding { signature: String, detail: String },
@@ -876,12 +1296,50 @@ fn tree_len(t: Tree) -> i64 {
                 return Outcome::Invalid("ownership");
             }
 
+            // The interpreter forks off here: no object, no link, no sanitizer.
+            // `captured_output` is the in-process equivalent of piping stdout.
+            //
+            // `catch_unwind` because a tree-walk gap is a `panic!`, not a
+            // `RuntimeError`, and one generated program hitting an unsupported
+            // construct must not take the whole batch down. Anything that
+            // panics or errors is Invalid, not a finding: the interpreter has
+            // its own feature gaps, and reporting those as run-vs-build
+            // divergence would bury the real ones.
+            if surface == Surface::Interp {
+                let program = &parsed.program;
+                let typed_ref = &typed;
+                let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut interp = karac::interpreter::Interpreter::new(program, typed_ref);
+                    interp.captured_output = Some(Vec::new());
+                    interp.run();
+                    (
+                        interp.captured_output.take().unwrap_or_default(),
+                        interp.runtime_errors.is_empty(),
+                    )
+                }));
+                return match captured {
+                    Err(_) => Outcome::Invalid("interp-panic"),
+                    Ok((_, false)) => Outcome::Invalid("interp-runtime-error"),
+                    Ok((lines, true)) => {
+                        let log = DropLog::parse(&lines.join("\n"));
+                        if log.imbalances().is_empty() {
+                            Outcome::Clean { log }
+                        } else {
+                            Outcome::Finding {
+                                signature: format!("interp:{}", log.imbalance_kind()),
+                                detail: log.detail(),
+                            }
+                        }
+                    }
+                };
+            }
+
             let concurrency = match surface {
-                Surface::Seq => None,
                 Surface::AutoPar => {
                     let effects = karac::effectcheck(&parsed.program);
                     Some(karac::concurrency_analyze(&parsed.program, &effects))
                 }
+                Surface::Seq | Surface::Interp => None,
             };
 
             let id = self.counter.get();
@@ -931,20 +1389,41 @@ fn tree_len(t: Tree) -> i64 {
 
             match output {
                 None => Outcome::Invalid("hang"),
-                Some((code, stderr)) => classify(code, &stderr, surface),
+                Some((code, stderr, stdout)) => classify(code, &stderr, &stdout, surface),
             }
         }
     }
 
     /// Classify a run result into Clean / Finding. ASan's `exitcode=23`, or a
     /// double-free SIGABRT/SIGTRAP (134/133), or a SEGV (139) is a finding.
-    fn classify(code: Option<i32>, stderr: &str, surface: Surface) -> Outcome {
+    ///
+    /// A clean exit is no longer automatically `Clean`: the drop log still has
+    /// to balance. The sanitizer arm takes precedence when both fire — an ASan
+    /// report names the offending allocation, which is strictly more actionable
+    /// than "this tag dropped twice".
+    fn classify(code: Option<i32>, stderr: &str, stdout: &str, surface: Surface) -> Outcome {
         // Extract the canonical ASan error kind if present.
         let kind = asan_error_kind(stderr);
         match code {
-            Some(0) => Outcome::Clean,
+            Some(0) => {
+                let log = DropLog::parse(stdout);
+                if log.imbalances().is_empty() {
+                    Outcome::Clean { log }
+                } else {
+                    Outcome::Finding {
+                        signature: format!("{}:{}", surface.tag(), log.imbalance_kind()),
+                        detail: log.detail(),
+                    }
+                }
+            }
             None if kind.is_some() => finding(kind.unwrap(), stderr, surface),
-            None => Outcome::Clean, // killed/exited-by-signal with no ASan report
+            // Killed / exited-by-signal with no ASan report. Not a finding, but
+            // the drop log is untrustworthy (the process died mid-run), so hand
+            // back an empty one rather than a partial count the cross-surface
+            // comparison would read as a divergence.
+            None => Outcome::Clean {
+                log: DropLog::default(),
+            },
             Some(23) if kind.is_some() => finding(kind.unwrap(), stderr, surface),
             Some(23) => finding("asan-error", stderr, surface),
             Some(134) => finding(kind.unwrap_or("abort-sigabrt"), stderr, surface),
@@ -1007,17 +1486,98 @@ fn tree_len(t: Tree) -> i64 {
         Outcome::Finding { signature, detail }
     }
 
-    /// Run `exe` with a wall-clock watchdog; return `(exit_code, stderr)` or
-    /// `None` if it had to be killed (hang). exit_code is `None` on signal.
+    /// Human-readable per-tag delta between two surfaces' drop logs.
+    fn droplog_diff(a: &DropLog, b: &DropLog) -> String {
+        let mut tags: Vec<i64> = a.counts.keys().chain(b.counts.keys()).copied().collect();
+        tags.sort_unstable();
+        tags.dedup();
+        let mut s = String::new();
+        for tag in tags {
+            let x = a.counts.get(&tag).copied().unwrap_or((0, 0));
+            let y = b.counts.get(&tag).copied().unwrap_or((0, 0));
+            if x != y {
+                s.push_str(&format!(
+                    "  tag {tag}: {}x new/{}x drop vs {}x new/{}x drop\n",
+                    x.0, x.1, y.0, y.1
+                ));
+            }
+        }
+        s
+    }
+
+    /// Bucket a finding by signature, log it, and (first of its signature, or
+    /// always under `--keep-going`) shrink and retain it.
+    #[allow(clippy::too_many_arguments)]
+    fn record_finding(
+        cfg: &Config,
+        runner: &Runner,
+        src: &str,
+        seed: u64,
+        signature: String,
+        detail: String,
+        surface: Surface,
+        seen_sigs: &mut BTreeMap<String, u64>,
+        findings: &mut Vec<Finding>,
+    ) {
+        let count = seen_sigs.entry(signature.clone()).or_insert(0);
+        *count += 1;
+        let first_of_sig = *count == 1;
+        eprintln!(
+            "  [FINDING] seed={seed} sig={signature}\n{}",
+            indent(&detail, "      ")
+        );
+
+        // A pinned known-open signature keeps exactly one unshrunk exemplar,
+        // even under `--keep-going`. Two reasons, both about the nightly's time
+        // budget rather than tidiness: B-2026-07-30-11 alone fires on ~62% of
+        // executions, and the shrinker re-compiles and re-runs the program once
+        // per candidate line — so shrinking every hit would mean hundreds of
+        // delta-debug passes per run, blowing the 90-minute CI cap to re-derive
+        // a minimal repro the ledger entry already records. One exemplar is
+        // enough to confirm the pin still describes something real.
+        if known_open_for(&signature).is_some() {
+            if first_of_sig {
+                findings.push(Finding {
+                    seed,
+                    signature,
+                    detail,
+                    src: src.to_string(),
+                });
+            }
+            return;
+        }
+
+        if first_of_sig || cfg.keep_going {
+            let final_src = if cfg.shrink {
+                shrink(runner, src, &signature, surface)
+            } else {
+                src.to_string()
+            };
+            findings.push(Finding {
+                seed,
+                signature,
+                detail,
+                src: final_src,
+            });
+        }
+    }
+
+    /// Run `exe` with a wall-clock watchdog; return `(exit_code, stderr, stdout)`
+    /// or `None` if it had to be killed (hang). exit_code is `None` on signal.
+    ///
+    /// stdout used to be `Stdio::null()` — the sanitizer was the only judge, and
+    /// it speaks on stderr. It is piped now because the `N<tag>` / `D<tag>` drop
+    /// tokens the generated programs print are the drop-log oracle's entire
+    /// input; see `DropLog`.
     fn run_with_watchdog(
         exe: &str,
         envs: &[(&str, &str)],
         timeout: Duration,
-    ) -> Option<(Option<i32>, String)> {
+    ) -> Option<(Option<i32>, String, String)> {
         use std::sync::mpsc;
         let mut cmd = Command::new(exe);
         cmd.stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         // Bound the auto-par pool so a fuzz batch does not oversubscribe.
         cmd.env("KARAC_PAR_WORKERS", "2");
@@ -1026,8 +1586,11 @@ fn tree_len(t: Tree) -> i64 {
         }
         let mut child = cmd.spawn().ok()?;
         let pid = child.id();
-        // stderr must be drained on another thread to avoid a full-pipe stall.
+        // Both pipes must be drained on their own threads to avoid a full-pipe
+        // stall — and stdout now carries hundreds of token lines per program,
+        // so it fills far faster than stderr ever did.
         let mut stderr_pipe = child.stderr.take();
+        let mut stdout_pipe = child.stdout.take();
         let (tx, rx) = mpsc::channel();
         let watchdog = std::thread::spawn(move || {
             if rx.recv_timeout(timeout).is_err() {
@@ -1045,10 +1608,22 @@ fn tree_len(t: Tree) -> i64 {
             }
             buf
         });
+        let stdout_handle = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            if let Some(ref mut p) = stdout_pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            // Lossy: a par-lane interleave can split a UTF-8 sequence across
+            // two writes. Token lines are pure ASCII, so a mangled byte can
+            // only corrupt a line the parser then ignores.
+            String::from_utf8_lossy(&buf).into_owned()
+        });
         let status = child.wait().ok();
         let _ = tx.send(());
         let killed = watchdog.join().unwrap_or(false);
         let stderr = stderr_handle.join().unwrap_or_default();
+        let stdout = stdout_handle.join().unwrap_or_default();
         if killed {
             return None;
         }
@@ -1060,7 +1635,7 @@ fn tree_len(t: Tree) -> i64 {
         };
         #[cfg(not(unix))]
         let code = status.code();
-        Some((code, stderr))
+        Some((code, stderr, stdout))
     }
 
     // ───────────────────────── the shrinker ──────────────────────────────
@@ -1253,6 +1828,12 @@ fn tree_len(t: Tree) -> i64 {
         let mut runs = 0u64; // total (program, surface) executions that were valid
         let mut findings: Vec<Finding> = Vec::new();
         let mut seen_sigs: BTreeMap<String, u64> = BTreeMap::new();
+        // Non-vacuity counter for the drop-log oracle: how many user-`impl Drop`
+        // values the corpus actually constructed across all clean runs. If this
+        // comes back at or near zero the grammar never reached the Drop-carrying
+        // shapes, and a clean report says nothing about them — the exact failure
+        // mode that let the pre-widening corpus report 0 findings.
+        let mut drop_tokens = 0u64;
         // Slice 3 — ownership-oracle model self-check across the corpus.
         let mut oracle_programs = 0u64;
         let mut oracle_drops = 0u64;
@@ -1307,37 +1888,79 @@ fn tree_len(t: Tree) -> i64 {
                 continue;
             }
 
-            for surface in [Surface::Seq, Surface::AutoPar] {
+            // Clean logs, kept for the cross-surface comparison below.
+            let mut clean_logs: Vec<(Surface, DropLog)> = Vec::new();
+
+            for surface in SURFACES {
                 match runner.run(&src, surface) {
                     Outcome::Invalid(_reason) => {}
-                    Outcome::Clean => {
+                    Outcome::Clean { log } => {
                         any_valid = true;
                         runs += 1;
+                        drop_tokens += log.constructions();
+                        clean_logs.push((surface, log));
                     }
                     Outcome::Finding { signature, detail } => {
                         any_valid = true;
                         runs += 1;
-                        let count = seen_sigs.entry(signature.clone()).or_insert(0);
-                        *count += 1;
-                        let first_of_sig = *count == 1;
-                        eprintln!(
-                            "  [FINDING] seed={seed} sig={signature}\n{}",
-                            indent(&detail, "      ")
+                        record_finding(
+                            &cfg,
+                            &runner,
+                            &src,
+                            seed,
+                            signature,
+                            detail,
+                            surface,
+                            &mut seen_sigs,
+                            &mut findings,
                         );
-                        if first_of_sig || cfg.keep_going {
-                            let final_src = if cfg.shrink {
-                                shrink(&runner, &src, &signature, surface)
-                            } else {
-                                src.clone()
-                            };
-                            findings.push(Finding {
-                                seed,
-                                signature: signature.clone(),
-                                detail: detail.clone(),
-                                src: final_src,
-                            });
-                        }
                     }
+                }
+            }
+
+            // ── cross-surface drop-log comparison ──
+            //
+            // Each surface having a self-consistent log does not make them
+            // agree with each other. A value dropped once under the sequential
+            // build and once inside an auto-par lane balances on both sides
+            // while the *programs* disagree — B-2026-07-31-41's shape, and the
+            // reason the per-surface balance check is not the whole oracle.
+            //
+            // Only counts are compared, never order: par lanes may legitimately
+            // interleave. A divergence is confirmed by re-running the diverging
+            // surface, because a torn write from two lanes printing at once
+            // would otherwise read as a real disagreement.
+            if clean_logs.len() > 1 {
+                let (base_surface, base) = &clean_logs[0];
+                for (other_surface, other) in &clean_logs[1..] {
+                    if other == base {
+                        continue;
+                    }
+                    let Outcome::Clean { log: confirm } = runner.run(&src, *other_surface) else {
+                        continue; // the re-run did not reproduce cleanly — drop it
+                    };
+                    if &confirm == base {
+                        continue; // first read was a torn write, not a divergence
+                    }
+                    let detail = format!(
+                        "user `impl Drop` counts differ between build surfaces\n{}",
+                        droplog_diff(base, &confirm)
+                    );
+                    record_finding(
+                        &cfg,
+                        &runner,
+                        &src,
+                        seed,
+                        format!(
+                            "{}-vs-{}:droplog-divergence",
+                            base_surface.tag(),
+                            other_surface.tag()
+                        ),
+                        detail,
+                        *other_surface,
+                        &mut seen_sigs,
+                        &mut findings,
+                    );
                 }
             }
             if any_valid {
@@ -1365,11 +1988,52 @@ fn tree_len(t: Tree) -> i64 {
         print_summary(
             &findings, &seen_sigs, valid, runs, cfg.count, elapsed, &cfg.out, &oracle,
         );
+        // Non-vacuity line for the drop-log oracle. A clean report with zero
+        // constructions means the corpus never built a Drop-carrying value, so
+        // it cleared nothing about that class — say so rather than let the
+        // green summary imply coverage the run did not have.
+        if drop_tokens == 0 {
+            eprintln!(
+                "  drop-log oracle: NO user-`impl Drop` values were constructed — \
+                 this run says nothing about the user-drop class"
+            );
+        } else {
+            eprintln!(
+                "  drop-log oracle: {drop_tokens} construction(s) observed on runs \
+                 that balanced (imbalanced runs are listed above)"
+            );
+        }
+
+        // Known-open pins: report which fired, and flag any that did not so a
+        // fixed bug forces its stale pin out instead of leaving the gate
+        // disarmed for that signature kind indefinitely.
+        for (kind, ledger_id) in KNOWN_OPEN {
+            let hits: u64 = seen_sigs
+                .iter()
+                .filter(|(s, _)| s.rsplit(':').next().unwrap_or(s) == *kind)
+                .map(|(_, n)| *n)
+                .sum();
+            if hits > 0 {
+                eprintln!(
+                    "  known-open: {kind} fired {hits}x — explained by {ledger_id}, not gating"
+                );
+            } else if cfg.count >= 20 {
+                eprintln!(
+                    "  known-open: {kind} did NOT fire in {} programs — if {ledger_id} is fixed, \
+                     drop it from KNOWN_OPEN so the gate covers this kind again",
+                    cfg.count
+                );
+            }
+        }
 
         // Exit non-zero if any *memory-safety* signature fired OR the model
         // self-check found an invariant violation, so the harness can gate.
-        // Plain `exit-N` runtime panics do not gate.
-        let mem_findings = seen_sigs.keys().filter(|s| is_memory_signature(s)).count();
+        // Plain `exit-N` runtime panics do not gate, and neither do the
+        // KNOWN_OPEN pins (reported above, tracked in the ledger).
+        let mem_findings = seen_sigs
+            .keys()
+            .filter(|s| is_memory_signature(s) && known_open_for(s).is_none())
+            .count();
         if mem_findings > 0 || oracle_violations > 0 {
             std::process::exit(1);
         }
@@ -1593,6 +2257,40 @@ fn tree_len(t: Tree) -> i64 {
         violations: u64,
     }
 
+    /// Signature kinds a currently-**open** ledger bug already explains.
+    ///
+    /// The drop-log oracle went live while B-2026-07-30-11 was open, and that
+    /// bug fires on roughly 60% of generated programs — every displaced or
+    /// overwritten user-`impl Drop` value, from four independent directions
+    /// (`o = None`, `o = Some(..)`, `c.field = ..`, and a match arm binding
+    /// that receives a moved payload). Gating on it would make the nightly
+    /// permanently red and teach everyone to ignore it.
+    ///
+    /// Pinning rather than narrowing the grammar is deliberate: dropping those
+    /// shapes would route around a known bug and quietly un-cover the class the
+    /// moment it is fixed. Pinned findings are still reported and still have
+    /// their repros saved — they just do not set the exit code.
+    ///
+    /// The cost is real and worth stating: while a kind is pinned, a *new* bug
+    /// producing the same signature will not redden CI either. It will appear
+    /// in the report and the corpus, but someone has to read it. That is the
+    /// price of keeping the shapes in the corpus while the known bug is open,
+    /// and it ends when the pin does.
+    ///
+    /// Two-sided, like `tests/extern_keep_list.rs`'s: `run()` reports a pin
+    /// that stopped firing, so a fixed bug forces its own pin out instead of
+    /// silently disarming the gate for that kind forever.
+    const KNOWN_OPEN: &[(&str, &str)] = &[("drop-never-ran", "B-2026-07-30-11")];
+
+    /// The ledger id explaining `sig`, if it is a pinned known-open kind.
+    fn known_open_for(sig: &str) -> Option<&'static str> {
+        let kind = sig.rsplit(':').next().unwrap_or(sig);
+        KNOWN_OPEN
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, id)| *id)
+    }
+
     fn is_memory_signature(sig: &str) -> bool {
         let kind = sig.rsplit(':').next().unwrap_or(sig);
         matches!(
@@ -1607,6 +2305,14 @@ fn tree_len(t: Tree) -> i64 {
                 | "abort-sigabrt"
                 | "trap-sigtrap"
                 | "asan-error"
+                // Drop-log oracle. These gate for the same reason the ASan
+                // signatures do — a user `impl Drop` body that runs twice or
+                // not at all is a miscompile, and the fact that no sanitizer
+                // can see it is the argument for gating on it, not against.
+                | "drop-ran-too-often"
+                | "drop-never-ran"
+                | "drop-imbalance-both"
+                | "droplog-divergence"
         )
     }
 
@@ -1762,5 +2468,68 @@ fn tree_len(t: Tree) -> i64 {
         eprintln!("memory-safety findings: {mem} ({rate:.2}% of valid executions)");
         eprintln!("repros saved: {} -> {}", findings.len(), out.display());
         eprintln!("report: {}", out.join("report.md").display());
+    }
+
+    // ───────────────────────── drop-log oracle tests ─────────────────────
+    //
+    // The oracle's *under*-count arm has a live subject (B-2026-07-30-11 is
+    // open, and the corpus hits it constantly). Its *over*-count arm does not:
+    // the bug that ran a Drop body twice, B-2026-07-31-37, is fixed, so no
+    // generated program currently exercises that direction. Without these tests
+    // "drop-ran-too-often" would be code that has never once been observed to
+    // work — and the next double-run bug would be the first thing to test it.
+    #[cfg(test)]
+    mod tests {
+        use super::DropLog;
+
+        #[test]
+        fn balanced_log_reports_nothing() {
+            let log = DropLog::parse("N1\nN2\nD2\nD1\n42\n");
+            assert!(log.imbalances().is_empty());
+            assert_eq!(log.constructions(), 2);
+        }
+
+        #[test]
+        fn a_body_that_never_ran_is_an_under_count() {
+            let log = DropLog::parse("N1\nN1\nD1\n");
+            assert_eq!(log.imbalances(), vec![(1, 2, 1)]);
+            assert_eq!(log.imbalance_kind(), "drop-never-ran");
+        }
+
+        #[test]
+        fn a_body_that_ran_twice_is_an_over_count() {
+            let log = DropLog::parse("N7\nD7\nD7\n");
+            assert_eq!(log.imbalances(), vec![(7, 1, 2)]);
+            assert_eq!(log.imbalance_kind(), "drop-ran-too-often");
+        }
+
+        #[test]
+        fn both_directions_at_once_get_their_own_bucket() {
+            let log = DropLog::parse("N1\nN1\nD1\nN2\nD2\nD2\n");
+            assert_eq!(log.imbalance_kind(), "drop-imbalance-both");
+        }
+
+        /// Non-token output — the program's own `println(acc)`, and a line torn
+        /// by two par lanes writing at once — must not be counted. A torn write
+        /// read as a token would show up as a phantom imbalance, which is the
+        /// one way this oracle could manufacture a bug that is not there.
+        #[test]
+        fn non_token_and_torn_lines_are_ignored() {
+            let log = DropLog::parse("N3\n123456\nND3\nN\nDx9\nN3garbage\nD3\n");
+            assert!(
+                log.imbalances().is_empty(),
+                "unexpected imbalance: {:?}",
+                log.imbalances()
+            );
+            assert_eq!(log.constructions(), 1);
+        }
+
+        /// Negative-count directions must not cancel out across tags: one tag
+        /// over and another under is still two findings, not zero.
+        #[test]
+        fn imbalances_do_not_cancel_across_tags() {
+            let log = DropLog::parse("N1\nN1\nD1\nN2\nD2\nD2\n");
+            assert_eq!(log.imbalances().len(), 2);
+        }
     }
 }

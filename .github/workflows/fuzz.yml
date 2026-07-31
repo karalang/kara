@@ -9,9 +9,14 @@ name: Fuzz
 #   * `src/bin/drop_fuzz.rs` + `scripts/drop-fuzz.sh` — the drop-soundness
 #     fuzzer: it generates well-typed heap-core Kāra programs, compiles
 #     each through the real AOT path, links under ASan + LSan, runs it,
-#     and lets the sanitizer judge. Its last recorded measurement was
-#     0 bugs over ~2500 (program, surface) executions
-#     (docs/spikes/ownership-model-mechanization.md).
+#     and lets the sanitizer judge. It also runs each program on the
+#     interpreter and checks a drop-token log, which is what covers user
+#     `impl Drop` bodies — no sanitizer can see a destructor that runs
+#     twice or not at all while the heap is still freed correctly.
+#     (docs/spikes/ownership-model-mechanization.md. The "0 bugs over
+#     ~2500 executions" figure recorded there predates the drop-log
+#     oracle and describes the implicit-drop heap core only — see the
+#     scope correction under it.)
 #
 # Neither ran on a schedule, so both measurements were only ever as fresh
 # as the last time someone remembered. That matters here more than in most

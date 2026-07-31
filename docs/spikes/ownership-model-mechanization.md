@@ -18,6 +18,19 @@
 
 **Measured drop-bug rate on current HEAD: 0 over ~2500 valid (program, surface) executions** across multiple runs (500 + 400 programs on the initial core, plus 350 on the widened Map/Set + ref-forwarding core, each × 2 surfaces). The known classes in the covered heap-core are **closed** on HEAD — an honest, meaningful measurement, not a vacuous pass (see next).
 
+> **Scope correction (2026-07-31).** That 0 is a statement about *implicitly*-dropped
+> heap, and only that. The corpus contained no `impl Drop` at all, so the number said
+> nothing about user destructors — and the sanitizers could not have told us if it had:
+> a Drop body that runs twice, or never, while the heap is still freed correctly leaves
+> ASan and LSan completely silent. Over the same period the ledger accumulated six
+> user-`impl Drop` bugs, none of them found here; **0 of 812 ledger entries name this
+> fuzzer as their source.** The grammar has since gained a `Tracked` type with a
+> token-printing `impl Drop`, a drop-log oracle asserting per-tag construct/drop
+> balance, displacement transforms, and the interpreter as a third surface. On its
+> first 6-program run the widened corpus rediscovered open bug B-2026-07-30-11 from
+> four independent directions. Read the original 0 as "the implicit-drop heap core is
+> clean", which is what it measured, not "drop insertion is clean".
+
 **Validation — the fuzzer rediscovers ≥2 known classes (acceptance criterion met).** Because HEAD is hardened, "green" was proven non-vacuous by **fault injection** (mutation-testing the detector): two temporary, env-gated, default-dormant knobs were added to codegen, the fuzzer was run, then the knobs were **fully reverted** (not committed — the committed slice-1 artifact touches no compiler code):
 - `DROPFUZZ_INJECT_LEAK` — skip the scope-cleanup drain (`emit_scope_cleanup_from`). Fuzzer flagged **`memory-leak`** on both `seq` and `autopar`.
 - `DROPFUZZ_INJECT_DOUBLE_FREE` — disable move-source suppression (`suppress_source_vec_cleanup_for_arg_ex`) so caller and callee both free a moved value. Fuzzer flagged **`double-free`** (+ downstream `segv`) on both surfaces, and the shrinker minimized it to the 3-line repro above.
