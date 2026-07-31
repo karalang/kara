@@ -399,6 +399,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // (slice α/β, 2026-05-14).
             self.suppress_source_vec_cleanup_for_arg(k_expr);
             self.suppress_source_vec_cleanup_for_arg(v_expr);
+            // Container-bodies twin of the cap-zeros above (whole-value
+            // move into the map — retract the sources' `__karac_dropelems_*`
+            // actions so no body fires over a moved-from slot).
+            self.disarm_container_bodies_for_arg(k_expr);
+            self.disarm_container_bodies_for_arg(v_expr);
             self.builder.build_store(key_slot, k_val).unwrap();
             self.builder.build_store(val_slot, v_val).unwrap();
             self.builder
@@ -1501,6 +1506,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                // Container-bodies twin of the cap-zeros above.
+                self.disarm_container_bodies_for_arg(&args[0].value);
+                self.disarm_container_bodies_for_arg(&args[1].value);
                 self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
@@ -1663,8 +1671,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // key side on the borrowed path — nothing is moved in.)
                 if borrowed_key.is_none() {
                     self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                    self.disarm_container_bodies_for_arg(&args[0].value);
                 }
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                // Container-bodies twin of the cap-zero above.
+                self.disarm_container_bodies_for_arg(&args[1].value);
                 // Slice 3u: a moved boxed-payload Option/Result binding
                 // (`m.insert(k, o)` on a Map[K, Option[Wide]]) — null the
                 // source's box word so its BoxedEnumDrop skips; the map's

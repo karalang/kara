@@ -25908,6 +25908,59 @@ fn test_owned_aggregate_temp_runs_field_user_drop() {
     );
 }
 
+/// B-2026-07-31 (container-bodies move disarm) — a WHOLE-VALUE move of a
+/// binding that carries a container-bodies walk (enum payload, Vec element,
+/// tuple element) fires the payload's `Drop` body exactly ONCE, at the
+/// destination. Before the disarm, every move shape here double-fired on the
+/// interpreter, and under codegen the second fire read the cap-zeroed
+/// moved-from slot (`self.id` printed 0 — a silently wrong value, not a
+/// leak). Shapes pinned: rebind, tuple rebind, return-move, Vec rebind,
+/// reassign, by-value call arg (the pre-existing balanced case).
+///
+/// Deliberate residual, asserted by ABSENCE: `f = g;` never runs the body of
+/// f's OVERWRITTEN original (no 95 in the expected string) — both backends
+/// share that silence today, a leak rather than a divergence.
+///
+/// Same source and expected string as `tests/codegen.rs`'s
+/// `e2e_container_bodies_whole_value_move_single_fire` — the pair is the
+/// parity contract.
+#[test]
+fn test_container_bodies_whole_value_move_single_fire() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }\n\
+             enum Slot { Empty, Held(Res) }\n\
+             fn make() -> Slot {\n\
+                 let m = Slot.Held(Res { id: 3 });\n\
+                 return m;\n\
+             }\n\
+             fn consume(s: Slot) {\n\
+                 println(70);\n\
+             }\n\
+             fn main() {\n\
+                 let a = Slot.Held(Res { id: 1 });\n\
+                 let a2 = a;\n\
+                 println(1);\n\
+                 let t = (Res { id: 2 }, 10);\n\
+                 let t2 = t;\n\
+                 println(2);\n\
+                 let c = make();\n\
+                 println(3);\n\
+                 let v: Vec[Res] = [Res { id: 4 }];\n\
+                 let v2 = v;\n\
+                 println(4);\n\
+                 let mut f = Slot.Held(Res { id: 5 });\n\
+                 let g = Slot.Held(Res { id: 6 });\n\
+                 f = g;\n\
+                 println(5);\n\
+                 let b = Slot.Held(Res { id: 7 });\n\
+                 consume(b);\n\
+                 println(6);\n\
+             }\n"),
+        "91\n1\n92\n2\n93\n3\n94\n4\n96\n5\n70\n97\n6\n"
+    );
+}
+
 /// B-2026-07-30-12 — a by-value owned-struct arg that the callee RETURNS runs
 /// its `Drop` body exactly once.
 ///

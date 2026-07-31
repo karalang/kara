@@ -5563,6 +5563,67 @@ fn main() {
         );
     }
 
+    /// B-2026-07-31 (container-bodies move disarm) — a WHOLE-VALUE move of a
+    /// binding carrying a container-bodies walk fires the payload body exactly
+    /// ONCE, at the destination. Before the disarm, `let a2 = a;` on an enum
+    /// with a Drop-bearing payload printed the body twice under the
+    /// interpreter and — worse — the second codegen fire read the cap-zeroed
+    /// moved-from slot, printing `90` (`self.id` == 0): a silently WRONG
+    /// value, invisible to every sanitizer. Shapes: rebind (enum/tuple/Vec),
+    /// return-move, reassign, by-value call arg. The tuple rebind
+    /// additionally pins the `tuple_var_elem_tes` propagation — without it
+    /// the destination cannot re-register and codegen goes silent where the
+    /// interpreter fires.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_container_bodies_whole_value_move_single_fire`, same source and
+    /// expected string — the pair is the parity contract.
+    #[test]
+    fn e2e_container_bodies_whole_value_move_single_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }\n\
+             enum Slot { Empty, Held(Res) }\n\
+             fn make() -> Slot {\n\
+             \x20   let m = Slot.Held(Res { id: 3 });\n\
+             \x20   return m;\n\
+             }\n\
+             fn consume(s: Slot) {\n\
+             \x20   println(70);\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a = Slot.Held(Res { id: 1 });\n\
+             \x20   let a2 = a;\n\
+             \x20   println(1);\n\
+             \x20   let t = (Res { id: 2 }, 10);\n\
+             \x20   let t2 = t;\n\
+             \x20   println(2);\n\
+             \x20   let c = make();\n\
+             \x20   println(3);\n\
+             \x20   let v: Vec[Res] = [Res { id: 4 }];\n\
+             \x20   let v2 = v;\n\
+             \x20   println(4);\n\
+             \x20   let mut f = Slot.Held(Res { id: 5 });\n\
+             \x20   let g = Slot.Held(Res { id: 6 });\n\
+             \x20   f = g;\n\
+             \x20   println(5);\n\
+             \x20   let b = Slot.Held(Res { id: 7 });\n\
+             \x20   consume(b);\n\
+             \x20   println(6);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            // One fire per moved value, at its destination's live-range end.
+            // No `90` anywhere (no body over zeroed data), and no `95` — the
+            // reassign target's OVERWRITTEN original is a shared residual
+            // silence on both backends (a leak, not a divergence).
+            "91\n1\n92\n2\n93\n3\n94\n4\n96\n5\n70\n97\n6\n"
+        );
+    }
+
     /// B-2026-07-30-11 (Vec leg) — a `Vec[T]`'s ELEMENTS run their user
     /// `impl Drop` bodies when the Vec dies.
     ///

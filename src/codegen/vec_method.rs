@@ -2449,6 +2449,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // source's `cap` so its cleanup's `cap > 0` guard skips
                 // — the container becomes the unique owner.
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Container-bodies twin of the cap-zero above: a bare-
+                // identifier arg moves its container value in, so retract
+                // its `__karac_dropelems_*` action or the body fires over
+                // the zeroed moved-from slot.
+                self.disarm_container_bodies_for_arg(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -2677,6 +2682,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
                 let elem_val = self.maybe_defensive_copy_param_arg(&args[1].value, elem_val);
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                // Container-bodies twin of the cap-zero above: a bare-
+                // identifier arg moves its container value in, so retract
+                // its `__karac_dropelems_*` action or the body fires over
+                // the zeroed moved-from slot.
+                self.disarm_container_bodies_for_arg(&args[1].value);
                 if let ExprKind::Identifier(n) = &args[1].value.kind {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
@@ -2830,6 +2840,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_fstr_acc_if_moved_out(&args[0].value);
                 let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Container-bodies twin of the cap-zero above: a bare-
+                // identifier arg moves its container value in, so retract
+                // its `__karac_dropelems_*` action or the body fires over
+                // the zeroed moved-from slot.
+                self.disarm_container_bodies_for_arg(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -3026,6 +3041,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // scope-exit cleanup skips — the deque owns the buffer now
                 // (mirrors the "push" arm; push_front was missing it).
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Container-bodies twin of the cap-zero above: a bare-
+                // identifier arg moves its container value in, so retract
+                // its `__karac_dropelems_*` action or the body fires over
+                // the zeroed moved-from slot.
+                self.disarm_container_bodies_for_arg(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's
@@ -3176,6 +3196,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_fstr_acc_if_moved_out(&args[0].value);
                 let elem_val = self.maybe_defensive_copy_param_arg(&args[0].value, elem_val);
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                // Container-bodies twin of the cap-zero above: a bare-
+                // identifier arg moves its container value in, so retract
+                // its `__karac_dropelems_*` action or the body fires over
+                // the zeroed moved-from slot.
+                self.disarm_container_bodies_for_arg(&args[0].value);
                 // Map/Set source moved into the Vec: the Vec now owns the
                 // handle and frees it via the `Vec[Map]` element drop
                 // (`track_vec_of_maps_var`), so drop the source binding's

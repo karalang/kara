@@ -142,6 +142,15 @@ impl<'a> super::Interpreter<'a> {
             // ControlFlow::Return signal propagates back to this
             // block), the source's user-body doesn't run.
             self.suppress_return_stmt_user_drop(stmt, &mut cleanup);
+            // Container twin of the line above: `return a;` moves a's
+            // container value to the caller — record it so the payload/
+            // element-body walks skip when the return's cleanup drains
+            // (the caller's binding runs them on the same logical value).
+            if let StmtKind::Expr(e) = &stmt.kind {
+                if let ExprKind::Return(Some(inner)) = &e.kind {
+                    self.record_container_bodies_move_sources(inner);
+                }
+            }
             let stmt_result = self.eval_stmt_cf(stmt);
             let cf_opt = match stmt_result {
                 Ok(_) => self.pending_cf.take(),
@@ -221,6 +230,9 @@ impl<'a> super::Interpreter<'a> {
             // Mirrors the codegen `suppress_cleanup_for_tail_return`
             // wiring.
             self.suppress_tail_expr_user_drop(expr, &mut cleanup);
+            // Container twin: a bare-identifier tail moves the container out
+            // as the block's result.
+            self.record_container_bodies_move_sources(expr);
             let v = self.eval_expr_inner(expr);
             if let Some(cf) = self.pending_cf.take() {
                 let path = ExitPath::classify(&cf);
@@ -624,6 +636,13 @@ impl<'a> super::Interpreter<'a> {
             Some(Value::Tuple(items)) => items,
             _ => return false,
         };
+        // Whole-value move-out (`let v2 = v;`, `return v;`): the destination
+        // owns the elements; walking here too fires each body twice (and
+        // codegen's walk would read the moved-from slot). Checked after the
+        // shape resolution so the caller still stops for an array/tuple.
+        if self.moved_out_container_bodies_bindings.contains(name) {
+            return true;
+        }
         for e in elems {
             if let Value::Struct { name: tn, .. } = &e {
                 if self.program.drop_method_keys.contains_key(tn) {
@@ -749,7 +768,11 @@ impl<'a> super::Interpreter<'a> {
     /// cannot be path-sensitive. Firing here on a non-consuming sibling arm
     /// would print a body `karac build` does not.
     fn run_enum_payload_user_drops(&mut self, name: &str, value: &Value) {
-        if self.moved_out_enum_payload_bindings.contains(name) {
+        if self.moved_out_enum_payload_bindings.contains(name)
+            // Whole-value move-out (`let b = a;`, `x = a;`, `return a;`) —
+            // the destination's walk owns the payload bodies now.
+            || self.moved_out_container_bodies_bindings.contains(name)
+        {
             return;
         }
         let Value::EnumVariant {
@@ -1178,6 +1201,69 @@ impl<'a> super::Interpreter<'a> {
         });
     }
 
+    /// Whole-value container move-out recorder — the interpreter twin of
+    /// codegen's `disarm_container_bodies_move_sources`. For each bare
+    /// identifier the RHS moves wholesale (direct rebind, struct-literal
+    /// field, tuple-literal element), record the source so its
+    /// element/payload-body walks skip at drop time. A struct whose FIELDS
+    /// carry the drop routes to the existing `moved_out_drop_field_bindings`
+    /// set (the field walk's own disarm channel); a struct with its own
+    /// `impl Drop` is left to `suppress_let_rebind_user_drop`, which already
+    /// retracts its whole action.
+    fn record_container_bodies_move_sources(&mut self, value: &Expr) {
+        match &value.kind {
+            ExprKind::Identifier(n) => self.record_container_move_source_name(n),
+            ExprKind::SelfValue => self.record_container_move_source_name("self"),
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    if let ExprKind::Identifier(n) = &f.value.kind {
+                        self.record_container_move_source_name(n);
+                    }
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                for e in elems {
+                    if let ExprKind::Identifier(n) = &e.kind {
+                        self.record_container_move_source_name(n);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Single-name worker for [`Self::record_container_bodies_move_sources`],
+    /// also called at consuming method-arg sites (`v.push(e)`). Value-shape
+    /// gated so direct struct bindings keep their existing (balanced) move
+    /// machinery.
+    pub(crate) fn record_container_move_source_name(&mut self, name: &str) {
+        match self.env.get(name) {
+            Some(Value::EnumVariant { .. } | Value::Array(_) | Value::Tuple(_)) => {
+                self.moved_out_container_bodies_bindings
+                    .insert(name.to_string());
+            }
+            Some(v @ Value::Struct { .. }) => {
+                // Field-carried drop only: the own-`Drop` struct is handled by
+                // `suppress_let_rebind_user_drop`'s action retraction.
+                let own_drop = matches!(&v, Value::Struct { name: tn, .. }
+                    if self.program.drop_method_keys.contains_key(tn));
+                if !own_drop && self.value_runs_user_drop(&v) {
+                    self.moved_out_drop_field_bindings.insert(name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Re-arm a name that just received a FRESH value (a new `let` binding or
+    /// an assignment target): stale move-out records from a previous binding
+    /// of the same name must not silence the new value's walks.
+    fn rearm_container_bodies_for_name(&mut self, name: &str) {
+        self.moved_out_container_bodies_bindings.remove(name);
+        self.moved_out_drop_field_bindings.remove(name);
+        self.moved_out_enum_payload_bindings.remove(name);
+    }
+
     #[allow(clippy::result_large_err)]
     fn eval_stmt_cf(&mut self, stmt: &Stmt) -> EvalResult {
         match &stmt.kind {
@@ -1252,7 +1338,17 @@ impl<'a> super::Interpreter<'a> {
                 // Value)>)` and `Set(Vec<Value>)` are by-value, so their
                 // clones froze. Capture now happens once at end of `main`
                 // (`call_function`), which is uniform across all three.
+                //
+                // Whole-value container moves out of the RHS (`let b = a;`,
+                // `Box2 { s: d }`, `(h, 1)`): silence the sources' walks
+                // before binding, then re-arm the freshly-bound names so a
+                // stale record from a prior same-named binding can't silence
+                // the new one.
+                self.record_container_bodies_move_sources(value);
                 self.bind_pattern(pattern, val);
+                for bound in pattern.binding_names() {
+                    self.rearm_container_bodies_for_name(&bound);
+                }
             }
             StmtKind::LetUninit { name, .. } => {
                 // Declare the binding with a sentinel `Unit` value. Static
@@ -1303,6 +1399,10 @@ impl<'a> super::Interpreter<'a> {
                 let _ = body;
             }
             StmtKind::Assign { target, value } => {
+                // `f = g;` — g's container value moves into f. Record g so
+                // its walks skip (codegen's Assign-arm disarm twin), and
+                // re-arm f below once the store lands.
+                self.record_container_bodies_move_sources(value);
                 let val = self.eval_expr_inner(value);
                 // A faulted RHS (index OOB, unwrap of None, …) or a control-flow
                 // signal escaping a closure body (`break` out of an enclosing
@@ -1320,6 +1420,12 @@ impl<'a> super::Interpreter<'a> {
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",
                         stmt.span.line, stmt.span.column
                     );
+                }
+                // The target holds a fresh value now — a stale move-out
+                // record from its previous value must not silence it.
+                if let ExprKind::Identifier(t) = &target.kind {
+                    let t = t.clone();
+                    self.rearm_container_bodies_for_name(&t);
                 }
             }
             StmtKind::CompoundAssign { target, op, value } => {
