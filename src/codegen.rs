@@ -49,6 +49,7 @@ mod coro;
 mod dataframe;
 mod debug_info;
 mod declarations;
+mod disjoint_par;
 mod driver;
 pub mod drop_obs;
 mod entry_chains;
@@ -8274,6 +8275,31 @@ impl<'ctx> Codegen<'ctx> {
             .loop_reductions
             .iter()
             .find(|r| r.stmt_index == stmt_index && r.loop_line == loop_line)
+    }
+
+    /// Sibling of [`Self::loop_reduction_for_stmt`] for the indexed-write
+    /// fan-out shape — but keyed on the loop expression's **byte span**, not
+    /// `(stmt_index, loop_line)`.
+    ///
+    /// The stricter key is load-bearing, not tidiness. A nested loop written on
+    /// its parent's source line shares both the parent's statement index (0,
+    /// within the parent's own body block) and its line; codegen compiles the
+    /// parent's body inside the fan-out worker, meets the inner loop there, and
+    /// a line-keyed lookup hands it the parent's tag. The result is a second
+    /// fan-out over a loop nothing proved disjoint — see
+    /// `DisjointWriteLoop::loop_span` for the concrete same-slot race that
+    /// produces. `stmt_index` is kept in the match as a cheap first filter.
+    pub(crate) fn disjoint_write_loop_for_stmt(
+        &self,
+        stmt_index: usize,
+        loop_span: &crate::token::Span,
+    ) -> Option<&crate::concurrency::DisjointWriteLoop> {
+        let decision = self.concurrency_decisions.get(&self.current_fn_name)?;
+        decision.disjoint_write_loops.iter().find(|d| {
+            d.stmt_index == stmt_index
+                && d.loop_span.offset == loop_span.offset
+                && d.loop_span.length == loop_span.length
+        })
     }
 
     // ── Program / function compilation ───────────────────────────

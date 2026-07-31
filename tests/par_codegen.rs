@@ -105,6 +105,28 @@ mod par_codegen_tests {
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
 
+    /// Full CLI-shaped pipeline (resolve → typecheck → lower → effects →
+    /// ownership → **concurrency**) feeding the analysis into codegen, so the
+    /// auto-par lowerings that key off `ConcurrencyAnalysis` actually fire.
+    /// `ir_for_with_pipeline` passes `None` for the analysis and therefore
+    /// cannot see them.
+    fn ir_for_analyzed(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+        compile_to_ir(&parsed.program, Some(&ownership), Some(&analysis)).expect("codegen failed")
+    }
+
     #[test]
     fn collect_all_vec_lowers_to_par_run_gather() {
         // Phase 6 slice 1b — `collect_all_vec(fs)` lowers to a parallel
@@ -288,6 +310,356 @@ mod par_codegen_tests {
         let _ = std::fs::remove_file(&exe_path);
 
         Some(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    // ── Auto-par indexed-write fan-out (disjoint-writes lowering) ─────
+    //
+    // Sub-slice 3 of "Auto-parallel loops over provably-disjoint indexed
+    // writes" (phase-6-runtime.md). The proof lives in `src/index_disjoint.rs`
+    // and is tested in `tests/index_disjoint.rs`; what these pin is the
+    // LOWERING — that a proven loop reaches `karac_par_reduce` through a
+    // `__karac_disjoint_worker_*`, that a declined one does not, and that the
+    // result is what the sequential program would have produced.
+    //
+    // The E2E oracle is a POSITION-FOLDED DIGEST over the whole output buffer,
+    // not a spot-check: `d = d*131 + out[i]` for every i. A single-element
+    // check passes under reordering and under a worker writing the right value
+    // to the wrong slot, which is exactly the failure this lowering could have.
+    // The expected value is recomputed in Rust from the same kernel, so the
+    // test is an independent oracle rather than a self-comparison.
+
+    /// The `.kara` kernel used by the fan-out E2E tests, and its Rust twin
+    /// below. Deliberately compute-bound (a real call per element) so it clears
+    /// the `body_is_memory_bound` gate that correctly rejects a bare
+    /// `out[i] = src[i] + 1`.
+    const FANOUT_KERNEL_SRC: &str = concat!(
+        "fn heavy(v: i64) -> i64 {\n",
+        "    let mut acc: i64 = v % 1000003;\n",
+        "    let mut t: i64 = 0;\n",
+        "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+        "    acc\n",
+        "}\n",
+        "fn kernel(h: i64, w: i64, out: mut Slice[i64]) {\n",
+        "    for y in 0..h {\n",
+        "        for x in 0..w { out[y * w + x] = heavy(y * 31 + x); }\n",
+        "    }\n",
+        "}\n",
+        "fn main() {\n",
+        "    let h: i64 = 64;\n",
+        "    let w: i64 = 40;\n",
+        "    let mut buf: Vec[i64] = Vec.filled(h * w, 0);\n",
+        "    kernel(h, w, mut buf);\n",
+        "    let mut d: i64 = 0;\n",
+        "    let mut i: i64 = 0;\n",
+        "    while i < h * w { d = (d * 131 + buf[i]) % 1000000007; i = i + 1; }\n",
+        "    println(f\"{d}\");\n",
+        "}\n",
+    );
+
+    /// Rust twin of `FANOUT_KERNEL_SRC` — the independent oracle.
+    fn fanout_kernel_expected_digest() -> i64 {
+        fn heavy(v: i64) -> i64 {
+            let mut acc = v % 1000003;
+            for _ in 0..200 {
+                acc = (acc * 1103515245 + 12345) % 2147483647;
+            }
+            acc
+        }
+        let (h, w) = (64i64, 40i64);
+        let mut d = 0i64;
+        for y in 0..h {
+            for x in 0..w {
+                d = (d * 131 + heavy(y * 31 + x)) % 1000000007;
+            }
+        }
+        d
+    }
+
+    #[test]
+    fn disjoint_indexed_write_loop_emits_a_fanout_worker() {
+        let ir = ir_for_analyzed(FANOUT_KERNEL_SRC);
+        assert!(
+            ir.contains("__karac_disjoint_worker_"),
+            "a proven, cost-clearing indexed-write loop must lower to a fan-out worker:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_par_reduce"),
+            "the fan-out must dispatch through the existing reduce substrate:\n{ir}"
+        );
+        // The vestigial slot helpers exist because the descriptor ABI requires
+        // them; the worker never touches the slot.
+        assert!(ir.contains("__karac_disjoint_init"));
+        assert!(ir.contains("__karac_disjoint_combine"));
+    }
+
+    #[test]
+    fn disjoint_fanout_output_matches_the_sequential_oracle() {
+        let Some(out) = run_program(FANOUT_KERNEL_SRC) else {
+            return;
+        };
+        assert_eq!(
+            out.trim(),
+            fanout_kernel_expected_digest().to_string(),
+            "fan-out changed the program's output"
+        );
+    }
+
+    #[test]
+    fn memory_bound_indexed_write_loop_declines_to_fan_out() {
+        // Proven disjoint, but a bare element-wise copy is bandwidth-bound:
+        // splitting it pays dispatch cost without reducing wall time. The
+        // query reports this as `cost_gate: declined_memory_bound`; codegen
+        // must agree, because they call the same `fanout_verdict`.
+        let src = concat!(
+            "fn kernel(n: i64, src: ref Slice[i64], out: mut Slice[i64]) {\n",
+            "    for i in 0..n { out[i] = src[i] + 1; }\n",
+            "}\n",
+            "fn main() {\n",
+            "    let mut a: Vec[i64] = Vec.filled(8, 1);\n",
+            "    let mut b: Vec[i64] = Vec.filled(8, 0);\n",
+            "    kernel(8, a, mut b);\n",
+            "    println(f\"{b[0]}\");\n",
+            "}\n",
+        );
+        let ir = ir_for_analyzed(src);
+        assert!(
+            !ir.contains("__karac_disjoint_worker_"),
+            "a memory-bound loop must not fan out:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn printing_loop_body_declines_to_fan_out() {
+        // `karac_par_reduce` has no per-branch output capture (that is
+        // `karac_par_run`'s machinery), so a printing body would interleave.
+        // "Auto-par never changes what your program prints" is unconditional.
+        let src = concat!(
+            "fn heavy(v: i64) -> i64 {\n",
+            "    let mut acc: i64 = v % 1000003;\n",
+            "    let mut t: i64 = 0;\n",
+            "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+            "    acc\n",
+            "}\n",
+            "fn note(v: i64) { println(f\"{v}\"); }\n",
+            "fn kernel(h: i64, w: i64, out: mut Slice[i64]) {\n",
+            "    for y in 0..h {\n",
+            "        let mut x: i64 = 0;\n",
+            "        while x < w { out[y * w + x] = heavy(y * 3 + x); x = x + 1; }\n",
+            "        note(y);\n",
+            "    }\n",
+            "}\n",
+            "fn main() {\n",
+            "    let mut b: Vec[i64] = Vec.filled(64, 0);\n",
+            "    kernel(8, 8, mut b);\n",
+            "}\n",
+        );
+        let ir = ir_for_analyzed(src);
+        assert!(
+            !ir.contains("__karac_disjoint_worker_"),
+            "a loop whose body prints (even transitively) must not fan out:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn nested_loop_sharing_its_parents_line_does_not_get_the_parents_tag() {
+        // `for y in .. { for x in .. { out[y*w] = f(x); } }` written on ONE
+        // line: the inner loop has the same statement index (0, within the
+        // outer loop's own body block) AND the same source line as the outer.
+        // Under `(stmt_index, line)` keying the inner loop matched the outer's
+        // tag and got its own fan-out — over iterations that all write the SAME
+        // slot. The outer proof says nothing about that; it only says distinct
+        // `y` values are disjoint. Exactly one worker is the assertion.
+        let src = concat!(
+            "fn heavy(v: i64) -> i64 {\n",
+            "    let mut acc: i64 = v % 1000003;\n",
+            "    let mut t: i64 = 0;\n",
+            "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+            "    acc\n",
+            "}\n",
+            "fn kernel(h: i64, w: i64, out: mut Slice[i64]) {\n",
+            "    for y in 0..h { for x in 0..w { out[y * w] = heavy(x); } }\n",
+            "}\n",
+            "fn main() {\n",
+            "    let mut b: Vec[i64] = Vec.filled(64, 0);\n",
+            "    kernel(8, 8, mut b);\n",
+            "    println(f\"{b[0]}\");\n",
+            "}\n",
+        );
+        let ir = ir_for_analyzed(src);
+        assert!(
+            ir.contains("__karac_disjoint_worker_0"),
+            "the outer loop is proven and should still fan out:\n{ir}"
+        );
+        // Workers are numbered from the shared par counter, so a second one
+        // would be `_1`. Its absence is the assertion: the inner loop got no
+        // tag of its own and must not have inherited the outer's.
+        assert!(
+            !ir.contains("__karac_disjoint_worker_1"),
+            "the inner loop must NOT receive the outer loop's tag:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn per_iteration_heap_in_a_fanout_worker_runs_and_matches_the_oracle() {
+        // The worker pushes a per-iteration scope frame so a body-local `Vec`
+        // drops each iteration instead of accumulating for the whole chunk.
+        // This exercises that frame end-to-end, and the digest proves the
+        // temporaries were read back correctly before being dropped.
+        let src = concat!(
+            "fn heavy(v: i64) -> i64 {\n",
+            "    let mut acc: i64 = v % 1000003;\n",
+            "    let mut t: i64 = 0;\n",
+            "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+            "    acc\n",
+            "}\n",
+            "fn kernel(h: i64, w: i64, out: mut Slice[i64]) {\n",
+            "    for y in 0..h {\n",
+            "        let mut tmp: Vec[i64] = Vec.new();\n",
+            "        let mut x: i64 = 0;\n",
+            "        while x < w { tmp.push(heavy(y * 11 + x)); x = x + 1; }\n",
+            "        let mut j: i64 = 0;\n",
+            "        while j < w { out[y * w + j] = tmp[j]; j = j + 1; }\n",
+            "    }\n",
+            "}\n",
+            "fn main() {\n",
+            "    let h: i64 = 64;\n",
+            "    let w: i64 = 20;\n",
+            "    let mut buf: Vec[i64] = Vec.filled(h * w, 0);\n",
+            "    kernel(h, w, mut buf);\n",
+            "    let mut d: i64 = 0;\n",
+            "    let mut i: i64 = 0;\n",
+            "    while i < h * w { d = (d * 131 + buf[i]) % 1000000007; i = i + 1; }\n",
+            "    println(f\"{d}\");\n",
+            "}\n",
+        );
+        assert!(
+            ir_for_analyzed(src).contains("__karac_disjoint_worker_"),
+            "this shape should fan out"
+        );
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        fn heavy(v: i64) -> i64 {
+            let mut acc = v % 1000003;
+            for _ in 0..200 {
+                acc = (acc * 1103515245 + 12345) % 2147483647;
+            }
+            acc
+        }
+        let (h, w) = (64i64, 20i64);
+        let mut expect = 0i64;
+        for y in 0..h {
+            for x in 0..w {
+                expect = (expect * 131 + heavy(y * 11 + x)) % 1000000007;
+            }
+        }
+        assert_eq!(out.trim(), expect.to_string());
+    }
+
+    #[test]
+    fn three_deep_nest_fans_out_the_outer_loop_and_matches_the_oracle() {
+        let src = concat!(
+            "fn heavy(v: i64) -> i64 {\n",
+            "    let mut acc: i64 = v % 1000003;\n",
+            "    let mut t: i64 = 0;\n",
+            "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+            "    acc\n",
+            "}\n",
+            "fn kernel(d: i64, hh: i64, ww: i64, out: mut Slice[i64]) {\n",
+            "    for z in 0..d {\n",
+            "        for y in 0..hh {\n",
+            "            for x in 0..ww { out[(z * hh + y) * ww + x] = heavy(z * 13 + y * 5 + x); }\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+            "fn main() {\n",
+            "    let dd: i64 = 40;\n",
+            "    let hh: i64 = 8;\n",
+            "    let ww: i64 = 8;\n",
+            "    let mut buf: Vec[i64] = Vec.filled(dd * hh * ww, 0);\n",
+            "    kernel(dd, hh, ww, mut buf);\n",
+            "    let mut acc: i64 = 0;\n",
+            "    let mut i: i64 = 0;\n",
+            "    while i < dd * hh * ww { acc = (acc * 131 + buf[i]) % 1000000007; i = i + 1; }\n",
+            "    println(f\"{acc}\");\n",
+            "}\n",
+        );
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        fn heavy(v: i64) -> i64 {
+            let mut acc = v % 1000003;
+            for _ in 0..200 {
+                acc = (acc * 1103515245 + 12345) % 2147483647;
+            }
+            acc
+        }
+        let (dd, hh, ww) = (40i64, 8i64, 8i64);
+        let mut expect = 0i64;
+        for z in 0..dd {
+            for y in 0..hh {
+                for x in 0..ww {
+                    expect = (expect * 131 + heavy(z * 13 + y * 5 + x)) % 1000000007;
+                }
+            }
+        }
+        assert_eq!(out.trim(), expect.to_string());
+    }
+
+    // ── Inverted-range trip count (B-2026-07-31-6) ────────────────────
+
+    #[test]
+    fn inverted_range_reduction_runs_zero_iterations() {
+        // `for y in 5..3` runs ZERO iterations sequentially. The descriptor's
+        // `iter_total` is a `u64`, so an unclamped `end - lo` of -2 became
+        // ~2^64 and the fan-out ran essentially forever — measured as a 20s
+        // timeout against a sequential build that returned immediately.
+        let src = concat!(
+            "fn heavy(v: i64) -> i64 {\n",
+            "    let mut acc: i64 = v % 1000003;\n",
+            "    let mut t: i64 = 0;\n",
+            "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+            "    acc\n",
+            "}\n",
+            "fn kernel(lo: i64, hi: i64) -> i64 {\n",
+            "    let mut sum: i64 = 0;\n",
+            "    for y in lo..hi { sum = sum + heavy(y); }\n",
+            "    sum\n",
+            "}\n",
+            "fn main() { println(f\"{kernel(5, 3)}\"); }\n",
+        );
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(out.trim(), "0", "an inverted range must reduce to identity");
+    }
+
+    #[test]
+    fn inverted_range_disjoint_fanout_writes_nothing() {
+        // Same defect on the indexed-write shape, where it is a WRITE out of
+        // range rather than a hang: the buffer must come back untouched.
+        let src = concat!(
+            "fn heavy(v: i64) -> i64 {\n",
+            "    let mut acc: i64 = v % 1000003;\n",
+            "    let mut t: i64 = 0;\n",
+            "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+            "    acc\n",
+            "}\n",
+            "fn kernel(lo: i64, hi: i64, w: i64, out: mut Slice[i64]) {\n",
+            "    for y in lo..hi {\n",
+            "        for x in 0..w { out[y * w + x] = heavy(y * 3 + x); }\n",
+            "    }\n",
+            "}\n",
+            "fn main() {\n",
+            "    let mut buf: Vec[i64] = Vec.filled(64, 7);\n",
+            "    kernel(5, 3, 8, mut buf);\n",
+            "    println(f\"{buf[0]}\");\n",
+            "}\n",
+        );
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(out.trim(), "7", "an inverted range must write nothing");
     }
 
     // ── Auto-par slot rebind: unannotated struct-of-Vecs binding ─────

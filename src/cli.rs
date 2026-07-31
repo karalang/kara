@@ -10649,7 +10649,14 @@ fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
                     ),
                     Some(&pipeline.parsed.program),
                 ),
-                crate::effect_graph::disjoint_write_loops_json(fc),
+                crate::effect_graph::disjoint_write_loops_json(
+                    fc,
+                    crate::effect_graph::function_by_decision_key(
+                        &pipeline.parsed.program,
+                        function,
+                    ),
+                    Some(&pipeline.parsed.program),
+                ),
                 crate::effect_graph::serialization_points_json(fc),
                 crate::effect_graph::reorder_opportunities_json(fc),
             );

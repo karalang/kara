@@ -323,16 +323,33 @@ pub(crate) fn loop_reductions_json(
 /// - `targets` — per written collection, its `stride` and `base`, so a reader
 ///   can check the interval the compiler believes in against the one they meant.
 ///
-/// ## There is deliberately no `fanned_out` field
+/// - `fanned_out` — does the emitted binary dispatch this loop across the
+///   worker pool? A proof is necessary but not sufficient: the same cost model
+///   the reduction path uses still decides whether dispatch pays. Recognition
+///   and emission are different questions, and reporting the first as the
+///   second is the defect B-2026-07-29-29 was filed for.
+/// - `cost_gate` — `"fanout"` when it dispatches, the declining gate's name
+///   when the proof held but the cost model said no
+///   (`declined_memory_bound`, `declined_below_cost_threshold`,
+///   `declined_variable_k_param_bound`), and `"n/a"` when the proof itself
+///   declined — there is no dispatch to gate.
 ///
-/// The proof is a *memory-footprint* fact. Fan-out lowering for this shape,
-/// its cost gate, and the differential harness that gates enabling it are
-/// separate sub-slices of the same entry
-/// (`implementation_checklist/phase-6-runtime.md`). Emitting `fanned_out` now
-/// would assert an emission decision no code makes yet — precisely the
-/// over-promise B-2026-07-29-29 was filed for on the reduction side. It lands
-/// with the lowering, next to `loop_reductions`' own `fanned_out`.
-pub(crate) fn disjoint_write_loops_json(fc: &FunctionConcurrency) -> String {
+/// The verdict comes from [`crate::par_cost::fanout_verdict`], the SAME
+/// function `codegen/disjoint_par.rs` calls, so the query cannot drift from the
+/// binary.
+///
+/// ## `fanned_out` is a COMPILE-TIME fact
+///
+/// It means codegen emitted a fan-out dispatch. Whether a given execution
+/// actually forks additionally depends on the runtime's own cost gate and the
+/// per-thread fork-depth cap (`KARAC_PAR_MAX_FORK_DEPTH`) — neither a
+/// compile-time property. Same reading as `loop_reductions`' field of the same
+/// name.
+pub(crate) fn disjoint_write_loops_json(
+    fc: &FunctionConcurrency,
+    func: Option<&Function>,
+    program: Option<&Program>,
+) -> String {
     let entries: Vec<String> = fc
         .disjoint_write_loops
         .iter()
@@ -350,19 +367,92 @@ pub(crate) fn disjoint_write_loops_json(fc: &FunctionConcurrency) -> String {
                     )
                 })
                 .collect();
+            // A declined proof never reaches the cost model, so it reports
+            // `n/a` rather than a gate name it did not run.
+            let (fanned_out, cost_gate) = if !d.proven() {
+                (false, "n/a")
+            } else {
+                match func.and_then(|f| disjoint_loop_verdict(f, program, d)) {
+                    Some(v) => (v.is_fanout(), v.tag()),
+                    None => (false, "unknown"),
+                }
+            };
             format!(
-                "{{\"statement\":{},\"loop_line\":{},\"loop_var\":{},\"disjoint_writes\":{},\"gate\":{},\"targets\":[{}],\"reason\":{}}}",
+                "{{\"statement\":{},\"loop_line\":{},\"loop_var\":{},\"disjoint_writes\":{},\"gate\":{},\"fanned_out\":{},\"cost_gate\":{},\"targets\":[{}],\"reason\":{}}}",
                 d.stmt_index,
                 d.loop_line,
                 json_string(&d.loop_var),
                 d.proven(),
                 json_string(d.tag()),
+                fanned_out,
+                json_string(cost_gate),
                 targets.join(","),
                 json_string(&d.reason),
             )
         })
         .collect();
     format!("[{}]", entries.join(","))
+}
+
+/// Locate the loop a `DisjointWriteLoop` came from and run the fan-out cost
+/// gates over it — the same gates, through the same entry point, that
+/// `codegen/disjoint_par.rs` applies.
+///
+/// Matched on the loop expression's **byte span**, not its line: a nested loop
+/// written on its parent's line shares the parent's line and statement index,
+/// and handing it the parent's tag is the miscompile
+/// `DisjointWriteLoop::loop_span` documents. The query has no reason to be
+/// looser than codegen about which loop a tag names.
+fn disjoint_loop_verdict(
+    func: &Function,
+    program: Option<&Program>,
+    d: &crate::concurrency::DisjointWriteLoop,
+) -> Option<crate::par_cost::FanoutVerdict> {
+    let (parent, idx, loop_expr) = find_loop_by_span(&func.body, &d.loop_span)?;
+    let shape = crate::par_cost::extract_loop_shape(parent, idx, loop_expr)?;
+    let params: Vec<&str> = func.params.iter().filter_map(|p| p.name()).collect();
+    let refs_param = expr_mentions_any_name(&shape.end_expr, &params)
+        || shape
+            .lo_expr
+            .as_ref()
+            .is_some_and(|e| expr_mentions_any_name(e, &params));
+    Some(crate::par_cost::fanout_verdict(
+        &shape.body,
+        &shape.end_expr,
+        shape.lo_expr.as_ref(),
+        program,
+        refs_param,
+    ))
+}
+
+/// Span-exact sibling of [`find_loop_by_line`].
+fn find_loop_by_span<'a>(block: &'a Block, span: &Span) -> Option<(&'a Block, usize, &'a Expr)> {
+    for (i, stmt) in block.stmts.iter().enumerate() {
+        let StmtKind::Expr(e) = &stmt.kind else {
+            continue;
+        };
+        if !matches!(
+            e.kind,
+            ExprKind::For { .. } | ExprKind::While { .. } | ExprKind::Loop { .. }
+        ) {
+            continue;
+        }
+        if e.span.offset == span.offset && e.span.length == span.length {
+            return Some((block, i, e));
+        }
+        let inner = match &e.kind {
+            ExprKind::For { body, .. }
+            | ExprKind::While { body, .. }
+            | ExprKind::Loop { body, .. } => Some(body),
+            _ => None,
+        };
+        if let Some(b) = inner {
+            if let Some(hit) = find_loop_by_span(b, span) {
+                return Some(hit);
+            }
+        }
+    }
+    None
 }
 
 /// Find the AST of the function a concurrency decision is keyed under.
@@ -575,7 +665,11 @@ pub(crate) fn build_concurrency_graph_json(
                         program.and_then(|p| function_by_decision_key(p, key)),
                         program,
                     ),
-                    disjoint_write_loops_json(fc),
+                    disjoint_write_loops_json(
+                        fc,
+                        program.and_then(|p| function_by_decision_key(p, key)),
+                        program,
+                    ),
                     serialization_points_json(fc),
                     reorder_opportunities_json(fc),
                 )

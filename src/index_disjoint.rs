@@ -67,8 +67,10 @@
 //!   caller. (This module still declines on any *direct* write it cannot place.)
 //! - **Observable effects.** Console output, I/O ordering, and non-atomic
 //!   `shared` refcounts are orthogonal to footprint disjointness. The caller
-//!   applies `loop_body_types_cross_task_safe`; the rest is the lowering slice's
-//!   cost/effect gate, exactly as it is for loop reductions today.
+//!   applies `loop_body_types_cross_task_safe`, plus a transitive console-output
+//!   scan and a resource-effect check — the fan-out substrate does not reorder
+//!   output back into source order the way `par {}` does, so a printing body
+//!   must decline rather than fan out.
 //!
 //! ## Overflow is a soundness question, not a nuisance
 //!
@@ -476,6 +478,21 @@ pub enum DisjointDecline {
     /// Set by the caller: the body passes a loop-invariant buffer to a callee
     /// by `mut ref` / `mut Slice` (B-2026-07-23-20).
     SharesOuterMutBorrow,
+    /// Set by the caller: the body writes to the console, directly or through a
+    /// callee. The fan-out substrate (`karac_par_reduce`) does not install the
+    /// per-branch output capture + source-order replay that `karac_par_run`
+    /// does, so parallel workers would interleave prints — and "auto-par never
+    /// changes what your program prints" is an unconditional invariant.
+    BodyEmitsOutput,
+    /// Set by the caller: the body performs a resource effect. Two iterations
+    /// running concurrently would reorder them against each other, which the
+    /// statement-level grouper serializes for exactly this reason.
+    BodyHasEffects,
+    /// Set by the caller: a write target is not a positionally-indexed
+    /// sequence. `m[k] = v` on a `Map` is spelled like an element store but is
+    /// a hash insert — distinct keys share buckets and an insert can resize the
+    /// table, so "iteration `i` owns slot `i`" is not a fact about it at all.
+    UnsupportedTargetType,
 }
 
 impl DisjointDecline {
@@ -501,6 +518,9 @@ impl DisjointDecline {
             DisjointDecline::SymbolicOverflow => "symbolic_overflow",
             DisjointDecline::NotCrossTaskSafe => "not_cross_task_safe",
             DisjointDecline::SharesOuterMutBorrow => "shares_outer_mut_borrow",
+            DisjointDecline::BodyEmitsOutput => "body_emits_output",
+            DisjointDecline::BodyHasEffects => "body_has_effects",
+            DisjointDecline::UnsupportedTargetType => "unsupported_target_type",
         }
     }
 
@@ -564,6 +584,15 @@ impl DisjointDecline {
             DisjointDecline::SharesOuterMutBorrow => {
                 "the body passes a loop-invariant buffer to a callee by `mut ref`, which mutates it outside this walk"
             }
+            DisjointDecline::BodyEmitsOutput => {
+                "the body writes to the console, and parallel workers would interleave the writes"
+            }
+            DisjointDecline::BodyHasEffects => {
+                "the body performs a resource effect, which concurrent iterations would reorder"
+            }
+            DisjointDecline::UnsupportedTargetType => {
+                "a write target is not a positionally-indexed sequence; `Map`/`Set` element syntax is a hash insert, not a slot store"
+            }
         }
     }
 }
@@ -621,6 +650,22 @@ impl DisjointWriteProof {
 }
 
 // ── Entry point ─────────────────────────────────────────────────
+
+/// Does this loop body contain an indexed write to a collection declared
+/// OUTSIDE it? Callers use this to decide whether a loop is a candidate at all,
+/// before [`prove_disjoint_indexed_writes`] gets to reject it on loop form.
+///
+/// Order matters for the query surface: without this, every `while` and `loop`
+/// in the program — including ones that touch no collection — would be reported
+/// as a declined `unsupported_loop_form` candidate, burying the declines that
+/// name a real obstacle.
+pub fn loop_body_has_outer_indexed_write(body: &Block) -> bool {
+    let mut declared: HashSet<String> = HashSet::new();
+    collect_declared_names_block(body, &mut declared);
+    let mut targets: Vec<String> = Vec::new();
+    collect_indexed_write_targets(body, &declared, &mut targets);
+    !targets.is_empty()
+}
 
 /// Try to prove that the outer loop `loop_expr` writes a disjoint contiguous
 /// range per iteration.
@@ -1499,9 +1544,16 @@ impl Prover<'_> {
 /// One immediate child of an expression or block — an expression or a nested
 /// block. A single callback (rather than two) keeps a visitor able to hold one
 /// `&mut` accumulator across both arms.
-enum Child<'a> {
+pub(crate) enum Child<'a> {
     Expr(&'a Expr),
     Block(&'a Block),
+}
+
+/// [`for_each_child`], re-exported for `concurrency.rs`'s callee-name walk so
+/// there is one exhaustive `ExprKind` traversal in the tree rather than two
+/// that can drift apart on a new expression form.
+pub(crate) fn for_each_child_public<'a>(expr: &'a Expr, on: &mut dyn FnMut(Child<'a>)) {
+    for_each_child(expr, on)
 }
 
 /// Visit every immediate sub-expression and sub-block of `expr`.
@@ -1510,7 +1562,7 @@ enum Child<'a> {
 /// form must be classified here explicitly, because a silently-unvisited
 /// subtree would hide an indexed write from the pre-pass and turn a real
 /// overlap into a "proof".
-fn for_each_child(expr: &Expr, on: &mut dyn FnMut(Child<'_>)) {
+fn for_each_child<'a>(expr: &'a Expr, on: &mut dyn FnMut(Child<'a>)) {
     match &expr.kind {
         ExprKind::Integer(..)
         | ExprKind::Float(..)
@@ -1685,7 +1737,7 @@ fn for_each_child(expr: &Expr, on: &mut dyn FnMut(Child<'_>)) {
 
 /// Visit every immediate sub-expression and sub-block of every statement in
 /// `block`, plus its tail expression.
-fn for_each_block_child(block: &Block, on: &mut dyn FnMut(Child<'_>)) {
+fn for_each_block_child<'a>(block: &'a Block, on: &mut dyn FnMut(Child<'a>)) {
     for stmt in &block.stmts {
         match &stmt.kind {
             StmtKind::Let { value, .. } => on(Child::Expr(value)),
@@ -2095,11 +2147,43 @@ mod tests {
         assert_eq!(scaled.iv.get("i").unwrap().render(), "w");
     }
 
-    #[test]
-    fn every_decline_tag_is_distinct() {
-        // The tags are a machine surface; two variants sharing one would make
-        // a query answer ambiguous.
-        let all = [
+    /// Every [`DisjointDecline`] variant, for the tag-distinctness test.
+    ///
+    /// Written as an exhaustive `match` rather than a hand-listed array so a
+    /// new variant fails to COMPILE here instead of silently skipping the
+    /// check — the first version of this test was a bare array and fell three
+    /// variants behind within a slice.
+    const ALL_DECLINES: &[DisjointDecline] = {
+        // The match exists only to make the compiler enumerate the variants;
+        // its arms are unreachable at runtime.
+        #[allow(dead_code)]
+        fn exhaustive(d: DisjointDecline) {
+            match d {
+                DisjointDecline::UnsupportedLoopForm
+                | DisjointDecline::LoopVarMutated
+                | DisjointDecline::NoIndexedWrite
+                | DisjointDecline::ComplexWriteTarget
+                | DisjointDecline::IndirectIndex
+                | DisjointDecline::NonAffineIndex
+                | DisjointDecline::IndexNotInvariant
+                | DisjointDecline::InvariantWriteSlot
+                | DisjointDecline::UnboundedInnerLoop
+                | DisjointDecline::CoefficientSignUnknown
+                | DisjointDecline::StrideMismatch
+                | DisjointDecline::FootprintOverlap
+                | DisjointDecline::ReadsWrittenTarget
+                | DisjointDecline::OtherOuterWrite
+                | DisjointDecline::OpaqueBodyConstruct
+                | DisjointDecline::EarlyExit
+                | DisjointDecline::SymbolicOverflow
+                | DisjointDecline::NotCrossTaskSafe
+                | DisjointDecline::SharesOuterMutBorrow
+                | DisjointDecline::BodyEmitsOutput
+                | DisjointDecline::BodyHasEffects
+                | DisjointDecline::UnsupportedTargetType => {}
+            }
+        }
+        &[
             DisjointDecline::UnsupportedLoopForm,
             DisjointDecline::LoopVarMutated,
             DisjointDecline::NoIndexedWrite,
@@ -2119,7 +2203,17 @@ mod tests {
             DisjointDecline::SymbolicOverflow,
             DisjointDecline::NotCrossTaskSafe,
             DisjointDecline::SharesOuterMutBorrow,
-        ];
+            DisjointDecline::BodyEmitsOutput,
+            DisjointDecline::BodyHasEffects,
+            DisjointDecline::UnsupportedTargetType,
+        ]
+    };
+
+    #[test]
+    fn every_decline_tag_is_distinct() {
+        // The tags are a machine surface; two variants sharing one would make
+        // a query answer ambiguous.
+        let all = ALL_DECLINES;
         let tags: HashSet<&str> = all.iter().map(|d| d.tag()).collect();
         assert_eq!(tags.len(), all.len(), "duplicate decline tag");
         assert!(all.iter().all(|d| !d.reason().is_empty()));

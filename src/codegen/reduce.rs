@@ -64,7 +64,7 @@ use super::state::{AssertedIndexBound, VarSlot};
 /// `partition_const_int_captures`. The `const_int_captures` tuple
 /// carries `(binding_name, literal_value, integer_suffix)` so the
 /// caller can materialize each entry as a typed LLVM constant.
-type ConstIntCapturePartition = (Vec<String>, Vec<(String, i64, Option<IntSuffix>)>);
+pub(super) type ConstIntCapturePartition = (Vec<String>, Vec<(String, i64, Option<IntSuffix>)>);
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Try to lower the top-level statement at `stmt_index` (inside
@@ -96,7 +96,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Recursive walk over the common bound-expression shapes (identifiers,
     /// arithmetic, casts, field/index/method access, calls) checking for any
     /// identifier that names a current-function parameter.
-    fn expr_references_current_param(&self, expr: &Expr) -> bool {
+    pub(super) fn expr_references_current_param(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Identifier(n) => self.current_fn_param_names.contains(n),
             ExprKind::Path { segments, .. } => segments
@@ -131,6 +131,30 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => false,
         }
+    }
+
+    /// Clamp a computed `iter_total` to `max(v, 0)`.
+    ///
+    /// **Soundness, not tidiness.** The descriptor's `iter_total` is a `u64`;
+    /// an inverted source range (`for y in 5..3`, or `0..n` with a negative
+    /// `n`) makes `end - lo` negative, and a negative `i64` stamped into a
+    /// `u64` field becomes ~2^64. Sequential semantics run **zero** iterations;
+    /// the fan-out would run essentially forever — measured as a hang on a
+    /// scalar reduction and as an out-of-range write on the indexed-write
+    /// shape, both against a sequential build that returned immediately.
+    ///
+    /// Applied unconditionally, not only when a `lo` is present: `for y in 0..n`
+    /// with `n < 0` is the same defect with `lo` elided.
+    pub(super) fn clamp_iter_total_nonneg(&self, v: IntValue<'ctx>) -> IntValue<'ctx> {
+        let zero = v.get_type().const_zero();
+        let is_pos = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, v, zero, "iter.total.pos")
+            .unwrap();
+        self.builder
+            .build_select(is_pos, v, zero, "iter.total.clamped")
+            .unwrap()
+            .into_int_value()
     }
 
     #[allow(clippy::result_large_err)]
@@ -324,7 +348,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // matches `end`'s (same belt-and-suspenders gate fires if the
         // typed AST somehow violates it).
         let (iter_total_val, lo_val) = match &shape.lo_expr {
-            None => (end_val, None),
+            None => (self.clamp_iter_total_nonneg(end_val), None),
             Some(lo_expr) => {
                 let lo_val = self.compile_expr(lo_expr)?.into_int_value();
                 if lo_val.get_type() != acc_int_ty {
@@ -334,7 +358,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_sub(end_val, lo_val, "iter.total")
                     .unwrap();
-                (iter_total, Some(lo_val))
+                (self.clamp_iter_total_nonneg(iter_total), Some(lo_val))
             }
         };
 
@@ -390,7 +414,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The set of outer-scope variables the body reads, minus the
     /// accumulator, the loop variable, and any body-local let-bindings.
     /// Sorted so the env-struct field order is deterministic across runs.
-    fn collect_reduction_captures(
+    pub(super) fn collect_reduction_captures(
         &self,
         body: &Block,
         acc_name: &str,
@@ -423,7 +447,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `let mut` plus a later assignment, stay on the runtime path.
     /// This is the common case for bench-shape constants like
     /// `let n: i64 = 8i64;`.
-    fn partition_const_int_captures(
+    pub(super) fn partition_const_int_captures(
         &self,
         captures: &[String],
         parent_body: &Block,
@@ -1583,7 +1607,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let end_val = self.compile_expr(&shape.end_expr)?.into_int_value();
         let loop_var_int_ty = end_val.get_type();
         let (iter_total_val, lo_val) = match &shape.lo_expr {
-            None => (end_val, None),
+            None => (self.clamp_iter_total_nonneg(end_val), None),
             Some(lo_expr) => {
                 let lo_val = self.compile_expr(lo_expr)?.into_int_value();
                 if lo_val.get_type() != loop_var_int_ty {
@@ -1593,7 +1617,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_sub(end_val, lo_val, "iter.total")
                     .unwrap();
-                (iter_total, Some(lo_val))
+                (self.clamp_iter_total_nonneg(iter_total), Some(lo_val))
             }
         };
 
@@ -4156,7 +4180,7 @@ fn collect_modulo_index_sites_in_expr(
 // } }` list walk — whose `break` targets the inner loop — wrongly declined the
 // reduction. Purely a precision gain: a labeled break the analysis cannot place
 // still falls to "escapes", and the failure mode it guards (invalid IR) is loud.
-fn block_has_early_exit(block: &Block) -> bool {
+pub(super) fn block_has_early_exit(block: &Block) -> bool {
     block_has_early_exit_ctx(block, 0, &[])
 }
 

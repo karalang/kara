@@ -690,6 +690,160 @@ fn test_mut_ref_argument_to_a_callee_declines() {
     );
 }
 
+#[test]
+fn test_printing_body_declines_even_when_the_print_is_transitive() {
+    // The fan-out substrate (`karac_par_reduce`) has no per-branch output
+    // capture — that is `karac_par_run`'s machinery — so parallel workers would
+    // interleave prints. The transitive case is the one that matters: a kernel
+    // calling `log(y)` looks pure at the loop, and a direct-`println`-only scan
+    // would wave it through.
+    assert_tag_typed(
+        &program(
+            r#"fn note(v: i64) { println(f"{v}"); }
+            fn k(n: i64, w: i64, out: mut Slice[i64]) {
+                for i in 0..n {
+                    for x in 0..w { out[i * w + x] = x; }
+                    note(i);
+                }
+            }"#,
+        ),
+        "body_emits_output",
+    );
+}
+
+#[test]
+fn test_resource_effect_in_the_body_declines() {
+    assert_tag_typed(
+        &program(
+            r#"effect resource Audit;
+            fn record(v: i64) writes(Audit) {}
+            fn k(n: i64, w: i64, out: mut Slice[i64]) {
+                for i in 0..n {
+                    for x in 0..w { out[i * w + x] = x; }
+                    record(i);
+                }
+            }"#,
+        ),
+        "body_has_effects",
+    );
+}
+
+#[test]
+fn test_allocating_body_still_fans_out() {
+    // `allocates` is inferred for any body that builds a temporary, which is
+    // most real kernels. The allocator is thread-safe and allocation ORDER is
+    // not observable, so treating it like `writes(Resource)` would decline the
+    // motivating workload for nothing. Contrast with the two tests above.
+    let analysis = analyze_with_types(&program(
+        r#"fn k(n: i64, w: i64, out: mut Slice[i64]) {
+                for i in 0..n {
+                    let mut tmp: Vec[i64] = Vec.new();
+                    let mut x: i64 = 0;
+                    while x < w { tmp.push(i + x); x = x + 1; }
+                    let mut j: i64 = 0;
+                    while j < w { out[i * w + j] = tmp[j]; j = j + 1; }
+                }
+            }"#,
+    ));
+    let loops = loops_of(&analysis, "k");
+    assert!(!loops.is_empty(), "expected a candidate");
+    assert_eq!(loops[0].tag(), "proven", "{}", loops[0].reason);
+}
+
+#[test]
+fn test_a_loop_with_no_indexed_write_is_never_reported_whatever_its_form() {
+    // The proof rejects on loop form BEFORE it looks for a write, so without a
+    // candidate filter every `while`/`loop` in a program — including ones that
+    // touch no collection at all — would surface as a declined
+    // `unsupported_loop_form` entry and bury the declines that name a real
+    // obstacle.
+    let analysis = analyze(
+        &program(
+            r#"fn k(n: i64) -> i64 {
+                let mut acc: i64 = 0;
+                let mut i: i64 = 0;
+                while i < n { acc = acc + i; i = i + 1; }
+                loop { if acc > 10 { break; } acc = acc + 1; }
+                acc
+            }"#,
+        ),
+        false,
+    );
+    assert!(
+        loops_of(&analysis, "k").is_empty(),
+        "loops that write no collection must not be reported at all"
+    );
+}
+
+#[test]
+fn test_while_loop_with_an_indexed_write_is_reported_as_an_unsupported_form() {
+    // The contrast to the test above: once a loop DOES write a collection, its
+    // form becomes a useful answer to "why isn't my loop parallel".
+    assert_tag(
+        &program(
+            r#"fn k(n: i64, out: mut Slice[i64]) {
+                let mut i: i64 = 0;
+                while i < n { out[i] = i; i = i + 1; }
+            }"#,
+        ),
+        "unsupported_loop_form",
+    );
+}
+
+#[test]
+fn test_hash_container_target_declines() {
+    // `m[i] = v` on a `Map[i64, V]` parses exactly like an element store, and
+    // its index is an ordinary integer expression — so the footprint proof
+    // concludes "iteration `i` writes slot `i`, disjoint". It is not: a hash
+    // insert places by hash, distinct keys share buckets, and an insert can
+    // resize the table.
+    //
+    // Codegen declines this independently (a `Map` control block is not a Vec
+    // header), so the binary was never at risk. What this pins is the QUERY: it
+    // reported `disjoint_writes: true` / `fanned_out: true` for a loop the
+    // binary does not fan out, which is the recognition-reported-as-emission
+    // defect B-2026-07-29-29 exists to prevent.
+    assert_tag_typed(
+        &program(
+            r#"fn k(n: i64, m: mut ref Map[i64, i64]) {
+                for i in 0..n { m[i] = i * 2; }
+            }"#,
+        ),
+        "unsupported_target_type",
+    );
+}
+
+#[test]
+fn test_sequence_targets_are_accepted_in_every_declaration_form() {
+    // The container check reads the DECLARATION, because the typechecker
+    // records the index expression's type at the object's span (`out[i]` on a
+    // `Slice[i64]` reports `i64` at `out`) and so cannot discriminate. All
+    // three declaration channels must work: a param annotation, a `let`
+    // annotation, and an unannotated `let` with a recognizable constructor.
+    let cases = [
+        // param annotation
+        r#"fn k(n: i64, w: i64, out: mut Slice[i64]) {
+            for i in 0..n { for x in 0..w { out[i * w + x] = x; } }
+        }"#,
+        // annotated let
+        r#"fn k(n: i64, w: i64) {
+            let mut out: Vec[i64] = Vec.filled(n * w, 0);
+            for i in 0..n { for x in 0..w { out[i * w + x] = x; } }
+        }"#,
+        // unannotated let with a Vec constructor
+        r#"fn k(n: i64, w: i64) {
+            let mut out = Vec.filled(n * w, 0);
+            for i in 0..n { for x in 0..w { out[i * w + x] = x; } }
+        }"#,
+    ];
+    for body in cases {
+        let analysis = analyze_with_types(&program(body));
+        let loops = loops_of(&analysis, "k");
+        assert!(!loops.is_empty(), "expected a candidate in:\n{body}");
+        assert_eq!(loops[0].tag(), "proven", "{}\nin:\n{body}", loops[0].reason);
+    }
+}
+
 // ── Query surface ───────────────────────────────────────────────
 
 #[test]

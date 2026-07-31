@@ -864,8 +864,27 @@ pub struct DisjointWriteLoop {
     /// The loop's index within its own block (same convention as
     /// [`LoopReduction::stmt_index`]).
     pub stmt_index: usize,
-    /// 1-indexed source line of the loop expression.
+    /// 1-indexed source line of the loop expression. Reporting only — the
+    /// codegen lookup keys on [`Self::loop_span`], which `loop_line` is NOT a
+    /// safe substitute for; see that field.
     pub loop_line: usize,
+    /// Byte span of the loop expression, and the **exact** key codegen matches
+    /// this tag by.
+    ///
+    /// `(stmt_index, loop_line)` — what the reduction tags use — is not unique:
+    /// a nested loop written on its parent's line (`for y in 0..h { for x in
+    /// 0..w { … } }`) has BOTH the same statement index (0, within the outer
+    /// loop's own body block) and the same line. Codegen compiles the outer
+    /// loop's body inside the fan-out worker, hits the inner loop there, and
+    /// matches the outer loop's tag against it — emitting a second fan-out over
+    /// a loop nothing proved disjoint.
+    ///
+    /// That is a miscompile, not an inefficiency. The outer proof says
+    /// "iteration `y` writes only `[y*S, (y+1)*S)`"; it says nothing about two
+    /// `x` values being distinct. `for y in 0..h { for x in 0..w { out[y*w] =
+    /// f(x); } }` proves for `y` and is a same-slot race for `x`. A span is
+    /// unique per expression, so matching on it closes the class.
+    pub loop_span: crate::token::Span,
     /// The candidate parallel dimension.
     pub loop_var: String,
     /// `None` when the proof discharged; otherwise the obligation that failed.
@@ -2004,7 +2023,7 @@ impl<'a> ConcurrencyChecker<'a> {
     /// claim.
     fn recognize_disjoint_write_loops(&self, func: &Function) -> Vec<DisjointWriteLoop> {
         let mut out = Vec::new();
-        self.recognize_disjoint_writes_in_block(&func.body, &mut out);
+        self.recognize_disjoint_writes_in_block(func, &func.body, &mut out);
         out
     }
 
@@ -2018,7 +2037,12 @@ impl<'a> ConcurrencyChecker<'a> {
     /// writes stride-1 slots). Reporting all of them would bury the decision
     /// that matters under its own corollaries. A *declined* loop still recurses,
     /// so an inner candidate stays visible when the outer one is what failed.
-    fn recognize_disjoint_writes_in_block(&self, block: &Block, out: &mut Vec<DisjointWriteLoop>) {
+    fn recognize_disjoint_writes_in_block(
+        &self,
+        func: &Function,
+        block: &Block,
+        out: &mut Vec<DisjointWriteLoop>,
+    ) {
         for (idx, stmt) in block.stmts.iter().enumerate() {
             let StmtKind::Expr(expr) = &stmt.kind else {
                 continue;
@@ -2029,10 +2053,10 @@ impl<'a> ConcurrencyChecker<'a> {
                     else_branch,
                     ..
                 } => {
-                    self.recognize_disjoint_writes_in_block(then_block, out);
+                    self.recognize_disjoint_writes_in_block(func, then_block, out);
                     if let Some(else_expr) = else_branch {
                         if let ExprKind::Block(else_block) = &else_expr.kind {
-                            self.recognize_disjoint_writes_in_block(else_block, out);
+                            self.recognize_disjoint_writes_in_block(func, else_block, out);
                         }
                     }
                     continue;
@@ -2046,29 +2070,28 @@ impl<'a> ConcurrencyChecker<'a> {
                 | ExprKind::Loop { body, .. } => body,
                 _ => unreachable!("filtered above"),
             };
-            match self.classify_disjoint_write_loop(expr, body, idx) {
+            match self.classify_disjoint_write_loop(func, expr, body, idx) {
                 // Not a candidate at all — no indexed write to an outer
                 // collection. Keep walking inward.
-                None => self.recognize_disjoint_writes_in_block(body, out),
+                None => self.recognize_disjoint_writes_in_block(func, body, out),
                 Some(record) => {
                     let proven = record.proven();
                     out.push(record);
                     if !proven {
-                        self.recognize_disjoint_writes_in_block(body, out);
+                        self.recognize_disjoint_writes_in_block(func, body, out);
                     }
                 }
             }
         }
     }
 
-    /// Run the proof on one loop, then apply the two soundness gates the proof
+    /// Run the proof on one loop, then apply the four soundness gates the proof
     /// deliberately does not model. Returns `None` when the loop is not a
     /// candidate (no indexed write to an outside-the-loop collection).
     ///
-    /// The gates are the same ones the reduction classifier applies, for the
-    /// same reasons, and they belong here rather than in `index_disjoint`
-    /// because both need signature/type knowledge the plain-AST proof does not
-    /// have:
+    /// The gates belong here rather than in `index_disjoint` because each needs
+    /// signature, type, or whole-program knowledge the plain-AST footprint walk
+    /// does not have:
     ///
     /// - **B-2026-07-16-6** — a body touching a plain (non-`par`) `shared`
     ///   value carries a NON-ATOMIC refcount header. Racing rc-inc/rc-dec
@@ -2078,13 +2101,26 @@ impl<'a> ConcurrencyChecker<'a> {
     ///   `mut ref self` method) writes memory this walk never sees, so a
     ///   loop-invariant scratch buffer threaded through a helper is a race the
     ///   footprint proof cannot observe.
+    /// - **Console output**, transitively. `karac_par_run` installs a
+    ///   per-branch `OutputCapture` and replays it in source order after the
+    ///   join, so a `par {}` block's prints are byte-identical to sequential
+    ///   execution. `karac_par_reduce` — the substrate this fan-out reuses —
+    ///   does **not**: its workers write straight through. A printing body must
+    ///   therefore decline, because "auto-par never changes what your program
+    ///   prints" is unconditional.
+    /// - **Resource effects.** Two iterations running concurrently reorder
+    ///   their effects against each other. The statement-level grouper
+    ///   serializes conflicting effects for exactly this reason; a loop body is
+    ///   no different.
     fn classify_disjoint_write_loop(
         &self,
+        func: &Function,
         loop_expr: &Expr,
         body: &Block,
         stmt_index: usize,
     ) -> Option<DisjointWriteLoop> {
         let loop_line = loop_expr.span.line;
+        let loop_span = loop_expr.span.clone();
         let mk = |loop_var: String,
                   decline: Option<DisjointDecline>,
                   targets: Vec<TargetFootprint>,
@@ -2092,12 +2128,21 @@ impl<'a> ConcurrencyChecker<'a> {
             Some(DisjointWriteLoop {
                 stmt_index,
                 loop_line,
+                loop_span: loop_span.clone(),
                 loop_var,
                 decline,
                 targets,
                 reason,
             })
         };
+        // Candidate filter FIRST. `prove_disjoint_indexed_writes` rejects on
+        // loop form before it ever looks for a write, so without this every
+        // `while`/`loop` in the program would surface as a declined
+        // `unsupported_loop_form` entry — noise that buries the declines
+        // naming a real obstacle.
+        if !crate::index_disjoint::loop_body_has_outer_indexed_write(body) {
+            return None;
+        }
         let loop_var = disjoint_candidate_loop_var(loop_expr).unwrap_or_default();
         match prove_disjoint_indexed_writes(loop_expr) {
             Err(DisjointDecline::NoIndexedWrite) => None,
@@ -2116,11 +2161,192 @@ impl<'a> ConcurrencyChecker<'a> {
                     let d = DisjointDecline::SharesOuterMutBorrow;
                     return mk(proof.loop_var, Some(d), Vec::new(), d.reason().to_string());
                 }
+                if self.loop_body_emits_output(body) {
+                    let d = DisjointDecline::BodyEmitsOutput;
+                    return mk(proof.loop_var, Some(d), Vec::new(), d.reason().to_string());
+                }
+                if self.loop_body_has_effects(body) {
+                    let d = DisjointDecline::BodyHasEffects;
+                    return mk(proof.loop_var, Some(d), Vec::new(), d.reason().to_string());
+                }
+                if !self.loop_body_write_targets_are_sequences(func, body) {
+                    let d = DisjointDecline::UnsupportedTargetType;
+                    return mk(proof.loop_var, Some(d), Vec::new(), d.reason().to_string());
+                }
                 let reason = proof.reason();
                 let DisjointWriteProof { loop_var, targets } = proof;
                 mk(loop_var, None, targets, reason)
             }
         }
+    }
+
+    /// Does this loop body write to the console — directly, or through any
+    /// function it can reach?
+    ///
+    /// Console output is **resourceless by design** (see
+    /// `stmt_has_console_output`), so the effect graph cannot see it and
+    /// [`Self::loop_body_has_effects`] would wave a printing helper straight
+    /// through. The transitive walk is what makes the gate real: the shape that
+    /// matters is a kernel calling `log_progress(dy)`, not one calling
+    /// `println` inline.
+    ///
+    /// Bounded by a visited set, so recursion and call cycles terminate.
+    /// Unresolvable callees (extern, closures, dynamic dispatch) are treated as
+    /// output-emitting — declining a loop costs a missed fan-out; admitting one
+    /// scrambles the program's output.
+    fn loop_body_emits_output(&self, body: &Block) -> bool {
+        let mut visited: HashSet<String> = HashSet::new();
+        self.block_emits_output_transitively(body, &mut visited, 0)
+    }
+
+    /// Recursion depth cap for [`Self::loop_body_emits_output`]. A call chain
+    /// deeper than this is treated as output-emitting rather than searched
+    /// further — the conservative direction.
+    const OUTPUT_WALK_MAX_DEPTH: usize = 16;
+
+    fn block_emits_output_transitively(
+        &self,
+        block: &Block,
+        visited: &mut HashSet<String>,
+        depth: usize,
+    ) -> bool {
+        if depth > Self::OUTPUT_WALK_MAX_DEPTH {
+            return true;
+        }
+        if block_has_console_output(block) {
+            return true;
+        }
+        let mut callees: HashSet<String> = HashSet::new();
+        collect_callee_names_in_block(block, &mut callees);
+        for name in callees {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            // A lowered primitive op arrives as `i64.mul`; the builtin check
+            // keys on the method segment, so both spellings resolve.
+            let bare = name.rsplit('.').next().unwrap_or(name.as_str());
+            let Some(callee) = self
+                .function_bodies
+                .get(&name)
+                .or_else(|| self.method_bodies.get(&name))
+            else {
+                // Not a source-defined function in this program: a stdlib
+                // method (`push`, `len`, `sort`), a lowered primitive op
+                // (`i64.mul`), or an `extern`. None of the stdlib surface
+                // writes to the console except the console writers themselves,
+                // which `unresolved_callee_may_print` names — so treating
+                // every unresolvable callee as printing would decline any loop
+                // that so much as calls `.push`, which is most of them.
+                if unresolved_callee_may_print(bare) {
+                    return true;
+                }
+                continue;
+            };
+            if self.block_emits_output_transitively(&callee.body, visited, depth + 1) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Is every indexed write in this body a store into a positionally-indexed
+    /// SEQUENCE — a `Vec`, a `Slice`, or a fixed-size array?
+    ///
+    /// The footprint proof reasons about index *arithmetic* and cannot see what
+    /// the container is. `m[k] = v` on a `Map[i64, V]` parses exactly like an
+    /// element store and its "index" is an ordinary integer expression, so the
+    /// proof concludes "iteration `i` writes slot `i`, disjoint". It is not: a
+    /// hash insert places by hash, distinct keys share buckets, and an insert
+    /// can resize the whole table. `Set` has the same shape.
+    ///
+    /// Codegen declines a hash container independently — a `Map` control block
+    /// is not a Vec header, so `disjoint_target_shares_storage` rejects it, and
+    /// the emitted binary was never at risk. What this gate protects is the
+    /// QUERY: without it the surface answered `disjoint_writes: true` and
+    /// `fanned_out: true` for a loop the binary does not fan out, which is
+    /// exactly the recognition-reported-as-emission defect B-2026-07-29-29 was
+    /// filed for.
+    ///
+    /// **Why the declaration and not `expr_types`.** The obvious
+    /// implementation — look up the target object's type — does not work: the
+    /// typechecker records the INDEX expression's type at the object's span
+    /// (`out[i]` on a `Slice[i64]` reports `i64` at `out`), so the lookup
+    /// returns the element type for sequence and hash containers alike.
+    /// Measured on both before settling on the declaration.
+    fn loop_body_write_targets_are_sequences(&self, func: &Function, body: &Block) -> bool {
+        let mut objects: Vec<&Expr> = Vec::new();
+        collect_index_assign_objects_in_block(body, &mut objects);
+        objects.iter().all(|obj| match &obj.kind {
+            ExprKind::Identifier(name) => self.binding_is_indexable_sequence(func, name),
+            // A non-identifier target root (`self.buf[i]`, `a[i][j]`) is outside
+            // the proof's `name[index]` shape anyway.
+            _ => false,
+        })
+    }
+
+    /// Does `name`'s declaration in `func` say it is a positionally-indexed
+    /// sequence?
+    ///
+    /// Checked, in order: the parameter list, then any `let` in the body —
+    /// annotation first, initializer second. Fails CLOSED: a binding whose
+    /// declaration cannot be read is not assumed to be a `Vec`, because the
+    /// cost of a wrong "yes" is a query that claims a fan-out the binary does
+    /// not perform.
+    fn binding_is_indexable_sequence(&self, func: &Function, name: &str) -> bool {
+        for p in &func.params {
+            if p.pattern.binding_names().iter().any(|n| n == name) {
+                return type_expr_is_sequence(&p.ty);
+            }
+        }
+        match find_binding_decl(&func.body, name) {
+            Some((Some(ty), _)) => type_expr_is_sequence(ty),
+            Some((None, Some(init))) => init_expr_builds_sequence(init),
+            _ => false,
+        }
+    }
+
+    /// Does this loop body perform an effect whose ORDER two concurrent
+    /// iterations would change?
+    ///
+    /// Not every effect qualifies, and treating them alike was measurably too
+    /// strict — a body that builds one intermediate `Vec` infers `allocates`,
+    /// which would have declined most real image kernels for no reason.
+    ///
+    /// - `reads` / `writes` / `sends` / `receives` on a user resource, and any
+    ///   `UserDefined` verb: **decline**. These are the verbs the
+    ///   statement-level grouper serializes on, and a loop body is no
+    ///   different. (`reads` included deliberately: two workers reading one
+    ///   `File` share its offset.)
+    /// - `blocks` / `suspends`: **decline**. The execution verbs drive
+    ///   scheduler placement; parking inside a fan-out worker occupies a pool
+    ///   thread that the dispatch is counting on.
+    /// - `allocates`: **allow**. The allocator is thread-safe and allocation
+    ///   order is not observable.
+    /// - `panics`: **allow**. A panicking worker aborts the process exactly as
+    ///   the sequential loop would; which iteration trips first can differ, but
+    ///   only for an already-failing program. Same call the reduction lowering
+    ///   makes.
+    ///
+    /// A polymorphic callee (`with _`) declines: its effects are unknown here,
+    /// so none of the reasoning above applies.
+    fn loop_body_has_effects(&self, body: &Block) -> bool {
+        let mut info = StmtInfo::default();
+        self.collect_block_effects(body, &mut info);
+        if info.calls_polymorphic {
+            return true;
+        }
+        info.effects.iter().any(|e| {
+            matches!(
+                e.verb,
+                EffectVerbKind::Reads
+                    | EffectVerbKind::Writes
+                    | EffectVerbKind::Sends
+                    | EffectVerbKind::Receives
+                    | EffectVerbKind::Blocks
+                    | EffectVerbKind::Suspends
+                    | EffectVerbKind::UserDefined(_)
+            )
+        })
     }
 
     /// Walk one block's statements for reduction-shaped loops, recursing
@@ -5879,6 +6105,241 @@ fn is_acc_plus_int_literal(left: &ExprKind, right: &ExprKind, acc_name: &str) ->
 /// Like `induction_step_via_assign`, this checks both the pre-lowered
 /// `Binary` and the lowered `Call(Path([type, op_method]), [a, b])`
 /// shapes — see that function's doc comment for context.
+/// Does this type annotation name a positionally-indexed sequence?
+///
+/// `Vec[T]`, `Slice[T]`, `mut Slice[T]`, and `[T; N]` qualify. `Map` / `Set`
+/// and their sorted / hash spellings do not — their element syntax is a hash
+/// (or tree) insert, not a slot store. Borrow wrappers are transparent.
+fn type_expr_is_sequence(ty: &TypeExpr) -> bool {
+    match &ty.kind {
+        TypeKind::Array { .. } | TypeKind::MutSlice(_) => true,
+        TypeKind::Ref(inner) | TypeKind::MutRef(inner) => type_expr_is_sequence(inner),
+        TypeKind::Path(p) => matches!(p.segments.last().map(String::as_str), Some("Vec" | "Slice")),
+        _ => false,
+    }
+}
+
+/// Does this initializer build a positionally-indexed sequence? Used only for
+/// an UNANNOTATED `let`, where the annotation channel has nothing to read.
+fn init_expr_builds_sequence(init: &Expr) -> bool {
+    match &init.kind {
+        ExprKind::ArrayLiteral(_) | ExprKind::RepeatLiteral { .. } => true,
+        ExprKind::PrefixCollectionLiteral { type_name, .. } => type_name == "Vec",
+        // `Vec.new()` / `Vec.filled(n, x)` / `Vec.with_capacity(n)`.
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Path { segments, .. } => segments.len() == 2 && segments[0] == "Vec",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Find `name`'s `let` declaration anywhere in `block`, returning its
+/// annotation and initializer. First match wins — a shadowing rebind would make
+/// the answer ambiguous, and the sequence check treats ambiguity as "no".
+fn find_binding_decl<'a>(
+    block: &'a Block,
+    name: &str,
+) -> Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let {
+                pattern, ty, value, ..
+            }
+            | StmtKind::LetElse {
+                pattern, ty, value, ..
+            } => {
+                if pattern.binding_names().iter().any(|n| n == name) {
+                    return Some((ty.as_ref(), Some(value)));
+                }
+            }
+            StmtKind::LetUninit { name: n, ty, .. } if n == name => {
+                return Some((Some(ty), None));
+            }
+            _ => {}
+        }
+        if let Some(hit) = find_binding_decl_in_stmt(stmt, name) {
+            return Some(hit);
+        }
+    }
+    block
+        .final_expr
+        .as_ref()
+        .and_then(|e| find_binding_decl_in_expr(e, name))
+}
+
+fn find_binding_decl_in_stmt<'a>(
+    stmt: &'a Stmt,
+    name: &str,
+) -> Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> {
+    match &stmt.kind {
+        StmtKind::Let { value, .. } => find_binding_decl_in_expr(value, name),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => find_binding_decl_in_expr(value, name).or_else(|| find_binding_decl(else_block, name)),
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            find_binding_decl_in_expr(target, name)
+                .or_else(|| find_binding_decl_in_expr(value, name))
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => find_binding_decl(body, name),
+        StmtKind::Expr(e) => find_binding_decl_in_expr(e, name),
+        StmtKind::LetUninit { .. } | StmtKind::MultiAssign { .. } => None,
+    }
+}
+
+fn find_binding_decl_in_expr<'a>(
+    expr: &'a Expr,
+    name: &str,
+) -> Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> {
+    let mut found: Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> = None;
+    crate::index_disjoint::for_each_child_public(expr, &mut |c| {
+        if found.is_some() {
+            return;
+        }
+        found = match c {
+            crate::index_disjoint::Child::Expr(e) => find_binding_decl_in_expr(e, name),
+            crate::index_disjoint::Child::Block(b) => find_binding_decl(b, name),
+        };
+    });
+    found
+}
+
+/// The OBJECT expression of every `name[...] = ...` / `name[...] op= ...` in
+/// `block`, at any nesting depth. Spans on those objects key the typechecker's
+/// `expr_types`, which is how a write target's container type is recovered.
+fn collect_index_assign_objects_in_block<'a>(block: &'a Block, out: &mut Vec<&'a Expr>) {
+    for stmt in &block.stmts {
+        if let StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } =
+            &stmt.kind
+        {
+            if let ExprKind::Index { object, .. } = &target.kind {
+                out.push(object);
+            }
+        }
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => collect_index_assign_objects_in_expr(value, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                collect_index_assign_objects_in_expr(value, out);
+                collect_index_assign_objects_in_block(else_block, out);
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                collect_index_assign_objects_in_expr(target, out);
+                collect_index_assign_objects_in_expr(value, out);
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_index_assign_objects_in_block(body, out)
+            }
+            StmtKind::Expr(e) => collect_index_assign_objects_in_expr(e, out),
+            StmtKind::LetUninit { .. } | StmtKind::MultiAssign { .. } => {}
+        }
+    }
+    if let Some(e) = &block.final_expr {
+        collect_index_assign_objects_in_expr(e, out);
+    }
+}
+
+fn collect_index_assign_objects_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    crate::index_disjoint::for_each_child_public(expr, &mut |c| match c {
+        crate::index_disjoint::Child::Expr(e) => collect_index_assign_objects_in_expr(e, out),
+        crate::index_disjoint::Child::Block(b) => collect_index_assign_objects_in_block(b, out),
+    });
+}
+
+/// Bare callee names reachable from `block` — free-function calls and method
+/// names, at any nesting depth. Mirrors `StmtInfo::called_fn_names`' keying
+/// (bare name for a free fn, bare method name for a method) so the same
+/// `function_bodies` / `method_bodies` lookups apply.
+///
+/// Over-collecting is safe for its one consumer
+/// (`block_emits_output_transitively`): a name that resolves to nothing is
+/// treated as output-emitting, which declines a fan-out rather than admitting
+/// an unsound one.
+fn collect_callee_names_in_block(block: &Block, out: &mut HashSet<String>) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => collect_callee_names_in_expr(value, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                collect_callee_names_in_expr(value, out);
+                collect_callee_names_in_block(else_block, out);
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                collect_callee_names_in_expr(target, out);
+                collect_callee_names_in_expr(value, out);
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_callee_names_in_block(body, out)
+            }
+            StmtKind::Expr(e) => collect_callee_names_in_expr(e, out),
+            StmtKind::LetUninit { .. } | StmtKind::MultiAssign { .. } => {}
+        }
+    }
+    if let Some(e) = &block.final_expr {
+        collect_callee_names_in_expr(e, out);
+    }
+}
+
+fn collect_callee_names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
+    if let ExprKind::Call { callee, .. } = &expr.kind {
+        match &callee.kind {
+            ExprKind::Identifier(n) => {
+                out.insert(n.clone());
+            }
+            ExprKind::Path { segments, .. } => {
+                // `Type.method` associated calls key as `Type.method` in
+                // `method_bodies`; a single-segment path is a free fn.
+                out.insert(if segments.len() >= 2 {
+                    format!(
+                        "{}.{}",
+                        segments[segments.len() - 2],
+                        segments[segments.len() - 1]
+                    )
+                } else if let Some(last) = segments.last() {
+                    last.clone()
+                } else {
+                    return;
+                });
+            }
+            _ => {}
+        }
+    }
+    if let ExprKind::MethodCall { method, .. } = &expr.kind {
+        out.insert(method.clone());
+    }
+    crate::index_disjoint::for_each_child_public(expr, &mut |c| match c {
+        crate::index_disjoint::Child::Expr(e) => collect_callee_names_in_expr(e, out),
+        crate::index_disjoint::Child::Block(b) => collect_callee_names_in_block(b, out),
+    });
+}
+
+/// Can a callee that resolves to no source-defined function still write to the
+/// console?
+///
+/// Only the console writers can: the free `println` family (already caught
+/// syntactically by `block_has_console_output`, listed here so the two spellings
+/// agree) and the `Stdout` / `Stderr` writer methods. Everything else that fails
+/// to resolve is stdlib — `push`, `len`, `sort`, a lowered `i64.mul` — and is
+/// silent.
+///
+/// The inverted default matters: an allow-list of silent builtins would have to
+/// enumerate the whole stdlib, and every name it missed would decline a loop for
+/// no reason (measured: `tmp.push(v)` alone was enough).
+///
+/// **Known limit.** An `extern` function could print without declaring an
+/// effect, and nothing here would see it. That is the same resourceless-console
+/// blind spot the rest of this pass carries (see `stmt_has_console_output`); an
+/// extern whose declared effects don't describe what it does is already outside
+/// what any analysis in this file can promise.
+fn unresolved_callee_may_print(name: &str) -> bool {
+    matches!(
+        name,
+        "println" | "print" | "eprintln" | "eprint" | "write" | "write_line" | "writeln" | "flush"
+    )
+}
+
 /// The loop variable name to report for a disjoint-write candidate, for the
 /// declined case where the proof never got far enough to return one. Empty
 /// string when the loop has no simple binding (a `while`, a destructuring

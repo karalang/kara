@@ -67,7 +67,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // out. The lookup keys on (stmt_index, line) so an index
             // collision with a sibling block can't cross-match; a miss is
             // one cheap Vec scan.
-            let lowered = self.try_emit_reduction_lowering(block, i)?;
+            let lowered = match self.try_emit_reduction_lowering(block, i)? {
+                Some(()) => Some(()),
+                // Indexed-write fan-out (`out[f(i)] = ...`) — the third
+                // compute-fan-out shape. Tried after the reduction attempt
+                // because the two recognizers are mutually exclusive by
+                // construction (a reduction writes a scalar accumulator or
+                // pushes; this one writes a computed slot), so the order only
+                // decides which one gets asked first, never which one fires.
+                None => self.try_emit_disjoint_write_lowering(block, i)?,
+            };
             if lowered.is_none() {
                 self.compile_stmt(stmt)?;
             }
@@ -914,7 +923,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // lowered; `None` means the analyzer tagged it but the
                 // codegen v1 doesn't yet handle that op/type/shape — fall
                 // through to sequential.
-                let lowered = self.try_emit_reduction_lowering(body, i)?;
+                let lowered = match self.try_emit_reduction_lowering(body, i)? {
+                    Some(()) => Some(()),
+                    // See the sibling call in `compile_block` for why the
+                    // disjoint-write attempt follows the reduction one.
+                    None => self.try_emit_disjoint_write_lowering(body, i)?,
+                };
                 if lowered.is_none() {
                     self.compile_stmt(&body.stmts[i])?;
                 }

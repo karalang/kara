@@ -34089,4 +34089,58 @@ fn main() {
             "owned_aggregate_temp_field_drop_fires_once",
         );
     }
+    // ── Auto-par indexed-write fan-out (disjoint-writes lowering) ─────
+
+    #[test]
+    fn asan_disjoint_fanout_worker_with_per_iteration_heap_is_clean() {
+        // The fan-out worker pushes a per-iteration cleanup frame so a
+        // body-local `Vec` drops each iteration rather than accumulating for
+        // the worker's whole chunk. Without that frame every iteration's buffer
+        // survives to the join — a leak that scales with the chunk size and
+        // that only LeakSanitizer (Linux CI, not macOS) reports.
+        //
+        // The digest read-back also proves the temporaries were still alive
+        // when read: a frame drained one statement too early would be a
+        // use-after-free here, which ASAN reports on every host.
+        if !asan_available() {
+            eprintln!("skipping: ASAN unavailable");
+            return;
+        }
+        let src = concat!(
+            "fn heavy(v: i64) -> i64 {\n",
+            "    let mut acc: i64 = v % 1000003;\n",
+            "    let mut t: i64 = 0;\n",
+            "    while t < 200 { acc = (acc * 1103515245 + 12345) % 2147483647; t = t + 1; }\n",
+            "    acc\n",
+            "}\n",
+            "fn kernel(h: i64, w: i64, out: mut Slice[i64]) {\n",
+            "    for y in 0..h {\n",
+            "        let mut tmp: Vec[i64] = Vec.new();\n",
+            "        let mut x: i64 = 0;\n",
+            "        while x < w { tmp.push(heavy(y * 11 + x)); x = x + 1; }\n",
+            "        let mut j: i64 = 0;\n",
+            "        while j < w { out[y * w + j] = tmp[j]; j = j + 1; }\n",
+            "    }\n",
+            "}\n",
+            "fn main() {\n",
+            "    let h: i64 = 64;\n",
+            "    let w: i64 = 20;\n",
+            "    let mut buf: Vec[i64] = Vec.filled(h * w, 0);\n",
+            "    kernel(h, w, mut buf);\n",
+            "    let mut d: i64 = 0;\n",
+            "    let mut i: i64 = 0;\n",
+            "    while i < h * w { d = (d * 131 + buf[i]) % 1000000007; i = i + 1; }\n",
+            "    println(f\"{d}\");\n",
+            "}\n",
+        );
+        let Some((out, status)) =
+            run_under_asan_with_full_pipeline(src, "disjoint_fanout_per_iteration_heap")
+        else {
+            return;
+        };
+        assert!(
+            status.success(),
+            "ASAN reported a problem in a disjoint-write fan-out worker:\n{out}"
+        );
+    }
 }
