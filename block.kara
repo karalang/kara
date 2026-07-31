@@ -1,0 +1,15 @@
+trait Counter { fn bump(mut ref self); fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem {
+    fn bump(mut ref self) { self.n = self.n + 1; }
+    fn get(ref self) -> i64 { self.n }
+}
+fn do_bump() with writes(Ctr) { Ctr.bump(); }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn main() {
+    providers { Ctr => InMem { n: 10 } } in {
+        do_bump(); do_bump(); do_bump();
+        println(f"{read()}");
+    }
+}

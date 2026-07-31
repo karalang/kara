@@ -1216,6 +1216,23 @@ impl<'a> Interpreter<'a> {
             .find_map(|frame| frame.get(resource).cloned())
     }
 
+    /// Replace the provider bound to `resource` with a fresh `Arc` wrapping
+    /// `value`, in the topmost frame that binds it. Paired with
+    /// [`lookup_provider`] (top-down search). Used by the `mut ref self`
+    /// resource-method write-back (B-2026-07-31-4): the provider is dispatched
+    /// against a by-value clone bound to `self`, so a mutation is otherwise
+    /// discarded when the method scope pops. No-op when no frame binds the
+    /// resource — the caller already resolved one through `lookup_provider`, so
+    /// that case does not arise in practice.
+    fn update_provider(&mut self, resource: &str, value: Value) {
+        for frame in self.provider_stack.iter_mut().rev() {
+            if frame.contains_key(resource) {
+                frame.insert(resource.to_string(), Arc::new(value));
+                return;
+            }
+        }
+    }
+
     /// Check if there's a pending control flow signal. If so, return early.
     fn check_cf(&self) -> bool {
         self.pending_cf.is_some()

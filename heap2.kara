@@ -1,0 +1,13 @@
+trait Store { fn put(mut ref self, k: String); fn count(ref self) -> i64; }
+effect resource Db: Store;
+struct Mem { keys: Vec[String] }
+impl Store for Mem {
+    fn put(mut ref self, k: String) { self.keys.push(k); }
+    fn count(ref self) -> i64 { self.keys.len() }
+}
+fn seed() with writes(Db) { Db.put("a"); Db.put("b"); Db.put("c"); }
+fn total() -> i64 with reads(Db) { Db.count() }
+fn main() {
+    let m = Mem { keys: [] };
+    with_provider[Db](m, || { seed(); println(f"{total()}"); });
+}

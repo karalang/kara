@@ -7747,6 +7747,75 @@ fn test_with_provider_value_of_closure_is_returned() {
 }
 
 #[test]
+fn test_with_provider_mut_ref_self_mutation_visible_across_calls() {
+    // B-2026-07-31-4 — a `mut ref self` provider method's mutation must be
+    // visible to later calls in the same `with_provider` scope
+    // (design.md § Provider-Rooted Resources: mutation-visible-after-pop). The
+    // provider is dispatched against a by-value clone bound to `self`, so
+    // without a write-back into the provider frame the mutation was discarded:
+    // two `bump()`s read back 0. Codegen already got this right (`2`); this is
+    // the interpreter twin of that behaviour.
+    let output = run(
+        "trait Counter { fn bump(mut ref self); fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem {
+             fn bump(mut ref self) { self.n = self.n + 1; }
+             fn get(ref self) -> i64 { self.n }
+         }
+         fn do_bump() with writes(Ctr) { Ctr.bump(); }
+         fn read() -> i64 with reads(Ctr) { Ctr.get() }
+         fn main() {
+             let c = InMem { n: 0 };
+             with_provider[Ctr](c, || { do_bump(); do_bump(); println(f\"{read()}\"); });
+         }",
+    );
+    assert_eq!(output, "2\n");
+}
+
+#[test]
+fn test_with_provider_mut_ref_self_mutates_heap_field() {
+    // The write-back must carry a heap-field mutation too — `put` pushes onto a
+    // `Vec[String]` provider field, and a later `count()` must see all three.
+    let output = run(
+        "trait Store { fn put(mut ref self, k: String); fn count(ref self) -> i64; }
+         effect resource Db: Store;
+         struct Mem { keys: Vec[String] }
+         impl Store for Mem {
+             fn put(mut ref self, k: String) { self.keys.push(k); }
+             fn count(ref self) -> i64 { self.keys.len() }
+         }
+         fn seed() with writes(Db) { Db.put(\"a\"); Db.put(\"b\"); Db.put(\"c\"); }
+         fn total() -> i64 with reads(Db) { Db.count() }
+         fn main() {
+             with_provider[Db](Mem { keys: [] }, || { seed(); println(f\"{total()}\"); });
+         }",
+    );
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_with_provider_ref_self_does_not_rebind_provider() {
+    // A `ref self` reader must NOT trigger a write-back (it can't mutate), so
+    // repeated reads see the original value unchanged. Guards against an
+    // over-eager write-back that rebinds on every call.
+    let output = run(
+        "trait Counter { fn bump(mut ref self); fn get(ref self) -> i64; }
+         effect resource Ctr: Counter;
+         struct InMem { n: i64 }
+         impl Counter for InMem {
+             fn bump(mut ref self) { self.n = self.n + 1; }
+             fn get(ref self) -> i64 { self.n }
+         }
+         fn peek() -> i64 with reads(Ctr) { let a = Ctr.get(); let b = Ctr.get(); return a + b; }
+         fn main() {
+             with_provider[Ctr](InMem { n: 5 }, || { println(f\"{peek()}\"); });
+         }",
+    );
+    assert_eq!(output, "10\n");
+}
+
+#[test]
 fn test_with_provider_frame_popped_after_closure_even_when_body_returns() {
     // After the `with_provider` block exits, the resource is unbound
     // again — the second bare `UserDB.id()` should fail with the same

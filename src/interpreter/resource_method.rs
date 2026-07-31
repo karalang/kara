@@ -131,7 +131,30 @@ impl<'a> super::Interpreter<'a> {
             self.bind_pattern(pat, val);
         }
         let result = self.eval_body_growing(&body);
+        // B-2026-07-31-4 — write the (possibly mutated) provider back into its
+        // frame for a `mut ref self` resource method, so the mutation is visible
+        // to later calls in the same `with_provider` scope (design.md §
+        // Provider-Rooted Resources: the value slot is non-consuming, with
+        // mutation-visible-after-pop semantics; codegen already does this). The
+        // provider was bound as a by-value CLONE of the frame's `Arc`'d value,
+        // so without the write-back a `bump()` that sets `self.n = self.n + 1`
+        // is discarded when this method scope pops — two `bump()`s then read
+        // back 0, not 2. Mirrors the normal-method CICO write-back in
+        // `method_call.rs`, gated identically on `MutRef` so a `ref self` /
+        // owned-self method never rebinds the provider. Read BEFORE `pop_scope`
+        // (the `self` binding lives in the popping scope), written after.
+        let self_writeback = if matches!(
+            self.method_self_param(&type_name, method),
+            Some(crate::ast::SelfParam::MutRef)
+        ) {
+            self.env.get("self")
+        } else {
+            None
+        };
         self.env.pop_scope();
+        if let Some(new_self) = self_writeback {
+            self.update_provider(resource, new_self);
+        }
         match result {
             Ok(v) => v,
             Err(ControlFlow::Return(v)) => v,

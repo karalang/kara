@@ -1,0 +1,11 @@
+trait Counter { fn bump(mut ref self); fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem {
+    fn bump(mut ref self) { self.n = self.n + 1; }
+    fn get(ref self) -> i64 { self.n }
+}
+fn peek() -> i64 with reads(Ctr) { let a = Ctr.get(); let b = Ctr.get(); return a + b; }
+fn main() {
+    with_provider[Ctr](InMem { n: 5 }, || { println(f"{peek()}"); });
+}
