@@ -321,8 +321,33 @@ impl KaracMap {
         }
     }
 
+    /// Pick the next table width when the load-factor trigger fires.
+    ///
+    /// B-2026-07-31-21 — unconditionally doubling made capacity O(TOTAL
+    /// removals): the trigger counts tombstones, `remove` only ever adds
+    /// them, and no path dropped them without also widening. A sliding-window
+    /// map with DISTINCT keys (live size pinned at 1024) measured 297 MB at
+    /// 16M ops where Rust's HashMap holds 2.4 MB flat. When the LIVE count is
+    /// small, rehash at the SAME capacity instead — `rehash_from` drops every
+    /// tombstone, which is all a churn-dominated table needs.
+    ///
+    /// The same-width branch requires HEADROOM, not merely "the live set
+    /// fits": compacting to a table that is still near the ¾ trigger would
+    /// re-fire it after a handful of inserts, degenerating to an O(len)
+    /// rehash per insert right at the boundary. Same-width only when the
+    /// live count is at or below ~⅜ of capacity (half the trigger), so a
+    /// compaction buys at least ~⅜·capacity further operations — the same
+    /// amortization doubling provides, without the growth.
+    fn next_capacity(&self) -> usize {
+        if (self.len + 1) * 8 <= self.capacity * 3 {
+            self.capacity
+        } else {
+            self.capacity * 2
+        }
+    }
+
     unsafe fn resize(&mut self) {
-        let new_cap = self.capacity * 2;
+        let new_cap = self.next_capacity();
         let (new_status, new_kv) = Self::alloc_storage(new_cap, self.key_size, self.val_size);
 
         let old_status = self.status;
@@ -353,8 +378,10 @@ impl KaracMap {
     /// 3,125-key `Map[String, i64]` built 60 times, growth accounted for 21.5ms
     /// of kara's 29.7ms insert total against Rust's 6.8ms of 11.1ms:
     ///
-    /// * **The load-factor test cannot fire.** `resize` doubled the capacity and
-    ///   is replaying at most `3/4 * old_cap == 3/8 * new_cap` live keys, so the
+    /// * **The load-factor test cannot fire.** `resize` either doubled the
+    ///   capacity (replaying at most `3/4 * old_cap == 3/8 * new_cap` live keys)
+    ///   or compacted at the same width (which `next_capacity` only allows when
+    ///   the live count is at most `3/8 * cap`), so the
     ///   `(len + tombstones + 1) * 4 > capacity * 3` guard is false at every
     ///   step. Re-evaluating it per key is a branch on a value that cannot move.
     /// * **`find_insert_slot`'s tombstone bookkeeping and `eq_fn` call site are
@@ -436,14 +463,18 @@ impl KaracMap {
         Some((status, kv))
     }
 
-    /// Fallible sibling of [`resize`]: doubles capacity via
+    /// Fallible sibling of [`resize`]: picks the next width via
+    /// [`Self::next_capacity`] and allocates it with
     /// [`alloc_storage_fallible`]. On OOM the map is left **completely
     /// unchanged** — nothing is swapped in, no rehash runs, the old storage is
     /// intact — and the attempted allocation size (status + kv arrays) is
     /// returned as `Err(bytes)`. The new storage is allocated *before* any
     /// `self` field is mutated, so the failure path needs no rollback.
     unsafe fn try_resize(&mut self) -> Result<(), u64> {
-        let new_cap = self.capacity * 2;
+        // Same live-count-driven width choice as `resize` (B-2026-07-31-21);
+        // on the fallible path the same-capacity compaction is also the
+        // OOM-friendlier allocation.
+        let new_cap = self.next_capacity();
         let (new_status, new_kv) =
             match Self::alloc_storage_fallible(new_cap, self.key_size, self.val_size) {
                 Some(pair) => pair,
@@ -1352,6 +1383,77 @@ mod tests {
                 let expected = if i == 7 { 9999 } else { i * 10 };
                 assert_eq!(got, expected, "value for key {i}");
             }
+            super::karac_map_free(map);
+        }
+    }
+    /// B-2026-07-31-21 — capacity must track the LIVE count, not the total
+    /// removal count. A sliding-window workload with DISTINCT keys (live size
+    /// pinned at 1024) used to ratchet capacity once per ~¾·capacity removals
+    /// forever: the growth trigger counts tombstones, `remove` only adds
+    /// them, and `resize` unconditionally doubled — 297 MB RSS at 16M ops
+    /// where Rust's HashMap holds 2.4 MB. With the live-count-driven
+    /// `next_capacity`, a tombstone-dominated table compacts at the SAME
+    /// width (dropping tombstones) and capacity stays bounded by the live
+    /// set. 200k ops here would have doubled past 65k buckets before the
+    /// fix; the bound below fails immediately on the unconditional-doubling
+    /// code.
+    #[test]
+    fn churn_with_distinct_keys_keeps_capacity_bounded() {
+        use std::ffi::c_void;
+        unsafe extern "C" fn hash_i64(p: *const c_void) -> u64 {
+            // splitmix64 — a real mix so the probe chains look like
+            // production, not sequential-cluster worst cases.
+            let mut z = (*(p as *const i64) as u64).wrapping_add(0x9e3779b97f4a7c15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            z ^ (z >> 31)
+        }
+        unsafe extern "C" fn eq_i64(a: *const c_void, b: *const c_void) -> bool {
+            unsafe { *(a as *const i64) == *(b as *const i64) }
+        }
+        unsafe {
+            let map = KaracMap::new(8, 8, hash_i64, eq_i64) as *mut c_void;
+            let window: i64 = 1024;
+            let total: i64 = 200_000;
+            let mut t: i64 = 0;
+            while t < total {
+                let val: i64 = t * 3;
+                super::karac_map_insert(
+                    map,
+                    &t as *const i64 as *const c_void,
+                    &val as *const i64 as *const c_void,
+                );
+                if t >= window {
+                    let old = t - window;
+                    let removed =
+                        super::karac_map_remove(map, &old as *const i64 as *const c_void, 0, 0);
+                    assert!(removed, "key {old} should have been present");
+                }
+                t += 1;
+            }
+            let m = &*(map as *const KaracMap);
+            assert_eq!(m.len, window as usize, "live size must stay the window");
+            // The live set is 1024; the same-width compaction keeps live
+            // <= 3/8 of capacity, so the steady-state width is <= 8192
+            // buckets (1025 * 8 / 3 = 2733 -> next power of two above any
+            // transient is comfortably under 8192). Unconditional doubling
+            // reaches 65536+ within these 200k ops.
+            assert!(
+                m.capacity <= 8192,
+                "capacity {} grew with total removals, not live size",
+                m.capacity
+            );
+            // Correctness after many same-width compactions: every live key
+            // still resolves to its value.
+            let probe: i64 = total - 10;
+            let mut out: i64 = 0;
+            let found = super::karac_map_get(
+                map,
+                &probe as *const i64 as *const c_void,
+                &mut out as *mut i64 as *mut c_void,
+            );
+            assert!(found, "live key {probe} must still be present");
+            assert_eq!(out, probe * 3);
             super::karac_map_free(map);
         }
     }
