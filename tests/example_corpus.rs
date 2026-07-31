@@ -91,13 +91,14 @@ const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
     //
     // Every remaining error is a compiler-side gap, none of them filed as a
     // bug yet because each is arguably a design question rather than a defect.
-    "3 errors, none of them example rot. (a) 2 × the error type of a \
-         `?`-chained `Result` is not inferred through a trait method \
-         (executor.kara:52/57). (b) 1 × E_NOT_CROSS_TASK — the `InMemoryDb` \
-         provider cannot cross the `par` boundary main.kara:43 puts it across. \
-         Two earlier groups are gone: a map literal typing as `HashMap`, so \
-         unwritable in a typed position (B-2026-07-30-14), and `Map` lookup \
-         rejecting a borrowed key (B-2026-07-30-17).",
+    "1 error, and not example rot: E_NOT_CROSS_TASK at main.kara:43 — the \
+         `InMemoryDb` provider cannot cross the `par` boundary the seed loop \
+         puts it across. Three earlier groups are gone: a map literal typing \
+         as `HashMap`, so unwritable in a typed position (B-2026-07-30-14); \
+         `Map` lookup rejecting a borrowed key (B-2026-07-30-17); and \
+         `Ok(Vec.new())` not receiving the expected payload type \
+         (B-2026-07-31-2, which this pin had misdiagnosed as a `?`-chain \
+         inference gap — neither the `?` nor the match was required).",
 )];
 
 /// Single files that do not currently check, with the first reported error.
