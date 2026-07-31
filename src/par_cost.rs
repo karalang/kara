@@ -34,6 +34,15 @@
 //! - `MemoryBoundDetector` / `body_is_memory_bound` — the memory-bandwidth gate.
 //! - [`fanout_verdict`] — the gate *sequence*, which is the part both callers
 //!   need to agree on.
+//!
+//! ## Debugging a verdict
+//!
+//! `KARAC_COST_DEBUG=1` prints the per-iteration estimate, the floor it is
+//! compared against, and whether the body reads as memory-bound. The verdict
+//! tags name the gate that fired but not the number behind it, and hand-counting
+//! that number is unreliable — see the note at the `eprintln!`.
+//! `KARAC_PROOF_DEBUG=1` (in `index_disjoint.rs`) is its counterpart for the
+//! disjointness proof that runs one phase earlier.
 
 use crate::ast::{
     BinOp, Block, CompoundOp, Expr, ExprKind, Function, Item, PatternKind, Program, Stmt, StmtKind,
@@ -172,8 +181,27 @@ pub fn accumulator_type_fans_out(type_name: Option<&str>) -> bool {
 ///   vs 107.5 ms fanned out (11 runs), a **1.6x** loss to the gate. Three
 ///   interleaved runs put the ratio between 1.45x and 1.60x.
 ///
-/// The carve-out cannot reach kata-153's shape: a flat body scores far below
-/// [`VARIABLE_K_PER_ITER_FLOOR_UNITS`], so it stays `DeclinedMemoryBound`.
+/// ## What the carve-out actually reaches — it is wider than "nested loops"
+///
+/// The gate is skipped on a cost threshold, not on the presence of a nested
+/// loop, so **any** body scoring >= 64 escapes it — including a flat one, if it
+/// is simply long. Measured with `KARAC_COST_DEBUG=1`:
+///
+/// - kata-153's `let x = nums[i]; if x < m { m = x; }` scores **14**. Below the
+///   floor, so it stays `DeclinedMemoryBound` — the calibration this gate was
+///   built for is intact, and `test_ir_memory_bound_body_skips_par_reduce`
+///   pins it.
+/// - A flat Rec.601 grayscale body — four index reads, ~12 statements, no
+///   nested loop — scores **161**. It escapes, and fanning it out measures
+///   **1.32x** on 4 cores (29.3 ms/rep sequential vs 22.1 ms/rep, 12 MP).
+///
+/// So the honest characterization is "bodies with more than roughly ten
+/// statements' worth of scalar work", of which a nested loop is one instance.
+/// An earlier version of this comment claimed a flat body "scores far below"
+/// the floor and therefore could not be reached; that is false, and grayscale
+/// is the counterexample. The 1.32x says the wider reach is earning its keep on
+/// this machine rather than misfiring — but it is wider than the nested-loop
+/// story suggests, and a future narrowing should start from the real boundary.
 ///
 /// ## What the gate does and does not still cover
 ///
@@ -234,6 +262,23 @@ pub fn fanout_verdict_with_cost(
         return (FanoutVerdict::DeclinedNonIntegerAccumulator, per_iter_cost);
     }
     let substantial = per_iter_cost >= VARIABLE_K_PER_ITER_FLOOR_UNITS;
+    // `KARAC_COST_DEBUG=1` prints the numbers behind the verdict. The tags on
+    // `FanoutVerdict` name WHICH gate fired but never the estimate that decided
+    // it, so "why is this body above/below the floor?" meant hand-counting AST
+    // nodes — and that count is easy to get wrong by an order of magnitude. The
+    // carve-out above was documented as unreachable by flat bodies until this
+    // lever showed a flat grayscale body scoring 161 against a floor of 64
+    // (B-2026-07-31-10's correction). Pairs with `KARAC_PROOF_DEBUG=1` in
+    // `index_disjoint.rs`, which covers the proof side one phase earlier.
+    if std::env::var("KARAC_COST_DEBUG").as_deref() == Ok("1") {
+        eprintln!(
+            "karac-cost-debug: per_iter_cost={} floor={} substantial={} memory_bound={}",
+            per_iter_cost,
+            VARIABLE_K_PER_ITER_FLOOR_UNITS,
+            substantial,
+            body_is_memory_bound(body)
+        );
+    }
     if !substantial && body_is_memory_bound(body) {
         return (FanoutVerdict::DeclinedMemoryBound, per_iter_cost);
     }

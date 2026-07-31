@@ -5668,6 +5668,44 @@ fn main() {
     /// `Vec.filled` keeps the program free of any other candidate loop, so the
     /// only reductions are the outer `total` (must fan out) and the inner
     /// `acc` (flat body, must stay declined).
+    /// Rec.601 grayscale in the auto-par-eligible unit-stride form: a FLAT
+    /// memory-bound body (four index reads, no call, no nested loop) that is
+    /// long enough to score 161 against the floor of 64. All channels are 100,
+    /// so every luma is (100*30 + 100*59 + 100*11)/100 = 100 and the byte sum
+    /// is 120 px * 4 * 100 = 48000.
+    const FLAT_SUBSTANTIAL_MEMORY_BOUND_SRC: &str = r#"
+fn gray(src: ref Vec[u8], px: i64) -> Vec[u8] {
+    let n = px * 4i64;
+    let mut out: Vec[u8] = Vec.filled(n, 0u8);
+    for p in 0i64..px {
+        let i = p * 4i64;
+        let r = src[i] as i64;
+        let g = src[i + 1i64] as i64;
+        let b = src[i + 2i64] as i64;
+        let y = (r * 30i64 + g * 59i64 + b * 11i64) / 100i64;
+        out[i] = y as u8;
+        out[i + 1i64] = y as u8;
+        out[i + 2i64] = y as u8;
+        out[i + 3i64] = src[i + 3i64];
+    }
+    out
+}
+
+fn main() {
+    let px: i64 = 120i64;
+    let n = px * 4i64;
+    let mut src: Vec[u8] = Vec.filled(n, 100u8);
+    let out = gray(src, px);
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        sum = sum + (out[i] as i64);
+        i = i + 1i64;
+    }
+    println(sum);
+}
+"#;
+
     const MEMORY_BOUND_NESTED_LOOP_SRC: &str = r#"
 fn main() {
     let kn: i64 = 7i64;
@@ -5699,9 +5737,14 @@ fn main() {
     /// Before the carve-out this declined as memory-bound and ran sequential.
     /// Measured cost of that decline on a 4-core box, 2M samples x 24 reps,
     /// 11 runs, medians: 172.2 ms sequential vs 107.5 ms fanned out — a 1.6x
-    /// loss. `test_ir_memory_bound_body_skips_par_reduce` above pins the other
-    /// side: a FLAT memory-bound body scores far below
-    /// `VARIABLE_K_PER_ITER_FLOOR_UNITS` and still declines.
+    /// loss. `test_ir_memory_bound_body_skips_par_reduce` above pins one other
+    /// side — kata-153's TWO-STATEMENT body scores 14 against the floor of 64
+    /// and still declines — and
+    /// `test_ir_memory_bound_gate_flat_but_substantial_body_fans_out` below
+    /// pins the third: the gate is skipped on a COST threshold, not on the
+    /// presence of a nested loop, so a flat body that is merely long escapes
+    /// too. An earlier version of this comment said a flat body "scores far
+    /// below" the floor; that is false (see B-2026-07-31-10's correction).
     #[test]
     fn test_ir_memory_bound_gate_nested_loop_body_fans_out() {
         let src = MEMORY_BOUND_NESTED_LOOP_SRC;
@@ -5725,6 +5768,57 @@ fn main() {
             "a body with a runtime-bounded nested loop does at least one nested loop's \
              worth of work per iteration, so the memory-bound gate must not claim it; got:\n{ir}"
         );
+    }
+
+    /// A FLAT memory-bound body — no nested loop — that is simply long enough
+    /// to clear `VARIABLE_K_PER_ITER_FLOOR_UNITS`, and therefore escapes the
+    /// memory-bound gate too.
+    ///
+    /// This pins the real boundary, which is NOT "has a nested loop". The gate
+    /// is skipped on a cost threshold, so the question is only whether the body
+    /// scores >= 64. Rec.601 grayscale — four index reads, ~12 statements, zero
+    /// nested loops — scores 161 (`KARAC_COST_DEBUG=1`) and fans out, while
+    /// kata-153's two-statement body scores 14 and does not.
+    ///
+    /// Kept as a test rather than a comment because the claim is easy to get
+    /// backwards: B-2026-07-31-10 originally documented the carve-out as
+    /// unreachable by flat bodies, which this shape falsifies. Measured, the
+    /// escape is a WIN and not a misfire — 1.32x on 4 cores at 12 MP (29.3
+    /// ms/rep sequential vs 22.1 ms/rep) — so the assertion is that it fans
+    /// out, not that it declines.
+    #[test]
+    fn test_ir_memory_bound_gate_flat_but_substantial_body_fans_out() {
+        let src = FLAT_SUBSTANTIAL_MEMORY_BOUND_SRC;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "a flat body scoring above VARIABLE_K_PER_ITER_FLOOR_UNITS must escape the \
+             memory-bound gate — the gate keys on cost, not on nesting; got:\n{ir}"
+        );
+    }
+
+    /// Sink-correctness for the flat-but-substantial path: fanned-out grayscale
+    /// must equal the sequential result.
+    #[test]
+    fn test_e2e_memory_bound_gate_flat_but_substantial_par_matches_serial() {
+        let Some(out) = run_program(FLAT_SUBSTANTIAL_MEMORY_BOUND_SRC) else {
+            return;
+        };
+        assert_eq!(out.trim(), "48000");
     }
 
     /// Sink-correctness for the fire path above: the fanned-out result must
