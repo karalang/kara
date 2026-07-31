@@ -113,16 +113,30 @@ fn sibling_match_arms_same_name_no_spurious_rc() {
 
 #[test]
 fn intra_arm_incomparable_consume_still_fires_rc() {
-    // The fix must not over-suppress: a binding consumed in two
-    // dominance-incomparable branches *within a single arm* is a genuine RC
-    // fallback and must still fire — reported under its original name `s`, not
-    // the internal `s@armN` rename.
+    // The per-arm alpha-renaming must not over-suppress: a genuine RC inside a
+    // SINGLE arm still has to fire, and still has to be reported under the
+    // original name `s` rather than the internal `s@armN` rename. Those two
+    // properties are what this test exists for, and both are still asserted.
+    //
+    // The SHAPE changed with B-2026-07-31-28. It used to be
+    // `if cond { consume(s) } else { consume(s) }`, described here as "a
+    // binding consumed in two dominance-incomparable branches is a genuine RC
+    // fallback" — which is exactly the false positive -28 turned out to be:
+    // the two branches are MUTUALLY EXCLUSIVE, so `s` is consumed once per
+    // path and needs no RC. Dominance-incomparability is a necessary condition
+    // for the RC shape, not a sufficient one, and this test had picked an
+    // incomparable-but-not-actually-reused pair as its example.
+    //
+    // The shape below is genuinely RC and stays inside one arm: the consume is
+    // on one branch and the use is AFTER the join, so the use really is
+    // reachable from the consume.
     let src = "fn consume(s: String) -> i64 { s.len() as i64 }\n\
                shared enum E { A(String), B(String) }\n\
                fn h(e: E, cond: bool) -> i64 {\n\
                    match e {\n\
                        A(s) => {\n\
-                           if cond { consume(s) } else { consume(s) }\n\
+                           let n = if cond { consume(s) } else { 0 };\n\
+                           n + (s.len() as i64)\n\
                        }\n\
                        B(x) => consume(x),\n\
                    }\n\

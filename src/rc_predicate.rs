@@ -227,6 +227,31 @@ fn reassign_kills_by_reachability(
     reach(&empty) && !reach(&forbidden)
 }
 
+/// Forward CFG reachability: is `to` reachable from `from` by following
+/// successor edges (excluding the trivial `from == to`, which the caller's
+/// dominance filter has already ruled out)?
+///
+/// Back-edges are ordinary successors here, so a loop body is reachable from
+/// itself — which is exactly what [`first_witness`]'s check needs: two
+/// `if`/`else` arms inside a loop CAN both run (in different iterations) and
+/// must keep triggering RC, while the same two arms outside a loop cannot. It
+/// is also what keeps a consume INSIDE a loop firing against a use earlier in
+/// the same body, which the next iteration reaches.
+fn cfg_reaches(cfg: &Cfg, from: BlockId, to: BlockId) -> bool {
+    let mut seen: HashSet<BlockId> = HashSet::new();
+    let mut stack: Vec<BlockId> = cfg.block(from).successors.clone();
+    while let Some(n) = stack.pop() {
+        if n == to {
+            return true;
+        }
+        if !seen.insert(n) {
+            continue;
+        }
+        stack.extend(cfg.block(n).successors.iter().copied());
+    }
+    false
+}
+
 /// Find the first (C, U) pair for `binding` that satisfies the RC
 /// predicate, scanning consume sites in source order and the partner U
 /// in source order too. Returns `None` if no such pair exists.
@@ -288,6 +313,65 @@ fn first_witness(
                 if c_terminates && !cfg.closure_body_blocks.contains(ub) {
                     continue;
                 }
+            }
+            // B-2026-07-31-28 — MUTUAL EXCLUSION. Dominance-incomparability is
+            // a NECESSARY condition for the RC shape, not a sufficient one: two
+            // blocks can be incomparable because neither precedes the other on
+            // any path, i.e. they are on mutually exclusive branches. `if b {
+            // takes(l) } else { takes(l) }` consumes `l` exactly once on every
+            // path and needs no RC, but each arm is the other's dominance-
+            // incomparable partner, so the bare predicate fired and inserted a
+            // real retain/release — plus a perf lint telling the author to
+            // restructure already-correct code (restructuring does not clear it;
+            // `#[allow(rc_fallback)]` was the only escape).
+            //
+            // The check is DIRECTIONAL, which is what also settles this entry's
+            // second, undiagnosed instance. RC fallback for trigger 1 means
+            // "re-use AFTER consume", so what matters is whether U can execute
+            // after C — not whether the two blocks are dominance-incomparable.
+            // If U is not forward-reachable from C, no execution runs U after C
+            // and the RC is spurious, whether that is because the two sites are
+            // mutually exclusive (the `if`/`else` shape above) or because U
+            // always runs BEFORE C and only looks incomparable because a loop
+            // header sits between them:
+            //
+            //     while i < 64 { inner.push(..) }   // U — every iteration
+            //     let d = sha256(inner);            // C — once, after the loop
+            //
+            // The loop body does not dominate the post-loop consume (the CFG
+            // admits zero iterations), so dominance called them incomparable and
+            // fired — reporting an "other use" that PRECEDES the consume in
+            // source order, which is what made that report so hard to read.
+            //
+            // The reverse direction is deliberately NOT part of the suppression:
+            // if C is reachable from U that is fine, but if U is reachable from
+            // C the pair is a genuine re-use after consume and must fire.
+            //
+            // This SUBSUMES the terminal-`return` case above (a block whose only
+            // successor is exit reaches nothing), which is left in place rather
+            // than folded in: it is separately gated and separately tested, and
+            // this check is deliberately purely ADDITIVE — it only ever
+            // suppresses, never re-fires something that was suppressed.
+            //
+            // What it must NOT suppress, and does not:
+            //   * the real trigger-1 shape, `if b { takes(l) } … use(l)` after
+            //     the join — U is reachable from C, so the pair survives;
+            //   * the same two arms INSIDE A LOOP — the back-edge makes each arm
+            //     reachable from the other, so iteration 1's consume really can
+            //     precede iteration 2's use and RC is genuine;
+            //   * a sequential double consume — dominance-comparable, filtered
+            //     out above and reported as use-after-move, not RC.
+            //
+            // Gated to `Direct` and to non-closure blocks for the same reason
+            // the terminal-`return` case is: a closure body runs at its
+            // invocation, which CFG edges do not model, so reachability carries
+            // no information about whether the two sites can both execute.
+            if c.consume_origin == ConsumeOrigin::Direct
+                && !cfg.closure_body_blocks.contains(cb)
+                && !cfg.closure_body_blocks.contains(ub)
+                && !cfg_reaches(cfg, *cb, *ub)
+            {
+                continue;
             }
             return Some(RcWitness {
                 binding: binding.to_string(),

@@ -4558,6 +4558,135 @@ fn terminal_return_accumulator_no_rc_fallback() {
 }
 
 #[test]
+fn mutually_exclusive_arms_consuming_once_each_no_rc_fallback() {
+    // B-2026-07-31-28: a value consumed exactly once on each of two MUTUALLY
+    // EXCLUSIVE arms needs no RC — only one arm can run, so it is consumed once
+    // per execution. The bare formal predicate (dominance-incomparable C and U)
+    // fired anyway, because incomparability is a NECESSARY condition for the RC
+    // shape, not a sufficient one: two blocks can be incomparable precisely
+    // because neither precedes the other on any path.
+    //
+    // The `if`/`else` and `match` spellings are both asserted because both were
+    // reported; the equivalent early-`return` spelling was always correct
+    // (`terminal_return_accumulator_no_rc_fallback` above), which is what showed
+    // this was a JOIN defect rather than general flow-insensitivity.
+    for (what, src) in [
+        (
+            "if/else",
+            "fn takes(s: String) -> i64 { s.len() }\n\
+             fn f(l: String, b: bool) -> i64 { if b { takes(l) } else { takes(l) } }",
+        ),
+        (
+            "match",
+            "fn takes(s: String) -> i64 { s.len() }\n\
+             fn f(l: String, b: bool) -> i64 {\n\
+            \x20    match b { true => takes(l), false => takes(l) }\n\
+             }",
+        ),
+    ] {
+        let result = ownership_ok(src);
+        assert!(
+            result.rc_values.get("f").and_then(|m| m.get("l")).is_none(),
+            "{what}: `l` is consumed once per path and must NOT be RC-promoted; got: {:?}",
+            result.rc_values.get("f")
+        );
+    }
+}
+
+#[test]
+fn use_before_consume_with_a_later_loop_no_rc_fallback() {
+    // B-2026-07-31-28's SECOND instance, which that entry recorded as observed
+    // in context but undiagnosed — the flagged "other use" PRECEDES the consume
+    // in source order, which is what made the report unreadable.
+    //
+    // `inner` is filled in a loop and consumed once afterwards, so the use can
+    // only ever run BEFORE the consume: no re-use after consume, no RC. Pure
+    // dominance called the two incomparable because the loop body does not
+    // dominate the post-loop consume (the CFG admits zero iterations).
+    //
+    // The trailing loop is LOAD-BEARING and is why the entry's own reductions
+    // ("a vec built in a while loop and then consumed") all came out clean: with
+    // straight-line code after the consume the blocks collapse enough for
+    // dominance to hold, and only a second loop after the consume keeps them
+    // incomparable. Reduced from `examples/sha256.kara`'s `hmac_sha256`, where
+    // the trailing loop is `for b in inner_digest { outer.push(b) }`.
+    //
+    // This is also why the suppression is directional (`U` not reachable from
+    // `C`) rather than a mutual-exclusion test: these two sites are not mutually
+    // exclusive at all — `C` IS reachable from `U` — but `U` still never runs
+    // after `C`.
+    let result = ownership_ok(
+        "fn sha256(v: Vec[u8]) -> Vec[u8] { v }\n\
+         fn f() -> i64 {\n\
+        \x20    let mut inner: Vec[u8] = Vec.new();\n\
+        \x20    let mut i: i64 = 0;\n\
+        \x20    while i < 64 { inner.push(0u8); i = i + 1; }\n\
+        \x20    let d = sha256(inner);\n\
+        \x20    for b in d { i = i + (b as i64); }\n\
+        \x20    i\n\
+         }",
+    );
+    assert!(
+        result
+            .rc_values
+            .get("f")
+            .and_then(|m| m.get("inner"))
+            .is_none(),
+        "`inner` is built then consumed once and must NOT be RC-promoted; got: {:?}",
+        result.rc_values.get("f")
+    );
+}
+
+#[test]
+fn branch_arms_inside_a_loop_still_rc_fallback() {
+    // The guard the B-2026-07-31-28 suppression must not break, and the reason
+    // it is CFG reachability rather than a syntactic "same if/else" test: the
+    // very same two mutually-exclusive arms INSIDE A LOOP really can both run —
+    // one in iteration 1, the other in iteration 2 — so iteration 1's consume is
+    // genuinely re-used and RC must still fire. The back-edge makes each arm
+    // reachable from the other, so the pair survives the suppression.
+    let result = ownership_ok(
+        "fn takes(s: String) -> i64 { s.len() }\n\
+         fn f(l: String, n: i64) -> i64 {\n\
+        \x20    let mut t = 0;\n\
+        \x20    let mut i = 0;\n\
+        \x20    while i < n {\n\
+        \x20        if i == 0 { t = t + takes(l); } else { t = t + takes(l); }\n\
+        \x20        i = i + 1;\n\
+        \x20    }\n\
+        \x20    t\n\
+         }",
+    );
+    assert!(
+        result.rc_values.get("f").and_then(|m| m.get("l")).is_some(),
+        "two arms inside a loop CAN both run across iterations — `l` must still \
+         be RC-promoted; got: {:?}",
+        result.rc_values.get("f")
+    );
+}
+
+#[test]
+fn consume_on_one_arm_with_use_after_join_still_rc_fallback() {
+    // The canonical trigger-1 shape, asserted alongside the B-2026-07-31-28
+    // suppression so a too-aggressive version of it fails here: the consume is
+    // on one arm and the use is AFTER the join, which is forward-reachable from
+    // the consume, so a real re-use after consume exists and RC is required.
+    let result = ownership_ok(
+        "fn takes(s: String) -> i64 { s.len() }\n\
+         fn f(l: String, b: bool) -> i64 {\n\
+        \x20    let n = if b { takes(l) } else { 0 };\n\
+        \x20    n + l.len()\n\
+         }",
+    );
+    assert!(
+        result.rc_values.get("f").and_then(|m| m.get("l")).is_some(),
+        "use after the join is reachable from the consume — `l` must still be \
+         RC-promoted; got: {:?}",
+        result.rc_values.get("f")
+    );
+}
+
+#[test]
 fn closure_capture_with_terminal_outer_consume_still_rc() {
     // B-2026-07-11-9 guard: the terminal-return suppression must NOT weaken the
     // genuine closure-capture RC. Here the closure body READS `cfg` (deferred to

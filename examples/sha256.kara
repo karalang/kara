@@ -190,17 +190,11 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
 // HMAC = H((K XOR opad) || H((K XOR ipad) || msg)), with the key reduced by
 // H when it exceeds the 64-byte block size and zero-padded when shorter.
 //
-// The `allow` covers two B-2026-07-31-28 reports in this function. The first
-// is `key`: consumed on exactly one of two MUTUALLY EXCLUSIVE branches of the
-// `normalized` binding below, so no RC is needed, but the analysis joins the
-// branches and calls it a re-use. Restructuring does not help — the
-// single-expression `if` below is already minimal and still trips it. The
-// second is `inner`, reported as "consume at the `sha256(inner)` line, other
-// use at the earlier `inner.push(b)` line" — i.e. the flagged re-use precedes
-// the consume in source order. That one did not reduce to a small repro (a
-// vec built across two loops and then consumed is clean on its own), so it is
-// recorded as observed-in-context rather than explained.
-#[allow(rc_fallback)]
+// This function carried `#[allow(rc_fallback)]` for the two B-2026-07-31-28
+// reports it used to draw — `key`, consumed on exactly one of two mutually
+// exclusive branches, and `inner`, whose flagged "re-use" actually PRECEDED
+// the consume. Both were false positives and both are gone, so the allow is
+// gone with them; the code is unchanged.
 fn hmac_sha256(key: Vec[u8], msg: Vec[u8]) -> Vec[u8] {
     // A key longer than the block is replaced by its own digest — the path
     // RFC 4231 test case 6 exists to exercise. Normalizing to one binding
@@ -268,9 +262,9 @@ fn repeat_byte(b: u8, n: i64) -> Vec[u8] {
     v
 }
 
-// Same B-2026-07-31-28 shape: `label` is consumed on exactly one of the two
-// arms, so the RC the analysis inserts is never needed at runtime.
-#[allow(rc_fallback)]
+// `label` is consumed on exactly one of the two arms. This drew the third
+// B-2026-07-31-28 false positive and needed an `#[allow(rc_fallback)]`; the
+// analysis is path-sensitive across the join now, so it does not.
 fn check(label: String, got: String, want: String) {
     if got == want {
         println(label + " ok");
