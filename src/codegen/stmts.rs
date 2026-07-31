@@ -2296,14 +2296,6 @@ impl<'ctx> super::Codegen<'ctx> {
             StmtKind::Let {
                 pattern, value, ty, ..
             } => {
-                // Whole-value move of a container binding (`let b = a;`,
-                // `Box2 { s: d }`, `(h, 1)`): retract the SOURCE's
-                // `__karac_dropelems_*` bodies action before the destination
-                // registers its own, or the body fires twice — under codegen
-                // the second time over the cap-zeroed moved-from slot
-                // (`self.id` reads 0). Interp twin:
-                // `record_container_bodies_move_sources`.
-                self.disarm_container_bodies_move_sources(value);
                 // B-2026-07-31-20 — a `with_provider(...)` RHS has no callee
                 // fn whose declared return type the derivations below could
                 // consult, so an unannotated heap-typed binding
@@ -5177,13 +5169,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(elem_tes) =
                                     self.tuple_binding_elem_tes(ty.as_ref(), value)
                                 {
-                                    // Recorded so a later bare rebind
-                                    // (`let t2 = t;`) can re-register the
-                                    // bodies walk for the destination — the
-                                    // rebind has no annotation/literal to
-                                    // derive element types from.
-                                    self.tuple_var_elem_tes
-                                        .insert(var_name.clone(), elem_tes.clone());
                                     if let Some(bodies) =
                                         self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elem_tes)
                                     {
@@ -6042,11 +6027,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::Assign { target, value } => {
-                // `f = g;` moves g's container value into f — retract g's
-                // bodies action, same rule as the Let-arm hook above (the
-                // reassign shape double-printed the payload body on both
-                // backends).
-                self.disarm_container_bodies_move_sources(value);
                 // B-2026-07-26-1: arm the one-shot latch when this exact
                 // statement was proven non-trapping. Taken by the first `add`
                 // the RHS reaches — which, for the recognized
@@ -7944,15 +7924,6 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let ExprKind::Tuple(elems) = &value.kind {
             return Some(elems.iter().map(|e| self.infer_arg_elem_te(e)).collect());
-        }
-        // Bare rebind `let t2 = t;` — the destination inherits the source's
-        // recorded element types, so its bodies walk re-registers after the
-        // move disarms the source's (parity with the interpreter, whose
-        // value-driven tuple walk fires for the destination automatically).
-        if let ExprKind::Identifier(n) = &value.kind {
-            if let Some(tes) = self.tuple_var_elem_tes.get(n.as_str()) {
-                return Some(tes.clone());
-            }
         }
         // #24 (B-2026-06-14-2) — the call-result source with no annotation
         // (`let p = ret_tuple(i)` where `ret_tuple -> (Tok, i64)`). The RHS is a

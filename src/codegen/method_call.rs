@@ -6275,7 +6275,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return Err(
                 "`Iterator.reduce()` is not yet supported under `karac build` for this shape \
-                        (codegen); it works under `karac run` (the tree-walk interpreter). \
+                        (codegen); it works under `karac run --interp` (the tree-walk interpreter). \
                         Re-run with `--interp` (or `KARAC_RUN_JIT=0`), or use `.fold(init, f)` \
                         for a non-optional accumulation."
                     .to_string(),

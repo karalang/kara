@@ -1075,7 +1075,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.column_elem_is_string(elem) {
             return Err(
                 "Column.from_iter_nullable for String is not yet supported by the native \
-                 backend (`karac build`); it works under `karac run` and lands in a follow-on \
+                 backend (`karac build`); it works under `karac run --interp` and lands in a follow-on \
                  codegen slice. Use `Column.from_vec(<Vec[String] binding>)` for now."
                     .to_string(),
             );
@@ -1291,7 +1291,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return Err(format!(
                 "Column[String].{method} is not yet supported by the native backend \
-                 (`karac build`); it works under `karac run` and lands in a follow-on \
+                 (`karac build`); it works under `karac run --interp` and lands in a follow-on \
                  codegen slice. Supported on String in build today: from_vec, len, \
                  null_count, valid_count, is_null, iter_valid."
             ));
@@ -2449,7 +2449,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // clone plumbing; POD-only for this cut.
         if self.column_elem_is_string(elem) {
             return Err("Column[String].fold is not yet supported by the native \
-                        backend (`karac build`); it works under `karac run`."
+                        backend (`karac build`); it works under `karac run --interp`."
                 .to_string());
         }
 
@@ -2628,7 +2628,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Same-element-type only (`Fn(T) -> T`); the first native cut is POD-only
     /// and inline-literal-only, matching `Column.fold`. A heap element
     /// (`Column[String]`) or a closure-valued local is rejected loudly (each
-    /// works under `karac run`), never a silent miscompile.
+    /// works under `karac run --interp`), never a silent miscompile.
     fn compile_column_map(
         &mut self,
         control: PointerValue<'ctx>,
@@ -2646,7 +2646,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err(
                 "Column.map expects an inline closure literal under `karac build`; a \
                  closure-valued local / named fn is not yet supported by the native \
-                 backend (it works under `karac run`)."
+                 backend (it works under `karac run --interp`)."
                     .to_string(),
             );
         };
@@ -2658,7 +2658,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if self.column_elem_is_string(elem) {
             return Err("Column[String].map is not yet supported by the native \
-                        backend (`karac build`); it works under `karac run`."
+                        backend (`karac build`); it works under `karac run --interp`."
                 .to_string());
         }
 
@@ -2730,7 +2730,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err(
                 "Column.zip_with expects an inline closure literal under `karac build`; a \
                  closure-valued local / named fn is not yet supported by the native \
-                 backend (it works under `karac run`)."
+                 backend (it works under `karac run --interp`)."
                     .to_string(),
             );
         };
@@ -2743,7 +2743,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.column_elem_is_string(elem) {
             return Err(
                 "Column[String].zip_with is not yet supported by the native \
-                        backend (`karac build`); it works under `karac run`."
+                        backend (`karac build`); it works under `karac run --interp`."
                     .to_string(),
             );
         }

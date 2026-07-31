@@ -1284,7 +1284,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // `a: Option[i64]` (which would mis-route a scalar `==` to the heap
         // String comparator). Repopulated below from params and at let sites.
         self.enum_inst_var_types.clear();
-        self.tuple_var_elem_tes.clear();
         self.string_vars.clear();
         self.ascii_const_string_lets.clear();
         self.slice_elem_types.clear();

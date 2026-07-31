@@ -4090,7 +4090,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// First cut is POD-only + inline-literal-only, exactly like `Column.fold`:
     /// a closure-valued local / named fn or a heap / aggregate accumulator is
-    /// rejected LOUDLY (each works under `karac run`). Tensor elements are
+    /// rejected LOUDLY (each works under `karac run --interp`). Tensor elements are
     /// always numeric (no `String` element to guard).
     fn compile_tensor_fold(
         &mut self,
@@ -4290,7 +4290,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err(
                 "Tensor.map expects an inline closure literal under `karac build`; a \
                  closure-valued local / named fn is not yet supported by the native \
-                 backend (it works under `karac run`)."
+                 backend (it works under `karac run --interp`)."
                     .to_string(),
             );
         };
@@ -4365,7 +4365,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Err(
                 "Tensor.zip_with expects an inline closure literal under `karac build`; a \
                  closure-valued local / named fn is not yet supported by the native \
-                 backend (it works under `karac run`)."
+                 backend (it works under `karac run --interp`)."
                     .to_string(),
             );
         };

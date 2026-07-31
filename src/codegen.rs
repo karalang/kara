@@ -2955,14 +2955,6 @@ pub(super) struct Codegen<'ctx> {
     /// at the reliable, absolute-spanned binding sites; this name map is the
     /// reliable lookup at use sites.
     pub(crate) enum_inst_var_types: HashMap<String, TypeExpr>,
-    /// Element `TypeExpr`s per let-bound TUPLE variable, recorded where the
-    /// let-site resolves them (annotation / literal / callee return). A bare
-    /// rebind `let t2 = t;` has none of those sources, so without this table
-    /// the destination could not re-register the tuple's element-bodies walk
-    /// (`__karac_dropelems_tuple_*`) after the move disarms the source's —
-    /// the body would then run on one backend and not the other. Cleared per
-    /// function alongside `enum_inst_var_types`.
-    pub(crate) tuple_var_elem_tes: HashMap<String, Vec<TypeExpr>>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -7620,7 +7612,6 @@ impl<'ctx> Codegen<'ctx> {
             enum_inst_type_exprs: HashMap::new(),
             concrete_named_type_exprs: HashMap::new(),
             enum_inst_var_types: HashMap::new(),
-            tuple_var_elem_tes: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             mono_payload_binding_type_exprs: HashMap::new(),

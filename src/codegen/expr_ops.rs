@@ -4313,7 +4313,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return Err(
                 "structural `==`/`!=` on this reference type is not yet supported under \
-                 `karac build` (codegen); it works under `karac run`. A direct \
+                 `karac build` (codegen); it works under `karac run --interp`. A direct \
                  `shared struct` comparison is supported — the remaining gap is a \
                  `shared enum`, or a `shared struct` nested inside a by-value struct."
                     .to_string(),

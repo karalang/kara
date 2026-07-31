@@ -130,16 +130,6 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                // Bare-identifier key/value args move their container values
-                // into the map — same disarm as Vec.push (codegen twin: the
-                // `disarm_container_bodies_for_arg` calls at the map insert
-                // lowering).
-                for arg in args.iter().take(2) {
-                    if let ExprKind::Identifier(n) = &arg.value.kind {
-                        let n = n.clone();
-                        self.record_container_move_source_name(&n);
-                    }
-                }
                 if let Value::Map(mut m) = obj {
                     // Map.insert(key, value) -> Option[V] (old value)
                     let value = args
