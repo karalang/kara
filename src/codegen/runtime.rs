@@ -5114,6 +5114,58 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Whole-value MOVE disarm for container-bodies actions. A binding whose
+    /// value moves out wholesale — `let b = a;`, `x = a;`, `S { f: a }`,
+    /// `(a, 1)` — hands its container's Drop-bearing elements/payload to the
+    /// destination, but the source's `__karac_dropelems_*` action stayed armed
+    /// and fired on the moved-from slot. For an enum payload the move
+    /// cap-zeroes the source, so the body ran over ZEROED data (`self.id`
+    /// printed 0) — the silent wrong-value profile this entry's layer-3 note
+    /// warns about; for a Vec both walks read the same shared buffer and the
+    /// body printed twice. The destination re-registers per its own let-site
+    /// rule, so removal here leaves exactly one owner of the bodies.
+    ///
+    /// Static and flow-insensitive, like the match-arm disarm: a move inside a
+    /// conditional disarms on every path, which can only under-fire (a leak,
+    /// the safe side). The interpreter's twin is
+    /// `record_container_bodies_move_sources` — the two must cover the same
+    /// expression shapes or the backends print different things.
+    pub(super) fn disarm_container_bodies_move_sources(&mut self, value: &Expr) {
+        match &value.kind {
+            ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
+            ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    if let ExprKind::Identifier(n) = &f.value.kind {
+                        self.suppress_container_elem_bodies_for_var(n);
+                    }
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                for e in elems {
+                    if let ExprKind::Identifier(n) = &e.kind {
+                        self.suppress_container_elem_bodies_for_var(n);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Consuming-ARG form of [`Self::disarm_container_bodies_move_sources`]:
+    /// a bare-identifier arg to a container-consuming method (`v.push(e)`,
+    /// `m.insert(k, e)`) moves the binding's value into the container, and the
+    /// same zeroed-payload misfire follows. The container's own element walk
+    /// does not (yet) reach enum elements, so the residual is a leak — the
+    /// safe side — never a double body.
+    pub(super) fn disarm_container_bodies_for_arg(&mut self, e: &Expr) {
+        match &e.kind {
+            ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
+            ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
+            _ => {}
+        }
+    }
+
     /// Channel sibling of [`suppress_user_drop_for_var`]: drop the parent's
     /// scope-exit `DropChannelEnd` for a channel end (`Sender`/`Receiver`)
     /// `name` that was moved into a spawned task (which now owns the drop).

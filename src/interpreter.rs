@@ -417,6 +417,21 @@ pub struct Interpreter<'a> {
     /// SEPARATE set from `moved_out_drop_field_bindings` so the two disarms
     /// can't cross-talk when a name is later rebound to a different shape.
     pub(crate) moved_out_enum_payload_bindings: HashSet<String>,
+    /// Container binding names whose WHOLE value moved out — `let b = a;`,
+    /// `x = a;`, `return a;`, `S { f: a }`, `(a, 1)`, `v.push(a)`. The
+    /// destination (or the container) owns the elements/payload now, so the
+    /// source's element/payload-body walks (`run_array_element_user_drops`,
+    /// `run_enum_payload_user_drops`) must skip it or the body fires twice —
+    /// and under codegen the second fire reads the cap-zeroed moved-from slot
+    /// (`self.id` prints 0), the silent wrong-value profile. Codegen's twin is
+    /// `disarm_container_bodies_move_sources` /
+    /// `disarm_container_bodies_for_arg`. A set rather than an action
+    /// retraction because the source's `Drop` action may live in an OUTER
+    /// block's cleanup vec (a move inside an `if` body); the walks consult
+    /// this at fire time, which reaches every frame. A fresh `let` (or
+    /// assign) of the same name re-arms it — see the removal in the Let/
+    /// Assign arms.
+    pub(crate) moved_out_container_bodies_bindings: HashSet<String>,
     /// REPL value-snapshot output channel. Populated by the Let arm of
     /// `eval_stmt_cf` whenever the binding name is in
     /// `let_snapshot_watch`. The REPL reads this after `run()` returns;
@@ -691,6 +706,7 @@ impl<'a> Interpreter<'a> {
             let_snapshot_watch: HashSet::new(),
             moved_out_drop_field_bindings: HashSet::new(),
             moved_out_enum_payload_bindings: HashSet::new(),
+            moved_out_container_bodies_bindings: HashSet::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,
             timed_out: false,
