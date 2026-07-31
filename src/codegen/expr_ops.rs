@@ -6153,11 +6153,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     let len = i64_t.const_int(at.len() as u64, false);
                     return Ok(Some(self.build_slice_header(slice_ty, slot.ptr, len)));
                 }
+                // The two arms below read the binding's payload IN PLACE, so
+                // they must go through `get_data_ptr` rather than `slot.ptr`:
+                // for a `ref Slice[T]` / `ref Vec[T]` PARAM the alloca holds a
+                // POINTER to the caller's header, not the header itself, and
+                // for an RC-promoted binding it holds the box pointer. Reading
+                // `slot.ptr` directly is only correct for an owned local.
+                // B-2026-07-30-18: a `ref` container param forwarded to a
+                // BY-VALUE `Slice[T]` param loaded `{header_ptr, whatever sits
+                // next on the stack}` — `.len()` came back as a stack address
+                // (JIT) or a constant (AOT), and `v[i]` indexed off the header
+                // itself, so `v[1]` read the len field and `v[0]` the data
+                // pointer. `get_data_ptr` is the canonical accessor for exactly
+                // this "owned alloca, ref param, or module global" fork, and is
+                // what the `ref`-arg fast path in `call_dispatch.rs` uses.
+                let payload = self.get_data_ptr(var_name).unwrap_or(slot.ptr);
                 // Already a slice: load and pass through.
                 if self.slice_elem_types.contains_key(var_name.as_str()) {
                     let loaded = self
                         .builder
-                        .build_load(slice_ty, slot.ptr, "slice.arg")
+                        .build_load(slice_ty, payload, "slice.arg")
                         .unwrap();
                     return Ok(Some(loaded));
                 }
@@ -6167,7 +6182,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let vec_ty = self.vec_struct_type();
                     let data_ptr_ptr = self
                         .builder
-                        .build_struct_gep(vec_ty, slot.ptr, 0, "coerce.v.data.ptr")
+                        .build_struct_gep(vec_ty, payload, 0, "coerce.v.data.ptr")
                         .unwrap();
                     let data = self
                         .builder
@@ -6176,7 +6191,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into_pointer_value();
                     let len_ptr = self
                         .builder
-                        .build_struct_gep(vec_ty, slot.ptr, 1, "coerce.v.len.ptr")
+                        .build_struct_gep(vec_ty, payload, 1, "coerce.v.len.ptr")
                         .unwrap();
                     let len = self
                         .builder

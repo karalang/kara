@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 188 | 0 |
+| miscompile | 189 | 0 |
 | leak | 102 | 1 |
 | codegen-gap | 86 | 0 |
 | double-free | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 555 | 4 |
+| codegen | 556 | 4 |
 | typecheck | 104 | 1 |
 | interp | 81 | 3 |
 | ownership | 33 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **773 surfaced · 6 open · 759 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **774 surfaced · 6 open · 760 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -137,9 +137,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **773 surfaced 
 | B-2026-07-31-1 | 2026-07-31 | typecheck | high | NO METHOD-NAME CHECKING on baked-stdlib handle types — `f.totally_bogus_method_xyz()` on a `File`, `TcpStream`, `Mutex`, `Regex`, `Pool`, … typechecks clean, while the same call on `String`/`Vec`/`Map` is correctly rejected. 11 of 11 resolvable types affected, so every typo on those surfaces escapes `karac check` and fails later at codegen or runtime. | — |
 | B-2026-07-31-4 | 2026-07-31 | interp | high | INTERPRETER LOSES PROVIDER MUTATIONS: a `mut ref self` provider method called inside `with_provider` has no visible effect — two `bump()` calls read back 0, not 2. Codegen gets it right (prints 2), so this is a silent WRONG ANSWER that diverges from the backend it is meant to preview. | — |
 
-### Fixed (759)
+### Fixed (760)
 
-<details><summary>759 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>760 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -900,6 +900,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **773 surfaced 
 | B-2026-07-30-14 | typecheck | high | A MAP LITERAL typed as `HashMap<K, V>` — a name Kāra source cannot write — so it matched no annotation: `let m: Map[String, i64] = Map["x": 1];` fail… | b9995ce |
 | B-2026-07-30-16 | typecheck+codegen+interp | high | `File.sync_all()` / `sync_data()` — the durability API design.md:9150 mandates — TYPECHECKS CLEAN but is unimplemented in codegen AND the interpreter… | 38808e0 |
 | B-2026-07-30-17 | typecheck | medium | Map LOOKUP (`get` / `get_or` / `contains_key` / `remove`) rejected a borrowed key: `m.get(key)` where `key: ref String` failed with `expected 'String… | 097f0a4 |
+| B-2026-07-30-18 | codegen | high | SILENT WRONG OUTPUT + OUT-OF-BOUNDS READ (run-vs-build): a `ref Slice[T]` / `ref Vec[T]` PARAM forwarded to a BY-VALUE `Slice[T]` parameter is read a… | — |
 | B-2026-07-31-2 | typecheck | medium | `Ok(x)` / `Err(x)` / `Some(x)` did not push the expected PAYLOAD type inward, so a type-inferred constructor in the payload never resolved: `fn f() -… | dcdc9e1 |
 | B-2026-07-31-3 | typecheck | high | CONTRADICTORY RULES: E_ENUM_NESTED_ENUM_PAYLOAD said to mark a nested inner enum `shared`, while E_NOT_CROSS_TASK said a `shared enum` cannot cross a… | 895d4da |
 

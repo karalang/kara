@@ -11371,6 +11371,55 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-30-18): a `ref Slice[T]` / `ref Vec[T]` PARAM
+    /// forwarded to a BY-VALUE `Slice[T]` parameter — `fn via(v: ref Slice[i64])
+    /// -> i64 { blen(v) }` with `fn blen(v: Slice[i64]) -> i64 { v.len() }`.
+    ///
+    /// The sibling of B-2026-07-30-6, one level down: that one was the `ref`-ARG
+    /// path (the callee also takes `ref`), this one is the by-value coercion in
+    /// `coerce_to_slice`. Its Identifier fast-path read the payload straight out
+    /// of `slot.ptr`, which is the header only for an OWNED local; for a `ref`
+    /// param the alloca holds a POINTER to the caller's header, so the load
+    /// produced `{header_ptr, whatever sits next on the stack}`. Symptoms, all
+    /// with a green `karac check`: `.len()` returned a stack address under the
+    /// JIT and a constant (1073741824) under AOT; `v[1]` read the len field
+    /// (returning 4 for a 4-element slice) because the data pointer was the
+    /// header itself, an OUT-OF-BOUNDS read the JIT did not trap; a `String`
+    /// element printed garbage bytes. The interpreter was correct throughout.
+    ///
+    /// Source is irrelevant (Array and Vec both), which is what separates this
+    /// from the Array-header family — the defect is in how the FORWARDING
+    /// binding is read, not in what it points at.
+    #[test]
+    fn e2e_ref_container_param_forwarded_to_by_value_slice_param() {
+        if let Some(out) = run_program(
+            "fn blen(v: Slice[i64]) -> i64 { v.len() }\n\
+             fn bidx(v: Slice[i64]) -> i64 { v[1] }\n\
+             fn bfirst(v: Slice[String]) -> String { v[0] }\n\
+             fn via_refslice_len(v: ref Slice[i64]) -> i64 { blen(v) }\n\
+             fn via_refslice_idx(v: ref Slice[i64]) -> i64 { bidx(v) }\n\
+             fn via_refvec_len(v: ref Vec[i64]) -> i64 { blen(v) }\n\
+             fn via_refvec_idx(v: ref Vec[i64]) -> i64 { bidx(v) }\n\
+             fn via_refslice_str(v: ref Slice[String]) -> String { bfirst(v) }\n\
+             fn main() {\n\
+             \x20   let a: Array[i64, 4] = [100i64, 7i64, 3i64, 4i64];\n\
+             \x20   println(f\"{via_refslice_len(a)}\");\n\
+             \x20   println(f\"{via_refslice_idx(a)}\");\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(100i64); v.push(7i64); v.push(3i64); v.push(4i64);\n\
+             \x20   println(f\"{via_refslice_len(v)}\");\n\
+             \x20   println(f\"{via_refvec_len(v)}\");\n\
+             \x20   println(f\"{via_refvec_idx(v)}\");\n\
+             \x20   let mut s: Vec[String] = Vec.new();\n\
+             \x20   s.push(\"own-\" + \"x\");\n\
+             \x20   s.push(\"own-\" + \"y\");\n\
+             \x20   println(f\"[{via_refslice_str(s)}]\");\n\
+             }",
+        ) {
+            assert_eq!(out, "4\n7\n4\n4\n7\n[own-x]\n");
+        }
+    }
+
     /// B-2026-07-03-7 (codegen side): `Vec[Struct].sort()` and
     /// `Vec[Enum].sort()` for a `#[derive(Ord)]` user type. Pre-fix codegen
     /// errored "Vec.sort() in codegen supports integer, String, float, tuple,
