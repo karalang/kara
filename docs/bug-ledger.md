@@ -918,7 +918,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **790 surfaced 
 | B-2026-07-31-15 | interp+typecheck | medium | `break` out of an enclosing loop from inside a `with_provider` closure body makes the interpreter return UNIT from an i64 function — the Break contro… | c18c457 |
 | B-2026-07-31-16 | codegen | low | `return` inside a `with_provider` CLOSURE body is closure-scoped per the typechecker and interpreter (`let x = with_provider[R](v, \|\| { return 8; });… | 7cd69b0 |
 | B-2026-07-31-17 | codegen | low | A let-bound value expression that TERMINATES (`let x = { return 5; }; tail`) fails module verification under codegen — the let-site emits its store a… | e92c16b |
-| B-2026-07-31-18 | typecheck | low | The typechecker types a `return E` inside a `with_provider(p, \|\| { .. | — |
+| B-2026-07-31-18 | typecheck | low | The typechecker types a `return E` inside a `with_provider(p, \|\| { .. | 64c4df5 |
 
 </details>
 
