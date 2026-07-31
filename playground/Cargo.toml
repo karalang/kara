@@ -3,6 +3,7 @@ name = "karac-playground"
 version = "0.1.0"
 edition = "2021"
 publish = false
+rust-version.workspace = true
 
 # Browser playground for tracker line 703 (`play.kara-lang.org`).
 # Builds to `wasm32-unknown-unknown` via `wasm-pack build --target web`;

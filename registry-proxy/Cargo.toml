@@ -3,6 +3,7 @@ name = "kara-registry-proxy"
 version = "0.1.0"
 edition = "2021"
 publish = false
+rust-version.workspace = true
 license = "MIT OR Apache-2.0"
 
 # Minimal **reference / dev** registry proxy for the Kāra package manager

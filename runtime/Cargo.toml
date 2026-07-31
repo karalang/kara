@@ -3,6 +3,10 @@ name = "karac-runtime"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# Same MSRV as the root crate — see `[workspace.package]` in the top-level
+# Cargo.toml. This is the member downstream code actually links, so a
+# declared floor matters most here.
+rust-version.workspace = true
 # Same license as the root `karac` crate — declared so cargo-deny's
 # license gate does not flag this first-party crate as `unlicensed`.
 license = "MIT OR Apache-2.0"

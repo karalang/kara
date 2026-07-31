@@ -3,6 +3,7 @@ name = "karac-kernel"
 version = "0.1.0"
 edition = "2021"
 publish = false
+rust-version.workspace = true
 
 # Jupyter kernel for tracker line 719. Built as a separate workspace
 # member (mirrors the `playground/` pattern) so libzmq + HMAC + Jupyter

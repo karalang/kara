@@ -38,16 +38,32 @@ exclude = [
     "examples/ws_idle_holder/rust",
 ]
 
+# Fields every member inherits via `<field>.workspace = true`.
+[workspace.package]
+# MSRV — the oldest rustc this workspace compiles on, and a real promise:
+# CI's `msrv` job reads this value and runs `cargo check --all --all-targets`
+# on exactly that release, so a stray use of a newer language or std feature
+# fails here rather than for whoever is building on the minimum.
+#
+# It is currently the same minor as `rust-toolchain.toml`'s pin, but the two
+# are independent knobs — the pin is the ceiling every other job runs, this is
+# the floor. Bumping the pin does not require bumping this; only a change that
+# genuinely needs newer rustc does, and the `msrv` job is what says so.
+#
+# Declared here rather than on `[package]` so the members inherit it too. A
+# per-crate MSRV would be a fiction — they share one lockfile and one pinned
+# toolchain, so no member can in practice build on a rustc the root crate
+# can't. Without inheritance the members simply declared *no* floor, which
+# means cargo would happily start compiling `karac-runtime` on an ancient
+# toolchain and fail somewhere inside the dep tree instead of up front.
+rust-version = "1.94"
+
 [package]
 name = "karac"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-# MSRV. Set to the toolchain `rust-toolchain.toml` pins, because that is the
-# only version the gate actually verifies — claiming a lower floor we never
-# build against would be a guess, not a guarantee. Raise both together; see
-# the header comment in `rust-toolchain.toml` for the bump procedure.
-rust-version = "1.94"
+rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

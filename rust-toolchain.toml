@@ -20,9 +20,14 @@
 # Bumping: change `channel` here, run the full gate
 # (`cargo fmt --all -- --check`, `cargo clippy --all --all-targets --
 # -D warnings`, `cargo test --all`), and land it as its own
-# `chore: bump pinned toolchain to <version>` commit. Keep
-# `rust-version` in `Cargo.toml` in step — that field is the MSRV we
-# actually verify, and this pin is what verifies it.
+# `chore: bump pinned toolchain to <version>` commit.
+#
+# The pin and the MSRV are separate decisions and no longer move together.
+# `[workspace.package] rust-version` in `Cargo.toml` is the floor, verified
+# on its own by CI's `msrv` job (which builds on exactly that release, not
+# on this pin); this file is the ceiling every other job runs. Raising the
+# pin does not oblige you to raise the floor — only a change that genuinely
+# needs newer rustc does, and the `msrv` job is what tells you.
 [toolchain]
 channel = "1.94.1"
 components = ["rustfmt", "clippy"]

@@ -933,6 +933,70 @@ jobs:
           # defines.
           arguments: --all-features
 
+  # ── MSRV floor ─────────────────────────────────────────────────────
+  # `[workspace.package] rust-version` claims an oldest-supported rustc, and
+  # every member inherits it. Nothing else in this file verifies that claim:
+  # all the other jobs run the toolchain `rust-toolchain.toml` pins, and the
+  # pin sits AT the floor — so a stray use of a newer language or std feature
+  # compiles green here and only breaks for someone building on the declared
+  # minimum. That makes the field a guess unless something builds on it.
+  #
+  # The floor is read from the manifest rather than hardcoded, so this gate
+  # cannot drift out of step with what the crate advertises: bump
+  # `rust-version` and the next run checks the new value. `RUSTUP_TOOLCHAIN`
+  # overrides `rust-toolchain.toml` — the same mechanism `stable-drift` uses
+  # below, pointed the other way (oldest supported vs. newest available).
+  #
+  # This one blocks. A red run means the declared floor became false, and the
+  # fix is a deliberate choice — raise `rust-version`, or hold the dependency
+  # that raised it — not something to discover downstream.
+  #
+  # Scope: default features. `--features llvm` needs system LLVM and is
+  # covered by `codegen-e2e` on the pinned toolchain.
+  msrv:
+    name: MSRV floor (declared rust-version)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the declared MSRV
+        id: msrv
+        run: |
+          set -euo pipefail
+          # Only `[workspace.package]` declares a literal; members inherit
+          # with `rust-version.workspace = true`, which this pattern skips.
+          msrv=$(grep -oP '^rust-version = "\K[^"]+' Cargo.toml | head -1 || true)
+          if [ -z "$msrv" ]; then
+            echo "::error file=Cargo.toml::no literal rust-version in [workspace.package]"
+            exit 1
+          fi
+          # rustup wants a full x.y.z; a two-component MSRV means ".0" — the
+          # first release of that minor, which is the actual floor.
+          case "$msrv" in
+            *.*.*) toolchain="$msrv" ;;
+            *)     toolchain="$msrv.0" ;;
+          esac
+          echo "declared MSRV: $msrv  ->  toolchain $toolchain"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
+      # rustup ships on the runner image, so no action is needed here — and
+      # passing an arbitrary version to `dtolnay/rust-toolchain` would mean
+      # referencing it at `@master`, a floating ref in a job whose whole
+      # point is pinning.
+      - name: Install the floor toolchain
+        run: rustup toolchain install '${{ steps.msrv.outputs.toolchain }}' --profile minimal
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check at the floor
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.toolchain }}
+        run: |
+          rustc --version
+          cargo check --all --all-targets
+
   # ── Toolchain drift canary ─────────────────────────────────────────
   # `rust-toolchain.toml` pins the toolchain so that rustfmt output, the
   # clippy lint set, and the size/speed baselines are reproducible. The

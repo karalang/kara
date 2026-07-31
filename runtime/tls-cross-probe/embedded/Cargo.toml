@@ -33,6 +33,7 @@
 name = "karac-tls-cross-probe-embedded"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 
 [dependencies]
 # no_std rustls: same `tls12` + `ring` as the runtime, minus `std`/`logging`.

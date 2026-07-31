@@ -3,6 +3,7 @@ name = "kara-lsp"
 version = "0.1.0"
 edition = "2021"
 publish = false
+rust-version.workspace = true
 
 # Language server for Kāra (roadmap Track 3, `kara-lsp`). Built as a
 # separate workspace member (mirrors the `kernel/` + `playground/`
