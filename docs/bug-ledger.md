@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 196 | 0 |
+| miscompile | 197 | 1 |
 | leak | 108 | 3 |
 | codegen-gap | 88 | 0 |
 | double-free | 83 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 580 | 4 |
+| codegen | 581 | 5 |
 | typecheck | 108 | 0 |
-| interp | 86 | 1 |
+| interp | 87 | 2 |
 | ownership | 35 | 0 |
 | autopar | 30 | 3 |
 | cli | 23 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **814 surfaced · 6 open · 800 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **815 surfaced · 7 open · 800 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **814 surfaced 
 | B-2026-07-31-42 | 2026-07-31 | autopar | medium | The auto-par cost model has no notion of memory ACCESS PATTERN, only of statement count. Prism's `rotate` — the least arithmetic-heavy of its kernels — is the biggest fan-out win measured (3.52x) because its reads are transposed and latency-bound, and nothing in the model knows that. It cleared the gate by accident. | src/par_cost.rs::CostEstimator / body_is_memory_bound |
 | B-2026-07-31-43 | 2026-07-31 | codegen | low | A chained method call on a fresh container-returning builtin receiver leaks the receiver temp: `let k = Env.args().len();` leaks the args Vec[String]'s element string(s) every execution — the receiver temporary is never registered for cleanup. | docs/bug-ledger.md |
 | B-2026-07-31-44 | 2026-07-31 | other | medium | 554 `--features llvm`-gated tests across 19 targets never run in CI — including par_codegen (220) and drop_differential (13). `cargo test --all` compiles them to nothing and reports green, and the LLVM jobs name their targets one by one, so the omission is invisible from a passing build. | .github/workflows/ci.yml (the codegen-e2e job's explicit --test list; the `test` job's bare `cargo test --all`), docs/spikes/ci-test-coverage.md (Tier 1 scope) |
+| B-2026-07-31-45 | 2026-07-31 | interp+codegen | medium | let-else with a moved Drop-bearing enum payload: the interpreter runs the payload's Drop body TWICE (once BEFORE the binding is even used) while AOT runs it once with the wrong owner — a live cross-backend divergence, not a silent-in-parity residual. | docs/bug-ledger.md |
 
 ### Fixed (800)
 
