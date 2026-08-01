@@ -5008,6 +5008,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                             &en, var_name, slot_ptr, bodies,
                                         );
                                     }
+                                } else if let Some(te) = elem_te.as_ref() {
+                                    // B-2026-08-01-23 — a NESTED container
+                                    // element (`Vec[Vec[Res]]`): the te-driven
+                                    // recursive walker fires the innermost
+                                    // struct elements' bodies. Same UserDrop
+                                    // channel, same NLL placement.
+                                    let te = te.clone();
+                                    if let Some(bodies) = self.emit_nested_vec_elem_bodies_fn(&te) {
+                                        let label = match &te.kind {
+                                            TypeKind::Path(p) => p
+                                                .segments
+                                                .first()
+                                                .cloned()
+                                                .unwrap_or_else(|| "Vec".to_string()),
+                                            _ => "Vec".to_string(),
+                                        };
+                                        self.track_user_drop_var_with_fn(
+                                            &label, var_name, slot_ptr, bodies,
+                                        );
+                                    }
                                 }
                             }
                         }

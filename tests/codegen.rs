@@ -6850,6 +6850,41 @@ fn main() {
         assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n");
     }
 
+    /// B-2026-08-01-23 — container-in-container element Drop bodies:
+    /// `Vec[Vec[Res]]` inner elements (the te-driven recursive
+    /// `__karac_dropelems_vecof_*` walker) and `Map[i64, Vec[Res]]`
+    /// value-Vec elements (the map walker's nested-value arm) fire at the
+    /// outer binding's death — pre-fix both were silent on both backends
+    /// (memory freed). Twin of `tests/interpreter.rs`'s
+    /// `test_nested_container_elem_bodies`.
+    #[test]
+    fn e2e_nested_container_elem_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut vv: Vec[Vec[Res]] = Vec.new();\n\
+             \x20   let mut inner: Vec[Res] = Vec.new();\n\
+             \x20   inner.push(Res { id: 7, name: f\"q{7}\" });\n\
+             \x20   vv.push(inner);\n\
+             \x20   println(\"b\");\n\
+             \x20   let mut m: Map[i64, Vec[Res]] = Map.new();\n\
+             \x20   let mut mi: Vec[Res] = Vec.new();\n\
+             \x20   mi.push(Res { id: 8, name: f\"r{8}\" });\n\
+             \x20   let _ = m.insert(1, mi);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 7 q7\nb\ndrop 8 r8\nend\n");
+    }
+
     /// B-2026-08-01-22 leg b — a struct-FIELD `Vec[DropT]`'s elements fire
     /// their Drop bodies at the OWNER's death (pre-fix: silent on both
     /// backends — the b55743b element-bodies leg covered direct Vec

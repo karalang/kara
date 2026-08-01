@@ -5548,6 +5548,122 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-08-01-23 — te-driven wrapper over
+    /// [`Self::emit_vec_elem_user_drop_bodies_fn`] that RECURSES through
+    /// nested containers: given the ELEMENT TypeExpr of a Vec/VecDeque,
+    /// return a walker over a vec header of such elements. A plain struct
+    /// element delegates to the existing per-name walker; a Vec/VecDeque
+    /// element emits `__karac_dropelems_vecof_<mangle>` — a loop over the
+    /// outer elements (each itself a `{ptr,len,cap}` header) calling the
+    /// inner walker. Recursion terminates on the TypeExpr's finite depth;
+    /// the struct base case is the only body source, so enum elements
+    /// inside nested containers keep their prior silence (recorded
+    /// residual).
+    pub(super) fn emit_nested_vec_elem_bodies_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return None;
+        };
+        let head = p.segments.first()?.clone();
+        if self.struct_types.contains_key(&head) {
+            let ty = self.llvm_type_for_type_expr(elem_te);
+            return self.emit_vec_elem_user_drop_bodies_fn(&head, ty);
+        }
+        if head != "Vec" && head != "VecDeque" {
+            return None;
+        }
+        let inner_te = match p.generic_args.as_ref()?.first()? {
+            GenericArg::Type(t) => t.clone(),
+            _ => return None,
+        };
+        let inner = self.emit_nested_vec_elem_bodies_fn(&inner_te)?;
+        let fn_name = format!(
+            "__karac_dropelems_vecof_{}",
+            Self::display_mangle_te(elem_te)
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+        let saved = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        let check = self.context.append_basic_block(walker, "check");
+        let body = self.context.append_basic_block(walker, "body");
+        let done = self.context.append_basic_block(walker, "done");
+
+        self.builder.position_at_end(entry);
+        let vp = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let data = self
+            .builder
+            .build_load(
+                ptr_ty,
+                self.builder
+                    .build_struct_gep(vec_ty, vp, 0, "dnv.data.p")
+                    .unwrap(),
+                "dnv.data",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_load(
+                i64_t,
+                self.builder
+                    .build_struct_gep(vec_ty, vp, 1, "dnv.len.p")
+                    .unwrap(),
+                "dnv.len",
+            )
+            .unwrap()
+            .into_int_value();
+        let idx = self.builder.build_alloca(i64_t, "dnv.i").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_unconditional_branch(check).unwrap();
+
+        self.builder.position_at_end(check);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "dnv.i.v")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, len, "dnv.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body, done)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let ep = unsafe {
+            self.builder
+                .build_in_bounds_gep(vec_ty, data, &[i], "dnv.elem")
+                .unwrap()
+        };
+        self.builder.build_call(inner, &[ep.into()], "").unwrap();
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "dnv.i.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(check).unwrap();
+
+        self.builder.position_at_end(done);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     /// B-2026-07-30-11 (tuple leg) — emit `__karac_dropelems_tuple_<n>_<...>`:
     /// run the user `impl Drop` BODY of each tuple element that has one, in
     /// FORWARD element order. `None` when no element runs a body.
@@ -6017,12 +6133,29 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let vname = vp.segments.first()?.clone();
-        if self.shared_types.contains_key(&vname)
-            || !self.struct_types.contains_key(&vname)
-            || !self.type_runs_user_drop(&vname, &mut Vec::new())
-        {
+        if self.shared_types.contains_key(&vname) {
             return None;
         }
+        // B-2026-08-01-23 — a Vec/VecDeque-valued V: the per-value blob is a
+        // vec header; run the te-driven recursive element walker on it
+        // instead of the struct body/field calls.
+        let nested_val_walker = if vname == "Vec" || vname == "VecDeque" {
+            let inner_te = match &val_te.kind {
+                TypeKind::Path(ip) => match ip.generic_args.as_ref().and_then(|ga| ga.first()) {
+                    Some(crate::ast::GenericArg::Type(t)) => t.clone(),
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            Some(self.emit_nested_vec_elem_bodies_fn(&inner_te)?)
+        } else {
+            if !self.struct_types.contains_key(&vname)
+                || !self.type_runs_user_drop(&vname, &mut Vec::new())
+            {
+                return None;
+            }
+            None
+        };
 
         let fn_name = format!("__karac_dropelems_map_{}", Self::display_mangle_te(map_te));
         if let Some(f) = self.module.get_function(&fn_name) {
@@ -6178,19 +6311,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None => kptr,
             };
-            let owns_body = self
-                .program_snapshot
-                .as_deref()
-                .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
-            if owns_body {
-                if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
+            if let Some(nw) = nested_val_walker {
+                self.builder.build_call(nw, &[tptr.into()], "").unwrap();
+            } else {
+                let owns_body = self
+                    .program_snapshot
+                    .as_deref()
+                    .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
+                if owns_body {
+                    if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
+                        self.builder.build_call(f, &[tptr.into()], "").unwrap();
+                    }
+                }
+                if let Some(f) =
+                    self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
+                {
                     self.builder.build_call(f, &[tptr.into()], "").unwrap();
                 }
-            }
-            if let Some(f) =
-                self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
-            {
-                self.builder.build_call(f, &[tptr.into()], "").unwrap();
             }
             let next_i = self
                 .builder
@@ -6325,19 +6462,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_in_bounds_gep(i8_t, kv_ptr, &[voff], "dm.v.p")
                 .unwrap()
         };
-        let owns_body = self
-            .program_snapshot
-            .as_deref()
-            .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
-        if owns_body {
-            if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
+        if let Some(nw) = nested_val_walker {
+            self.builder.build_call(nw, &[vptr.into()], "").unwrap();
+        } else {
+            let owns_body = self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
+            if owns_body {
+                if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
+                    self.builder.build_call(f, &[vptr.into()], "").unwrap();
+                }
+            }
+            if let Some(f) =
+                self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
+            {
                 self.builder.build_call(f, &[vptr.into()], "").unwrap();
             }
-        }
-        if let Some(f) =
-            self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
-        {
-            self.builder.build_call(f, &[vptr.into()], "").unwrap();
         }
         self.builder.build_unconditional_branch(loop_bb).unwrap();
 

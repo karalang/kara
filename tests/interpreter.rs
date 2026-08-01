@@ -27072,6 +27072,34 @@ fn test_field_rooted_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-01-23 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_nested_container_elem_bodies`, same source and expected string.
+#[test]
+fn test_nested_container_elem_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut vv: Vec[Vec[Res]] = Vec.new();\n\
+                 let mut inner: Vec[Res] = Vec.new();\n\
+                 inner.push(Res { id: 7, name: f\"q{7}\" });\n\
+                 vv.push(inner);\n\
+                 println(\"b\");\n\
+                 let mut m: Map[i64, Vec[Res]] = Map.new();\n\
+                 let mut mi: Vec[Res] = Vec.new();\n\
+                 mi.push(Res { id: 8, name: f\"r{8}\" });\n\
+                 let _ = m.insert(1, mi);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 7 q7\nb\ndrop 8 r8\nend\n"
+    );
+}
+
 /// B-2026-08-01-22 leg b — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_field_vec_elem_bodies_at_owner_death`, same source and
 /// expected string.

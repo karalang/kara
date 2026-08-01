@@ -671,6 +671,12 @@ impl<'a> super::Interpreter<'a> {
             return true;
         }
         for e in elems {
+            // B-2026-08-01-23 — a nested container element (`Vec[Vec[Res]]`):
+            // recurse to the innermost struct elements.
+            if let Value::Array(_) = &e {
+                self.run_nested_array_struct_elem_bodies(&e);
+                continue;
+            }
             if let Value::Struct { name: tn, .. } = &e {
                 if self.program.drop_method_keys.contains_key(tn) {
                     let tn = tn.clone();
@@ -1905,6 +1911,7 @@ impl<'a> super::Interpreter<'a> {
             matches!(
                 p.generic_args.as_ref().and_then(|a| a.get(elem_idx)),
                 Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
+                    || self.te_vec_elem_runs_user_drop(v)
             )
         });
         if qualifies {
@@ -1915,12 +1922,63 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-08-01-23 — does `te` name a Vec/VecDeque whose ELEMENT type
+    /// runs a user Drop? The interp twin of codegen's map-walker gate
+    /// widening; scoped to the Map-values registration so the general
+    /// `type_expr_runs_user_drop` keeps its head-name semantics everywhere
+    /// else.
+    fn te_vec_elem_runs_user_drop(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(head) = p.segments.first() else {
+            return false;
+        };
+        if head != "Vec" && head != "VecDeque" {
+            return false;
+        }
+        match p.generic_args.as_ref().and_then(|ga| ga.first()) {
+            Some(crate::ast::GenericArg::Type(inner)) => {
+                self.type_expr_runs_user_drop(inner) || self.te_vec_elem_runs_user_drop(inner)
+            }
+            _ => false,
+        }
+    }
+
     /// The walk half: run each stored VALUE's user `impl Drop` body for a
     /// dying `Map` binding. Insertion order — codegen's walk is bucket
     /// order, and the two differ exactly as `for (k, v) in m` already does
     /// (unordered-map semantics); parity tests are order-insensitive.
     /// Returns `true` when the binding resolved to a Map (walked or not) so
     /// the caller stops — a Map is not a `drop_target` shape.
+    /// B-2026-08-01-23 — fire the Drop bodies of STRUCT elements reachable
+    /// through nested arrays (`Vec[Vec[Res]]`, a Vec-valued Map value's
+    /// elements), recursing through `Value::Array` layers. Struct elements
+    /// only — the same base case as codegen's te-driven
+    /// `emit_nested_vec_elem_bodies_fn`, so enum elements inside nested
+    /// containers keep their prior silence on both backends (recorded
+    /// residual). Forward order at every level.
+    fn run_nested_array_struct_elem_bodies(&mut self, arr: &Value) {
+        let Value::Array(rc) = arr else {
+            return;
+        };
+        let elems: Vec<Value> = rc.read().map(|g| g.clone()).unwrap_or_default();
+        for e in elems {
+            match &e {
+                Value::Struct { name: tn, .. } => {
+                    if self.program.drop_method_keys.contains_key(tn) {
+                        let tn = tn.clone();
+                        self.run_user_drop_body_on_value(&tn, e.clone());
+                    } else if self.value_runs_user_drop(&e) {
+                        self.drop_user_drop_fields_of_value(&e);
+                    }
+                }
+                Value::Array(_) => self.run_nested_array_struct_elem_bodies(&e),
+                _ => {}
+            }
+        }
+    }
+
     fn run_map_val_user_drops(&mut self, name: &str) -> bool {
         // SortedMap shares the walk (same declared-V gate); its values come
         // out in key order vs the Map's insertion order — the same
@@ -1955,6 +2013,14 @@ impl<'a> super::Interpreter<'a> {
         };
         let declared_head = Self::declared_field_type_head(val_te);
         for v in vals {
+            // B-2026-08-01-23 — a Vec/VecDeque-valued V: fire the nested
+            // elements' bodies (declared-type gated like the struct arm).
+            if let Value::Array(_) = &v {
+                if matches!(declared_head.as_deref(), Some("Vec") | Some("VecDeque")) {
+                    self.run_nested_array_struct_elem_bodies(&v);
+                }
+                continue;
+            }
             let Value::Struct { name: tn, .. } = &v else {
                 continue;
             };
