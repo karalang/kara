@@ -1794,11 +1794,22 @@ impl<'a> super::Interpreter<'a> {
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.push(span.clone());
                 }
+                // B-2026-08-01-12: expose the callee's OWNED param names to
+                // the body's let-destructure gate — a struct destructure of
+                // an owned by-value param binds views of the entry copy, and
+                // its Drop observability belongs to the caller (see
+                // `owned_param_names_stack`). Ref/mut-ref params are
+                // excluded at collection time; a closure (no program fn of
+                // this name) contributes an empty set, so the gate never
+                // fires inside closures.
+                self.owned_param_names_stack
+                    .push(self.owned_param_names_of_fn(&fn_name));
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
+                self.owned_param_names_stack.pop();
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.pop();
                 }
@@ -1992,6 +2003,32 @@ impl<'a> super::Interpreter<'a> {
                 )
             }
         }
+    }
+
+    /// Owned (by-value) parameter names of the top-level function `fn_name`,
+    /// for the let-destructure gate (B-2026-08-01-12). A `ref T` /
+    /// `mut ref T` param takes no ownership and stays out of the set; a
+    /// name with no program-level fn (a closure) yields the empty set.
+    fn owned_param_names_of_fn(&self, fn_name: &str) -> std::collections::HashSet<String> {
+        self.program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::ast::Item::Function(f) if f.name == fn_name => Some(
+                    f.params
+                        .iter()
+                        .filter(|p| {
+                            !matches!(
+                                p.ty.kind,
+                                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                            )
+                        })
+                        .filter_map(|p| p.name().map(str::to_string))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// B-2026-07-01-8 second half — run the user `impl Drop` body for

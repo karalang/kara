@@ -447,6 +447,16 @@ pub struct Interpreter<'a> {
     /// `scrutinee_expr_is_consuming`: a `self` scrutinee is consuming only
     /// under an OWNED receiver (B-2026-08-01-6).
     pub(crate) self_param_stack: Vec<crate::ast::SelfParam>,
+    /// Owned (by-value) parameter names of the actively-executing user
+    /// functions, innermost last — pushed around each free-fn body by
+    /// `eval_call`. Read by the let-destructure gate: a struct destructure
+    /// of an OWNED param (`let Holder { r } = h;`) binds views of the
+    /// callee's entry copy — the conceptual value's Drop observability is
+    /// the CALLER's under the caller-retains convention (its NLL /
+    /// fresh-arg fire reads the original), and codegen already fires
+    /// caller-side only. Registering Drop slots for the bound fields
+    /// double-fired the body under `karac run` only (B-2026-08-01-12).
+    pub(crate) owned_param_names_stack: Vec<HashSet<String>>,
     /// Bindings whose WHOLE value moved into a variant constructor
     /// (`Ok(h)`, `Some(h)`, `Slot.Held(r)`). Every drop the source would run
     /// — own `impl Drop` body and container walks — is silenced; the enum's
@@ -749,6 +759,7 @@ impl<'a> Interpreter<'a> {
             moved_out_container_bodies_bindings: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             self_param_stack: Vec::new(),
+            owned_param_names_stack: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
             pending_arm_drop_bindings: Vec::new(),
             map_val_bodies_tes: HashMap::new(),

@@ -6730,6 +6730,48 @@ fn main() {
         assert_eq!(out, "a\ndrop 24 h24\nb\nend\n");
     }
 
+    /// B-2026-08-01-12 — a struct destructure of an OWNED param
+    /// (`let Holder { r } = h;` inside the callee) binds views of the
+    /// callee's entry copy: the conceptual value's Drop body fires
+    /// CALLER-side, once, at the arg's statement end (identifier arg: the
+    /// caller binding's NLL fire; fresh literal arg: the fresh-arg temp
+    /// fire). Codegen already behaved this way — this pin is the parity
+    /// target the interpreter's new destructure gate meets (pre-fix
+    /// `karac run` fired the bound field's body a second time inside the
+    /// callee). Twin of `tests/interpreter.rs`'s
+    /// `test_param_struct_destructure_single_caller_fire`.
+    #[test]
+    fn e2e_param_struct_destructure_single_caller_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             fn take(h: Holder) {\n\
+             \x20   let Holder { r } = h;\n\
+             \x20   println(f\"got {r.id}\");\n\
+             \x20   println(\"take done\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let x = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+             \x20   take(x);\n\
+             \x20   println(\"b\");\n\
+             \x20   take(Holder { r: Res { id: 7, name: f\"y{7}\" } });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ngot 5\ntake done\ndrop 5 y5\nb\ngot 7\ntake done\ndrop 7 y7\nend\n"
+        );
+    }
+
     /// B-2026-08-01-5 — fresh method-RECEIVER Drop temps: a `ref self`
     /// method's fresh receiver fires its body at STATEMENT END on both
     /// backends (pre-fix: never under `karac run`, at scope exit under

@@ -209,8 +209,17 @@ impl<'a> super::Interpreter<'a> {
             // destructor never fires (Slice 4).
             self.suppress_forget_stmt_user_drop(stmt, &mut cleanup);
             // After a successful let-binding, push a Drop slot for each
-            // name the pattern introduced.
-            push_drops_for_stmt(stmt, &mut cleanup);
+            // name the pattern introduced. EXCEPT (B-2026-08-01-12): a
+            // struct destructure of an OWNED PARAM (`let Holder { r } = h;`
+            // where `h` is the current fn's by-value param) binds views of
+            // the callee's entry copy — under the caller-retains convention
+            // the conceptual value's Drop observability is the CALLER's
+            // (its NLL / fresh-arg fire reads the original), and codegen
+            // already fires caller-side only. Registering slots here
+            // double-fired the bound fields' bodies under `karac run`.
+            if !self.let_destructures_owned_param(stmt) {
+                push_drops_for_stmt(stmt, &mut cleanup);
+            }
             // NLL placement: fire any Drop slot whose binding's last
             // use was this statement, then remove it from `cleanup`
             // so it does not fire again at scope exit. A binding that
@@ -972,6 +981,30 @@ impl<'a> super::Interpreter<'a> {
     /// type-level `type_runs_user_drop`, so both backends disarm on the same
     /// condition. `Value::SharedStruct` is not walked — its drop is
     /// refcount-driven, never the holder's business.
+    /// B-2026-08-01-12 — is this statement a struct destructure of an
+    /// OWNED param of the currently-executing function
+    /// (`let Holder { r } = h;` with `h` a by-value param)? The bound
+    /// fields are views of the callee's entry copy; their Drop
+    /// observability belongs to the caller (caller-retains), so
+    /// `eval_block_inner` skips their Drop-slot registration. A
+    /// destructure of a LOCAL (`let h2 = h; let Holder { r } = h2;`)
+    /// stays registered — the move-indirected double is a recorded
+    /// residual, matching codegen's depth-0 behavior.
+    fn let_destructures_owned_param(&self, stmt: &Stmt) -> bool {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return false;
+        };
+        if !matches!(pattern.kind, PatternKind::Struct { .. }) {
+            return false;
+        }
+        let ExprKind::Identifier(n) = &value.kind else {
+            return false;
+        };
+        self.owned_param_names_stack
+            .last()
+            .is_some_and(|params| params.contains(n.as_str()))
+    }
+
     pub(crate) fn value_runs_user_drop(&self, value: &Value) -> bool {
         let Value::Struct { name, fields } = value else {
             return false;
