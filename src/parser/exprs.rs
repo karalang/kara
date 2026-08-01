@@ -375,14 +375,13 @@ impl super::Parser {
             let (op, l_bp, r_bp) = match self.peek_token() {
                 Token::Or => (BinOp::Or, 6, 7),
                 Token::And => (BinOp::And, 8, 9),
-                Token::PipePipe => {
-                    self.error("the `||` operator is not used in Kāra; use `or` instead");
-                    (BinOp::Or, 6, 7)
-                }
-                Token::AmpAmp => {
-                    self.error("the `&&` operator is not used in Kāra; use `and` instead");
-                    (BinOp::And, 8, 9)
-                }
+                // `||` / `&&` diagnose at the CONSUME site below, not here: this
+                // match runs on a PEEK, so a peek-site emission re-fired once
+                // per precedence level the Pratt climb unwound through — a
+                // 4-operand `||` chain reported each operator 3x
+                // (B-2026-08-01-25).
+                Token::PipePipe => (BinOp::Or, 6, 7),
+                Token::AmpAmp => (BinOp::And, 8, 9),
                 Token::EqualEqual => (BinOp::Eq, 10, 11),
                 Token::BangEqual => (BinOp::NotEq, 10, 11),
                 Token::LessThan => (BinOp::Lt, 10, 11),
@@ -404,6 +403,51 @@ impl super::Parser {
 
             if l_bp < min_bp {
                 break;
+            }
+
+            // B-2026-08-01-25 — `&&`/`||` are not Kāra. The operator token is
+            // about to be consumed (exactly once per source position, unlike
+            // the peek above), so this is the spot that emits the diagnostic
+            // once AND registers the machine-applicable one-token fix
+            // (`&&` → `and`, `||` → `or`) for `karac fix`, mirroring the
+            // `!` → `not` prefix sibling below. A word operator needs spaces
+            // the symbol did not: `a&&b` must become `a and b`, so each side
+            // that abuts a neighboring token gains one.
+            let rust_habit_op = match self.peek_token() {
+                Token::PipePipe => Some(("||", "or")),
+                Token::AmpAmp => Some(("&&", "and")),
+                _ => None,
+            };
+            if let Some((sym, word)) = rust_habit_op {
+                self.error(&format!(
+                    "the `{sym}` operator is not used in Kāra; use `{word}` instead"
+                ));
+                let op_span = self.current_span();
+                let lead = self
+                    .pos
+                    .checked_sub(1)
+                    .and_then(|i| self.tokens.get(i))
+                    .is_some_and(|prev| prev.span.offset + prev.span.length == op_span.offset);
+                let trail = self
+                    .tokens
+                    .get(self.pos + 1)
+                    .is_some_and(|next| op_span.offset + op_span.length == next.span.offset);
+                let mut replacement = String::new();
+                if lead {
+                    replacement.push(' ');
+                }
+                replacement.push_str(word);
+                if trail {
+                    replacement.push(' ');
+                }
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&op_span),
+                    crate::resolver::TextEdit {
+                        offset: op_span.offset,
+                        length: op_span.length,
+                        replacement,
+                    },
+                );
             }
 
             self.advance();

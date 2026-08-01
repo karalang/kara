@@ -2227,6 +2227,47 @@ fn test_mod_decl_rejected_at_parse_time() {
     );
 }
 
+/// B-2026-08-01-25 — `&&`/`||` diagnose ONCE per operator token, not once per
+/// precedence level the Pratt climb unwinds through (a 4-operand `||` chain
+/// used to emit 3 copies per operator: the peek-site emission re-fired on
+/// every re-examination), and each occurrence registers a machine-applicable
+/// replacement (`and`/`or`) on the parser fix-edit channel so `karac fix` can
+/// apply the one-token substitution the message spells out.
+#[test]
+fn test_amp_amp_pipe_pipe_diagnose_once_per_token_with_fix_edit() {
+    let result = parse(
+        "fn main() {\n\
+             let a = 1;\n\
+             let b = 2;\n\
+             if a == 1 || b == 3 || a == 9 || b == 2 { println(\"x\"); }\n\
+             if a == 1 && b == 2 { println(\"y\"); }\n\
+         }\n",
+    );
+    let or_errs = result
+        .errors
+        .iter()
+        .filter(|e| e.message.contains("`||`"))
+        .count();
+    let and_errs = result
+        .errors
+        .iter()
+        .filter(|e| e.message.contains("`&&`"))
+        .count();
+    assert_eq!(or_errs, 3, "one per `||` token: {:?}", result.errors);
+    assert_eq!(and_errs, 1, "one per `&&` token: {:?}", result.errors);
+    let mut texts: Vec<&str> = result
+        .fix_edits
+        .values()
+        .map(|e| e.replacement.as_str())
+        .collect();
+    texts.sort_unstable();
+    assert_eq!(
+        texts,
+        ["and", "or", "or", "or"],
+        "each occurrence carries its word-operator replacement"
+    );
+}
+
 #[test]
 fn test_mod_decl_rejection_recovers_for_following_items() {
     // After rejecting `mod foo;` the parser should resync cleanly so the

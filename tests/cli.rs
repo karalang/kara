@@ -23719,6 +23719,56 @@ fn fix_applies_bang_to_not_and_string_slice_edits() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-08-01-25 — `karac fix` applies the `&&` → `and` / `||` → `or`
+/// word-operator substitutions end-to-end, including the spacing rule for an
+/// operator that abuts its operands (`1&&b` must become `1 and b`, never
+/// `1andb`). Pre-fix these diagnostics carried no `replacement` at all, so
+/// the most mechanical Rust-habit mistake in the language cost a human
+/// round-trip; they were also emitted 2-3x per occurrence (pinned by
+/// `tests/parser.rs`'s
+/// `test_amp_amp_pipe_pipe_diagnose_once_per_token_with_fix_edit`).
+#[test]
+fn fix_applies_and_or_word_operator_edits() {
+    let (tmp, path) = ownership_gate_fixture(
+        "b25-andor",
+        "fn main() {\n\
+             let a = 1;\n\
+             let b = 2;\n\
+             if a == 1 && b == 2 { println(\"both\"); }\n\
+             if a == 1 || b == 3 || a == 9 || b == 2 { println(\"chain\"); }\n\
+             if a == 1&&b == 2 { println(\"tight\"); }\n\
+         }\n",
+    );
+
+    karac_bin().arg("fix").arg(&path).output().unwrap();
+
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        fixed.contains("if a == 1 and b == 2 { println(\"both\"); }"),
+        "spaced `&&` becomes `and`: {fixed}"
+    );
+    assert!(
+        fixed.contains("if a == 1 or b == 3 or a == 9 or b == 2 {"),
+        "every operator in the `||` chain is rewritten: {fixed}"
+    );
+    assert!(
+        fixed.contains("if a == 1 and b == 2 { println(\"tight\"); }"),
+        "abutting `&&` gains spaces on both sides: {fixed}"
+    );
+    assert!(
+        !fixed.contains("&&") && !fixed.contains("||"),
+        "no symbol operator survives: {fixed}"
+    );
+
+    let check = karac_bin().arg("check").arg(&path).output().unwrap();
+    assert!(
+        check.status.success(),
+        "fixed program must pass check; stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn fix_reports_no_progress_on_unfixable_naming_diagnostic() {
     // B-2026-07-31-32 — the liveness half. `let mut M` carried a no-op rename
