@@ -34332,6 +34332,41 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-1 — the row buffer behind
+    /// `mk_rows().first().unwrap().len()` is freed exactly once: the
+    /// get-family materialization's per-element walk owns it, and the len
+    /// intercept must not track the unwrapped borrow a second time (the
+    /// double-free aborted the binary before the fix; ASAN reports it as
+    /// heap-use-after-free/double-free on the first iteration).
+    #[test]
+    fn asan_len_of_unwrapped_borrow_row_freed_once() {
+        assert_clean_asan_run(
+            r#"
+fn mk_rows(n: i64) -> Vec[Vec[i64]] {
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        v.push(Vec[i, i + 1i64, i + 2i64]);
+        i = i + 1i64;
+    }
+    v
+}
+fn main() {
+    let mut total = 0i64;
+    let mut it = 0i64;
+    while it < 200i64 {
+        total = total + mk_rows(2i64).first().unwrap().len();
+        total = total + mk_rows(3i64).get(1i64).unwrap().len();
+        it = it + 1i64;
+    }
+    println(f"{total}");
+}
+"#,
+            &["1200"],
+            "len_of_unwrapped_borrow_row_freed_once",
+        );
+    }
+
     // B-2026-07-30-5 — the VecDeque head-index lowering frees the malloc
     // base, exactly once, on every exit shape. The header's data pointer
     // never moves (only `head` advances, in a frame-local alloca), so the

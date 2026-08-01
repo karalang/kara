@@ -5555,7 +5555,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `temp_recv_len_elem_types` table exactly for this
                     // receiver; prefer it, falling back to the chokepoint
                     // when absent (scalar elements — outer free is complete).
-                    if self.expr_yields_fresh_owned_temp(object) {
+                    // …but NOT for an `unwrap`/`expect` over a borrow
+                    // accessor (`mk_rows().first().unwrap().len()`,
+                    // B-2026-08-01-1): the unwrapped value ALIASES element
+                    // storage a get-family materialization already
+                    // drop-tracks per-element (the same
+                    // `temp_recv_elem_types` record that let `first()`
+                    // compile is what tracked the outer temp), so a second
+                    // free of the row buffer here aborts. The typechecker
+                    // agrees the value is a borrow (`ref Vec[T]` — it
+                    // rejects passing it as owned), so there is nothing for
+                    // this scope to free.
+                    if self.expr_yields_fresh_owned_temp(object)
+                        && !self.expr_is_unwrap_of_borrow_accessor(object)
+                    {
                         let recv_span_key = (object.span.offset, object.span.length);
                         if !self.try_track_len_family_recv_temp(recv_val, recv_span_key) {
                             self.materialize_owned_temp(recv_val, recv_span_key);
@@ -13723,6 +13736,25 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_vec_var(slot, Some(elem_llvm));
         }
         true
+    }
+
+    /// `<chain>.get(i).unwrap()` / `.first().unwrap()` / `.last().expect(..)`
+    /// — an `unwrap`/`expect` peeled off a borrow accessor
+    /// (`scrutinee_is_borrow_call`). The result is a BORROW of the
+    /// container's element storage — the typechecker types it `ref T` and
+    /// rejects owned use — so despite being MethodCall-shaped it is NOT a
+    /// fresh owned temp, and a consuming site must not drop-track it: when
+    /// the container is itself a tracked fresh temp, its per-element walk
+    /// already frees that storage, and a second free aborts
+    /// (B-2026-08-01-1: `mk_rows().first().unwrap().len()`). `unwrap_or`
+    /// variants are excluded — their miss arm substitutes an owned default,
+    /// so their ownership is branch-dependent, and no double-free shape has
+    /// been proven for them.
+    fn expr_is_unwrap_of_borrow_accessor(&self, expr: &Expr) -> bool {
+        let ExprKind::MethodCall { object, method, .. } = &expr.kind else {
+            return false;
+        };
+        matches!(method.as_str(), "unwrap" | "expect") && self.scrutinee_is_borrow_call(object)
     }
 
     /// General owned-temp tracking, slice 3d — read methods on a FRESH-TEMP

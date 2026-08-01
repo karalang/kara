@@ -6435,6 +6435,33 @@ fn main() {
         assert_eq!(out, "3\nfalse\n2\ntrue\n");
     }
 
+    /// B-2026-08-01-1 — `len` on an `unwrap`ped borrow accessor over a
+    /// fresh-temp container (`mk_rows().first().unwrap().len()`) must not
+    /// drop-track the unwrapped row: it ALIASES element storage the
+    /// get-family materialization already frees per-element, and the second
+    /// free aborted the binary (glibc double-free). The intercept now skips
+    /// tracking for `unwrap`/`expect` over `scrutinee_is_borrow_call`
+    /// receivers (`expr_is_unwrap_of_borrow_accessor`).
+    #[test]
+    fn e2e_len_of_unwrapped_borrow_row_single_free() {
+        let Some(out) = run_program(
+            "fn mk_rows() -> Vec[Vec[i64]] {\n\
+             \x20   let mut v: Vec[Vec[i64]] = Vec.new();\n\
+             \x20   v.push(Vec[1, 2, 3]);\n\
+             \x20   v.push(Vec[4, 5]);\n\
+             \x20   v\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(f\"{mk_rows().first().unwrap().len()}\");\n\
+             \x20   println(f\"{mk_rows().last().unwrap().len()}\");\n\
+             \x20   println(f\"{mk_rows().get(1).unwrap().len()}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "3\n2\n2\n");
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///
