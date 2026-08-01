@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 199 | 0 |
+| miscompile | 200 | 1 |
 | leak | 115 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 602 | 0 |
+| codegen | 603 | 1 |
 | typecheck | 108 | 0 |
-| interp | 100 | 0 |
+| interp | 101 | 1 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **837 surfaced · 0 open · 829 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **838 surfaced · 1 open · 829 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-01-23 | 2026-08-01 | interp+codegen | low | container-in-container element Drop bodies are silent on both backends (Vec[Vec[DropT]] inner elements, Map[K, Vec[DropT]] value-Vec elements) — memory freed, bodies never fire | — |
 
 ### Fixed (829)
 
