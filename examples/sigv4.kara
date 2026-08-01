@@ -18,6 +18,21 @@
 // Every expected value is cross-checked against an independent Python
 // stdlib implementation (hashlib + hmac); two implementations agreeing on
 // a byte-exact signature is the oracle. `expected.txt` is the pinned form.
+//
+// ── STATUS: `karac run` only; `karac build` ABORTS ──────────────────────
+//
+// This file currently runs correctly under `karac run --interp` and matches
+// `sigv4.expected` byte for byte. The COMPILED binary aborts with
+// `free(): double free detected in tcache 2` before printing anything, on
+// both the JIT and AOT backends — B-2026-08-01-24, which this artifact found.
+//
+// The cause is `sort_headers` / `sort_params`: moving elements out of a
+// by-value `Vec[S]` parameter frees each element's heap field twice. It is
+// NOT specific to signing — it reduces to 22 lines with no crypto (the repro
+// is in the ledger entry). The Kāra here is deliberately left in its natural
+// shape rather than rewritten to dodge the bug, per CLAUDE.md's "fix the
+// compiler, never route around it": this file IS the reproducer, and the
+// codegen oracle lands with the fix.
 
 fn m32(x: u64) -> u64 {
     x & 4294967295u64
