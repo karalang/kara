@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 199 | 2 |
+| miscompile | 199 | 1 |
 | leak | 113 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 600 | 2 |
+| codegen | 600 | 1 |
 | typecheck | 108 | 0 |
-| interp | 99 | 2 |
+| interp | 99 | 1 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced · 2 open · 825 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced · 1 open · 826 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-19 | 2026-08-01 | interp+codegen | medium | storing an owned param into a local container FIELD (`o.h = h;`) fires the caller-retained value's Drop body TWICE — container walk + caller NLL, in parity on both backends | — |
 | B-2026-08-01-20 | 2026-08-01 | interp+codegen | low | displaced-value Drop bodies at FIELD-assign targets are silent on both backends (`o.h = <new>;` frees the old field's heap without running its bodies) | — |
 
-### Fixed (825)
+### Fixed (826)
 
-<details><summary>825 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>826 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -964,6 +963,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced 
 | B-2026-08-01-16 | interp+codegen | medium | Assign-based param rebind (`h2 = h;` onto a pre-declared local) double-fires the Drop body on both backends and silently skips the displaced value's… | e0fc863 |
 | B-2026-08-01-17 | interp+codegen | low | SortedSet[DropT] element Drop bodies drain in INSERTION order under karac build, sorted order under the interpreter (plain Set diverges too) | 96ad40a |
 | B-2026-08-01-18 | codegen | medium | Set/SortedSet element with a String field leaks the field buffer at scope exit under karac build (element blob freed, fields never walked) | eaf6c2a |
+| B-2026-08-01-19 | interp+codegen | medium | storing an owned param into a local container FIELD (`o.h = h;`) fires the caller-retained value's Drop body TWICE — container walk + caller NLL, in… | 99254ea |
 
 </details>
 
