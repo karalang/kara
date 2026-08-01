@@ -3753,9 +3753,26 @@ impl<'a> ConcurrencyChecker<'a> {
                 "Vec" | "String" | "Map" | "Set" | "SortedMap" | "SortedSet" | "VecDeque"
             )
         }
-        fn type_expr_is_container(te: &TypeExpr) -> bool {
+        // B-2026-07-31-41: a local whose type carries a user `impl Drop` is
+        // drop-OBSERVABLE — displacement (`x = Res{..}` over a live value)
+        // and scope exit run the user body, so a lost branch-local mutation
+        // is never a dead write: the parent's scope-exit fire reads the
+        // value the branch never published, and the lanes disagree on which
+        // value's body fires where (default build printed `drop 6` at the
+        // assignment and `drop 5` after `end`, while every sequential lane
+        // prints `drop 5` then `drop 6`). Same never-a-dead-write argument
+        // that put containers in this set (B-2026-07-15-2) — the field name
+        // `captured_container_mutations` predates the widening.
+        fn type_name_is_drop_observable(this: &ConcurrencyChecker, name: &str) -> bool {
+            let head = name.split(['[', ' ']).next().unwrap_or("");
+            type_name_is_container(name) || this.program.drop_method_keys.contains_key(head)
+        }
+        fn type_expr_is_container(this: &ConcurrencyChecker, te: &TypeExpr) -> bool {
             match &te.kind {
-                TypeKind::Path(p) => p.segments.last().is_some_and(|s| type_name_is_container(s)),
+                TypeKind::Path(p) => p
+                    .segments
+                    .last()
+                    .is_some_and(|s| type_name_is_drop_observable(this, s)),
                 _ => false,
             }
         }
@@ -3771,20 +3788,31 @@ impl<'a> ConcurrencyChecker<'a> {
             this: &ConcurrencyChecker,
             pattern: &Pattern,
             ty: &Option<TypeExpr>,
+            value: Option<&Expr>,
             out: &mut HashSet<String>,
         ) {
             let PatternKind::Binding(name) = &pattern.kind else {
                 return;
             };
             let is_container = match ty {
-                Some(te) => type_expr_is_container(te),
-                None => this
-                    .types
-                    .and_then(|t| {
-                        t.pattern_binding_types
-                            .get(&SpanKey::from_span(&pattern.span))
-                    })
-                    .is_some_and(|n| type_name_is_container(n)),
+                Some(te) => type_expr_is_container(this, te),
+                None => {
+                    this.types
+                        .and_then(|t| {
+                            t.pattern_binding_types
+                                .get(&SpanKey::from_span(&pattern.span))
+                        })
+                        .is_some_and(|n| type_name_is_drop_observable(this, n))
+                        // Unannotated `let mut x = Res { .. }` — the struct
+                        // literal names the type directly, independent of
+                        // whether the binding-types table covered this span
+                        // (B-2026-07-31-41).
+                        || value.is_some_and(|v| {
+                            matches!(&v.kind, ExprKind::StructLiteral { path, .. }
+                                if path.last().is_some_and(|n|
+                                    this.program.drop_method_keys.contains_key(n.as_str())))
+                        })
+                }
             };
             if is_container {
                 out.insert(name.clone());
@@ -3795,11 +3823,11 @@ impl<'a> ConcurrencyChecker<'a> {
                 StmtKind::Let {
                     pattern, ty, value, ..
                 } => {
-                    classify_let(this, pattern, ty, out);
+                    classify_let(this, pattern, ty, Some(value), out);
                     walk_expr(this, value, out);
                 }
                 StmtKind::LetUninit { name, ty, .. } => {
-                    if type_expr_is_container(ty) {
+                    if type_expr_is_container(this, ty) {
                         out.insert(name.clone());
                     }
                 }
@@ -3810,7 +3838,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     else_block,
                     ..
                 } => {
-                    classify_let(this, pattern, ty, out);
+                    classify_let(this, pattern, ty, Some(value), out);
                     walk_expr(this, value, out);
                     walk_block(this, else_block, out);
                 }

@@ -1592,6 +1592,63 @@ fn main() {
     /// Auto-par ordered output (phase-6-runtime.md "Auto-par ordered output").
     /// Three independent `fetch_*` calls reading disjoint resources auto-
     /// parallelize into one group — each prints two trace lines AND an int.
+    /// B-2026-07-31-41 — a parallel group that mutates a CAPTURED
+    /// user-Drop-bearing binding is forced sequential, so Drop bodies fire
+    /// with the sequential ids and timing on every backend. Pre-fix the
+    /// default build put `x = Res { id: 6 }` in a par lane: the branch
+    /// mutated its bit-copied env copy (a lost write), the lane's NLL fire
+    /// printed `drop 6` at the assignment, and the parent's scope-exit fire
+    /// printed `drop 5` after `end` — while interp / KARAC_AUTO_PAR=0 / JIT
+    /// all print `drop 5` then `drop 6` before `after overwrite`. The gate
+    /// widens the never-a-dead-write classification (B-2026-07-15-2's
+    /// `captured_container_mutations`) to types with a user `impl Drop`:
+    /// the parent's scope-exit body is an implicit read the analyzer's
+    /// outside-reads set cannot see. Groups that merely INTRODUCE a Drop
+    /// binding without a captured mutation stay parallel (the -40 map tests
+    /// pin that side).
+    ///
+    /// The D/F sections pad main so the interesting groups are non-trivial
+    /// — trivial groups compile inline and never diverged.
+    #[test]
+    fn test_e2e_auto_par_captured_drop_mutation_sequential_semantics() {
+        let out = run_program(
+            r#"
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+enum Box2 { Full(Res), Empty }
+fn main() {
+    println("D: enum payload moved into arm binding");
+    let b = Box2.Full(Res { id: 4 });
+    match b {
+        Box2.Full(r) => { println(f"arm sees {r.id}"); }
+        Box2.Empty => {}
+    }
+    println("E: overwrite via assignment");
+    let mut x = Res { id: 5 };
+    x = Res { id: 6 };
+    println("after overwrite");
+    println("F: displaced map value");
+    let mut m: Map[i64, Res] = Map.new();
+    let _ = m.insert(1, Res { id: 7 });
+    let _ = m.insert(1, Res { id: 8 });
+    println("after displace");
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "D: enum payload moved into arm binding\narm sees 4\ndrop 4\nE: overwrite via assignment\ndrop 5\ndrop 6\nafter overwrite\nF: displaced map value\ndrop 7\ndrop 8\nafter displace\nend\n",
+                "captured-Drop-mutation group must run with sequential Drop semantics; got {out:?}"
+            );
+        }
+    }
+
     /// B-2026-07-31-40 — a Drop-valued `Map` introduced inside an auto-par
     /// parallel group keeps its full cleanup across the branch write-back.
     /// The binding carries TWO transferable actions (`FreeMapHandle` + the
