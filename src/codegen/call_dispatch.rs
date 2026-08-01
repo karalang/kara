@@ -479,6 +479,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             };
 
+        // B-2026-08-01-26 — a LOCAL closure binding shadows every name-keyed
+        // intercept and fn-table dispatch below. Before this check ran FIRST,
+        // `let take = |x| ..; take(v)` compiled a direct call to the spliced
+        // stdlib `std.mem::take` (the generic-fn path at this function's tail
+        // ran before the `closure_fn_types` indirect-call check), silently
+        // returning `*dest`'s first word — pointer garbage for a String arg —
+        // while the typechecker and interpreter both resolved the local
+        // closure (locals-first), a three-way divergence. The typechecker's
+        // own intercepts already guard with `local_scope.lookup(name)`; this
+        // is the codegen twin of that rule. Gated on a LIVE local slot
+        // (`variables`) so a `closure_fn_types` entry from another scope
+        // cannot hijack an ordinary fn call, and on no explicit generic args
+        // (a closure call never has a turbofish). Module-binding closures
+        // keep their existing dispatch via the later `closure_fn_types`
+        // check, unchanged.
+        if explicit_generic_args.is_none()
+            && self.closure_fn_types.contains_key(&name)
+            && self.variables.contains_key(name.as_str())
+        {
+            return self.compile_closure_call(&name, args);
+        }
+
         // `Vector[T, N](lane0, …)` SIMD construction (design.md § Portable
         // SIMD). Intercepted before the generic-fn path — `Vector` is a
         // builtin type, not a user function. Builds an `<N x T>` value via an

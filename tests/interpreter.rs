@@ -27100,6 +27100,37 @@ fn test_nested_container_elem_bodies() {
     );
 }
 
+/// B-2026-08-01-26 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_local_closure_shadows_stdlib_names`, plus the interp-specific arm:
+/// the interpreter's own builtin-name intercept table was unguarded for
+/// `spawn` (a closure named `spawn` ran the stdlib spawn and returned a
+/// TaskHandle), so a local `Value::Function` binding now shadows the whole
+/// intercept match.
+#[test]
+fn test_local_closure_shadows_stdlib_names() {
+    assert_eq!(
+        run("fn shadowed() -> i64 {\n\
+                 let take = |x: i64| {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(x);\n\
+                     v.len()\n\
+                 };\n\
+                 take(9)\n\
+             }\n\
+             fn unshadowed() -> i64 {\n\
+                 let mut z = 7;\n\
+                 take(mut z)\n\
+             }\n\
+             fn main() {\n\
+                 let spawn = |x: i64| { x + 1 };\n\
+                 println(shadowed());\n\
+                 println(unshadowed());\n\
+                 println(spawn(4));\n\
+             }\n"),
+        "1\n7\n5\n"
+    );
+}
+
 /// B-2026-08-01-24 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_for_loop_struct_elem_push_move` (the interpreter was already correct;
 /// the twin pins parity for the for-loop element push-move shape).

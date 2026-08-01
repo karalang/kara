@@ -1436,170 +1436,180 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        // Built-in functions
+        // Built-in functions. B-2026-08-01-26 — the whole intercept match is
+        // skipped when the name is bound to a LOCAL closure value: a binding
+        // shadows every builtin (`let spawn = |x| x + 1; spawn(4)` calls the
+        // closure — the unguarded `spawn` arm used to hijack it), the same
+        // locals-first rule the typechecker's intercept guards
+        // (`local_scope.lookup(..)`) and codegen's closure-first dispatch
+        // apply. The generic callee-eval below then dispatches the closure
+        // through the ordinary `Value::Function` call path.
         if let ExprKind::Identifier(name) = &callee.kind {
-            match name.as_str() {
-                "todo" | "unreachable" | "panic" => {
-                    return self.eval_builtin_diverge(name, args, span);
-                }
-                "Some" => {
-                    let val = if let Some(a) = args.first() {
-                        self.eval_expr_inner(&a.value)
-                    } else {
-                        Value::Unit
-                    };
-                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
-                    self.record_ctor_arg_moves(args);
-                    return Value::EnumVariant {
-                        enum_name: "Option".to_string(),
-                        variant: "Some".to_string(),
-                        data: EnumData::Tuple(vec![val]),
-                    };
-                }
-                "Ok" => {
-                    let val = if let Some(a) = args.first() {
-                        self.eval_expr_inner(&a.value)
-                    } else {
-                        Value::Unit
-                    };
-                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
-                    self.record_ctor_arg_moves(args);
-                    return Value::EnumVariant {
-                        enum_name: "Result".to_string(),
-                        variant: "Ok".to_string(),
-                        data: EnumData::Tuple(vec![val]),
-                    };
-                }
-                "Err" => {
-                    let val = if let Some(a) = args.first() {
-                        self.eval_expr_inner(&a.value)
-                    } else {
-                        Value::Unit
-                    };
-                    // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
-                    self.record_ctor_arg_moves(args);
-                    return Value::EnumVariant {
-                        enum_name: "Result".to_string(),
-                        variant: "Err".to_string(),
-                        data: EnumData::Tuple(vec![val]),
-                    };
-                }
-                "print" | "println" | "eprintln" => {
-                    return self.eval_builtin_print(name, args, span);
-                }
-                "dbg" => {
-                    return self.eval_builtin_dbg(args, span);
-                }
-                "assert" => {
-                    return self.eval_builtin_assert(args, span);
-                }
-                "assert_eq" => {
-                    return self.eval_builtin_assert_eq(args, span);
-                }
-                "assert_ne" => {
-                    return self.eval_builtin_assert_ne(args, span);
-                }
-                "spawn" => {
-                    return self.eval_spawn(args, span);
-                }
-                "collect_all_vec" => {
-                    return self.eval_collect_all_vec(args, span);
-                }
-                "collect_all" => {
-                    return self.eval_collect_all(args, span);
-                }
-                "sleep_ms" => {
-                    return self.eval_builtin_sleep_ms(args, span);
-                }
-                "forget" => {
-                    // FFI ownership-handoff primitive (design.md §
-                    // Exported C ABI, Slice 4). Evaluate the argument to
-                    // consume it, then return unit. The argument's
-                    // scope-exit Drop is suppressed at the statement level
-                    // (`suppress_forget_stmt_user_drop` in eval_stmt) —
-                    // the tree-walk analogue of codegen's drop
-                    // suppression — so the destructor never fires. The
-                    // `#[compiler_builtin]` stub body is skipped by this
-                    // intercept (it would otherwise drop the owned param).
-                    if let Some(a) = args.first() {
-                        let _ = self.eval_expr_inner(&a.value);
+            let shadowed_by_local_fn = matches!(self.env.get(name), Some(Value::Function { .. }));
+            if !shadowed_by_local_fn {
+                match name.as_str() {
+                    "todo" | "unreachable" | "panic" => {
+                        return self.eval_builtin_diverge(name, args, span);
                     }
-                    return Value::Unit;
-                }
-                "ref_eq" => {
-                    // Reference-identity comparison for `shared` handles
-                    // (design.md § Equality Semantics). Two shared values are
-                    // `ref_eq` iff they share one `Arc` allocation. Typecheck
-                    // (`infer_ref_eq_intrinsic`) requires `shared` args, so the
-                    // non-shared arms below are unreachable for a well-formed
-                    // program — they keep eval total.
-                    let a = args.first().map(|x| self.eval_expr_inner(&x.value));
-                    if self.pending_cf.is_some() {
-                        return a.unwrap_or(Value::Unit);
+                    "Some" => {
+                        let val = if let Some(a) = args.first() {
+                            self.eval_expr_inner(&a.value)
+                        } else {
+                            Value::Unit
+                        };
+                        // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                        self.record_ctor_arg_moves(args);
+                        return Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![val]),
+                        };
                     }
-                    let b = args.get(1).map(|x| self.eval_expr_inner(&x.value));
-                    if self.pending_cf.is_some() {
-                        return b.unwrap_or(Value::Unit);
+                    "Ok" => {
+                        let val = if let Some(a) = args.first() {
+                            self.eval_expr_inner(&a.value)
+                        } else {
+                            Value::Unit
+                        };
+                        // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                        self.record_ctor_arg_moves(args);
+                        return Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Ok".to_string(),
+                            data: EnumData::Tuple(vec![val]),
+                        };
                     }
-                    let same = match (a, b) {
-                        (Some(Value::SharedStruct(x)), Some(Value::SharedStruct(y))) => {
-                            std::sync::Arc::ptr_eq(&x, &y)
+                    "Err" => {
+                        let val = if let Some(a) = args.first() {
+                            self.eval_expr_inner(&a.value)
+                        } else {
+                            Value::Unit
+                        };
+                        // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
+                        self.record_ctor_arg_moves(args);
+                        return Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Err".to_string(),
+                            data: EnumData::Tuple(vec![val]),
+                        };
+                    }
+                    "print" | "println" | "eprintln" => {
+                        return self.eval_builtin_print(name, args, span);
+                    }
+                    "dbg" => {
+                        return self.eval_builtin_dbg(args, span);
+                    }
+                    "assert" => {
+                        return self.eval_builtin_assert(args, span);
+                    }
+                    "assert_eq" => {
+                        return self.eval_builtin_assert_eq(args, span);
+                    }
+                    "assert_ne" => {
+                        return self.eval_builtin_assert_ne(args, span);
+                    }
+                    "spawn" => {
+                        return self.eval_spawn(args, span);
+                    }
+                    "collect_all_vec" => {
+                        return self.eval_collect_all_vec(args, span);
+                    }
+                    "collect_all" => {
+                        return self.eval_collect_all(args, span);
+                    }
+                    "sleep_ms" => {
+                        return self.eval_builtin_sleep_ms(args, span);
+                    }
+                    "forget" => {
+                        // FFI ownership-handoff primitive (design.md §
+                        // Exported C ABI, Slice 4). Evaluate the argument to
+                        // consume it, then return unit. The argument's
+                        // scope-exit Drop is suppressed at the statement level
+                        // (`suppress_forget_stmt_user_drop` in eval_stmt) —
+                        // the tree-walk analogue of codegen's drop
+                        // suppression — so the destructor never fires. The
+                        // `#[compiler_builtin]` stub body is skipped by this
+                        // intercept (it would otherwise drop the owned param).
+                        if let Some(a) = args.first() {
+                            let _ = self.eval_expr_inner(&a.value);
                         }
-                        _ => false,
-                    };
-                    return Value::Bool(same);
-                }
-                "fence" | "compiler_fence" => {
-                    // Standalone memory barriers (`runtime/stdlib/intrinsics.kara`).
-                    // A single-threaded tree-walk interpreter observes no memory
-                    // reordering, so a fence is semantically inert here — a
-                    // no-op, matching codegen's `fence` which only constrains
-                    // *inter-thread* visibility. The `#[compiler_builtin]` stub
-                    // body is skipped by this intercept (it would otherwise fail
-                    // to resolve the `fence` callee as a binding). No need to
-                    // evaluate the ordering argument (a pure `MemoryOrdering`
-                    // literal with no side effects).
-                    return Value::Unit;
-                }
-                "volatile_read" | "volatile_write" => {
-                    // MMIO intrinsics (`runtime/stdlib/intrinsics.kara`). The
-                    // tree-walk interpreter has no raw-pointer representation
-                    // (the same reason `CStr.from_ptr` / the `ptr` method
-                    // family reject in `karac run`), so a volatile load/store
-                    // through a pointer is meaningless here. Reject loudly at
-                    // the producer; the compiled backend lowers these.
-                    return self.record_runtime_error(
-                        format!(
-                            "{name}(...) is not supported under `karac run`: the \
+                        return Value::Unit;
+                    }
+                    "ref_eq" => {
+                        // Reference-identity comparison for `shared` handles
+                        // (design.md § Equality Semantics). Two shared values are
+                        // `ref_eq` iff they share one `Arc` allocation. Typecheck
+                        // (`infer_ref_eq_intrinsic`) requires `shared` args, so the
+                        // non-shared arms below are unreachable for a well-formed
+                        // program — they keep eval total.
+                        let a = args.first().map(|x| self.eval_expr_inner(&x.value));
+                        if self.pending_cf.is_some() {
+                            return a.unwrap_or(Value::Unit);
+                        }
+                        let b = args.get(1).map(|x| self.eval_expr_inner(&x.value));
+                        if self.pending_cf.is_some() {
+                            return b.unwrap_or(Value::Unit);
+                        }
+                        let same = match (a, b) {
+                            (Some(Value::SharedStruct(x)), Some(Value::SharedStruct(y))) => {
+                                std::sync::Arc::ptr_eq(&x, &y)
+                            }
+                            _ => false,
+                        };
+                        return Value::Bool(same);
+                    }
+                    "fence" | "compiler_fence" => {
+                        // Standalone memory barriers (`runtime/stdlib/intrinsics.kara`).
+                        // A single-threaded tree-walk interpreter observes no memory
+                        // reordering, so a fence is semantically inert here — a
+                        // no-op, matching codegen's `fence` which only constrains
+                        // *inter-thread* visibility. The `#[compiler_builtin]` stub
+                        // body is skipped by this intercept (it would otherwise fail
+                        // to resolve the `fence` callee as a binding). No need to
+                        // evaluate the ordering argument (a pure `MemoryOrdering`
+                        // literal with no side effects).
+                        return Value::Unit;
+                    }
+                    "volatile_read" | "volatile_write" => {
+                        // MMIO intrinsics (`runtime/stdlib/intrinsics.kara`). The
+                        // tree-walk interpreter has no raw-pointer representation
+                        // (the same reason `CStr.from_ptr` / the `ptr` method
+                        // family reject in `karac run`), so a volatile load/store
+                        // through a pointer is meaningless here. Reject loudly at
+                        // the producer; the compiled backend lowers these.
+                        return self.record_runtime_error(
+                            format!(
+                                "{name}(...) is not supported under `karac run`: the \
                              tree-walk interpreter has no raw-pointer \
                              representation. Compile with `karac build` instead."
-                        ),
-                        span,
-                    );
+                            ),
+                            span,
+                        );
+                    }
+                    "swap" if args.len() == 2 && self.env.get("swap").is_none() => {
+                        // std.mem::swap — exchange the values at two `mut ref`
+                        // places without dropping either. Read both current
+                        // values, then write each back to the OTHER place. The
+                        // `#[compiler_builtin]` stub body is skipped by this
+                        // intercept. (Tree-walk analogue of codegen's
+                        // load/load/store/store — no destructor runs.)
+                        let va = self.eval_expr_inner(&args[0].value);
+                        let vb = self.eval_expr_inner(&args[1].value);
+                        self.write_back_receiver(&args[0].value, vb);
+                        self.write_back_receiver(&args[1].value, va);
+                        return Value::Unit;
+                    }
+                    "replace" if args.len() == 2 && self.env.get("replace").is_none() => {
+                        // std.mem::replace — write `value` into `*dest`, return
+                        // the PREVIOUS `*dest`. The old value is moved out
+                        // (returned, not dropped); `value` is moved in.
+                        let old = self.eval_expr_inner(&args[0].value);
+                        let new = self.eval_expr_inner(&args[1].value);
+                        self.write_back_receiver(&args[0].value, new);
+                        return old;
+                    }
+                    _ => {}
                 }
-                "swap" if args.len() == 2 && self.env.get("swap").is_none() => {
-                    // std.mem::swap — exchange the values at two `mut ref`
-                    // places without dropping either. Read both current
-                    // values, then write each back to the OTHER place. The
-                    // `#[compiler_builtin]` stub body is skipped by this
-                    // intercept. (Tree-walk analogue of codegen's
-                    // load/load/store/store — no destructor runs.)
-                    let va = self.eval_expr_inner(&args[0].value);
-                    let vb = self.eval_expr_inner(&args[1].value);
-                    self.write_back_receiver(&args[0].value, vb);
-                    self.write_back_receiver(&args[1].value, va);
-                    return Value::Unit;
-                }
-                "replace" if args.len() == 2 && self.env.get("replace").is_none() => {
-                    // std.mem::replace — write `value` into `*dest`, return
-                    // the PREVIOUS `*dest`. The old value is moved out
-                    // (returned, not dropped); `value` is moved in.
-                    let old = self.eval_expr_inner(&args[0].value);
-                    let new = self.eval_expr_inner(&args[1].value);
-                    self.write_back_receiver(&args[0].value, new);
-                    return old;
-                }
-                _ => {}
             }
         }
 

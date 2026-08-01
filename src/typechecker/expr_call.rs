@@ -980,8 +980,11 @@ impl<'a> super::TypeChecker<'a> {
 
         // Built-in diverging functions: todo() and unreachable()
         // Accept 0 or 1 String argument; return Never (they never return normally).
+        // Local-binding shadow guard (B-2026-08-01-26): a closure bound to the
+        // name wins, same as the `spawn` / `ref_eq` intercepts above.
         if let ExprKind::Identifier(name) = &callee.kind {
-            if name == "todo" || name == "unreachable" {
+            if (name == "todo" || name == "unreachable") && self.local_scope.lookup(name).is_none()
+            {
                 match args.len() {
                     0 => {}
                     1 => {
@@ -1023,7 +1026,8 @@ impl<'a> super::TypeChecker<'a> {
         // shape — varies per call site, which no single generic signature
         // can express.
         if let ExprKind::Identifier(name) = &callee.kind {
-            if name == "collect_all" {
+            // Local-binding shadow guard (B-2026-08-01-26), as above.
+            if name == "collect_all" && self.local_scope.lookup(name).is_none() {
                 return self.infer_collect_all(args, span);
             }
         }
@@ -1363,8 +1367,11 @@ impl<'a> super::TypeChecker<'a> {
 
         // Built-in output functions: println() / print() / eprintln().
         // Accept 0 or 1 Display-implementing argument; return Unit.
+        // Local-binding shadow guard (B-2026-08-01-26), as above.
         if let ExprKind::Identifier(name) = &callee.kind {
-            if name == "println" || name == "print" || name == "eprintln" {
+            if (name == "println" || name == "print" || name == "eprintln")
+                && self.local_scope.lookup(name).is_none()
+            {
                 match args.len() {
                     0 => {}
                     1 => {

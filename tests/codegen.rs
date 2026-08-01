@@ -6956,6 +6956,49 @@ fn main() {
         assert_eq!(out, "x1\n7\ny2\n");
     }
 
+    /// B-2026-08-01-26 — a LOCAL closure binding shadows prelude/stdlib
+    /// free-fn names at call dispatch. Pre-fix, `let take = |x| ..; take(v)`
+    /// compiled a DIRECT call to the spliced `std.mem::take` (the generic-fn
+    /// path ran before the closure-binding check), returning the param (i64)
+    /// or its pointer word (String — pointer garbage) instead of the closure
+    /// result, while the typechecker and interpreter resolved the local.
+    /// The unshadowed stdlib `take` in a sibling fn must keep working (the
+    /// hoisted check is gated on a live local slot). Twin of
+    /// `tests/interpreter.rs`'s `test_local_closure_shadows_stdlib_names`.
+    #[test]
+    fn e2e_local_closure_shadows_stdlib_names() {
+        let Some(out) = run_program(
+            "fn shadowed() -> i64 {\n\
+             \x20   let take = |x: i64| {\n\
+             \x20       let mut v: Vec[i64] = Vec.new();\n\
+             \x20       v.push(x);\n\
+             \x20       v.len()\n\
+             \x20   };\n\
+             \x20   take(9)\n\
+             }\n\
+             fn heap_shadowed() -> i64 {\n\
+             \x20   let take = |x: String| {\n\
+             \x20       let mut v: Vec[String] = Vec.new();\n\
+             \x20       v.push(x);\n\
+             \x20       v.len()\n\
+             \x20   };\n\
+             \x20   take(String.from(\"a\"))\n\
+             }\n\
+             fn unshadowed() -> i64 {\n\
+             \x20   let mut z = 7;\n\
+             \x20   take(mut z)\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(shadowed());\n\
+             \x20   println(heap_shadowed());\n\
+             \x20   println(unshadowed());\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "1\n1\n7\n");
+    }
+
     /// B-2026-08-01-22 leg b — a struct-FIELD `Vec[DropT]`'s elements fire
     /// their Drop bodies at the OWNER's death (pre-fix: silent on both
     /// backends — the b55743b element-bodies leg covered direct Vec
