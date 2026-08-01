@@ -17051,6 +17051,60 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-24 — a heap-owning `for`-loop struct/enum ELEMENT
+    /// pushed whole into another container (`for h in hs { out.push(h) }`)
+    /// double-freed its heap payload pre-fix: the loop binding is a shallow
+    /// bit-copy of the source container's element slot, the push's
+    /// move-suppression zeroed only the binding's ALLOCA, and the source
+    /// vec's per-element drain plus the destination's element drop both
+    /// freed the same buffers (abort exit 134). The fix deep-copies the
+    /// stored element's heap in place at the destination slot (struct
+    /// fields via `deep_copy_struct_heap_fields_in_place`, enum live-variant
+    /// payload via `deep_copy_enum_heap_payload_in_place`) — ASAN guards
+    /// the double-free half, LSan (Linux CI) the no-leak half of the copy.
+    #[test]
+    fn asan_for_loop_elem_push_move_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Header { name: String, value: String }
+enum Item {
+    Named(String),
+    Plain(i64),
+}
+fn move_all(headers: Vec[Header]) -> Vec[Header] {
+    let mut out: Vec[Header] = Vec.new();
+    for h in headers {
+        out.push(h);
+    }
+    out
+}
+fn main() {
+    let stamp = "20150830T123600Z";
+    let mut hs: Vec[Header] = Vec.new();
+    hs.push(Header { name: "X-Amz-Date", value: stamp.clone() });
+    let moved = move_all(hs);
+    for h in moved { println(h.value); }
+    let mut src: Vec[Item] = Vec.new();
+    src.push(Item.Named(f"x{1}"));
+    src.push(Item.Plain(7));
+    let mut out2: Vec[Item] = Vec.new();
+    for it in src {
+        out2.push(it);
+    }
+    for it in out2 {
+        match it {
+            Item.Named(s) => println(s),
+            Item.Plain(n) => println(f"{n}"),
+        }
+    }
+    println("end");
+}
+"#,
+            &["20150830T123600Z", "x1", "7", "end"],
+            "for_loop_elem_push_move_freed",
+        );
+    }
+
     /// B-2026-08-01-18 — a Set/SortedSet ELEMENT (or Map KEY) that is a
     /// struct owning heap fields leaked those fields' buffers at scope
     /// exit: the handle free released the bucket storage but never walked

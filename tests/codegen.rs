@@ -6885,6 +6885,77 @@ fn main() {
         assert_eq!(out, "a\ndrop 7 q7\nb\ndrop 8 r8\nend\n");
     }
 
+    /// B-2026-08-01-24 — a heap-owning `for`-loop STRUCT element pushed whole
+    /// into another container (`for h in headers { out.push(h) }`). The loop
+    /// binding is a shallow bit-copy of the source container's element slot;
+    /// pre-fix the push's move-suppression zeroed only the binding's ALLOCA
+    /// caps, so the source vec's per-element drain and the destination both
+    /// freed the same String buffers (`free(): double free detected in
+    /// tcache 2`, exit 134). The fix deep-copies the stored element's heap
+    /// fields in place (copy-depth == drop-depth, the push twin of the
+    /// `let x = a` whole-move arm). Twin of `tests/interpreter.rs`'s
+    /// `test_for_loop_struct_elem_push_move`.
+    #[test]
+    fn e2e_for_loop_struct_elem_push_move() {
+        let Some(out) = run_program(
+            "struct Header { name: String, value: String }\n\
+             fn move_all(headers: Vec[Header]) -> Vec[Header] {\n\
+             \x20   let mut out: Vec[Header] = Vec.new();\n\
+             \x20   for h in headers {\n\
+             \x20       out.push(h);\n\
+             \x20   }\n\
+             \x20   out\n\
+             }\n\
+             fn main() {\n\
+             \x20   let stamp = \"20150830T123600Z\";\n\
+             \x20   let mut hs: Vec[Header] = Vec.new();\n\
+             \x20   hs.push(Header { name: \"X-Amz-Date\", value: stamp.clone() });\n\
+             \x20   let moved = move_all(hs);\n\
+             \x20   for h in moved { println(h.value); }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "20150830T123600Z\n");
+    }
+
+    /// B-2026-08-01-24 (enum leg) — the value-ENUM sibling of the struct
+    /// element push above: `for it in src { out.push(it) }` over a
+    /// `Vec[Item]` with a String payload double-freed the live variant's
+    /// payload buffer pre-fix (source drain + destination element drop).
+    /// The fix routes the stored slot through
+    /// `deep_copy_enum_heap_payload_in_place` (the entry-copy twin of the
+    /// enum drop). Twin of `tests/interpreter.rs`'s
+    /// `test_for_loop_enum_elem_push_move`.
+    #[test]
+    fn e2e_for_loop_enum_elem_push_move() {
+        let Some(out) = run_program(
+            "enum Item {\n\
+             \x20   Named(String),\n\
+             \x20   Plain(i64),\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut src: Vec[Item] = Vec.new();\n\
+             \x20   src.push(Item.Named(f\"x{1}\"));\n\
+             \x20   src.push(Item.Plain(7));\n\
+             \x20   src.push(Item.Named(f\"y{2}\"));\n\
+             \x20   let mut out: Vec[Item] = Vec.new();\n\
+             \x20   for it in src {\n\
+             \x20       out.push(it);\n\
+             \x20   }\n\
+             \x20   for it in out {\n\
+             \x20       match it {\n\
+             \x20           Item.Named(s) => println(s),\n\
+             \x20           Item.Plain(n) => println(f\"{n}\"),\n\
+             \x20       }\n\
+             \x20   }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "x1\n7\ny2\n");
+    }
+
     /// B-2026-08-01-22 leg b — a struct-FIELD `Vec[DropT]`'s elements fire
     /// their Drop bodies at the OWNER's death (pre-fix: silent on both
     /// backends — the b55743b element-bodies leg covered direct Vec

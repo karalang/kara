@@ -21,6 +21,56 @@ use inkwell::AddressSpace;
 use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// B-2026-08-01-24: a heap-owning `for`-loop struct ELEMENT binding pushed
+    /// whole into a container (`for h in headers { out.push(h) }`). The loop
+    /// binding is a shallow bit-copy of the source container's element slot
+    /// (`for_loop_owned_agg_vars`, B-2026-07-04-17), so the just-stored value's
+    /// heap fields alias buffers the SOURCE container's per-element drop still
+    /// frees — the move-suppression cap-zero (`suppress_source_vec_cleanup_for_
+    /// arg`) neutralizes only the binding's ALLOCA, which nothing drops; the
+    /// live owner is the source element slot the binding was loaded from.
+    /// Deep-copy the stored element's heap fields in place at `elem_slot` so
+    /// the destination container and the source container free independent
+    /// buffers — the push/insert twin of the `let x = a` whole-move arm in
+    /// `deep_copy_for_loop_agg_element_move` (copy-depth == drop-depth).
+    /// Bare-`shared` fields rc-INC during the copy (the source drain decs its
+    /// own handle; the destination's element walk decs the inc'd copy —
+    /// balanced, same as the LET arm, B-2026-07-18-2). A value-ENUM element
+    /// takes the same treatment through the entry-copy twin
+    /// (`deep_copy_enum_heap_payload_in_place` — live-variant heap payload
+    /// only, matching the enum drop's coverage). No-op unless the arg is a
+    /// bare Identifier naming a for-loop struct/enum element.
+    pub(super) fn deep_copy_pushed_for_loop_agg_element(
+        &mut self,
+        arg: &Expr,
+        elem_slot: PointerValue<'ctx>,
+    ) {
+        let ExprKind::Identifier(src) = &arg.kind else {
+            return;
+        };
+        if !self.for_loop_owned_agg_vars.contains(src.as_str()) {
+            return;
+        }
+        let Some(type_name) = self.var_type_names.get(src.as_str()).cloned() else {
+            return;
+        };
+        if self.shared_types.contains_key(&type_name) {
+            return;
+        }
+        if self.struct_types.contains_key(&type_name) {
+            let saved = self.deep_copy_rc_inc_bare_shared;
+            self.deep_copy_rc_inc_bare_shared = true;
+            self.deep_copy_struct_heap_fields_in_place(elem_slot, &type_name);
+            self.deep_copy_rc_inc_bare_shared = saved;
+            return;
+        }
+        if let Some(layout) = self.enum_layouts.get(&type_name).cloned() {
+            if !layout.is_shared {
+                self.deep_copy_enum_heap_payload_in_place(&type_name, elem_slot, &layout);
+            }
+        }
+    }
+
     /// Get-or-declare the panicking reallocation wrapper
     /// (`ptr karac_realloc_or_panic(ptr, i64)`, or the `__karac_realloc_or_panic64`
     /// i64-size shim on wasm). The grow paths call this to extend a heap buffer
@@ -2674,6 +2724,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // for struct fields and the index-store path below.
                 let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(elem_ptr, elem_val).unwrap();
+                // A for-loop struct-element binding aliases the SOURCE
+                // container's slot — deep-copy the stored fields so the two
+                // containers own independent heap (B-2026-08-01-24).
+                self.deep_copy_pushed_for_loop_agg_element(&args[0].value, elem_ptr);
 
                 // Increment len.
                 let one = i64_t.const_int(1, false);
@@ -2839,6 +2893,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(slot, elem_val).unwrap();
+                // For-loop struct-element source: copy-depth == drop-depth
+                // (B-2026-08-01-24, same as the push arm).
+                self.deep_copy_pushed_for_loop_agg_element(&args[1].value, slot);
                 let new_len = self
                     .builder
                     .build_int_add(len, one, "insert.new_len")
@@ -3027,6 +3084,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Narrow to element width — see the `push` store note.
                 let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(elem_ptr, elem_val).unwrap();
+                // For-loop struct-element source: copy-depth == drop-depth
+                // (B-2026-08-01-24, same as the push arm).
+                self.deep_copy_pushed_for_loop_agg_element(&args[0].value, elem_ptr);
                 let one = i64_t.const_int(1, false);
                 let new_len = self
                     .builder
@@ -3208,6 +3268,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(cur_data, elem_val).unwrap();
+                // For-loop struct-element source: copy-depth == drop-depth
+                // (B-2026-08-01-24, same as the push arm).
+                self.deep_copy_pushed_for_loop_agg_element(&args[0].value, cur_data);
                 let one = i64_t.const_int(1, false);
                 let new_len = self.builder.build_int_add(len, one, "new_len").unwrap();
                 self.builder.build_store(len_ptr, new_len).unwrap();
@@ -3384,6 +3447,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(cur_data, elem_val).unwrap();
+                // For-loop struct-element source: copy-depth == drop-depth
+                // (B-2026-08-01-24, same as the push arm).
+                self.deep_copy_pushed_for_loop_agg_element(&args[0].value, cur_data);
                 let new_len = self.builder.build_int_add(len, one, "tpf.new_len").unwrap();
                 self.builder.build_store(len_ptr, new_len).unwrap();
                 let unit_val = i64_t.const_zero().into();

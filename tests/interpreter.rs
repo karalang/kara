@@ -27100,6 +27100,60 @@ fn test_nested_container_elem_bodies() {
     );
 }
 
+/// B-2026-08-01-24 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_for_loop_struct_elem_push_move` (the interpreter was already correct;
+/// the twin pins parity for the for-loop element push-move shape).
+#[test]
+fn test_for_loop_struct_elem_push_move() {
+    assert_eq!(
+        run("struct Header { name: String, value: String }\n\
+             fn move_all(headers: Vec[Header]) -> Vec[Header] {\n\
+                 let mut out: Vec[Header] = Vec.new();\n\
+                 for h in headers {\n\
+                     out.push(h);\n\
+                 }\n\
+                 out\n\
+             }\n\
+             fn main() {\n\
+                 let stamp = \"20150830T123600Z\";\n\
+                 let mut hs: Vec[Header] = Vec.new();\n\
+                 hs.push(Header { name: \"X-Amz-Date\", value: stamp.clone() });\n\
+                 let moved = move_all(hs);\n\
+                 for h in moved { println(h.value); }\n\
+             }\n"),
+        "20150830T123600Z\n"
+    );
+}
+
+/// B-2026-08-01-24 (enum leg) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_for_loop_enum_elem_push_move`, same source and expected string.
+#[test]
+fn test_for_loop_enum_elem_push_move() {
+    assert_eq!(
+        run("enum Item {\n\
+                 Named(String),\n\
+                 Plain(i64),\n\
+             }\n\
+             fn main() {\n\
+                 let mut src: Vec[Item] = Vec.new();\n\
+                 src.push(Item.Named(f\"x{1}\"));\n\
+                 src.push(Item.Plain(7));\n\
+                 src.push(Item.Named(f\"y{2}\"));\n\
+                 let mut out: Vec[Item] = Vec.new();\n\
+                 for it in src {\n\
+                     out.push(it);\n\
+                 }\n\
+                 for it in out {\n\
+                     match it {\n\
+                         Item.Named(s) => println(s),\n\
+                         Item.Plain(n) => println(f\"{n}\"),\n\
+                     }\n\
+                 }\n\
+             }\n"),
+        "x1\n7\ny2\n"
+    );
+}
+
 /// B-2026-08-01-22 leg b — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_struct_field_vec_elem_bodies_at_owner_death`, same source and
 /// expected string.
