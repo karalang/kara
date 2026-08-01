@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
-| run-vs-build | 64 | 1 |
+| run-vs-build | 64 | 0 |
 | false-positive | 54 | 0 |
 | perf | 42 | 0 |
 | crash | 33 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 595 | 1 |
+| codegen | 595 | 0 |
 | typecheck | 108 | 0 |
-| interp | 95 | 1 |
+| interp | 95 | 0 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **830 surfaced · 1 open · 821 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **830 surfaced · 0 open · 822 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-01-15 | 2026-08-01 | interp+codegen | medium | move-indirected param destructure (`let h2 = h; let Holder { r } = h2;` inside the callee) fires a STALE cap-zeroed body under karac build and a double body under karac run | — |
+_None — the ledger is fully drained._
 
-### Fixed (821)
+### Fixed (822)
 
-<details><summary>821 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>822 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -959,6 +957,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **830 surfaced 
 | B-2026-08-01-12 | interp | medium | struct destructure of an owned param (`let Holder { r } = h;` in the callee) fires the bound field's Drop body a second time under karac run only | b916307 |
 | B-2026-08-01-13 | interp+codegen | medium | owned enum ARG Drop-body ownership incoherent: fresh ctor arg silent when the callee drops it whole, DOUBLE body (both backends) when the callee matc… | 8de98fe |
 | B-2026-08-01-14 | codegen | medium | fresh enum-ctor arg to a passthrough callee (`pass2(E2.B(..))`) orphans the ORIGINAL payload buffer — the callee entry-copies and returns the copy | 8de98fe |
+| B-2026-08-01-15 | interp+codegen | medium | move-indirected param destructure (`let h2 = h; let Holder { r } = h2;` inside the callee) fires a STALE cap-zeroed body under karac build and a doub… | 309c651 |
 
 </details>
 
