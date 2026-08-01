@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 42 | 0 |
 | crash | 33 | 0 |
 | soundness | 32 | 0 |
-| diagnostics | 31 | 1 |
+| diagnostics | 31 | 0 |
 | use-after-free | 11 | 0 |
 | other | 11 | 0 |
 
@@ -119,23 +119,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 22 | 0 |
 | runtime | 18 | 0 |
 | resolver | 15 | 0 |
-| parser | 9 | 1 |
+| parser | 9 | 0 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **841 surfaced · 2 open · 831 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **841 surfaced · 1 open · 832 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-25 | 2026-08-01 | parser | medium | `&&` / `||` diagnostics are emitted 2-3x per occurrence and carry NO `replacement`, so `karac fix` cannot apply a one-token substitution the message itself spells out. 11 real mistakes rendered as 24 JSON diagnostics, none machine-applicable. | src/parser/exprs.rs:379-385 (the `Token::PipePipe` / `Token::AmpAmp` arms of the Pratt infix match), src/parser.rs:635 (`fn error` — the no-replacement helper) vs src/parser/exprs.rs:487 (a sibling site that DOES set `replacement`) |
 | B-2026-08-01-26 | 2026-08-01 | typecheck+codegen | medium | Closure that move-captures an outer Vec (`let mut v = outer` in the body) and is called TWICE: both `karac run` (JIT) and `karac build` (AOT) print garbage (a raw pointer-sized integer, e.g. 188975220501568) where the interpreter prints 3 — and no phase rejects the program even though the second call re-moves an already-moved binding. | src/codegen/closures.rs (env capture of a MOVED-IN outer Vec binding + the `let mut v = outer` re-read inside the body across two calls); src/ownership.rs + src/typechecker.rs (no phase rejects the double-move: the closure body moves `outer` on EVERY call, so the second call moves an already-moved binding) |
 
-### Fixed (831)
+### Fixed (832)
 
-<details><summary>831 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>832 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -970,6 +969,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **841 surfaced 
 | B-2026-08-01-22 | interp+codegen | medium | struct-FIELD Vec[DropT] elements: Drop bodies never fire (owner death AND index-assign displacement, both backends); the displaced element's field bu… | bc4315f |
 | B-2026-08-01-23 | interp+codegen | low | container-in-container element Drop bodies are silent on both backends (Vec[Vec[DropT]] inner elements, Map[K, Vec[DropT]] value-Vec elements) — memo… | ca37e65 |
 | B-2026-08-01-24 | codegen | high | Moving elements out of a BY-VALUE `Vec[S]` parameter double-frees each element's heap field: `for h in headers { out.push(h); }` frees the same Strin… | 7225d0a |
+| B-2026-08-01-25 | parser | medium | `&&` / `\|\|` diagnostics are emitted 2-3x per occurrence and carry NO `replacement`, so `karac fix` cannot apply a one-token substitution the message… | 28438e8 |
 
 </details>
 
