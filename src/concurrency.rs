@@ -1497,6 +1497,19 @@ pub struct ConcurrencyChecker<'a> {
     /// calls on distinct-named shared receivers may still hit the same object —
     /// they are excluded from method-call fan-out.
     shared_type_names: HashSet<String>,
+    /// Transitive closure of user types whose drop is OBSERVABLE — a user
+    /// `impl Drop` body runs when a value of the type (or one reachable
+    /// through its declared fields / enum payloads / tuples / arrays /
+    /// generic args) is displaced or scope-dropped. Seeded from
+    /// `program.drop_method_keys` and closed over `StructDef` fields and
+    /// `EnumDef` variant payloads at construction. Drives the
+    /// never-a-dead-write widening in `collect_container_locals`
+    /// (B-2026-07-31-41): a lost branch-local mutation of such a binding is
+    /// never dead, because the parent's scope-exit fire reads the value the
+    /// branch never published — wrapper types (`Box2.Full(Res{..})`) diverge
+    /// exactly like the direct `Res` binding did. Non-owning type formers
+    /// (refs, slices, weak, raw pointers, fn types) do not propagate.
+    drop_observable_type_names: HashSet<String>,
 }
 
 impl<'a> ConcurrencyChecker<'a> {
@@ -1514,6 +1527,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 _ => None,
             })
             .collect();
+        let drop_observable_type_names = Self::compute_drop_observable_types(program);
         let mut checker = ConcurrencyChecker {
             program,
             effects,
@@ -1521,9 +1535,69 @@ impl<'a> ConcurrencyChecker<'a> {
             method_bodies: HashMap::new(),
             types,
             shared_type_names,
+            drop_observable_type_names,
         };
         checker.collect_functions();
         checker
+    }
+
+    /// Build the transitive drop-observable closure — see the field doc on
+    /// [`Self::drop_observable_type_names`]. Fixpoint over declared items:
+    /// seed with every `impl Drop` type, then admit any struct whose field
+    /// (or enum whose variant payload) MENTIONS a member through an owning
+    /// type former (path head, generic args, tuples, arrays). Terminates:
+    /// each round either adds a declared type name or stops, and the name
+    /// universe is finite.
+    fn compute_drop_observable_types(program: &Program) -> HashSet<String> {
+        fn te_mentions(te: &TypeExpr, set: &HashSet<String>) -> bool {
+            match &te.kind {
+                TypeKind::Path(p) => {
+                    p.segments.last().is_some_and(|s| set.contains(s))
+                        || p.generic_args.iter().flatten().any(|a| match a {
+                            GenericArg::Type(t) => te_mentions(t, set),
+                            _ => false,
+                        })
+                }
+                TypeKind::Tuple(elems) => elems.iter().any(|t| te_mentions(t, set)),
+                TypeKind::Array { element, .. } => te_mentions(element, set),
+                // Non-owning formers: a borrow/view/weak/raw-pointer/fn
+                // field never runs the pointee's drop, so it does not make
+                // the enclosing type drop-observable.
+                _ => false,
+            }
+        }
+        let mut set: HashSet<String> = program.drop_method_keys.keys().cloned().collect();
+        loop {
+            let mut changed = false;
+            for item in &program.items {
+                match item {
+                    Item::StructDef(s) if !set.contains(&s.name) => {
+                        if s.fields.iter().any(|f| te_mentions(&f.ty, &set)) {
+                            set.insert(s.name.clone());
+                            changed = true;
+                        }
+                    }
+                    Item::EnumDef(e) if !set.contains(&e.name) => {
+                        let hit = e.variants.iter().any(|v| match &v.kind {
+                            VariantKind::Tuple(tes) => tes.iter().any(|t| te_mentions(t, &set)),
+                            VariantKind::Struct(fields) => {
+                                fields.iter().any(|f| te_mentions(&f.ty, &set))
+                            }
+                            VariantKind::Unit => false,
+                        });
+                        if hit {
+                            set.insert(e.name.clone());
+                            changed = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        set
     }
 
     fn collect_functions(&mut self) {
@@ -3765,7 +3839,7 @@ impl<'a> ConcurrencyChecker<'a> {
         // `captured_container_mutations` predates the widening.
         fn type_name_is_drop_observable(this: &ConcurrencyChecker, name: &str) -> bool {
             let head = name.split(['[', ' ']).next().unwrap_or("");
-            type_name_is_container(name) || this.program.drop_method_keys.contains_key(head)
+            type_name_is_container(name) || this.drop_observable_type_names.contains(head)
         }
         fn type_expr_is_container(this: &ConcurrencyChecker, te: &TypeExpr) -> bool {
             match &te.kind {
@@ -3810,7 +3884,7 @@ impl<'a> ConcurrencyChecker<'a> {
                         || value.is_some_and(|v| {
                             matches!(&v.kind, ExprKind::StructLiteral { path, .. }
                                 if path.last().is_some_and(|n|
-                                    this.program.drop_method_keys.contains_key(n.as_str())))
+                                    this.drop_observable_type_names.contains(n.as_str())))
                         })
                 }
             };
