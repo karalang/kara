@@ -1,0 +1,495 @@
+// AWS Signature Version 4 — request signing in pure Kāra.
+//
+//   karac run examples/sigv4.kara
+//
+// SigV4 is the auth scheme every AWS API call uses: a four-stage HMAC-SHA256
+// chain over a canonicalized request. `examples/sha256.kara` was written as
+// its prerequisite (its header says so); this is the artifact that needed it,
+// and it reuses that file's SHA-256 / HMAC core verbatim.
+//
+// Two vectors. `get-vanilla` is AWS's own documented example — the
+// AKIDEXAMPLE credentials and the 20150830T123600Z timestamp from the
+// Signature Version 4 signing-process docs. The second is built to exercise
+// what the first cannot: query parameters given out of order, values needing
+// percent-encoding (including a `/` that must encode in a value but NOT in
+// the path), headers in mixed case and out of order, and a header value with
+// runs of internal whitespace the spec says to collapse.
+//
+// Every expected value is cross-checked against an independent Python
+// stdlib implementation (hashlib + hmac); two implementations agreeing on
+// a byte-exact signature is the oracle. `expected.txt` is the pinned form.
+
+fn m32(x: u64) -> u64 {
+    x & 4294967295u64
+}
+
+// Rotate right within 32 bits. The mask before the shift matters: a stray
+// high bit would rotate into the low word and corrupt every later round.
+fn rotr32(x: u64, n: u64) -> u64 {
+    let lo = m32(x);
+    m32((lo >> n) | (lo << (32u64 - n)))
+}
+
+fn shr32(x: u64, n: u64) -> u64 {
+    m32(x) >> n
+}
+
+// 32-bit bitwise NOT, as `x XOR all-ones`. Used for the `ch` function's
+// `(NOT e) AND g` term.
+fn not32(x: u64) -> u64 {
+    m32(x) ^ 4294967295u64
+}
+
+// ── Round constants ─────────────────────────────────────────────────────
+
+// The first 32 bits of the fractional parts of the cube roots of the first
+// 64 primes (FIPS 180-4 §4.2.2).
+fn sha256_k() -> Vec[u64] {
+    let mut k: Vec[u64] = Vec.new();
+    k.push(0x428a2f98u64); k.push(0x71374491u64); k.push(0xb5c0fbcfu64); k.push(0xe9b5dba5u64);
+    k.push(0x3956c25bu64); k.push(0x59f111f1u64); k.push(0x923f82a4u64); k.push(0xab1c5ed5u64);
+    k.push(0xd807aa98u64); k.push(0x12835b01u64); k.push(0x243185beu64); k.push(0x550c7dc3u64);
+    k.push(0x72be5d74u64); k.push(0x80deb1feu64); k.push(0x9bdc06a7u64); k.push(0xc19bf174u64);
+    k.push(0xe49b69c1u64); k.push(0xefbe4786u64); k.push(0x0fc19dc6u64); k.push(0x240ca1ccu64);
+    k.push(0x2de92c6fu64); k.push(0x4a7484aau64); k.push(0x5cb0a9dcu64); k.push(0x76f988dau64);
+    k.push(0x983e5152u64); k.push(0xa831c66du64); k.push(0xb00327c8u64); k.push(0xbf597fc7u64);
+    k.push(0xc6e00bf3u64); k.push(0xd5a79147u64); k.push(0x06ca6351u64); k.push(0x14292967u64);
+    k.push(0x27b70a85u64); k.push(0x2e1b2138u64); k.push(0x4d2c6dfcu64); k.push(0x53380d13u64);
+    k.push(0x650a7354u64); k.push(0x766a0abbu64); k.push(0x81c2c92eu64); k.push(0x92722c85u64);
+    k.push(0xa2bfe8a1u64); k.push(0xa81a664bu64); k.push(0xc24b8b70u64); k.push(0xc76c51a3u64);
+    k.push(0xd192e819u64); k.push(0xd6990624u64); k.push(0xf40e3585u64); k.push(0x106aa070u64);
+    k.push(0x19a4c116u64); k.push(0x1e376c08u64); k.push(0x2748774cu64); k.push(0x34b0bcb5u64);
+    k.push(0x391c0cb3u64); k.push(0x4ed8aa4au64); k.push(0x5b9cca4fu64); k.push(0x682e6ff3u64);
+    k.push(0x748f82eeu64); k.push(0x78a5636fu64); k.push(0x84c87814u64); k.push(0x8cc70208u64);
+    k.push(0x90befffau64); k.push(0xa4506cebu64); k.push(0xbef9a3f7u64); k.push(0xc67178f2u64);
+    k
+}
+
+// ── SHA-256 ─────────────────────────────────────────────────────────────
+
+// Digest of `msg`, returned as the 32 raw bytes.
+fn sha256(msg: Vec[u8]) -> Vec[u8] {
+    let msg_len: i64 = msg.len();
+    let bitlen: u64 = (msg_len as u64) * 8u64;
+
+    // Pad: 0x80, then zeros to 56 mod 64, then the length in bits as 8
+    // big-endian bytes.
+    let mut data: Vec[u8] = Vec.new();
+    for b in msg {
+        data.push(b);
+    }
+    data.push(128u8);
+    while (data.len() % 64) != 56 {
+        data.push(0u8);
+    }
+    let mut i: i64 = 7;
+    while i >= 0 {
+        data.push(((bitlen >> ((i as u64) * 8u64)) & 255u64) as u8);
+        i = i - 1;
+    }
+
+    // Initial state: first 32 bits of the fractional parts of the square
+    // roots of the first 8 primes.
+    let mut h: Vec[u64] = Vec.new();
+    h.push(0x6a09e667u64); h.push(0xbb67ae85u64); h.push(0x3c6ef372u64); h.push(0xa54ff53au64);
+    h.push(0x510e527fu64); h.push(0x9b05688cu64); h.push(0x1f83d9abu64); h.push(0x5be0cd19u64);
+
+    let k = sha256_k();
+    let total: i64 = data.len();
+    let mut pos: i64 = 0;
+    while pos < total {
+        // Message schedule: 16 words straight from the block, 48 derived.
+        let mut w: Vec[u64] = Vec.new();
+        let mut t: i64 = 0;
+        while t < 16 {
+            let o = pos + t * 4;
+            let b0 = (data[o] as u64) << 24u64;
+            let b1 = (data[o + 1] as u64) << 16u64;
+            let b2 = (data[o + 2] as u64) << 8u64;
+            let b3 = data[o + 3] as u64;
+            w.push(b0 | b1 | b2 | b3);
+            t = t + 1;
+        }
+        while t < 64 {
+            let x15 = w[t - 15];
+            let x2 = w[t - 2];
+            let s0 = rotr32(x15, 7u64) ^ rotr32(x15, 18u64) ^ shr32(x15, 3u64);
+            let s1 = rotr32(x2, 17u64) ^ rotr32(x2, 19u64) ^ shr32(x2, 10u64);
+            w.push(m32(w[t - 16] + s0 + w[t - 7] + s1));
+            t = t + 1;
+        }
+
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut hh = h[7];
+
+        let mut r: i64 = 0;
+        while r < 64 {
+            let sig1 = rotr32(e, 6u64) ^ rotr32(e, 11u64) ^ rotr32(e, 25u64);
+            let ch = (e & f) ^ (not32(e) & g);
+            let temp1 = m32(hh + sig1 + ch + k[r] + w[r]);
+            let sig0 = rotr32(a, 2u64) ^ rotr32(a, 13u64) ^ rotr32(a, 22u64);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = m32(sig0 + maj);
+            hh = g;
+            g = f;
+            f = e;
+            e = m32(d + temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = m32(temp1 + temp2);
+            r = r + 1;
+        }
+
+        h[0] = m32(h[0] + a);
+        h[1] = m32(h[1] + b);
+        h[2] = m32(h[2] + c);
+        h[3] = m32(h[3] + d);
+        h[4] = m32(h[4] + e);
+        h[5] = m32(h[5] + f);
+        h[6] = m32(h[6] + g);
+        h[7] = m32(h[7] + hh);
+        pos = pos + 64;
+    }
+
+    // Serialize the eight words big-endian.
+    let mut out: Vec[u8] = Vec.new();
+    let mut j: i64 = 0;
+    while j < 8 {
+        let word = h[j];
+        out.push(((word >> 24u64) & 255u64) as u8);
+        out.push(((word >> 16u64) & 255u64) as u8);
+        out.push(((word >> 8u64) & 255u64) as u8);
+        out.push((word & 255u64) as u8);
+        j = j + 1;
+    }
+    out
+}
+
+// ── HMAC-SHA256 (RFC 2104) ──────────────────────────────────────────────
+
+// HMAC = H((K XOR opad) or H((K XOR ipad) or msg)), with the key reduced by
+// H when it exceeds the 64-byte block size and zero-padded when shorter.
+//
+// This function carried `#[allow(rc_fallback)]` for the two B-2026-07-31-28
+// reports it used to draw — `key`, consumed on exactly one of two mutually
+// exclusive branches, and `inner`, whose flagged "re-use" actually PRECEDED
+// the consume. Both were false positives and both are gone, so the allow is
+// gone with them; the code is unchanged.
+fn hmac_sha256(key: Vec[u8], msg: Vec[u8]) -> Vec[u8] {
+    // A key longer than the block is replaced by its own digest — the path
+    // RFC 4231 test case 6 exists to exercise. Normalizing to one binding
+    // first keeps `key` on a single ownership path: consumed by `sha256` on
+    // one branch, moved out on the other, never both.
+    let normalized = if key.len() > 64 { sha256(key) } else { key };
+    let mut block_key: Vec[u8] = Vec.new();
+    for b in normalized {
+        block_key.push(b);
+    }
+    while block_key.len() < 64 {
+        block_key.push(0u8);
+    }
+
+    let mut inner: Vec[u8] = Vec.new();
+    let mut outer: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 64 {
+        let kb = block_key[i] as u64;
+        inner.push((kb ^ 54u64) as u8);
+        outer.push((kb ^ 92u64) as u8);
+        i = i + 1;
+    }
+    for b in msg {
+        inner.push(b);
+    }
+
+    let inner_digest = sha256(inner);
+    for b in inner_digest {
+        outer.push(b);
+    }
+    sha256(outer)
+}
+
+// ── Helpers for the vectors ─────────────────────────────────────────────
+
+fn to_hex(bytes: Vec[u8]) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut s = String.new();
+    for b in bytes {
+        let v = b as i64;
+        s.push(digits[v / 16] as char);
+        s.push(digits[v % 16] as char);
+    }
+    s
+}
+
+fn bytes_of(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+// ── SigV4 ───────────────────────────────────────────────────────────────
+
+// A request header. Kept as a pair so the canonicalization can sort and
+// rewrite both halves.
+struct Header {
+    name: String,
+    value: String,
+}
+
+struct QueryParam {
+    key: String,
+    value: String,
+}
+
+// ASCII lowercase. Works in BYTES rather than chars because `i64 as char` is
+// rejected (E_INT_AS_CHAR — not every integer is a scalar value), while
+// `u8 as char` is fine; header names are ASCII by the HTTP grammar, so the
+// byte path is exact here rather than a shortcut.
+fn lower(s: String) -> String {
+    let mut out = String.new();
+    for b in s.bytes() {
+        if b >= 65u8 and b <= 90u8 {
+            out.push((b + 32u8) as char);
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
+// Collapse runs of spaces and strip the ends — the spec's "trimall" for a
+// non-quoted header value.
+fn trimall(s: String) -> String {
+    let mut out = String.new();
+    let mut pending = false;
+    let mut seen = false;
+    for ch in s.chars() {
+        if ch == ' ' {
+            if seen {
+                pending = true;
+            }
+        } else {
+            if pending {
+                out.push(' ');
+            }
+            pending = false;
+            seen = true;
+            out.push(ch);
+        }
+    }
+    out
+}
+
+// RFC 3986 unreserved: A-Z a-z 0-9 - _ . ~ pass through; everything else
+// becomes %XX with UPPERCASE hex. `keep_slash` is the one difference between
+// encoding a path (where `/` separates segments) and a query value (where it
+// does not).
+fn uri_encode(s: String, keep_slash: bool) -> String {
+    let digits = "0123456789ABCDEF".bytes();
+    let mut out = String.new();
+    for b in s.bytes() {
+        let c = b as char;
+        let unreserved = (c >= 'A' and c <= 'Z')
+            or (c >= 'a' and c <= 'z')
+            or (c >= '0' and c <= '9')
+            or c == '-' or c == '_' or c == '.' or c == '~';
+        if unreserved {
+            out.push(c);
+        } else {
+            if c == '/' and keep_slash {
+                out.push(c);
+            } else {
+                let v = b as i64;
+                out.push('%');
+                out.push(digits[v / 16] as char);
+                out.push(digits[v % 16] as char);
+            }
+        }
+    }
+    out
+}
+
+// Insertion sort by canonical name. Small n, and it keeps the comparison in
+// one place — the spec orders headers by lowercased name and query params by
+// encoded key.
+fn sort_headers(headers: Vec[Header]) -> Vec[Header] {
+    let mut out: Vec[Header] = Vec.new();
+    for h in headers {
+        let key = lower(h.name.clone());
+        let mut at = out.len();
+        let mut i = 0;
+        while i < out.len() {
+            if key < lower(out[i].name.clone()) {
+                at = i;
+                i = out.len();
+            } else {
+                i = i + 1;
+            }
+        }
+        out.insert(at, h);
+    }
+    out
+}
+
+fn sort_params(params: Vec[QueryParam]) -> Vec[QueryParam] {
+    let mut out: Vec[QueryParam] = Vec.new();
+    for p in params {
+        let key = uri_encode(p.key.clone(), false);
+        let mut at = out.len();
+        let mut i = 0;
+        while i < out.len() {
+            if key < uri_encode(out[i].key.clone(), false) {
+                at = i;
+                i = out.len();
+            } else {
+                i = i + 1;
+            }
+        }
+        out.insert(at, p);
+    }
+    out
+}
+
+fn canonical_query(params: Vec[QueryParam]) -> String {
+    let sorted = sort_params(params);
+    let mut out = String.new();
+    let mut first = true;
+    for p in sorted {
+        if not first {
+            out = out + "&";
+        }
+        out = out + uri_encode(p.key, false) + "=" + uri_encode(p.value, false);
+        first = false;
+    }
+    out
+}
+
+// Stage 1 — the canonical request. Its SHA-256 is what gets signed.
+fn canonical_request(
+    method: String,
+    path: String,
+    params: Vec[QueryParam],
+    headers: Vec[Header],
+    payload_hash: String,
+) -> String {
+    let sorted = sort_headers(headers);
+    let mut canon_headers = String.new();
+    let mut signed = String.new();
+    let mut first = true;
+    for h in sorted {
+        let name = lower(h.name);
+        canon_headers = canon_headers + name.clone() + ":" + trimall(h.value) + "\n";
+        if not first {
+            signed = signed + ";";
+        }
+        signed = signed + name;
+        first = false;
+    }
+    method + "\n" + uri_encode(path, true) + "\n" + canonical_query(params) + "\n"
+        + canon_headers + "\n" + signed + "\n" + payload_hash
+}
+
+// Stage 2 — the string to sign.
+fn string_to_sign(stamp: String, scope: String, creq: String) -> String {
+    "AWS4-HMAC-SHA256\n" + stamp + "\n" + scope + "\n" + to_hex(sha256(bytes_of(creq)))
+}
+
+// Stage 3 — the derived signing key: four chained HMACs, each keyed by the
+// previous digest. This is what makes a leaked signature scoped to one day,
+// one region and one service.
+fn signing_key(secret: String, date: String, region: String, service: String) -> Vec[u8] {
+    let k_date = hmac_sha256(bytes_of("AWS4" + secret), bytes_of(date));
+    let k_region = hmac_sha256(k_date, bytes_of(region));
+    let k_service = hmac_sha256(k_region, bytes_of(service));
+    hmac_sha256(k_service, bytes_of("aws4_request"))
+}
+
+// Stage 4 — the signature.
+fn sign_request(
+    secret: String,
+    date: String,
+    region: String,
+    service: String,
+    stamp: String,
+    creq: String,
+) -> String {
+    let scope = date.clone() + "/" + region.clone() + "/" + service.clone() + "/aws4_request";
+    let sts = string_to_sign(stamp, scope, creq);
+    let key = signing_key(secret, date, region, service);
+    to_hex(hmac_sha256(key, bytes_of(sts)))
+}
+
+fn header(name: String, value: String) -> Header {
+    Header { name: name, value: value }
+}
+
+fn param(key: String, value: String) -> QueryParam {
+    QueryParam { key: key, value: value }
+}
+
+fn check(label: String, got: String, want: String) {
+    if got == want {
+        println(label + " ok");
+    } else {
+        println(label + " MISMATCH");
+        println("  got  " + got);
+        println("  want " + want);
+    }
+}
+
+fn main() {
+    let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+    let region = "us-east-1";
+    let service = "service";
+    let date = "20150830";
+    let stamp = "20150830T123600Z";
+    let empty_hash = to_hex(sha256(Vec.new()));
+
+    // ── Vector 1: AWS's documented `get-vanilla` ────────────────────────
+    let mut h1: Vec[Header] = Vec.new();
+    h1.push(header("Host", "example.amazonaws.com"));
+    h1.push(header("X-Amz-Date", stamp.clone()));
+    let creq1 = canonical_request("GET", "/", Vec.new(), h1, empty_hash.clone());
+    check(
+        "get-vanilla creq",
+        to_hex(sha256(bytes_of(creq1.clone()))),
+        "bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63",
+    );
+    check(
+        "get-vanilla signature",
+        sign_request(secret.clone(), date.clone(), region.clone(), service.clone(), stamp.clone(), creq1),
+        "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
+    );
+
+    // ── Vector 2: unordered params + encoding + header collapse ─────────
+    // Params are given Z, a, M; the canonical form must be M, Z, a (encoded
+    // key order). `a b` needs %20, `x/y` needs %2F — but the PATH's spaces
+    // encode while its slashes do not. `My-Header` arrives with padded and
+    // doubled internal spaces, which trimall collapses to one.
+    let mut p2: Vec[QueryParam] = Vec.new();
+    p2.push(param("Zed", "1"));
+    p2.push(param("alpha", "a b"));
+    p2.push(param("Mid", "x/y"));
+    let mut h2: Vec[Header] = Vec.new();
+    h2.push(header("X-Amz-Date", stamp.clone()));
+    h2.push(header("Host", "example.amazonaws.com"));
+    h2.push(header("My-Header", "  a  b  "));
+    let creq2 = canonical_request("GET", "/my path/doc", p2, h2, empty_hash);
+    println("canonical request 2:");
+    println(creq2.clone());
+    check(
+        "sorted+encoded signature",
+        sign_request(secret, date, region, service, stamp, creq2),
+        "052cb9fdf12c5dab03b1fc158bd7cddf8a3671fe71f4b6285fc4a3a7eb2f1a61",
+    );
+}

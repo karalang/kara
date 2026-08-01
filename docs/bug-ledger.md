@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 200 | 1 |
 | leak | 115 | 0 |
 | codegen-gap | 88 | 0 |
-| double-free | 84 | 0 |
+| double-free | 85 | 1 |
 | missing-feature | 72 | 0 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 603 | 1 |
+| codegen | 604 | 2 |
 | typecheck | 108 | 0 |
 | interp | 101 | 1 |
 | ownership | 35 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **838 surfaced · 1 open · 829 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **839 surfaced · 2 open · 829 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-23 | 2026-08-01 | interp+codegen | low | container-in-container element Drop bodies are silent on both backends (Vec[Vec[DropT]] inner elements, Map[K, Vec[DropT]] value-Vec elements) — memory freed, bodies never fire | — |
+| B-2026-08-01-24 | 2026-08-01 | codegen | high | Moving elements out of a BY-VALUE `Vec[S]` parameter double-frees each element's heap field: `for h in headers { out.push(h); }` frees the same String buffer from both the destination Vec and the source param. Aborts on JIT and AOT; the interpreter is correct, so it is a run-vs-build divergence as well as a memory-safety bug. | src/codegen/stmts.rs + src/codegen/control_flow_for.rs (the `for x in <by-value Vec[S]> { … }` element-move path and the param Vec's scope-exit cleanup), src/codegen/runtime.rs (suppress_source_vec_cleanup_for_arg / zero_struct_move_caps family — the disarm that does not reach a moved-out ELEMENT's fields) |
 
 ### Fixed (829)
 
