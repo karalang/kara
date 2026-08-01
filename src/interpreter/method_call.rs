@@ -507,6 +507,13 @@ impl<'a> super::Interpreter<'a> {
                 if let Some(msg) = contract_fault {
                     return Some(self.record_runtime_error(msg, span));
                 }
+                // B-2026-08-01-5: a fresh Drop-bearing RECEIVER temp dies at
+                // this statement — a `ref self` / `mut ref self` method only
+                // borrowed it, so the caller owns the body, fired here where
+                // codegen's `__urecv_drop_tmp` registration drains
+                // (statement end). Owned-`self` consumed the value and
+                // borrow-returning methods alias it — both stay silent.
+                self.run_fresh_recv_temp_drop(object, method, &type_name, obj);
                 return Some(match result {
                     Ok(v) => v,
                     Err(ControlFlow::Return(v)) => v,
@@ -515,6 +522,90 @@ impl<'a> super::Interpreter<'a> {
             }
         }
         None
+    }
+
+    /// B-2026-08-01-5 — the method-receiver sibling of the free-fn
+    /// fresh-temp arg hook (`run_fresh_temp_arg_drops`): run the user Drop
+    /// body work for a FRESH receiver temp after a borrowing method call.
+    /// Admitted shapes mirror the codegen registrar exactly: the receiver
+    /// expr is a Call (user fn / variant ctor) or a struct literal — an
+    /// Identifier/place receiver is its binding's own business, and a
+    /// CHAAIN link (MethodCall receiver) stays silent on both backends
+    /// (recorded residual); the method takes `ref self` / `mut ref self`
+    /// (owned `self` consumed the value) and does not return a borrow (the
+    /// result would alias the receiver). Value walk per kind matches the
+    /// discard battery: own body + field walk for structs, own body or the
+    /// declared-type payload walk for value enums; shared receivers are
+    /// refcount-driven and never reach the Struct/EnumVariant arms.
+    fn run_fresh_recv_temp_drop(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        type_name: &str,
+        obj: &Value,
+    ) {
+        let fresh = match &object.kind {
+            ExprKind::StructLiteral { .. } => true,
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { .. } => true,
+                ExprKind::Identifier(n) => self
+                    .program
+                    .items
+                    .iter()
+                    .any(|it| matches!(it, Item::Function(f) if &f.name == n)),
+                _ => false,
+            },
+            _ => false,
+        };
+        if !fresh {
+            return;
+        }
+        if !matches!(
+            self.method_self_param(type_name, method),
+            Some(crate::ast::SelfParam::Ref | crate::ast::SelfParam::MutRef)
+        ) {
+            return;
+        }
+        if self.method_returns_borrow(type_name, method) {
+            return;
+        }
+        // STRUCT receivers only — an ENUM receiver whose ref-self method
+        // matches on `self` and binds the payload already fires the
+        // match-arm channel (a pre-existing interp-only fire on borrowed
+        // self, B-2026-08-01-6); adding the walk here double-fired. The
+        // codegen twin skips enum receiver bodies identically.
+        if let Value::Struct { name, .. } = obj {
+            let tn = name.clone();
+            if self.program.drop_method_keys.contains_key(&tn) {
+                self.run_user_drop_body_on_value(&tn, obj.clone());
+            } else if self.value_runs_user_drop(obj) {
+                self.drop_user_drop_fields_of_value(obj);
+            }
+        }
+    }
+
+    /// Does the user impl method `type_name.method` declare a `ref`/`mut
+    /// ref` RETURN type? Companion of `method_self_param` for the
+    /// borrow-return exclusion above.
+    fn method_returns_borrow(&self, type_name: &str, method: &str) -> bool {
+        self.program.items.iter().any(|it| {
+            let Item::ImplBlock(imp) = it else {
+                return false;
+            };
+            let target_ok = matches!(&imp.target_type.kind, crate::ast::TypeKind::Path(p)
+                if p.segments.last().is_some_and(|s| s == type_name));
+            target_ok
+                && imp.items.iter().any(|ii| {
+                    let crate::ast::ImplItem::Method(f) = ii else {
+                        return false;
+                    };
+                    f.name == method
+                        && matches!(
+                            f.return_type.as_ref().map(|t| &t.kind),
+                            Some(crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_))
+                        )
+                })
+        })
     }
 
     /// `gpu.dispatch(kernel, buffer)` under `karac run` (spike slice-0c).

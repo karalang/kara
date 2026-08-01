@@ -6612,6 +6612,116 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-5 — fresh method-RECEIVER Drop temps: a `ref self`
+    /// method's fresh receiver fires its body at STATEMENT END on both
+    /// backends (pre-fix: never under `karac run`, at scope exit under
+    /// `karac build`); an owned-`self` method CONSUMED the receiver, so its
+    /// temp stays body-silent on both (pre-fix codegen fired it late over a
+    /// possibly-stale slot); a passthrough result (`mk(4).me()`) is owned by
+    /// its binding alone — exactly one fire, at the binding's death. Twin of
+    /// `tests/interpreter.rs`'s `test_fresh_recv_temp_drop_semantics`.
+    #[test]
+    fn e2e_fresh_recv_temp_drop_semantics() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             impl Res {\n\
+             \x20   fn ident(ref self) -> i64 {\n\
+             \x20       return self.id;\n\
+             \x20   }\n\
+             \x20   fn eat(self) -> i64 {\n\
+             \x20       return self.id + 100;\n\
+             \x20   }\n\
+             \x20   fn me(self) -> Res {\n\
+             \x20       return self;\n\
+             \x20   }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+             \x20   return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a: ref-method fresh struct receiver\");\n\
+             \x20   let x = mk(1).ident();\n\
+             \x20   println(f\"x={x}\");\n\
+             \x20   println(\"b: owned-self consumed receiver (silent)\");\n\
+             \x20   let y = mk(2).eat();\n\
+             \x20   println(f\"y={y}\");\n\
+             \x20   println(\"c: bare ref-method statement\");\n\
+             \x20   mk(3).ident();\n\
+             \x20   println(\"d: passthrough result owned by binding\");\n\
+             \x20   let m = mk(4).me();\n\
+             \x20   println(f\"m={m.id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a: ref-method fresh struct receiver\ndrop 1 r1\nx=1\n\
+             b: owned-self consumed receiver (silent)\ny=102\n\
+             c: bare ref-method statement\ndrop 3 r3\n\
+             d: passthrough result owned by binding\nm=4\ndrop 4 r4\nend\n"
+        );
+    }
+
+    /// B-2026-08-01-5 (chain leg) — owned-self passthrough chains no longer
+    /// double- or stale-fire: pre-fix `karac build` printed the receiver
+    /// body TWICE at scope exit for `mk(3).me().ident()`, re-fired r2 after
+    /// y's own death, and fired `mk(1).plus(10)`'s body over a STALE slot
+    /// (id 1 after the value had become 11). Each value now fires exactly
+    /// once, at its owner's death; chain-link receivers stay body-silent on
+    /// both backends (recorded residual). Twin of `tests/interpreter.rs`'s
+    /// `test_owned_self_chain_no_double_drop`.
+    #[test]
+    fn e2e_owned_self_chain_no_double_drop() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             impl Res {\n\
+             \x20   fn plus(self, n: i64) -> Res {\n\
+             \x20       return Res { id: self.id + n, name: self.name.clone() };\n\
+             \x20   }\n\
+             \x20   fn me(self) -> Res {\n\
+             \x20       return self;\n\
+             \x20   }\n\
+             \x20   fn ident(ref self) -> i64 {\n\
+             \x20       return self.id;\n\
+             \x20   }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+             \x20   return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a: rebuild-chain\");\n\
+             \x20   let x = mk(1).plus(10);\n\
+             \x20   println(f\"x={x.id}\");\n\
+             \x20   println(\"b: passthrough self\");\n\
+             \x20   let y = mk(2).me();\n\
+             \x20   println(f\"y={y.id}\");\n\
+             \x20   println(\"c: chain then ref-method\");\n\
+             \x20   let z = mk(3).me().ident();\n\
+             \x20   println(f\"z={z}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a: rebuild-chain\nx=11\ndrop 11 r1\nb: passthrough self\ny=2\ndrop 2 r2\n\
+             c: chain then ref-method\nz=3\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a

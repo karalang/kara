@@ -2049,7 +2049,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The generic substitution is empty, matching `emit_user_drop_wrapper`'s
     /// call: a temp has no binding name, so there is no recorded instantiation
     /// to derive one from. A generic parent therefore gets the base-layout walk.
-    fn field_bodies_fn_for_owned_temp(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
+    pub(super) fn field_bodies_fn_for_owned_temp(
+        &mut self,
+        type_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
         if !self.struct_types.contains_key(type_name)
             || !self.type_runs_user_drop(type_name, &mut Vec::new())
         {

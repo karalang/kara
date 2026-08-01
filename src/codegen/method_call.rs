@@ -13312,6 +13312,44 @@ impl<'ctx> super::Codegen<'ctx> {
         result.map(Some)
     }
 
+    /// `(self mode, returns-a-borrow)` for the user impl method
+    /// `type_name.method`, resolved from the program snapshot. `None` when no
+    /// impl block whose target head is `type_name` declares `method` with a
+    /// receiver (associated fns and generic impls resolved through other
+    /// channels stay `None` — the caller treats that as not body-eligible,
+    /// the conservative silent direction). B-2026-08-01-5.
+    pub(super) fn impl_method_self_and_borrow_return(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<(crate::ast::SelfParam, bool)> {
+        let program = self.program_snapshot.as_deref()?;
+        for item in &program.items {
+            let crate::ast::Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            let target_ok = matches!(&imp.target_type.kind, crate::ast::TypeKind::Path(p)
+                if p.segments.last().is_some_and(|s| s == type_name));
+            if !target_ok {
+                continue;
+            }
+            for ii in &imp.items {
+                let crate::ast::ImplItem::Method(f) = ii else {
+                    continue;
+                };
+                if f.name == method {
+                    let sp = f.self_param.clone()?;
+                    let borrow_ret = matches!(
+                        f.return_type.as_ref().map(|t| &t.kind),
+                        Some(crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_))
+                    );
+                    return Some((sp, borrow_ret));
+                }
+            }
+        }
+        None
+    }
+
     fn try_compile_nonident_collection_method(
         &mut self,
         object: &Expr,
@@ -13518,41 +13556,75 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         self.var_type_names.insert(synth.clone(), type_name.clone());
 
-        // Drop-track the materialized temp UNCONDITIONALLY (for a fresh-owned
-        // receiver), mirroring the `let`-binding path in `stmts.rs`, which always
-        // tracks a fresh local regardless of how it's later used. This is correct
-        // for BOTH self modes: a `ref self` / `mut ref self` method borrows, so the
-        // caller obviously owns the temp; and an owned `self` method does NOT drop
-        // `self` either (the user-impl dispatch passes the receiver by shallow
-        // value copy and emits no receiver drop — proven by LSan: the owned-`self`
-        // struct case leaked the field `Vec` once per call without this), so the
-        // caller's binding/temp remains the sole owner. Only when the receiver is
-        // NOT a fresh-owned temp (a borrow-returning call) do we skip — we don't
-        // own it. The drop machinery differs by kind, each mirroring the matching
-        // `let`-binding site in `stmts.rs`:
-        //   • shared struct / enum (or `par`): one scope-exit `RcDec` on the box —
-        //     `track_rc_var` with the heap type from `shared_types`. The method
-        //     borrows / shallow-copies `self`, net-zero on the count, so this
-        //     single dec frees the box (identical to `let c = make(); c.m()`).
-        //   • value enum: `track_enum_var` — a no-op for scalar payloads, a
-        //     recursive drop-switch for heap-bearing variants.
-        //   • non-shared struct: user-`impl Drop` wrapper when present, else the
-        //     synthesized struct-field drop.
+        // Drop-track the materialized temp (for a fresh-owned receiver),
+        // mirroring the `let`-binding path in `stmts.rs`. MEMORY tracking is
+        // unconditional for the caller-owned temp (proven by LSan: the
+        // owned-`self` struct case leaked the field `Vec` once per call
+        // without it — the user-impl dispatch passes the receiver by shallow
+        // value copy and emits no receiver drop). BODY tracking is
+        // self-mode-gated since B-2026-08-01-5: only a `ref self` /
+        // `mut ref self` method that does NOT return a borrow registers the
+        // user-Drop body, under the drain-eligible `__urecv_drop_tmp` name so
+        // it fires at STATEMENT END — where the interpreter's receiver hook
+        // fires it. An owned-`self` method CONSUMED the value (the old
+        // unconditional wrapper registration double-fired passthrough chains
+        // — `mk(3).me().ident()` printed the body twice at scope exit and
+        // `mk(1).plus(10)` fired over a stale slot), and a borrow-returning
+        // method's result outlives the statement (a statement-end wrapper
+        // free would dangle it) — both stay body-silent on both backends,
+        // memory-only here. The drop machinery by kind:
+        //   • shared struct / enum (or `par`): one scope-exit `RcDec` on the
+        //     box — `track_rc_var` with the heap type from `shared_types`.
+        //   • value enum: `track_enum_var` (memory), plus the own-body
+        //     wrapper or declared-type payload walker when body-eligible.
+        //   • non-shared struct: the `karac_drop_<T>` wrapper (body+memory,
+        //     statement-end) when body-eligible with an own `impl Drop`;
+        //     else the field-bodies walk (bodies) + `track_struct_var`
+        //     (memory); else `track_struct_var` alone.
         if self.expr_yields_fresh_owned_temp(object) {
             if is_shared {
                 if let Some(heap_type) = self.shared_types.get(&type_name).map(|i| i.heap_type) {
                     self.track_rc_var(&synth, val.into_pointer_value(), heap_type);
                 }
-            } else if is_value_enum {
-                self.track_enum_var(&type_name, slot);
             } else {
+                // Shape gate mirrors the interpreter hook exactly: only a
+                // Call (user fn / variant ctor) or struct-literal receiver
+                // is body-eligible — a CHAIN link (MethodCall receiver)
+                // stays body-silent on both backends (recorded residual).
+                let shape_ok = matches!(
+                    &object.kind,
+                    ExprKind::StructLiteral { .. } | ExprKind::Call { .. }
+                );
+                let bodies_eligible = shape_ok
+                    && !self.user_ref_method_names.contains(method)
+                    && matches!(
+                        self.impl_method_self_and_borrow_return(&type_name, method),
+                        Some((
+                            crate::ast::SelfParam::Ref | crate::ast::SelfParam::MutRef,
+                            false
+                        ))
+                    );
                 let has_user_drop = self
                     .program_snapshot
                     .as_deref()
                     .map(|p| p.drop_method_keys.contains_key(&type_name))
                     .unwrap_or(false);
-                if has_user_drop {
-                    self.track_user_drop_var(&type_name, &synth, slot);
+                if is_value_enum {
+                    // Memory only. ENUM receiver bodies are deliberately NOT
+                    // registered: a ref-self method that matches on `self`
+                    // and binds the payload fires the interpreter's arm
+                    // channel (a pre-existing interp-only fire on borrowed
+                    // self, B-2026-08-01-6) — registering a walker here
+                    // would stack a second fire on one side or the other.
+                    // Struct receivers below carry the body work.
+                    self.track_enum_var(&type_name, slot);
+                } else if bodies_eligible && has_user_drop {
+                    self.track_user_drop_var(&type_name, "__urecv_drop_tmp", slot);
+                } else if bodies_eligible && self.type_runs_user_drop(&type_name, &mut Vec::new()) {
+                    if let Some(f) = self.field_bodies_fn_for_owned_temp(&type_name) {
+                        self.track_user_drop_var_with_fn(&type_name, "__urecv_drop_tmp", slot, f);
+                    }
+                    self.track_struct_var(&type_name, slot);
                 } else {
                     self.track_struct_var(&type_name, slot);
                 }

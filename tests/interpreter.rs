@@ -26869,6 +26869,102 @@ fn test_fresh_arg_temp_drop_fires_at_statement_end() {
     );
 }
 
+/// B-2026-08-01-5 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_fresh_recv_temp_drop_semantics`, same source and expected string.
+/// Pre-fix the interpreter fired NO receiver-temp body ever (the free-fn
+/// arg hook had no method-receiver sibling); the new
+/// `run_fresh_recv_temp_drop` hook fires a `ref self` method's fresh
+/// receiver at statement end and stays silent for owned-`self` (the callee
+/// consumed the value) and borrow-returning methods.
+#[test]
+fn test_fresh_recv_temp_drop_semantics() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             impl Res {\n\
+                 fn ident(ref self) -> i64 {\n\
+                     return self.id;\n\
+                 }\n\
+                 fn eat(self) -> i64 {\n\
+                     return self.id + 100;\n\
+                 }\n\
+                 fn me(self) -> Res {\n\
+                     return self;\n\
+                 }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+                 return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a: ref-method fresh struct receiver\");\n\
+                 let x = mk(1).ident();\n\
+                 println(f\"x={x}\");\n\
+                 println(\"b: owned-self consumed receiver (silent)\");\n\
+                 let y = mk(2).eat();\n\
+                 println(f\"y={y}\");\n\
+                 println(\"c: bare ref-method statement\");\n\
+                 mk(3).ident();\n\
+                 println(\"d: passthrough result owned by binding\");\n\
+                 let m = mk(4).me();\n\
+                 println(f\"m={m.id}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a: ref-method fresh struct receiver\ndrop 1 r1\nx=1\n\
+         b: owned-self consumed receiver (silent)\ny=102\n\
+         c: bare ref-method statement\ndrop 3 r3\n\
+         d: passthrough result owned by binding\nm=4\ndrop 4 r4\nend\n"
+    );
+}
+
+/// B-2026-08-01-5 (chain leg) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_owned_self_chain_no_double_drop`, same source and expected string.
+/// The interpreter already produced this output pre-fix (its hook gates
+/// exclude owned-self and chain-link receivers) — the pin is the parity
+/// target the codegen self-mode gating now meets.
+#[test]
+fn test_owned_self_chain_no_double_drop() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             impl Res {\n\
+                 fn plus(self, n: i64) -> Res {\n\
+                     return Res { id: self.id + n, name: self.name.clone() };\n\
+                 }\n\
+                 fn me(self) -> Res {\n\
+                     return self;\n\
+                 }\n\
+                 fn ident(ref self) -> i64 {\n\
+                     return self.id;\n\
+                 }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+                 return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a: rebuild-chain\");\n\
+                 let x = mk(1).plus(10);\n\
+                 println(f\"x={x.id}\");\n\
+                 println(\"b: passthrough self\");\n\
+                 let y = mk(2).me();\n\
+                 println(f\"y={y.id}\");\n\
+                 println(\"c: chain then ref-method\");\n\
+                 let z = mk(3).me().ident();\n\
+                 println(f\"z={z}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a: rebuild-chain\nx=11\ndrop 11 r1\nb: passthrough self\ny=2\ndrop 2 r2\n\
+         c: chain then ref-method\nz=3\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

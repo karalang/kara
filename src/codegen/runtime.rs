@@ -5142,7 +5142,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         binding_ptr,
                         drop_fn,
                         ..
-                    } if binding_name == "__owned_agg_tmp" || binding_name == "__refarg_tmp" => {
+                    } if binding_name == "__owned_agg_tmp"
+                        || binding_name == "__refarg_tmp"
+                        || binding_name == "__urecv_drop_tmp" =>
+                    {
                         fired.push((binding_ptr, drop_fn));
                     }
                     other => frame.push(other),
