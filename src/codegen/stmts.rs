@@ -1955,12 +1955,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let names = self.struct_field_names.get(struct_name).cloned();
                 for field_init in fields {
+                    // A FieldAccess init reading OUT of the element
+                    // (`A { s: a.s }`) is no longer copied here: since
+                    // B-2026-08-01-28 admitted for-loop element receivers to
+                    // `maybe_defensive_copy_param_arg`'s borrowed-receiver
+                    // field lane, the struct-literal field compile
+                    // (exprs.rs) already hands this literal an independent
+                    // copy — copying again here leaked the first copy
+                    // (caught by asan_forloop_struct_element_field_move_
+                    // no_double_free). Only the WHOLE-element field init
+                    // (`A { f: a }`) still needs this in-place copy; that
+                    // shape is a bare Identifier the arg-lane helper does
+                    // not touch.
                     let from_elem = match &field_init.value.kind {
-                        ExprKind::FieldAccess { object, .. } => matches!(
-                            &object.kind,
-                            ExprKind::Identifier(a)
-                                if self.for_loop_owned_agg_vars.contains(a.as_str())
-                        ),
                         ExprKind::Identifier(a) => {
                             self.for_loop_owned_agg_vars.contains(a.as_str())
                         }

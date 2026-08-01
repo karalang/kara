@@ -3545,7 +3545,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             };
             if let Some(recv_name) = recv_name {
-                if self.ref_params.contains_key(&recv_name) {
+                // B-2026-08-01-28 — a for-loop struct ELEMENT binding is a
+                // shallow bit-copy of the container's slot, so like a borrowed
+                // receiver it does not own its fields: the container's
+                // per-element drain frees them. A consuming FIELD read at an
+                // arg position (`names.push(h.name)`) must therefore hand the
+                // sink an independent copy, exactly like the `ref
+                // self`/`ref`-param receiver case this arm already covers —
+                // without it the sink and the source container's drain freed
+                // the same buffer (the field-move-out arm of the
+                // B-2026-08-01-24 class).
+                if self.ref_params.contains_key(&recv_name)
+                    || self.for_loop_owned_agg_vars.contains(recv_name.as_str())
+                {
                     if let Some(struct_name) = self.inferred_receiver_type(object) {
                         let field_te = self
                             .struct_field_names

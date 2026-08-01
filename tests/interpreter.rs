@@ -27100,6 +27100,50 @@ fn test_nested_container_elem_bodies() {
     );
 }
 
+/// B-2026-08-01-28 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_for_loop_elem_map_set_field_consumes` (the interpreter was already
+/// correct; the twin pins parity for the Map/Set insert + field move-out
+/// consume arms over for-loop element bindings).
+#[test]
+fn test_for_loop_elem_map_set_field_consumes() {
+    assert_eq!(
+        run("#[derive(Hash, Eq, Ord)]\n\
+             struct P { a: i64, s: String }\n\
+             struct Header { name: String, value: String }\n\
+             fn main() {\n\
+                 let mut hs: Vec[Header] = Vec.new();\n\
+                 hs.push(Header { name: f\"n{1}\", value: f\"v{1}\" });\n\
+                 hs.push(Header { name: f\"n{2}\", value: f\"v{2}\" });\n\
+                 let mut m: Map[i64, Header] = Map.new();\n\
+                 let mut i = 0;\n\
+                 for h in hs {\n\
+                     let _ = m.insert(i, h);\n\
+                     i = i + 1;\n\
+                 }\n\
+                 match m.get(1) {\n\
+                     Some(h) => println(h.value),\n\
+                     None => println(\"none\"),\n\
+                 }\n\
+                 let mut ps: Vec[P] = Vec.new();\n\
+                 ps.push(P { a: 1, s: f\"x{1}\" });\n\
+                 ps.push(P { a: 2, s: f\"y{2}\" });\n\
+                 let mut set: Set[P] = Set.new();\n\
+                 for p in ps {\n\
+                     set.insert(p);\n\
+                 }\n\
+                 println(set.len());\n\
+                 let mut src: Vec[Header] = Vec.new();\n\
+                 src.push(Header { name: f\"a{7}\", value: f\"b{7}\" });\n\
+                 let mut names: Vec[String] = Vec.new();\n\
+                 for h in src {\n\
+                     names.push(h.name);\n\
+                 }\n\
+                 for n in names { println(n); }\n\
+             }\n"),
+        "v2\n2\na7\n"
+    );
+}
+
 /// B-2026-08-01-27 — a `let`-move of a Vec binding no longer leaves the new
 /// binding aliasing the moved-from source's storage: `let mut v = w;
 /// v.push(2)` used to make `w.len()` read 2 under the interpreter

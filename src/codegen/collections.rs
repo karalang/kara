@@ -115,6 +115,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 let fn_val = self.current_fn.unwrap();
                 let elem_slot = self.create_entry_alloca(fn_val, "set.insert.elem", elem_ty);
                 self.builder.build_store(elem_slot, elem_val).unwrap();
+                // A for-loop struct/enum element binding aliases the SOURCE
+                // container's slot — deep-copy the staged element before the
+                // runtime adopts the bytes (B-2026-08-01-28, the Set.insert
+                // arm of the B-2026-08-01-24 class; the element is the KEY
+                // here, Set lowering to Map[T, ()]).
+                self.deep_copy_pushed_for_loop_agg_element(&args[0].value, elem_slot);
                 // val_size = 0, so dummy_unit / dummy_out can be a single
                 // shared i8 alloca — the runtime store-of-zero-bytes is a
                 // no-op regardless of the byte's contents.
@@ -206,6 +212,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 let elem_slot = self.create_entry_alloca(fn_val, "set.try.elem", elem_ty);
                 self.builder.build_store(elem_slot, elem_val).unwrap();
+                // For-loop element staged for adoption: copy-depth ==
+                // drop-depth (B-2026-08-01-28, same as the `insert` arm).
+                self.deep_copy_pushed_for_loop_agg_element(&args[0].value, elem_slot);
                 // val_size == 0 → the out-old and val slots are a shared dummy.
                 let dummy = self.create_entry_alloca(fn_val, "set.try.dummy", i8_t.into());
                 let bytes_slot = self.create_entry_alloca(fn_val, "set.try.bytes", i64_t.into());

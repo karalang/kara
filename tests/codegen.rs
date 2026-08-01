@@ -6956,6 +6956,58 @@ fn main() {
         assert_eq!(out, "x1\n7\ny2\n");
     }
 
+    /// B-2026-08-01-28 — the B-2026-08-01-24 for-loop element double-free
+    /// through the consume arms its fix did not cover: `m.insert(k, h)`
+    /// (Map value), `set.insert(p)` (Set element = Map key), and
+    /// `names.push(h.name)` (a consuming FIELD read at an arg position).
+    /// All three aborted with free(): double free under JIT/AOT pre-fix.
+    /// The map/set arms now run the copy-depth == drop-depth deep-copy on
+    /// the staged key/value slots; the field read routes through the
+    /// borrowed-receiver defensive-copy arm (a loop element does not own
+    /// its fields — the container drain does). Twin of
+    /// `tests/interpreter.rs`'s `test_for_loop_elem_map_set_field_consumes`.
+    #[test]
+    fn e2e_for_loop_elem_map_set_field_consumes() {
+        let Some(out) = run_program(
+            "#[derive(Hash, Eq, Ord)]\n\
+             struct P { a: i64, s: String }\n\
+             struct Header { name: String, value: String }\n\
+             fn main() {\n\
+             \x20   let mut hs: Vec[Header] = Vec.new();\n\
+             \x20   hs.push(Header { name: f\"n{1}\", value: f\"v{1}\" });\n\
+             \x20   hs.push(Header { name: f\"n{2}\", value: f\"v{2}\" });\n\
+             \x20   let mut m: Map[i64, Header] = Map.new();\n\
+             \x20   let mut i = 0;\n\
+             \x20   for h in hs {\n\
+             \x20       let _ = m.insert(i, h);\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   match m.get(1) {\n\
+             \x20       Some(h) => println(h.value),\n\
+             \x20       None => println(\"none\"),\n\
+             \x20   }\n\
+             \x20   let mut ps: Vec[P] = Vec.new();\n\
+             \x20   ps.push(P { a: 1, s: f\"x{1}\" });\n\
+             \x20   ps.push(P { a: 2, s: f\"y{2}\" });\n\
+             \x20   let mut set: Set[P] = Set.new();\n\
+             \x20   for p in ps {\n\
+             \x20       set.insert(p);\n\
+             \x20   }\n\
+             \x20   println(set.len());\n\
+             \x20   let mut src: Vec[Header] = Vec.new();\n\
+             \x20   src.push(Header { name: f\"a{7}\", value: f\"b{7}\" });\n\
+             \x20   let mut names: Vec[String] = Vec.new();\n\
+             \x20   for h in src {\n\
+             \x20       names.push(h.name);\n\
+             \x20   }\n\
+             \x20   for n in names { println(n); }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "v2\n2\na7\n");
+    }
+
     /// B-2026-08-01-27 — compiled-backend pin for the let-move alias fix:
     /// the interpreter moved to MATCH these (already-correct) behaviors, so
     /// this twin guards the target semantics from drifting. Same program as

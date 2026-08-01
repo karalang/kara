@@ -1559,6 +1559,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 let bytes_slot = self.create_entry_alloca(fn_val, "map.try.bytes", i64_t.into());
                 self.builder.build_store(key_slot, key_val).unwrap();
                 self.builder.build_store(val_slot, val_val).unwrap();
+                // A for-loop struct/enum element binding aliases the SOURCE
+                // container's slot — deep-copy the staged key/value in place
+                // before the runtime adopts the bytes (B-2026-08-01-28, the
+                // Map.insert arm of the B-2026-08-01-24 class).
+                self.deep_copy_pushed_for_loop_agg_element(&args[0].value, key_slot);
+                self.deep_copy_pushed_for_loop_agg_element(&args[1].value, val_slot);
 
                 let i32_t = self.context.i32_type();
                 let status = self
@@ -1733,6 +1739,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     let val_slot = self.create_entry_alloca(fn_val, "map.insert.bval", val_ty);
                     self.builder.build_store(key_slot, view).unwrap();
                     self.builder.build_store(val_slot, val_val).unwrap();
+                    // For-loop element value staged for adoption: copy-depth
+                    // == drop-depth (B-2026-08-01-28; the key is a borrowed
+                    // slice view on this path, never an element binding).
+                    self.deep_copy_pushed_for_loop_agg_element(&args[1].value, val_slot);
                     self.builder
                         .build_call(
                             self.karac_map_insert_borrowed_str_old_fn,
@@ -1785,6 +1795,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         let val_slot = self.create_entry_alloca(fn_val, "map.insert.val", val_ty);
                         self.builder.build_store(key_slot, key_val).unwrap();
                         self.builder.build_store(val_slot, val_val).unwrap();
+                        // For-loop element key/value staged for adoption:
+                        // copy-depth == drop-depth (B-2026-08-01-28, the
+                        // Map.insert arm of the B-2026-08-01-24 class). The
+                        // mono fast path above is scalar-only, so this generic
+                        // pointer path is the one a struct/enum element takes.
+                        self.deep_copy_pushed_for_loop_agg_element(&args[0].value, key_slot);
+                        self.deep_copy_pushed_for_loop_agg_element(&args[1].value, val_slot);
                         self.builder
                             .build_call(
                                 self.karac_map_insert_old_fn,

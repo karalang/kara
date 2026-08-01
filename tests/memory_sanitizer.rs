@@ -17051,6 +17051,50 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-28 — the -24 double-free through the Map.insert /
+    /// Set.insert / field-move-out consume arms (all three aborted with
+    /// free(): double free pre-fix; the map/set arms now deep-copy the
+    /// staged key/value slots and a consuming field read of a loop element
+    /// routes through the borrowed-receiver defensive copy). ASAN pins the
+    /// double-free half; LSan (Linux CI) the no-leak half of the copies.
+    #[test]
+    fn asan_for_loop_elem_map_set_field_consumes_freed() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, Ord)]
+struct P { a: i64, s: String }
+struct Header { name: String, value: String }
+fn main() {
+    let mut hs: Vec[Header] = Vec.new();
+    hs.push(Header { name: f"n{1}", value: f"v{1}" });
+    let mut m: Map[i64, Header] = Map.new();
+    let mut i = 0;
+    for h in hs {
+        let _ = m.insert(i, h);
+        i = i + 1;
+    }
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { a: 1, s: f"x{1}" });
+    let mut set: Set[P] = Set.new();
+    for p in ps {
+        set.insert(p);
+    }
+    println(set.len());
+    let mut src: Vec[Header] = Vec.new();
+    src.push(Header { name: f"a{7}", value: f"b{7}" });
+    let mut names: Vec[String] = Vec.new();
+    for h in src {
+        names.push(h.name);
+    }
+    for n in names { println(n); }
+    println("end");
+}
+"#,
+            &["1", "a7", "end"],
+            "for_loop_elem_map_set_field_consumes_freed",
+        );
+    }
+
     /// B-2026-08-01-24 — a heap-owning `for`-loop struct/enum ELEMENT
     /// pushed whole into another container (`for h in hs { out.push(h) }`)
     /// double-freed its heap payload pre-fix: the loop binding is a shallow
