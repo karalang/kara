@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 197 | 0 |
+| miscompile | 199 | 2 |
 | leak | 113 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 598 | 0 |
+| codegen | 600 | 2 |
 | typecheck | 108 | 0 |
-| interp | 97 | 0 |
+| interp | 99 | 2 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,11 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **833 surfaced · 0 open · 825 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced · 2 open · 825 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (2)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-01-19 | 2026-08-01 | interp+codegen | medium | storing an owned param into a local container FIELD (`o.h = h;`) fires the caller-retained value's Drop body TWICE — container walk + caller NLL, in parity on both backends | — |
+| B-2026-08-01-20 | 2026-08-01 | interp+codegen | low | displaced-value Drop bodies at FIELD-assign targets are silent on both backends (`o.h = <new>;` frees the old field's heap without running its bodies) | — |
 
 ### Fixed (825)
 
