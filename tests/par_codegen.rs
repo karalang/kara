@@ -1652,13 +1652,16 @@ fn main() {
     /// B-2026-07-31-41 residual — WRAPPER types join the drop-observable
     /// classification transitively: `let mut b = Box2.Full(Res { id: 5 });
     /// b = Box2.Empty;` in a lane fired the stale pre-spawn payload's body
-    /// (`drop 5`) at parent scope exit while both sequential lanes stay
-    /// silent (the sequential enum-displacement body silence is a separate,
-    /// in-parity B-2026-07-30-11 residual). `Box2` carries no `impl Drop`
-    /// itself, so the direct `drop_method_keys` gate missed it; the
-    /// fixpoint closure over declared struct fields / enum payloads
+    /// (`drop 5`) at parent scope exit, diverging from the sequential
+    /// lanes. `Box2` carries no `impl Drop` itself, so the direct
+    /// `drop_method_keys` gate missed it; the fixpoint closure over
+    /// declared struct fields / enum payloads
     /// (`compute_drop_observable_types`) admits it via the `Res` payload
-    /// and the captured mutation of `b` now forces the group sequential.
+    /// and the captured mutation of `b` forces the group sequential. The
+    /// expected `drop 5` right after the overwrite line is the sequential
+    /// semantics: the B-2026-07-30-11 enum-assign displacement leg fires
+    /// the overwritten payload's body at the assignment on every backend
+    /// (this test originally pinned that position as a shared silence).
     #[test]
     fn test_e2e_auto_par_captured_drop_wrapper_mutation_sequential_semantics() {
         let out = run_program(
@@ -1693,7 +1696,7 @@ fn main() {
         if let Some(out) = out {
             assert_eq!(
                 out,
-                "D: pad section\narm sees 4\ndrop 4\nW: wrapper overwrite\nafter overwrite\nF: pad map\ndrop 7\ndrop 8\nafter displace\nend\n",
+                "D: pad section\narm sees 4\ndrop 4\nW: wrapper overwrite\ndrop 5\nafter overwrite\nF: pad map\ndrop 7\ndrop 8\nafter displace\nend\n",
                 "wrapper-Drop captured mutation must run with sequential semantics; got {out:?}"
             );
         }

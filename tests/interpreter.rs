@@ -26118,7 +26118,10 @@ fn test_container_bodies_whole_value_move_single_fire() {
                  consume(b);\n\
                  println(6);\n\
              }\n"),
-        "91\n1\n92\n2\n93\n3\n94\n4\n96\n5\n70\n97\n6\n"
+        // `95` is the reassign target's OVERWRITTEN original firing at the
+        // assignment — originally a shared residual silence, closed by the
+        // B-2026-07-30-11 enum-assign displacement leg.
+        "91\n1\n92\n2\n93\n3\n94\n4\n95\n96\n5\n70\n97\n6\n"
     );
 }
 
@@ -26542,6 +26545,50 @@ fn test_let_else_moved_payload_single_drop() {
                  println(\"end\");\n\
              }\n"),
         "a\nbound 52\ndrop 52\nb\nbound 53\ndrop 53\nc\nnope\nend\n"
+    );
+}
+
+/// B-2026-07-30-11 (enum-assign displacement) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_enum_assign_displacement_runs_payload_body`,
+/// same source and expected string. Pre-fix, overwriting an enum binding
+/// (`b = Box2.Empty;` over `Full(Res{5})`) fired NO payload body in either
+/// backend — the displaced-value hook matched only struct old values. Four
+/// shapes: full→empty (the silence), full→full (old body at the
+/// assignment, new at scope exit), empty→full (no old body), and a
+/// moved-out payload then reassign (the arm binding owns the body; the
+/// reassign must not replay it).
+#[test]
+fn test_enum_assign_displacement_runs_payload_body() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn main() {\n\
+                 println(\"a: full -> empty\");\n\
+                 let mut b = Box2.Full(Res { id: 5 });\n\
+                 b = Box2.Empty;\n\
+                 println(\"b: full -> full\");\n\
+                 let mut c = Box2.Full(Res { id: 6 });\n\
+                 c = Box2.Full(Res { id: 7 });\n\
+                 println(\"c: empty -> full (no old body)\");\n\
+                 let mut d = Box2.Empty;\n\
+                 d = Box2.Full(Res { id: 8 });\n\
+                 println(\"d: moved-out then reassign (no double)\");\n\
+                 let mut e = Box2.Full(Res { id: 9 });\n\
+                 match e {\n\
+                     Box2.Full(r) => { println(f\"took {r.id}\"); }\n\
+                     Box2.Empty => {}\n\
+                 }\n\
+                 e = Box2.Empty;\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a: full -> empty\ndrop 5\nb: full -> full\ndrop 6\ndrop 7\n\
+         c: empty -> full (no old body)\ndrop 8\n\
+         d: moved-out then reassign (no double)\ntook 9\ndrop 9\nend\n"
     );
 }
 

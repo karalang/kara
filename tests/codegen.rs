@@ -5617,10 +5617,12 @@ fn main() {
         assert_eq!(
             out,
             // One fire per moved value, at its destination's live-range end.
-            // No `90` anywhere (no body over zeroed data), and no `95` — the
-            // reassign target's OVERWRITTEN original is a shared residual
-            // silence on both backends (a leak, not a divergence).
-            "91\n1\n92\n2\n93\n3\n94\n4\n96\n5\n70\n97\n6\n"
+            // No `90` anywhere (no body over zeroed data). `95` is the
+            // reassign target's OVERWRITTEN original firing at the
+            // assignment — originally a shared residual silence on both
+            // backends, closed by the B-2026-07-30-11 enum-assign
+            // displacement leg (both backends fire it identically).
+            "91\n1\n92\n2\n93\n3\n94\n4\n95\n96\n5\n70\n97\n6\n"
         );
     }
 
@@ -6247,6 +6249,53 @@ fn main() {
         assert_eq!(
             out,
             "a\nbound 52\ndrop 52\nb\nbound 53\ndrop 53\nc\nnope\nend\n"
+        );
+    }
+
+    /// B-2026-07-30-11 (enum-assign displacement) — overwriting an enum
+    /// binding runs the OLD variant's Drop-bearing payload body before the
+    /// store (`__karac_dropelems_enum_<E>` on the old slot), matching the
+    /// struct leg. Pre-fix `b = Box2.Empty;` over `Full(Res{5})` was
+    /// silent in both backends. Twin of `tests/interpreter.rs`'s
+    /// `test_enum_assign_displacement_runs_payload_body`, same source and
+    /// expected string.
+    #[test]
+    fn e2e_enum_assign_displacement_runs_payload_body() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn main() {\n\
+             \x20   println(\"a: full -> empty\");\n\
+             \x20   let mut b = Box2.Full(Res { id: 5 });\n\
+             \x20   b = Box2.Empty;\n\
+             \x20   println(\"b: full -> full\");\n\
+             \x20   let mut c = Box2.Full(Res { id: 6 });\n\
+             \x20   c = Box2.Full(Res { id: 7 });\n\
+             \x20   println(\"c: empty -> full (no old body)\");\n\
+             \x20   let mut d = Box2.Empty;\n\
+             \x20   d = Box2.Full(Res { id: 8 });\n\
+             \x20   println(\"d: moved-out then reassign (no double)\");\n\
+             \x20   let mut e = Box2.Full(Res { id: 9 });\n\
+             \x20   match e {\n\
+             \x20       Box2.Full(r) => { println(f\"took {r.id}\"); }\n\
+             \x20       Box2.Empty => {}\n\
+             \x20   }\n\
+             \x20   e = Box2.Empty;\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a: full -> empty\ndrop 5\nb: full -> full\ndrop 6\ndrop 7\n\
+             c: empty -> full (no old body)\ndrop 8\n\
+             d: moved-out then reassign (no double)\ntook 9\ndrop 9\nend\n"
         );
     }
 

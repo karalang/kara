@@ -1919,13 +1919,36 @@ impl<'a> super::Interpreter<'a> {
                         && !crate::deque_head::expr_mentions_name_deep(value, t)
                     {
                         if let Some(old) = self.env.get(t) {
-                            if let Value::Struct { name: tn, .. } = &old {
-                                if self.program.drop_method_keys.contains_key(tn) {
-                                    let tn = tn.clone();
-                                    self.run_user_drop_body_on_value(&tn, old);
-                                } else if self.value_runs_user_drop(&old) {
-                                    self.drop_user_drop_fields_of_value(&old);
+                            match &old {
+                                Value::Struct { name: tn, .. } => {
+                                    if self.program.drop_method_keys.contains_key(tn) {
+                                        let tn = tn.clone();
+                                        self.run_user_drop_body_on_value(&tn, old);
+                                    } else if self.value_runs_user_drop(&old) {
+                                        self.drop_user_drop_fields_of_value(&old);
+                                    }
                                 }
+                                // Enum sibling (B-2026-07-30-11, enum-assign
+                                // displacement): `b = Box2.Empty;` over
+                                // `Full(Res{..})` silently discarded the
+                                // payload's Drop work — the Struct-only match
+                                // above never saw the EnumVariant. Reuse the
+                                // scope-exit payload walk (same moved-out
+                                // guards, same forward order as codegen's
+                                // `__karac_dropelems_enum_<E>`). An enum with
+                                // its OWN `impl Drop` is excluded — its
+                                // reassign shape carries a wrapper + walk
+                                // action pair whose assign-site sequencing is
+                                // unsettled; keeping it silent preserves
+                                // parity (codegen twin excludes it too).
+                                Value::EnumVariant { enum_name, .. } => {
+                                    if !self.program.drop_method_keys.contains_key(enum_name) {
+                                        let t = t.clone();
+                                        let old = old.clone();
+                                        self.run_enum_payload_user_drops(&t, &old);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }

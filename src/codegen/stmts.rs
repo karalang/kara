@@ -6747,6 +6747,54 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-07-30-11 (enum-assign displacement) — the ENUM
+                    // sibling of the struct leg above: `b = Box2.Empty;` over
+                    // `Full(Res{..})` silently discarded the payload's Drop
+                    // body (the binding's scope-exit walk reads the slot AFTER
+                    // the store, covering the new variant only). Run the
+                    // `__karac_dropelems_enum_<E>` payload-bodies walk on the
+                    // old slot contents before the store — its tag switch
+                    // no-ops for payload-free variants, and the emitter
+                    // returns None when no variant carries a Drop-bearing
+                    // payload. Guards mirror the struct leg (self-alias,
+                    // RHS-mentions-target) plus the armed test: a moved-out
+                    // value had its walk action retracted, and replaying it
+                    // would double the payload's body. USER value enums only:
+                    // Option/Result reassign rides its own inline-payload
+                    // machinery, shared enums are RC-driven, and an enum with
+                    // its OWN `impl Drop` is excluded (wrapper + walk action
+                    // pair whose assign-site sequencing is unsettled — the
+                    // interpreter twin excludes it identically, so the
+                    // backends stay in step).
+                    let lhs_is_tracked_value_enum =
+                        self.var_type_names.get(name.as_str()).is_some_and(|tn| {
+                            tn != "Option"
+                                && tn != "Result"
+                                && self
+                                    .enum_layouts
+                                    .get(tn.as_str())
+                                    .is_some_and(|l| !l.is_shared)
+                                && !self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .is_some_and(|p| p.drop_method_keys.contains_key(tn.as_str()))
+                        });
+                    if lhs_is_tracked_value_enum
+                        && !rhs_is_self_alias
+                        && !crate::deque_head::expr_mentions_name_deep(value, name)
+                        && self.has_armed_user_drop(name.as_str())
+                    {
+                        if let (Some(tn), Some(slot)) = (
+                            self.var_type_names.get(name.as_str()).cloned(),
+                            self.variables.get(name).copied(),
+                        ) {
+                            if let Some(walker) = self.emit_enum_payload_user_drop_bodies_fn(&tn) {
+                                self.builder
+                                    .build_call(walker, &[slot.ptr.into()], "")
+                                    .unwrap();
+                            }
+                        }
+                    }
                     if let Some(slot) = self.variables.get(name).copied() {
                         // Coerce a scalar RHS to the slot's width before
                         // storing — narrow-int arithmetic computes at i64
