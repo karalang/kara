@@ -26869,6 +26869,35 @@ fn test_fresh_arg_temp_drop_fires_at_statement_end() {
     );
 }
 
+/// B-2026-08-01-4 (struct-literal residual, closed) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_struct_literal_ref_param_arg_drop`, same
+/// source and expected string. The interpreter's arg hook already fired
+/// this shape — the pin is the parity target the widened codegen gate now
+/// meets.
+#[test]
+fn test_struct_literal_ref_param_arg_drop() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             fn peek(r: ref Res) -> i64 {\n\
+                 return r.id;\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let z = peek(Res { id: 4, name: f\"r4\" });\n\
+                 println(f\"z={z}\");\n\
+                 println(\"b\");\n\
+                 peek(Res { id: 5, name: f\"r5\" });\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 4 r4\nz=4\nb\ndrop 5 r5\nend\n"
+    );
+}
+
 /// B-2026-08-01-5 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_recv_temp_drop_semantics`, same source and expected string.
 /// Pre-fix the interpreter fired NO receiver-temp body ever (the free-fn

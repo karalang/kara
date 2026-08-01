@@ -6612,6 +6612,39 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-4 (struct-literal residual, closed) — a struct LITERAL
+    /// rvalue borrowed by a `ref` param (`peek(Res { .. })`) fires its Drop
+    /// body at statement end like the Call-shaped fresh args: literals are
+    /// fresh by construction, but `expr_yields_fresh_owned_temp` only
+    /// admits Call/MethodCall shapes, so the refarg registration silently
+    /// skipped them while the interpreter's arg hook fired. Twin of
+    /// `tests/interpreter.rs`'s `test_struct_literal_ref_param_arg_drop`.
+    #[test]
+    fn e2e_struct_literal_ref_param_arg_drop() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn peek(r: ref Res) -> i64 {\n\
+             \x20   return r.id;\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let z = peek(Res { id: 4, name: f\"r4\" });\n\
+             \x20   println(f\"z={z}\");\n\
+             \x20   println(\"b\");\n\
+             \x20   peek(Res { id: 5, name: f\"r5\" });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 4 r4\nz=4\nb\ndrop 5 r5\nend\n");
+    }
+
     /// B-2026-08-01-5 — fresh method-RECEIVER Drop temps: a `ref self`
     /// method's fresh receiver fires its body at STATEMENT END on both
     /// backends (pre-fix: never under `karac run`, at scope exit under

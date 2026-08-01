@@ -4356,7 +4356,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // declared-type payload walker for a value enum. Shared types stay
         // with the rc machinery; a non-fresh arg (a place rvalue) is the
         // owner's business.
-        if val.get_type().is_struct_type() && self.expr_yields_fresh_owned_temp(arg_expr) {
+        // A struct LITERAL is fresh by construction but
+        // `expr_yields_fresh_owned_temp` only admits Call/MethodCall shapes,
+        // so `peek(Res { .. })` silently skipped this leg while the
+        // interpreter's arg hook fired (the B-2026-08-01-4 recorded
+        // residual, closed here).
+        let arg_is_fresh = self.expr_yields_fresh_owned_temp(arg_expr)
+            || matches!(&arg_expr.kind, ExprKind::StructLiteral { .. });
+        if val.get_type().is_struct_type() && arg_is_fresh {
             let tn = match &arg_expr.kind {
                 ExprKind::Call { callee, .. } => match &callee.kind {
                     ExprKind::Identifier(n) => self
