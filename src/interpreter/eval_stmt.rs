@@ -1336,12 +1336,40 @@ impl<'a> super::Interpreter<'a> {
     /// `b`'s Drop slot lives in an outer scope's cleanup vec, the same
     /// (accepted) limitation as the let-rebind hook.
     fn suppress_assign_move_user_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
-        let StmtKind::Assign { value, .. } = &stmt.kind else {
+        let StmtKind::Assign { target, value } = &stmt.kind else {
             return;
         };
         let ExprKind::Identifier(source_name) = &value.kind else {
             return;
         };
+        // B-2026-08-01-16 — the ASSIGN sibling of the Let-path param-view
+        // rebind (B-2026-08-01-15): `h2 = h;` where the RHS is in the current
+        // fn's owned-param view set moves the callee's entry copy into `h2`,
+        // but under caller-retains the value's Drop observability stays the
+        // CALLER's. The displaced old `h2` value's body already ran in the
+        // Assign arm; retract the TARGET's Drop slot so its body doesn't fire
+        // a second time on the caller-retained value, and propagate view-ness
+        // (later rebinds/destructures/matches of `h2` consult the set — the
+        // same transitivity the Let path gets in
+        // `let_destructures_owned_param`). Codegen twin: the
+        // `param_view_locals` insert + `suppress_user_drop_for_var` in the
+        // Assign arm of `compile_stmt`.
+        if self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|s| s.contains(source_name.as_str()))
+        {
+            if let ExprKind::Identifier(target_name) = &target.kind {
+                cleanup.retain(|action| match action {
+                    CleanupAction::Drop { name } => name != target_name,
+                    _ => true,
+                });
+                if let Some(top) = self.owned_param_names_stack.last_mut() {
+                    top.insert(target_name.clone());
+                }
+                return;
+            }
+        }
         let type_name = match self.env.get(source_name) {
             Some(Value::Struct { name, .. }) => name,
             Some(Value::EnumVariant { enum_name, .. }) => enum_name,

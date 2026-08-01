@@ -6854,13 +6854,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .unwrap();
                                     }
                                 }
-                                // No `impl Drop`: field-heap cleanup only. A
-                                // moved-out source already has its caps
-                                // zeroed (`zero_struct_move_caps`), so the
-                                // synthesizer's frees no-op — safe without an
-                                // armed-action test (StructDrop actions are
-                                // not name-keyed the way UserDrop is).
+                                // No `impl Drop`: the "same cleanup the scope
+                                // exit would have run" is the Drop-bearing
+                                // FIELDS' bodies walk plus the field-heap
+                                // synthesizer — the bodies walk was missing
+                                // (B-2026-08-01-16: `a = Holder{5}` over
+                                // `Holder{9}` freed z9's heap silently while
+                                // the interpreter printed `drop 9 z9`).
+                                // Armed-gated like the wrapper arm: a
+                                // moved-out value had its UserDrop action
+                                // retracted, and replaying the walk would
+                                // read cap-zeroed bits. The synthesizer's
+                                // frees stay unguarded — a moved-out source
+                                // has its caps zeroed, so they no-op.
                                 None => {
+                                    if self.has_armed_user_drop(name.as_str()) {
+                                        if let Some(bodies) = self.emit_user_drop_field_bodies_fn(
+                                            &tn,
+                                            &std::collections::HashMap::new(),
+                                        ) {
+                                            self.builder
+                                                .build_call(bodies, &[slot.ptr.into()], "")
+                                                .unwrap();
+                                        }
+                                    }
                                     if let Some(f) = self.emit_struct_drop_synthesis(&tn) {
                                         self.builder.build_call(f, &[slot.ptr.into()], "").unwrap();
                                     }
@@ -7036,6 +7053,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                    }
+                    // B-2026-08-01-16 — the ASSIGN sibling of the Let-path
+                    // param-view rebind (B-2026-08-01-15): `h2 = h;` where the
+                    // RHS is an owned (non-ref) param, or an existing
+                    // param-view local, moves the callee's entry copy into
+                    // `h2` — but under caller-retains the conceptual value's
+                    // Drop observability is the CALLER's, so `h2`'s armed
+                    // bodies actions (the dropbodies walk / enum payload
+                    // walker registered at its own let, or re-armed just
+                    // above) must be retracted: the displaced OLD value's
+                    // body already fired in the displacement channel before
+                    // the store, and leaving the action armed fires the
+                    // param's body a second time against the caller's NLL
+                    // fire. Memory tracking (StructDrop/EnumDrop) is
+                    // name-blind and survives the retraction, so the moved
+                    // entry copy's heap still frees at scope exit. The
+                    // insert makes view-ness TRANSITIVE (later `let h3 =
+                    // h2` / destructures / matches consult
+                    // `param_view_locals`), matching the interpreter's
+                    // owned_param_names_stack propagation. Placed AFTER the
+                    // re-arm blocks above so they cannot resurrect the
+                    // retracted actions.
+                    let rhs_is_param_view = matches!(&value.kind,
+                        ExprKind::Identifier(src)
+                            if (self.current_fn_param_names.contains(src.as_str())
+                                && !self.ref_params.contains_key(src.as_str()))
+                                || self.param_view_locals.contains(src.as_str()));
+                    if rhs_is_param_view && (lhs_is_tracked_struct || lhs_is_tracked_value_enum) {
+                        self.suppress_user_drop_for_var(name);
+                        self.param_view_locals.insert(name.clone());
                     }
                     // Tensor move (`w = other`, an owned tensor binding moved
                     // into `w`): after the store both slots hold the same block

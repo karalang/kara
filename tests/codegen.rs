@@ -6817,6 +6817,65 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-16 — the ASSIGN sibling of the param-view rebind:
+    /// (1) `h2 = h;` onto a pre-declared local makes h2 a param view — its
+    /// armed bodies actions are retracted so the body fires exactly once,
+    /// caller-side (pre-fix: doubled on both backends); (2) the displaced
+    /// old h2 value's field bodies fire AT the assignment (pre-fix: `karac
+    /// build` freed the heap silently while the interpreter printed the
+    /// body — `drop 9 z9` / `drop 3 w3` missing under AOT); (3) same for a
+    /// plain local reassign with no params involved; (4) the enum-assign
+    /// sibling (`w2 = w; match w2`) binds views. Twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_assign_param_rebind_and_displaced_bodies`.
+    #[test]
+    fn e2e_assign_param_rebind_and_displaced_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             enum E2 { B(Res), Empty }\n\
+             fn take(h: Holder) {\n\
+             \x20   let mut h2 = Holder { r: Res { id: 9, name: f\"z{9}\" } };\n\
+             \x20   h2 = h;\n\
+             \x20   println(f\"held {h2.r.id}\");\n\
+             \x20   println(\"take done\");\n\
+             }\n\
+             fn take_enum(w: E2) {\n\
+             \x20   let mut w2 = E2.Empty;\n\
+             \x20   w2 = w;\n\
+             \x20   match w2 {\n\
+             \x20       E2.B(r) => { println(f\"got {r.id}\"); }\n\
+             \x20       E2.Empty => { println(\"none\"); }\n\
+             \x20   }\n\
+             \x20   println(\"take2 done\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let x = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+             \x20   take(x);\n\
+             \x20   println(\"b\");\n\
+             \x20   let mut d = Holder { r: Res { id: 3, name: f\"w{3}\" } };\n\
+             \x20   d = Holder { r: Res { id: 4, name: f\"v{4}\" } };\n\
+             \x20   println(f\"kept {d.r.id}\");\n\
+             \x20   println(\"c\");\n\
+             \x20   let e = E2.B(Res { id: 7, name: f\"q{7}\" });\n\
+             \x20   take_enum(e);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ndrop 9 z9\nheld 5\ntake done\ndrop 5 y5\nb\ndrop 3 w3\nkept 4\ndrop 4 v4\nc\ngot 7\ntake2 done\ndrop 7 q7\nend\n"
+        );
+    }
+
     /// B-2026-08-01-13 — owned enum ARG body ownership, the coherent
     /// caller-retains rule: a fresh enum-ctor arg's payload body fires
     /// exactly once, CALLER-side, at the arg's statement end — whether the

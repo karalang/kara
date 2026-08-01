@@ -27047,6 +27047,57 @@ fn test_param_view_rebind_single_caller_fire() {
     );
 }
 
+/// B-2026-08-01-16 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_assign_param_rebind_and_displaced_bodies`, same source and
+/// expected string. Pre-fix the interpreter fired the caller-retained
+/// value's body a second time off the target binding's still-armed Drop
+/// slot (the Assign path had no view propagation — the Let-only gate of
+/// B-2026-08-01-15); the `suppress_assign_move_user_drop` extension
+/// retracts the target's slot and propagates view-ness, leaving exactly
+/// the caller's single fire, and the displaced-value fires stay put.
+#[test]
+fn test_assign_param_rebind_and_displaced_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             enum E2 { B(Res), Empty }\n\
+             fn take(h: Holder) {\n\
+                 let mut h2 = Holder { r: Res { id: 9, name: f\"z{9}\" } };\n\
+                 h2 = h;\n\
+                 println(f\"held {h2.r.id}\");\n\
+                 println(\"take done\");\n\
+             }\n\
+             fn take_enum(w: E2) {\n\
+                 let mut w2 = E2.Empty;\n\
+                 w2 = w;\n\
+                 match w2 {\n\
+                     E2.B(r) => { println(f\"got {r.id}\"); }\n\
+                     E2.Empty => { println(\"none\"); }\n\
+                 }\n\
+                 println(\"take2 done\");\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let x = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+                 take(x);\n\
+                 println(\"b\");\n\
+                 let mut d = Holder { r: Res { id: 3, name: f\"w{3}\" } };\n\
+                 d = Holder { r: Res { id: 4, name: f\"v{4}\" } };\n\
+                 println(f\"kept {d.r.id}\");\n\
+                 println(\"c\");\n\
+                 let e = E2.B(Res { id: 7, name: f\"q{7}\" });\n\
+                 take_enum(e);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 9 z9\nheld 5\ntake done\ndrop 5 y5\nb\ndrop 3 w3\nkept 4\ndrop 4 v4\nc\ngot 7\ntake2 done\ndrop 7 q7\nend\n"
+    );
+}
+
 /// B-2026-08-01-13 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_owned_enum_arg_payload_body_single_caller_fire`, same source and
 /// expected string. Pre-fix the interpreter was silent for the
