@@ -131,6 +131,11 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // interpreter's let-move deep-clone now matches; the reuse IS the
     // divergence surface under test.
     "e2e_let_move_source_frozen",
+    // B-2026-08-01-31 — `let x = o.h.r; o.h.r = <new>` (UAM-warned
+    // move-then-reinit): pins the deep-chain move-out zeroing + the
+    // root-coarse bodies disarm keeping BOTH backends on the same
+    // single-fire sequencing. The reuse IS the point.
+    "e2e_deep_chain_field_move_then_reassign",
     "test_e2e_byvalue_aggregate_param_read_then_reused",
     "test_e2e_owned_vec_param_let_move_param_reusable",
     "test_e2e_struct_param_field_move_out",

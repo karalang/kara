@@ -4897,6 +4897,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.suppress_struct_field_move_into_literal(value);
                                 }
                             }
+                            // B-2026-08-01-31 — the deeper-place sibling
+                            // (`let s = o.h.name`): self-gated to a
+                            // non-Identifier/`self` object and a
+                            // non-owned-param root, so the shallow call
+                            // above stays the only emitter for depth 1.
+                            self.suppress_place_field_struct_move_source(value);
                         }
                         if let Some((slot_ptr, slot_ty)) =
                             self.variables.get(var_name.as_str()).map(|s| (s.ptr, s.ty))
@@ -5694,15 +5700,38 @@ impl<'ctx> super::Codegen<'ctx> {
                             ..
                         } = &value.kind
                         {
-                            if let ExprKind::Identifier(src) = &object.kind {
+                            // B-2026-08-01-31 — accept a DEEP chain source
+                            // (`let x = o.h.r`): the registered bodies walk
+                            // lives on the ROOT binding and covers the whole
+                            // subtree, so disarm the root via the FIRST chain
+                            // segment (`h` — its type carries the moved
+                            // field's Drop work transitively). Depth 1 keeps
+                            // the original (src, moved_field) pair.
+                            let mut chain_cur = object;
+                            let mut disarm_field = moved_field.as_str();
+                            let chain_src = loop {
+                                match &chain_cur.kind {
+                                    ExprKind::Identifier(o) => break Some(o.as_str()),
+                                    ExprKind::FieldAccess {
+                                        object: inner,
+                                        field: mid,
+                                    } => {
+                                        disarm_field = mid.as_str();
+                                        chain_cur = inner;
+                                    }
+                                    _ => break None,
+                                }
+                            };
+                            if let Some(src) = chain_src {
                                 if let (Some(src_slot), Some(src_type)) = (
-                                    self.variables.get(src.as_str()).copied(),
-                                    self.var_type_names.get(src.as_str()).cloned(),
+                                    self.variables.get(src).copied(),
+                                    self.var_type_names.get(src).cloned(),
                                 ) {
+                                    let disarm_field = disarm_field.to_string();
                                     self.disarm_user_drop_fields_for_moved_field(
                                         src_slot.ptr,
                                         &src_type,
-                                        moved_field,
+                                        &disarm_field,
                                     );
                                 }
                             }
@@ -5835,6 +5864,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.suppress_struct_field_move_into_literal(value);
                                 }
                             }
+                            // B-2026-08-01-31 — the deeper-place sibling
+                            // (`let x = o.h.r`): the moved-out binding is
+                            // tracked below and owns the field's heap, so
+                            // the ROOT's StructDrop must skip it. Self-gated
+                            // to a non-Identifier/`self` object and a
+                            // non-owned-param root.
+                            self.suppress_place_field_struct_move_source(value);
                         }
                         // B-2026-07-14-16 (struct leg): `let p = v.get(i).unwrap()`
                         // on a `Vec[Struct]` whose Struct owns heap. `Vec.get`
@@ -9260,6 +9296,72 @@ impl<'ctx> super::Codegen<'ctx> {
     /// containers that are owning Vecs (slices, map-index, SoA excluded);
     /// non-generic, non-shared user struct / value-enum elements. An RHS
     /// mentioning the container declines (uncertain ⇒ silent).
+    /// B-2026-08-01-30 leg B — an index expression this emitter may safely
+    /// RE-evaluate (the store compiles it again afterwards): pure scalar
+    /// arithmetic over literals / identifiers / casts only. Anything that
+    /// could observe mutated state or carry effects (calls, method calls,
+    /// nested indexing, field reads) declines, keeping the effect-free
+    /// re-evaluation rule intact by construction. Replaces the original
+    /// Integer/Identifier-only gate, which silently skipped the displaced
+    /// element's bodies AND leaked its field buffers for `v[base - 1] = ..`.
+    fn index_expr_is_pure_scalar(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(_, _) | ExprKind::Identifier(_) | ExprKind::Bool(_) => true,
+            ExprKind::Unary { operand, .. } => Self::index_expr_is_pure_scalar(operand),
+            ExprKind::Cast { expr, .. } => Self::index_expr_is_pure_scalar(expr),
+            ExprKind::Binary { left, right, .. } => {
+                Self::index_expr_is_pure_scalar(left) && Self::index_expr_is_pure_scalar(right)
+            }
+            // The typechecker desugars primitive-int operators into intrinsic
+            // calls (`base - 1` → `i64.sub(base, 1)`) before either backend
+            // sees the AST — the Binary arm above never fires for them. Accept
+            // exactly the registered primitive arithmetic/bit intrinsics over
+            // pure operands; any user call keeps declining.
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Path {
+                    segments,
+                    generic_args,
+                } = &callee.kind
+                else {
+                    return false;
+                };
+                generic_args.is_none()
+                    && segments.len() == 2
+                    && matches!(
+                        segments[0].as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
+                    )
+                    && matches!(
+                        segments[1].as_str(),
+                        "add"
+                            | "sub"
+                            | "mul"
+                            | "div"
+                            | "rem"
+                            | "neg"
+                            | "bitand"
+                            | "bitor"
+                            | "bitxor"
+                            | "shl"
+                            | "shr"
+                            | "not"
+                    )
+                    && args
+                        .iter()
+                        .all(|a| Self::index_expr_is_pure_scalar(&a.value))
+            }
+            _ => false,
+        }
+    }
+
     fn emit_displaced_index_elem_drop(&mut self, object: &Expr, index: &Expr, rhs: &Expr) {
         // Field-rooted container (`h.xs[i] = <new>`, B-2026-08-01-22 leg a):
         // resolve the field's storage pointer exactly like the store arm
@@ -9315,10 +9417,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(container) = &object.kind else {
             return;
         };
-        if !matches!(
-            &index.kind,
-            ExprKind::Integer(_, _) | ExprKind::Identifier(_)
-        ) {
+        if !Self::index_expr_is_pure_scalar(index) {
             return;
         }
         if crate::deque_head::expr_mentions_name_deep(rhs, container) {
@@ -9402,20 +9501,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cap-zeroed bits), and a param-view base had it retracted
     /// (B-2026-08-01-19 — the caller fires instead).
     fn emit_displaced_field_bodies(&mut self, object: &Expr, field: &str, rhs: &Expr) {
-        let ExprKind::Identifier(base) = &object.kind else {
-            return;
+        // B-2026-08-01-30 leg A — accept a DEEP chain base (`o.h.r = <new>`):
+        // flatten the target's object into (root identifier, middle fields),
+        // run every base-level gate against the ROOT (its armed UserDrop
+        // action covers the whole aggregate, nested fields included), then
+        // GEP down the middle segments to the parent holding the assigned
+        // field. Depth 1 (`o.h = <new>`) flattens to zero middles and keeps
+        // the original behavior bit-for-bit. Any non-Identifier link in the
+        // chain (an index, a call) declines exactly like before.
+        let mut middles: Vec<String> = Vec::new();
+        let mut cur = object;
+        let base = loop {
+            match &cur.kind {
+                ExprKind::Identifier(root) => break root.clone(),
+                ExprKind::FieldAccess {
+                    object: inner,
+                    field: mid,
+                } => {
+                    middles.push(mid.clone());
+                    cur = inner;
+                }
+                _ => return,
+            }
         };
-        if crate::deque_head::expr_mentions_name_deep(rhs, base) {
+        middles.reverse();
+        if crate::deque_head::expr_mentions_name_deep(rhs, &base) {
             return;
         }
-        let Some(base_tn) = self.var_type_names.get(base.as_str()).cloned() else {
+        let Some(root_tn) = self.var_type_names.get(base.as_str()).cloned() else {
             return;
         };
-        if !self.struct_types.contains_key(&base_tn)
-            || self.shared_types.contains_key(&base_tn)
+        if !self.struct_types.contains_key(&root_tn)
+            || self.shared_types.contains_key(&root_tn)
             || self
                 .struct_generic_params
-                .get(&base_tn)
+                .get(&root_tn)
                 .is_some_and(|ps| !ps.is_empty())
         {
             return;
@@ -9423,6 +9543,47 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(base.as_str()).copied() else {
             return;
         };
+        // Walk the middle segments: each must be a plain non-shared,
+        // non-generic struct field so the GEP chain stays offset-correct.
+        let mut base_tn = root_tn.clone();
+        let mut base_ptr = slot.ptr;
+        for mid in &middles {
+            let Some(mid_idx) = self
+                .struct_field_names
+                .get(&base_tn)
+                .and_then(|ns| ns.iter().position(|n| n == mid))
+            else {
+                return;
+            };
+            let Some(Some(mid_tn)) = self
+                .struct_field_type_names
+                .get(&base_tn)
+                .and_then(|v| v.get(mid_idx))
+                .cloned()
+            else {
+                return;
+            };
+            if !self.struct_types.contains_key(&mid_tn)
+                || self.shared_types.contains_key(&mid_tn)
+                || self
+                    .struct_generic_params
+                    .get(&mid_tn)
+                    .is_some_and(|ps| !ps.is_empty())
+            {
+                return;
+            }
+            let Some(cur_st) = self.struct_types.get(&base_tn).copied() else {
+                return;
+            };
+            let Ok(p) =
+                self.builder
+                    .build_struct_gep(cur_st, base_ptr, mid_idx as u32, "dispf.chain.p")
+            else {
+                return;
+            };
+            base_ptr = p;
+            base_tn = mid_tn;
+        }
         let Some(idx) = self
             .struct_field_names
             .get(&base_tn)
@@ -9456,14 +9617,16 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.type_runs_user_drop(&ftn, &mut Vec::new()) {
             return;
         }
-        // Full-action gate: the base's UserDrop must be armed and must not
+        // Full-action gate: the ROOT's UserDrop must be armed and must not
         // be the without-field-bodies replacement a field move-out left.
+        // (The registered action lives on the root binding's slot with the
+        // root type's wrapper — nested parents have no action of their own.)
         let without = if self
             .program_snapshot
             .as_deref()
-            .is_some_and(|p| p.drop_method_keys.contains_key(base_tn.as_str()))
+            .is_some_and(|p| p.drop_method_keys.contains_key(root_tn.as_str()))
         {
-            self.emit_user_drop_wrapper_without_field_bodies(&base_tn)
+            self.emit_user_drop_wrapper_without_field_bodies(&root_tn)
         } else {
             None
         };
@@ -9482,7 +9645,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let Ok(fptr) = self
             .builder
-            .build_struct_gep(st_ty, slot.ptr, idx as u32, "dispf.old.p")
+            .build_struct_gep(st_ty, base_ptr, idx as u32, "dispf.old.p")
         else {
             return;
         };

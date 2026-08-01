@@ -957,10 +957,34 @@ impl<'a> super::Interpreter<'a> {
         let ExprKind::FieldAccess { object, field, .. } = &value.kind else {
             return;
         };
-        let ExprKind::Identifier(src) = &object.kind else {
-            return;
+        // B-2026-08-01-31 — accept a DEEP chain source (`let x = o.h.r`):
+        // flatten to the root identifier and walk the value through the
+        // middle fields. The record stays ROOT-coarse, matching codegen's
+        // root-slot disarm. Depth 1 keeps the original behavior.
+        let mut middles: Vec<&str> = Vec::new();
+        let mut chain_cur = object;
+        let src = loop {
+            match &chain_cur.kind {
+                ExprKind::Identifier(s) => break s,
+                ExprKind::FieldAccess {
+                    object: inner,
+                    field: mid,
+                } => {
+                    middles.push(mid.as_str());
+                    chain_cur = inner;
+                }
+                _ => return,
+            }
         };
-        let Some(Value::Struct { fields, .. }) = self.env.get(src) else {
+        middles.reverse();
+        let mut parent = self.env.get(src);
+        for mid in &middles {
+            parent = match parent {
+                Some(Value::Struct { fields, .. }) => fields.get(*mid).cloned(),
+                _ => None,
+            };
+        }
+        let Some(Value::Struct { fields, .. }) = parent else {
             return;
         };
         let Some(field_value) = fields.get(field).cloned() else {
@@ -1042,6 +1066,70 @@ impl<'a> super::Interpreter<'a> {
         self.owned_param_names_stack
             .last()
             .is_some_and(|params| params.contains(n.as_str()))
+    }
+
+    /// B-2026-08-01-30 leg B — an index expression the displaced-bodies
+    /// branch may safely evaluate ahead of the store's own evaluation:
+    /// pure scalar arithmetic over literals / identifiers / casts only.
+    /// The interp twin of codegen's `index_expr_is_pure_scalar` — the two
+    /// gates must stay in step or the displaced body fires on one backend
+    /// only.
+    fn assign_index_is_pure_scalar(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(_, _) | ExprKind::Identifier(_) | ExprKind::Bool(_) => true,
+            ExprKind::Unary { operand, .. } => Self::assign_index_is_pure_scalar(operand),
+            ExprKind::Cast { expr, .. } => Self::assign_index_is_pure_scalar(expr),
+            ExprKind::Binary { left, right, .. } => {
+                Self::assign_index_is_pure_scalar(left) && Self::assign_index_is_pure_scalar(right)
+            }
+            // The typechecker desugars primitive-int operators into intrinsic
+            // calls (`base - 1` → `i64.sub(base, 1)`) before either backend
+            // sees the AST — the Binary arm above never fires for them. Accept
+            // exactly the registered primitive arithmetic/bit intrinsics over
+            // pure operands; any user call keeps declining.
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Path {
+                    segments,
+                    generic_args,
+                } = &callee.kind
+                else {
+                    return false;
+                };
+                generic_args.is_none()
+                    && segments.len() == 2
+                    && matches!(
+                        segments[0].as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
+                    )
+                    && matches!(
+                        segments[1].as_str(),
+                        "add"
+                            | "sub"
+                            | "mul"
+                            | "div"
+                            | "rem"
+                            | "neg"
+                            | "bitand"
+                            | "bitor"
+                            | "bitxor"
+                            | "shl"
+                            | "shr"
+                            | "not"
+                    )
+                    && args
+                        .iter()
+                        .all(|a| Self::assign_index_is_pure_scalar(&a.value))
+            }
+            _ => false,
+        }
     }
 
     pub(crate) fn value_runs_user_drop(&self, value: &Value) -> bool {
@@ -2358,12 +2446,43 @@ impl<'a> super::Interpreter<'a> {
                 // the disarm sets — the BASE-coarse move record stands in,
                 // matching the codegen twin's armed-action gate).
                 if let ExprKind::FieldAccess { object, field } = &target.kind {
-                    if let ExprKind::Identifier(base) = &object.kind {
+                    // B-2026-08-01-30 leg A — flatten a DEEP chain base
+                    // (`o.h.r = <new>`): collect the middle field names down
+                    // to the root identifier, then walk the root's Struct
+                    // value through them. Depth 1 keeps the original
+                    // behavior; a non-Identifier chain link declines.
+                    let mut chain_middles: Vec<String> = Vec::new();
+                    let mut chain_cur = object;
+                    let chain_base = loop {
+                        match &chain_cur.kind {
+                            ExprKind::Identifier(root) => break Some(root.clone()),
+                            ExprKind::FieldAccess {
+                                object: inner,
+                                field: mid,
+                            } => {
+                                chain_middles.push(mid.clone());
+                                chain_cur = inner;
+                            }
+                            _ => break None,
+                        }
+                    };
+                    if let Some(base) = chain_base {
+                        chain_middles.reverse();
                         if !self.moved_out_user_drop_bindings.contains(base.as_str())
                             && !self.moved_out_drop_field_bindings.contains(base.as_str())
-                            && !crate::deque_head::expr_mentions_name_deep(value, base)
+                            && !crate::deque_head::expr_mentions_name_deep(value, &base)
                         {
-                            let old_field = match self.env.get(base) {
+                            let mut parent = self.env.get(&base);
+                            for mid in &chain_middles {
+                                parent = match parent {
+                                    Some(Value::Struct { fields, .. }) => fields
+                                        .iter()
+                                        .find(|(n, _)| n.as_str() == mid.as_str())
+                                        .map(|(_, v)| v.clone()),
+                                    _ => None,
+                                };
+                            }
+                            let old_field = match parent {
                                 Some(Value::Struct { fields, .. }) => fields
                                     .iter()
                                     .find(|(n, _)| n.as_str() == field.as_str())
@@ -2415,10 +2534,7 @@ impl<'a> super::Interpreter<'a> {
                         _ => None,
                     };
                     if let Some((base, fname)) = field_rooted {
-                        let simple_index = matches!(
-                            &index.kind,
-                            ExprKind::Integer(_, _) | ExprKind::Identifier(_)
-                        );
+                        let simple_index = Self::assign_index_is_pure_scalar(index);
                         if simple_index
                             && !self.moved_out_user_drop_bindings.contains(base.as_str())
                             && !self.moved_out_drop_field_bindings.contains(base.as_str())
@@ -2467,10 +2583,7 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                     if let ExprKind::Identifier(vname) = &object.kind {
-                        let simple_index = matches!(
-                            &index.kind,
-                            ExprKind::Integer(_, _) | ExprKind::Identifier(_)
-                        );
+                        let simple_index = Self::assign_index_is_pure_scalar(index);
                         if simple_index
                             && !self.moved_out_user_drop_bindings.contains(vname.as_str())
                             && !crate::deque_head::expr_mentions_name_deep(value, vname)

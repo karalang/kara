@@ -7171,6 +7171,109 @@ fn main() {
         assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n");
     }
 
+    /// B-2026-08-01-30 leg A — a DEEP-CHAIN field-assign (`o.h.r = <new>`)
+    /// displaces the old field value, whose Drop body now fires before the
+    /// store (pre-fix: silent on both backends — the -20 emitter was
+    /// Identifier-base only) and whose heap frees (pre-fix: the nested
+    /// plain-parent store was a BARE overwrite; the leak was DCE-masked for
+    /// write-only old values and real for any read one). Twin of
+    /// `tests/interpreter.rs`'s `test_deep_chain_field_assign_displaced_bodies`;
+    /// the memory side is pinned by `tests/memory_sanitizer.rs`'s
+    /// `asan_nested_field_store_displaced_old_freed`.
+    #[test]
+    fn e2e_deep_chain_field_assign_displaced_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             struct Outer { h: Holder }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut o = Outer { h: Holder { r: Res { id: 9, name: f\"z{9}\" } } };\n\
+             \x20   o.h.r = Res { id: 5, name: f\"y{5}\" };\n\
+             \x20   println(f\"held {o.h.r.id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n");
+    }
+
+    /// B-2026-08-01-30 leg B — a COMPUTED pure-scalar index (`v[base - 1] =
+    /// <new>`) takes the same displaced-element fire as the -21 literal /
+    /// identifier shapes. The typechecker desugars `base - 1` into
+    /// `i64.sub(base, 1)` before either backend sees the AST, so the purity
+    /// gates accept exactly the primitive arithmetic intrinsics over pure
+    /// operands (pre-fix: both backends silently skipped the bodies AND
+    /// karac build leaked the displaced element's field buffers). Twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_computed_index_assign_displaced_elem_bodies`.
+    #[test]
+    fn e2e_computed_index_assign_displaced_elem_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut v: Vec[Res] = Vec.new();\n\
+             \x20   v.push(Res { id: 9, name: f\"z{9}\" });\n\
+             \x20   v.push(Res { id: 8, name: f\"w{8}\" });\n\
+             \x20   let base = 1;\n\
+             \x20   v[base - 1] = Res { id: 5, name: f\"y{5}\" };\n\
+             \x20   println(f\"held {v[0].id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\ndrop 8 w8\nend\n");
+    }
+
+    /// B-2026-08-01-31 — a deep-chain field MOVE-OUT followed by a reassign
+    /// (`let x = o.h.r; o.h.r = <new>`). The move zeroes the source field
+    /// and disarms the root's bodies walk (root-coarse, exactly the depth-1
+    /// B-2026-07-29-39 trade), so: x fires the moved value's body at ITS
+    /// death, the displaced-fire and the old-drop at the reassign stay
+    /// silent on the moved-out (cap-zeroed) bits, and the new value's body
+    /// goes silent at o's death — on BOTH backends identically, which is
+    /// what this twin pins. Pre-fix karac build double-freed z9 (x's drop +
+    /// o's StructDrop). Deliberate reuse-after-move (UAM-warned), so the
+    /// program is pinned in `OWNERSHIP_GATE_GRANDFATHERED`. Twin of
+    /// `tests/interpreter.rs`'s `test_deep_chain_field_move_then_reassign`.
+    #[test]
+    fn e2e_deep_chain_field_move_then_reassign() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct H7 { r: Res }\n\
+             struct O7 { h: H7 }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut o = O7 { h: H7 { r: Res { id: 9, name: f\"z{9}\" } } };\n\
+             \x20   let x = o.h.r;\n\
+             \x20   o.h.r = Res { id: 5, name: f\"y{5}\" };\n\
+             \x20   println(f\"x {x.name} new {o.h.r.name}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\nx z9 new y5\ndrop 9 z9\nend\n");
+    }
+
     /// B-2026-08-01-19 — storing an owned param into a local container
     /// FIELD (`o.h = h;`) fired the caller-retained value's body TWICE on
     /// both backends (o's bodies walk at its death + the caller's NLL

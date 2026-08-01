@@ -1522,26 +1522,55 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(heap_type) => Some(self.shared_gep_layout(&obj_ty, heap_type)),
                     None => self.struct_types.get(obj_ty.as_str()).map(|&st| (st, 0)),
                 };
-                if let (Some((gep_ty, base)), Some(names)) =
-                    (layout, self.struct_field_names.get(obj_ty.as_str()))
-                {
-                    if let Some(idx) = names.iter().position(|n| n == field) {
-                        let field_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                gep_ty,
-                                base_ptr,
-                                idx as u32 + base,
-                                &format!("nested_{}_ptr", field),
-                            )
-                            .unwrap();
-                        // Field-store width coercion — see
-                        // `coerce_to_struct_field_ty`.
-                        let new_val =
-                            self.coerce_to_struct_field_ty(gep_ty, idx as u32 + base, new_val);
-                        self.builder.build_store(field_ptr, new_val).unwrap();
-                        return Ok(());
+                let idx_opt = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())
+                    .and_then(|names| names.iter().position(|n| n == field));
+                if let (Some((gep_ty, base)), Some(idx)) = (layout, idx_opt) {
+                    // B-2026-08-01-30 (memory leg): this nested plain-parent
+                    // store was a BARE overwrite — the displaced old field
+                    // value's heap was never freed. The leak stayed invisible
+                    // whenever LLVM could DCE a never-read old value's
+                    // allocation outright, and was unmasked by ANY read of it
+                    // (a print before the reassign, or the displaced-bodies
+                    // emitter's own load). Run the same in-place old-value
+                    // drop the depth-1 fall-through uses. A shared parent
+                    // keeps its raw store (its fields ride the RC node
+                    // teardown), and an `Option[shared]` field keeps
+                    // pre-existing behavior — it needs the retain-aware store
+                    // (B-2026-07-28-8's class), not an unconditional drop
+                    // that would free an aliasing RHS's node.
+                    let shared_parent = self
+                        .shared_types
+                        .get(obj_ty.as_str())
+                        .is_some_and(|i| !i.is_enum);
+                    let optshared_field = self
+                        .struct_field_type_exprs
+                        .get(obj_ty.as_str())
+                        .and_then(|tes| tes.get(idx))
+                        .is_some_and(|te| {
+                            self.option_inner_shared_type_for_type_expr(te).is_some()
+                        });
+                    if !shared_parent && !optshared_field {
+                        self.drop_old_plain_struct_field(
+                            object, "", field, idx as u32, gep_ty, base_ptr,
+                        );
                     }
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            gep_ty,
+                            base_ptr,
+                            idx as u32 + base,
+                            &format!("nested_{}_ptr", field),
+                        )
+                        .unwrap();
+                    // Field-store width coercion — see
+                    // `coerce_to_struct_field_ty`.
+                    let new_val =
+                        self.coerce_to_struct_field_ty(gep_ty, idx as u32 + base, new_val);
+                    self.builder.build_store(field_ptr, new_val).unwrap();
+                    return Ok(());
                 }
             }
         }

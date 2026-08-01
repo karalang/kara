@@ -2204,6 +2204,99 @@ impl<'ctx> super::Codegen<'ctx> {
         self.zero_enum_payload_caps(field_ptr, &layout);
     }
 
+    /// B-2026-08-01-31 — `let x = o.h.r` / `let s = o.h.name`: a STRUCT or
+    /// Vec/String field moved OUT of a struct reached through a DEEPER place
+    /// (a nested field chain), which
+    /// [`Self::suppress_struct_field_move_into_literal`] (Identifier/`self`
+    /// object only) can't reach. The moved-out binding registers its own
+    /// cleanup and now owns the field's heap, but the ROOT's `StructDrop`
+    /// walks the chain and freed it again — the exact "Vec/String/struct
+    /// fields through a [deeper place] are a separate follow-on, not yet
+    /// observed" recorded on the enum sibling above, now observed as a
+    /// `karac check`-clean double-free. Resolve the parent via the same
+    /// place-chain machinery and cap-zero the moved field in place. Same
+    /// self-gates as the enum sibling: deeper-place object only (shallow
+    /// forms keep their dedicated suppressor), non-owned-param root. Field
+    /// dispatch mirrors `suppress_struct_field_move_into_literal`: a named
+    /// non-shared, non-generic struct routes through `zero_struct_move_caps`
+    /// (generic monomorphs decline — the base-layout GEP would mis-offset,
+    /// the B-2026-07-15-24 class — keeping today's behavior); a direct
+    /// Vec/String field cap-zeroes. Shared / Option / Map / Set fields keep
+    /// their existing paths.
+    pub(super) fn suppress_place_field_struct_move_source(&mut self, value: &Expr) {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return;
+        };
+        if matches!(object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return;
+        }
+        match Self::place_root_ident(value) {
+            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(_) => {}
+            None => return,
+        }
+        let Some(obj_ty) = self.place_chain_type_name(object) else {
+            return;
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(obj_ty.as_str())
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        let Some(fte) = self
+            .struct_field_type_exprs
+            .get(obj_ty.as_str())
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        let struct_field_name: Option<String> = match &fte.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .last()
+                .filter(|n| {
+                    self.struct_types.contains_key(n.as_str())
+                        && !self.shared_types.contains_key(n.as_str())
+                        && self
+                            .struct_generic_params
+                            .get(n.as_str())
+                            .is_none_or(|ps| ps.is_empty())
+                })
+                .cloned(),
+            _ => None,
+        };
+        let vecstr_field =
+            self.is_string_type_expr(&fte) || self.extract_vec_elem_type(&fte).is_some();
+        if struct_field_name.is_none() && !vecstr_field {
+            return;
+        }
+        let Some(st) = self.struct_types.get(obj_ty.as_str()).copied() else {
+            return;
+        };
+        let Some(base_ptr) = self.field_chain_place_ptr(object) else {
+            return;
+        };
+        let Ok(field_ptr) = self
+            .builder
+            .build_struct_gep(st, base_ptr, idx as u32, "p31.stmv.p")
+        else {
+            return;
+        };
+        if let Some(name) = struct_field_name {
+            self.zero_struct_move_caps(field_ptr, &name);
+        } else if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(self.vec_struct_type(), field_ptr, 2, "p31.stmv.cap")
+        {
+            let _ = self
+                .builder
+                .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+        }
+    }
+
     fn load_enum_word(
         &self,
         enum_ty: StructType<'ctx>,

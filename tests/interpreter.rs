@@ -27336,6 +27336,91 @@ fn test_field_assign_displaced_bodies() {
     );
 }
 
+/// B-2026-08-01-30 leg A — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_deep_chain_field_assign_displaced_bodies`, same source and expected
+/// string (the interp leg is bodies-only; memory is GC'd). Pre-fix the
+/// FieldAccess-target displaced fire was Identifier-base only, so a deep
+/// chain (`o.h.r = <new>`) stayed silent.
+#[test]
+fn test_deep_chain_field_assign_displaced_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             struct Outer { h: Holder }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut o = Outer { h: Holder { r: Res { id: 9, name: f\"z{9}\" } } };\n\
+                 o.h.r = Res { id: 5, name: f\"y{5}\" };\n\
+                 println(f\"held {o.h.r.id}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n"
+    );
+}
+
+/// B-2026-08-01-30 leg B — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_computed_index_assign_displaced_elem_bodies`, same source and
+/// expected string. The typechecker desugars `base - 1` into
+/// `i64.sub(base, 1)`, so the purity gate accepts the primitive arithmetic
+/// intrinsics over pure operands (pre-fix: silent).
+#[test]
+fn test_computed_index_assign_displaced_elem_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut v: Vec[Res] = Vec.new();\n\
+                 v.push(Res { id: 9, name: f\"z{9}\" });\n\
+                 v.push(Res { id: 8, name: f\"w{8}\" });\n\
+                 let base = 1;\n\
+                 v[base - 1] = Res { id: 5, name: f\"y{5}\" };\n\
+                 println(f\"held {v[0].id}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 9 z9\nheld 5\ndrop 5 y5\ndrop 8 w8\nend\n"
+    );
+}
+
+/// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_deep_chain_field_move_then_reassign`, same source and expected
+/// string. The deep-chain move records the ROOT in
+/// `moved_out_drop_field_bindings` (root-coarse, the depth-1
+/// B-2026-07-29-39 rule), so the displaced fire at the reassign and the
+/// root's walk at o's death both stay silent — x's own fire is the single
+/// body, matching codegen's disarm.
+#[test]
+fn test_deep_chain_field_move_then_reassign() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             struct H7 { r: Res }\n\
+             struct O7 { h: H7 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut o = O7 { h: H7 { r: Res { id: 9, name: f\"z{9}\" } } };\n\
+                 let x = o.h.r;\n\
+                 o.h.r = Res { id: 5, name: f\"y{5}\" };\n\
+                 println(f\"x {x.name} new {o.h.r.name}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\nx z9 new y5\ndrop 9 z9\nend\n"
+    );
+}
+
 /// B-2026-08-01-19 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_param_field_store_single_caller_fire`, same source and expected
 /// string. Pre-fix the base binding's Drop slot fired the caller-retained

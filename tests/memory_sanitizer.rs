@@ -17051,6 +17051,64 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-31 — `let x = o.h.r`: a struct field moved out of a
+    /// struct reached through a DEEPER field chain never cap-zeroed the
+    /// source, so BOTH x's cleanup and o's StructDrop freed the same name
+    /// buffer (double-free abort; `karac check`-clean — the depth-1
+    /// `let x = h.r` shape was fine). The deeper-place suppressor
+    /// (`suppress_place_field_struct_move_source`) now zeroes the moved
+    /// field in place; ASAN guards the free pairing. The Vec/String field
+    /// sibling (`let s = o.h.name`) rides the same suppressor.
+    #[test]
+    fn asan_deep_chain_field_move_out_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct R6 { id: i64, name: String }
+struct H6 { r: R6 }
+struct O6 { h: H6 }
+fn main() {
+    let o = O6 { h: H6 { r: R6 { id: 9, name: f"z{9}" } } };
+    let x = o.h.r;
+    println(f"x {x.name}");
+    let o2 = O6 { h: H6 { r: R6 { id: 7, name: f"q{7}" } } };
+    let s = o2.h.r.name;
+    println(f"s {s}");
+    println("end");
+}
+"#,
+            &["x z9", "s q7", "end"],
+            "deep_chain_field_move_out_no_double_free",
+        );
+    }
+
+    /// B-2026-08-01-30 (memory leg) — the nested plain-parent field store
+    /// (`o.h.r = <new>`, depth >= 2) was a BARE overwrite: the displaced
+    /// old value's heap was never freed. LLVM DCE masked the leak whenever
+    /// the old value was provably unread, so the probe READS it first
+    /// (`pre {o.h.r.name}`) to keep the allocation live; pre-fix LSan
+    /// (Linux CI) flags the stranded z9 buffer. The store now runs the same
+    /// in-place old-value drop the depth-1 fall-through uses; ASAN guards
+    /// it against double-freeing the new value the root's drop covers.
+    #[test]
+    fn asan_nested_field_store_displaced_old_freed() {
+        assert_clean_asan_run(
+            r#"
+struct R2 { id: i64, name: String }
+struct H2 { r: R2 }
+struct O2 { h: H2 }
+fn main() {
+    let mut o = O2 { h: H2 { r: R2 { id: 9, name: f"z{9}" } } };
+    println(f"pre {o.h.r.name}");
+    o.h.r = R2 { id: 5, name: f"y{5}" };
+    println(f"post {o.h.r.name}");
+    println("end");
+}
+"#,
+            &["pre z9", "post y5", "end"],
+            "nested_field_store_displaced_old_freed",
+        );
+    }
+
     /// B-2026-08-01-29 — duplicate-key inserts of a for-loop STRUCT element
     /// must not orphan the staged deep copy: the exists path keeps the
     /// bucket's stored key and never adopts the staged bytes, and the
