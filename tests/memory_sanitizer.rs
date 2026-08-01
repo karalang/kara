@@ -17011,7 +17011,7 @@ fn main() {
     println("end");
 }
 "#,
-            &["a", "drop 9 z9", "held 5", "end"],
+            &["a", "drop 9 z9", "held 5", "drop 5 y5", "end"],
             "field_rooted_index_assign_displaced_elem_freed",
         );
     }

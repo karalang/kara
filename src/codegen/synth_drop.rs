@@ -2278,7 +2278,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         seen.push(type_name.to_string());
-        let found = self
+        let mut found = self
             .struct_field_type_names
             .get(type_name)
             .map(|fields| {
@@ -2288,8 +2288,46 @@ impl<'ctx> super::Codegen<'ctx> {
                     .any(|n| self.type_runs_user_drop(n, seen))
             })
             .unwrap_or(false);
+        // B-2026-08-01-22 leg b — a Vec/VecDeque field whose ELEMENT runs a
+        // user Drop makes the parent Drop-relevant too: the head-name walk
+        // above reads such a field as "Vec" (no drop) and the parent never
+        // registered a bodies action, so `struct Holder { xs: Vec[Res] }`
+        // ran nothing when `h` died. One container level; deeper nesting
+        // (`Vec[Vec[Res]]`) is the recorded residual.
+        if !found {
+            if let Some(tes) = self.struct_field_type_exprs.get(type_name) {
+                for te in tes {
+                    if let Some(elem) = Self::vec_field_elem_head(te) {
+                        if self.type_runs_user_drop(&elem, seen) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         seen.pop();
         found
+    }
+
+    /// The ELEMENT head name of a `Vec[E]` / `VecDeque[E]` TypeExpr whose
+    /// element is a plain named type — `None` for any other shape. Companion
+    /// of the leg-b container widening in [`Self::type_runs_user_drop`].
+    pub(super) fn vec_field_elem_head(te: &TypeExpr) -> Option<String> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let head = p.segments.first()?;
+        if head != "Vec" && head != "VecDeque" {
+            return None;
+        }
+        match p.generic_args.as_ref()?.first()? {
+            GenericArg::Type(elem) => match &elem.kind {
+                TypeKind::Path(ep) => ep.segments.first().cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// The field indices of `struct_name` whose declared type must run a user
@@ -2305,9 +2343,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .enumerate()
             .filter_map(|(idx, name)| {
-                let name = name.as_deref()?;
-                self.type_runs_user_drop(name, &mut Vec::new())
-                    .then_some(idx)
+                let direct = name
+                    .as_deref()
+                    .is_some_and(|n| self.type_runs_user_drop(n, &mut Vec::new()));
+                let vec_elem = self
+                    .struct_field_type_exprs
+                    .get(struct_name)
+                    .and_then(|tes| tes.get(idx))
+                    .and_then(Self::vec_field_elem_head)
+                    .is_some_and(|e| self.type_runs_user_drop(&e, &mut Vec::new()));
+                (direct || vec_elem).then_some(idx)
             })
             .collect()
     }
@@ -2458,6 +2503,135 @@ impl<'ctx> super::Codegen<'ctx> {
                     &format!("dropbodies.field{field_idx}.p"),
                 )
                 .unwrap();
+            // B-2026-08-01-22 leg b — a Vec/VecDeque field of Drop-running
+            // elements: loop the live elements (len-guarded, forward order —
+            // the interpreter's Array-field arm iterates identically) firing
+            // each element's own body + nested walks. A moved-out field has
+            // len zeroed, so the loop no-ops. Base (non-mono) parents only —
+            // generic parents keep the recorded residual.
+            if effective_subst.is_none() {
+                if let Some(elem_head) = self
+                    .struct_field_type_exprs
+                    .get(struct_name)
+                    .and_then(|tes| tes.get(field_idx))
+                    .and_then(Self::vec_field_elem_head)
+                {
+                    if self.type_runs_user_drop(&elem_head, &mut Vec::new())
+                        && !self.shared_types.contains_key(&elem_head)
+                        && self
+                            .struct_generic_params
+                            .get(&elem_head)
+                            .is_none_or(|ps| ps.is_empty())
+                    {
+                        let is_struct_elem = self.struct_types.contains_key(&elem_head);
+                        let is_enum_elem = elem_head != "Option"
+                            && elem_head != "Result"
+                            && self
+                                .enum_layouts
+                                .get(&elem_head)
+                                .is_some_and(|l| !l.is_shared);
+                        if is_struct_elem || is_enum_elem {
+                            let i64_t = self.context.i64_type();
+                            let vec_ty = self.vec_struct_type();
+                            let data_pp = self
+                                .builder
+                                .build_struct_gep(vec_ty, field_ptr, 0, "dbv.data.pp")
+                                .unwrap();
+                            let data = self
+                                .builder
+                                .build_load(ptr_ty, data_pp, "dbv.data")
+                                .unwrap()
+                                .into_pointer_value();
+                            let len_p = self
+                                .builder
+                                .build_struct_gep(vec_ty, field_ptr, 1, "dbv.len.p")
+                                .unwrap();
+                            let len = self
+                                .builder
+                                .build_load(i64_t, len_p, "dbv.len")
+                                .unwrap()
+                                .into_int_value();
+                            let idx_slot = self.builder.build_alloca(i64_t, "dbv.i").unwrap();
+                            self.builder
+                                .build_store(idx_slot, i64_t.const_zero())
+                                .unwrap();
+                            let cond_bb = self.context.append_basic_block(bodies_fn, "dbv.cond");
+                            let body_bb = self.context.append_basic_block(bodies_fn, "dbv.body");
+                            let done_bb = self.context.append_basic_block(bodies_fn, "dbv.done");
+                            self.builder.build_unconditional_branch(cond_bb).unwrap();
+                            self.builder.position_at_end(cond_bb);
+                            let i = self
+                                .builder
+                                .build_load(i64_t, idx_slot, "dbv.i.v")
+                                .unwrap()
+                                .into_int_value();
+                            let more = self
+                                .builder
+                                .build_int_compare(inkwell::IntPredicate::SLT, i, len, "dbv.more")
+                                .unwrap();
+                            self.builder
+                                .build_conditional_branch(more, body_bb, done_bb)
+                                .unwrap();
+                            self.builder.position_at_end(body_bb);
+                            let elem_llvm_ty = self.llvm_type_for_type_expr(
+                                self.struct_field_type_exprs
+                                    .get(struct_name)
+                                    .and_then(|tes| tes.get(field_idx))
+                                    .and_then(|te| match &te.kind {
+                                        TypeKind::Path(p) => {
+                                            p.generic_args.as_ref().and_then(|ga| {
+                                                ga.first().and_then(|a| match a {
+                                                    GenericArg::Type(t) => Some(t),
+                                                    _ => None,
+                                                })
+                                            })
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap(),
+                            );
+                            let elem_ptr = unsafe {
+                                self.builder
+                                    .build_gep(elem_llvm_ty, data, &[i], "dbv.elem.p")
+                                    .unwrap()
+                            };
+                            if self
+                                .program_snapshot
+                                .as_deref()
+                                .is_some_and(|p| p.drop_method_keys.contains_key(&elem_head))
+                            {
+                                if let Some(f) =
+                                    self.module.get_function(&format!("{elem_head}.drop"))
+                                {
+                                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                                }
+                            }
+                            if is_struct_elem {
+                                if let Some(nested) = self.emit_user_drop_field_bodies_fn(
+                                    &elem_head,
+                                    &std::collections::HashMap::new(),
+                                ) {
+                                    self.builder
+                                        .build_call(nested, &[elem_ptr.into()], "")
+                                        .unwrap();
+                                }
+                            } else if let Some(w) =
+                                self.emit_enum_payload_user_drop_bodies_fn(&elem_head)
+                            {
+                                self.builder.build_call(w, &[elem_ptr.into()], "").unwrap();
+                            }
+                            let next = self
+                                .builder
+                                .build_int_add(i, i64_t.const_int(1, false), "dbv.i.next")
+                                .unwrap();
+                            self.builder.build_store(idx_slot, next).unwrap();
+                            self.builder.build_unconditional_branch(cond_bb).unwrap();
+                            self.builder.position_at_end(done_bb);
+                            continue;
+                        }
+                    }
+                }
+            }
             if let Some(body_fn) = self.module.get_function(&format!("{field_type}.drop")) {
                 self.builder
                     .build_call(body_fn, &[field_ptr.into()], "")

@@ -6820,10 +6820,9 @@ fn main() {
     /// B-2026-08-01-22 leg a — a FIELD-ROOTED index-assign
     /// (`h.xs[i] = Res { .. }`) displaces the old element: its Drop bodies
     /// fire and its field buffers free before the store (pre-fix: bodies
-    /// silent on both backends, buffers leaked under karac build). NOTE:
-    /// the NEW element's body at h's death is the row's still-open leg b
-    /// (struct-field Vec element bodies at owner death) — this expectation
-    /// gains a `drop 5 y5` line when that leg lands. Twin of
+    /// silent on both backends, buffers leaked under karac build). The
+    /// NEW element's body at h's death (`drop 5 y5`) fires per leg b —
+    /// struct-field Vec element bodies at owner death. Twin of
     /// `tests/interpreter.rs`'s
     /// `test_field_rooted_index_assign_displaced_elem_bodies`; the leak is
     /// pinned by `asan_field_rooted_index_assign_displaced_elem_freed`.
@@ -6848,7 +6847,36 @@ fn main() {
         ) else {
             return;
         };
-        assert_eq!(out, "a\ndrop 9 z9\nheld 5\nend\n");
+        assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n");
+    }
+
+    /// B-2026-08-01-22 leg b — a struct-FIELD `Vec[DropT]`'s elements fire
+    /// their Drop bodies at the OWNER's death (pre-fix: silent on both
+    /// backends — the b55743b element-bodies leg covered direct Vec
+    /// bindings only, and `type_runs_user_drop` read the field head "Vec"
+    /// as no-drop so the parent never registered a bodies action). Twin of
+    /// `tests/interpreter.rs`'s `test_struct_field_vec_elem_bodies_at_owner_death`.
+    #[test]
+    fn e2e_struct_field_vec_elem_bodies_at_owner_death() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { xs: Vec[Res] }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut h = Holder { xs: Vec.new() };\n\
+             \x20   h.xs.push(Res { id: 7, name: f\"q{7}\" });\n\
+             \x20   h.xs.push(Res { id: 8, name: f\"r{8}\" });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 7 q7\ndrop 8 r8\nend\n");
     }
 
     /// B-2026-08-01-21 — an INDEX-assign over a struct element with heap

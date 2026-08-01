@@ -1082,6 +1082,38 @@ impl<'a> super::Interpreter<'a> {
             let Some(field_value) = fields.get(&field).cloned() else {
                 continue;
             };
+            // B-2026-08-01-22 leg b — a Vec/VecDeque field of Drop-running
+            // elements: fire each live element's bodies, forward order
+            // (codegen's dropbodies vec loop iterates 0..len identically).
+            // Declared-type gated like the struct arm below; one container
+            // level (nested Vec[Vec[..]] is the recorded residual).
+            if let Value::Array(rc) = &field_value {
+                if matches!(declared_head.as_deref(), Some("Vec") | Some("VecDeque")) {
+                    let elems: Vec<Value> = rc.read().map(|g| g.clone()).unwrap_or_default();
+                    for e in elems {
+                        match &e {
+                            Value::Struct { name: tn, .. } => {
+                                if self.program.drop_method_keys.contains_key(tn) {
+                                    let tn = tn.clone();
+                                    self.run_user_drop_body_only(&tn, e.clone());
+                                }
+                                self.drop_user_drop_fields_of_value(&e);
+                            }
+                            Value::EnumVariant { enum_name, .. }
+                                if enum_name != "Option" && enum_name != "Result" =>
+                            {
+                                if self.program.drop_method_keys.contains_key(enum_name) {
+                                    let tn = enum_name.clone();
+                                    self.run_user_drop_body_only(&tn, e.clone());
+                                }
+                                self.run_enum_payload_user_drops_value(&e);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                continue;
+            }
             let Value::Struct {
                 name: field_type, ..
             } = &field_value

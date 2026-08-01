@@ -27068,7 +27068,31 @@ fn test_field_rooted_index_assign_displaced_elem_bodies() {
                  println(f\"held {h.xs[0].id}\");\n\
                  println(\"end\");\n\
              }\n"),
-        "a\ndrop 9 z9\nheld 5\nend\n"
+        "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n"
+    );
+}
+
+/// B-2026-08-01-22 leg b — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_struct_field_vec_elem_bodies_at_owner_death`, same source and
+/// expected string.
+#[test]
+fn test_struct_field_vec_elem_bodies_at_owner_death() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             struct Holder { xs: Vec[Res] }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut h = Holder { xs: Vec.new() };\n\
+                 h.xs.push(Res { id: 7, name: f\"q{7}\" });\n\
+                 h.xs.push(Res { id: 8, name: f\"r{8}\" });\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 7 q7\ndrop 8 r8\nend\n"
     );
 }
 
