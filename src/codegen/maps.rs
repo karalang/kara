@@ -1614,6 +1614,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_int_value();
                 self.free_str_vec_buffer_if_heap(key_val);
                 self.free_str_vec_buffer_if_heap(val_val);
+                // Staged for-loop struct-element copies orphaned by the
+                // failed insert — nothing was stored (B-2026-08-01-29).
+                self.free_staged_for_loop_agg_copy_on_no_adopt(&args[0].value, key_slot);
+                self.free_staged_for_loop_agg_copy_on_no_adopt(&args[1].value, val_slot);
                 let err_result = self.build_alloc_oom_result(bytes)?;
                 let oom_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(done_bb).unwrap();
@@ -1641,6 +1645,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (duplicate-key leak, B-2026-06-20-9 sibling).
                 self.builder.position_at_end(some_bb);
                 self.free_str_vec_buffer_if_heap(key_val);
+                // Staged for-loop struct-element KEY copy orphaned by the
+                // no-adopt on an existing key (B-2026-08-01-29); the value
+                // was adopted (bucket value replaced).
+                self.free_staged_for_loop_agg_copy_on_no_adopt(&args[0].value, key_slot);
                 let old_val = self
                     .builder
                     .build_load(val_ty, old_slot, "map.try.oldv")
@@ -1734,6 +1742,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
                 let fn_val = self.current_fn.unwrap();
                 let old_slot = self.create_entry_alloca(fn_val, "map.insert.old", val_ty);
+                // Staged key slot for the B-2026-08-01-29 no-adopt reclaim on
+                // the exists branch — set only on the generic pointer path
+                // (the one a for-loop struct-element KEY takes).
+                let mut staged_key_slot: Option<inkwell::values::PointerValue<'ctx>> = None;
                 let existed = if let Some(view) = borrowed_key {
                     let key_slot = self.create_entry_alloca(fn_val, "map.insert.bkey", key_ty);
                     let val_slot = self.create_entry_alloca(fn_val, "map.insert.bval", val_ty);
@@ -1802,6 +1814,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // pointer path is the one a struct/enum element takes.
                         self.deep_copy_pushed_for_loop_agg_element(&args[0].value, key_slot);
                         self.deep_copy_pushed_for_loop_agg_element(&args[1].value, val_slot);
+                        staged_key_slot = Some(key_slot);
                         self.builder
                             .build_call(
                                 self.karac_map_insert_old_fn,
@@ -1838,6 +1851,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on a rodata literal or scalar key.
                 if let Some(kv) = key_val {
                     self.free_str_vec_buffer_if_heap(kv);
+                }
+                // Staged for-loop struct-element KEY copy orphaned by the
+                // no-adopt (B-2026-08-01-29): reclaim from the staged slot.
+                // The VALUE is adopted even on an existing key (the bucket's
+                // value is replaced), so only the key side needs this.
+                if let Some(ks) = staged_key_slot {
+                    self.free_staged_for_loop_agg_copy_on_no_adopt(&args[0].value, ks);
                 }
                 let old_val = self
                     .builder

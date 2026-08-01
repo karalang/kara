@@ -71,6 +71,52 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Whether `arg` is a bare identifier naming a for-loop STRUCT element
+    /// binding (`for_loop_owned_agg_vars`, non-shared) — the gate the staged
+    /// deep-copy hook above fires on for struct elements. Used by no-adopt
+    /// branches to decide whether a staged copy exists to reclaim
+    /// (B-2026-08-01-29).
+    pub(super) fn arg_is_for_loop_struct_elem(&self, arg: &Expr) -> bool {
+        matches!(&arg.kind, ExprKind::Identifier(src)
+            if self.for_loop_owned_agg_vars.contains(src.as_str())
+                && self
+                    .var_type_names
+                    .get(src.as_str())
+                    .is_some_and(|t| self.struct_types.contains_key(t.as_str())
+                        && !self.shared_types.contains_key(t.as_str())))
+    }
+
+    /// B-2026-08-01-29 — reclaim the STAGED deep copy on a no-adopt branch.
+    /// When a Map/Set insert's key slot was deep-copied for a for-loop
+    /// struct element (`deep_copy_pushed_for_loop_agg_element`) and the
+    /// runtime kept the bucket's existing key (duplicate) or left the
+    /// container unchanged (OOM), the staged copy's field buffers are
+    /// orphaned — the existing no-adopt frees are vec-struct-gated and skip
+    /// struct aggregates. Run the memory-only `__karac_drop_struct_<T>` on
+    /// the slot; Drop BODIES are the separate UserDrop channel and must not
+    /// fire for a value the program never observed as stored. No-op unless
+    /// the arg matches the same gate the copy hook fired on.
+    pub(super) fn free_staged_for_loop_agg_copy_on_no_adopt(
+        &mut self,
+        arg: &Expr,
+        slot: PointerValue<'ctx>,
+    ) {
+        if !self.arg_is_for_loop_struct_elem(arg) {
+            return;
+        }
+        let ExprKind::Identifier(src) = &arg.kind else {
+            return;
+        };
+        let Some(type_name) = self.var_type_names.get(src.as_str()).cloned() else {
+            return;
+        };
+        if let Some(drop_fn) = self.emit_struct_drop_synthesis(&type_name) {
+            self.builder
+                .build_call(drop_fn, &[slot.into()], "staged.noadopt.drop")
+                .unwrap();
+        }
+    }
+
     /// Get-or-declare the panicking reallocation wrapper
     /// (`ptr karac_realloc_or_panic(ptr, i64)`, or the `__karac_realloc_or_panic64`
     /// i64-size shim on wasm). The grow paths call this to extend a heap buffer

@@ -174,7 +174,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`Set[String]` / `Set[Vec[T]]`) elements; the `cap > 0` runtime
                 // guard inside `free_str_vec_buffer_if_heap` no-ops on a borrowed
                 // view / rodata literal.
-                if self.llvm_ty_is_vec_struct(elem_ty) {
+                // B-2026-08-01-29 — a for-loop STRUCT element's staged deep
+                // copy is orphaned on the duplicate path too (the vec-struct
+                // gate below never fires for a struct aggregate); reclaim it
+                // from the staged slot on the EXISTS branch.
+                let staged_struct_elem = self.arg_is_for_loop_struct_elem(&args[0].value);
+                if self.llvm_ty_is_vec_struct(elem_ty) || staged_struct_elem {
                     let exists_bb = self.context.append_basic_block(fn_val, "set.ins.exists");
                     let cont_bb = self.context.append_basic_block(fn_val, "set.ins.cont");
                     self.builder
@@ -182,6 +187,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                     self.builder.position_at_end(exists_bb);
                     self.free_str_vec_buffer_if_heap(elem_val);
+                    self.free_staged_for_loop_agg_copy_on_no_adopt(&args[0].value, elem_slot);
                     self.builder.build_unconditional_branch(cont_bb).unwrap();
                     self.builder.position_at_end(cont_bb);
                 }
@@ -264,6 +270,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.llvm_ty_is_vec_struct(elem_ty) {
                     self.free_str_vec_buffer_if_heap(elem_val);
                 }
+                // Staged for-loop struct-element copy orphaned by the failed
+                // insert (B-2026-08-01-29).
+                self.free_staged_for_loop_agg_copy_on_no_adopt(&args[0].value, elem_slot);
                 let err_result = self.build_alloc_oom_result(bytes)?;
                 let oom_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(done_bb).unwrap();
@@ -282,7 +291,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         "set.try.inserted",
                     )
                     .unwrap();
-                if self.llvm_ty_is_vec_struct(elem_ty) {
+                // B-2026-08-01-29 — reclaim the staged for-loop struct-element
+                // copy on the duplicate branch too (gate widened past the
+                // vec-struct-only check, same as the panicking `insert` arm).
+                let staged_struct_elem = self.arg_is_for_loop_struct_elem(&args[0].value);
+                if self.llvm_ty_is_vec_struct(elem_ty) || staged_struct_elem {
                     let dup_bb = self.context.append_basic_block(fn_val, "set.try.dup");
                     let cont_bb = self.context.append_basic_block(fn_val, "set.try.cont");
                     self.builder
@@ -290,6 +303,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                     self.builder.position_at_end(dup_bb);
                     self.free_str_vec_buffer_if_heap(elem_val);
+                    self.free_staged_for_loop_agg_copy_on_no_adopt(&args[0].value, elem_slot);
                     self.builder.build_unconditional_branch(cont_bb).unwrap();
                     self.builder.position_at_end(cont_bb);
                 }

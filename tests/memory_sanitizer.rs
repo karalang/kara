@@ -17051,6 +17051,47 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-29 — duplicate-key inserts of a for-loop STRUCT element
+    /// must not orphan the staged deep copy: the exists path keeps the
+    /// bucket's stored key and never adopts the staged bytes, and the
+    /// pre-existing no-adopt frees are vec-struct-gated (String/Vec keys
+    /// only). The staged copy is now reclaimed with the memory-only
+    /// `__karac_drop_struct_<T>` on the exists/OOM branches of the Set and
+    /// Map insert arms. LSan (Linux) is the lane that catches the pre-fix
+    /// leak (one field-buffer set per duplicate insert).
+    #[test]
+    fn asan_dup_key_for_loop_elem_insert_no_leak() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, Ord)]
+struct P { a: i64, s: String }
+fn main() {
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { a: 1, s: f"x{1}" });
+    ps.push(P { a: 1, s: f"x{1}" });
+    let mut set: Set[P] = Set.new();
+    for p in ps {
+        set.insert(p);
+    }
+    println(set.len());
+    let mut qs: Vec[P] = Vec.new();
+    qs.push(P { a: 1, s: f"x{1}" });
+    qs.push(P { a: 1, s: f"x{1}" });
+    let mut m: Map[P, i64] = Map.new();
+    let mut i = 0;
+    for p in qs {
+        let _ = m.insert(p, i);
+        i = i + 1;
+    }
+    println(m.len());
+    println("end");
+}
+"#,
+            &["1", "1", "end"],
+            "dup_key_for_loop_elem_insert_no_leak",
+        );
+    }
+
     /// B-2026-08-01-28 — the -24 double-free through the Map.insert /
     /// Set.insert / field-move-out consume arms (all three aborted with
     /// free(): double free pre-fix; the map/set arms now deep-copy the
