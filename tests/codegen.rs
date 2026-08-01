@@ -6876,6 +6876,81 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-17 — a SORTED container's element/value Drop bodies
+    /// drain in the container's public iteration order (ascending keys):
+    /// `SortedMap[i64, DropV]` values walk sorted keys + `karac_map_get`,
+    /// and `SortedSet[DropT]` struct elements sort via the new field-wise
+    /// struct comparator. Pre-fix both drained in bucket order — observably
+    /// divergent from the interpreter on any key set whose hash order
+    /// differs (6,5,7 here). Plain Map/Set stay bucket-order by design
+    /// (unspecified, like their iteration order). Twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_sorted_container_drop_bodies_key_order`.
+    #[test]
+    fn e2e_sorted_container_drop_bodies_key_order() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             #[derive(Hash, Eq, Ord)]\n\
+             struct Tag { id: i64 }\n\
+             impl Drop for Tag {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"tag {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut m: SortedMap[i64, Res] = SortedMap.new();\n\
+             \x20   let _ = m.insert(6, Res { id: 6, name: f\"s{6}\" });\n\
+             \x20   let _ = m.insert(5, Res { id: 5, name: f\"s{5}\" });\n\
+             \x20   let _ = m.insert(7, Res { id: 7, name: f\"s{7}\" });\n\
+             \x20   println(\"b\");\n\
+             \x20   let mut s: SortedSet[Tag] = SortedSet.new();\n\
+             \x20   s.insert(Tag { id: 6 });\n\
+             \x20   s.insert(Tag { id: 5 });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ndrop 5 s5\ndrop 6 s6\ndrop 7 s7\nb\ntag 5\ntag 6\nend\n"
+        );
+    }
+
+    /// B-2026-08-01-17 (comparator leg) — `SortedSet` with a STRUCT element
+    /// type iterates under `karac build`: the field-wise comparator
+    /// (declaration-order lexicographic, derived-`Ord` semantics — i64
+    /// first, String tie-break here) replaces the former loud codegen
+    /// error \"only integer and String keys sort in codegen\". NOTE: this
+    /// test is compile-gated pre-fix (the error made `run_program` skip),
+    /// so the non-vacuity proof rides the drop-order twin above, which
+    /// compiled and mis-ordered pre-fix.
+    #[test]
+    fn e2e_sortedset_struct_key_iteration() {
+        let Some(out) = run_program(
+            "#[derive(Hash, Eq, Ord)]\n\
+             struct P { a: i64, s: String }\n\
+             fn main() {\n\
+             \x20   let mut set: SortedSet[P] = SortedSet.new();\n\
+             \x20   set.insert(P { a: 2, s: f\"zz{2}\" });\n\
+             \x20   set.insert(P { a: 1, s: f\"bb{1}\" });\n\
+             \x20   set.insert(P { a: 1, s: f\"aa{1}\" });\n\
+             \x20   for x in set {\n\
+             \x20       println(f\"{x.a} {x.s}\");\n\
+             \x20   }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "1 aa1\n1 bb1\n2 zz2\n");
+    }
+
     /// B-2026-08-01-13 — owned enum ARG body ownership, the coherent
     /// caller-retains rule: a fresh enum-ctor arg's payload body fires
     /// exactly once, CALLER-side, at the arg's statement end — whether the

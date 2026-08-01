@@ -27098,6 +27098,43 @@ fn test_assign_param_rebind_and_displaced_bodies() {
     );
 }
 
+/// B-2026-08-01-17 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_sorted_container_drop_bodies_key_order`, same source and expected
+/// string. The interpreter always drained sorted-container element/value
+/// Drop bodies in ascending key order — this pin holds that side of the
+/// parity while the codegen walker learns the same order.
+#[test]
+fn test_sorted_container_drop_bodies_key_order() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             #[derive(Hash, Eq, Ord)]\n\
+             struct Tag { id: i64 }\n\
+             impl Drop for Tag {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"tag {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut m: SortedMap[i64, Res] = SortedMap.new();\n\
+                 let _ = m.insert(6, Res { id: 6, name: f\"s{6}\" });\n\
+                 let _ = m.insert(5, Res { id: 5, name: f\"s{5}\" });\n\
+                 let _ = m.insert(7, Res { id: 7, name: f\"s{7}\" });\n\
+                 println(\"b\");\n\
+                 let mut s: SortedSet[Tag] = SortedSet.new();\n\
+                 s.insert(Tag { id: 6 });\n\
+                 s.insert(Tag { id: 5 });\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 5 s5\ndrop 6 s6\ndrop 7 s7\nb\ntag 5\ntag 6\nend\n"
+    );
+}
+
 /// B-2026-08-01-13 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_owned_enum_arg_payload_body_single_caller_fire`, same source and
 /// expected string. Pre-fix the interpreter was silent for the

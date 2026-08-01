@@ -5859,6 +5859,191 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let i8_t = self.context.i8_type();
         let saved = self.builder.get_insert_block();
+
+        // B-2026-08-01-17 — a SORTED container's element Drop bodies must
+        // drain in the container's public iteration order (ascending keys),
+        // not bucket order: the interpreter fires them sorted, and bucket
+        // order made `karac build` observably diverge on any key set whose
+        // hash order differs. Walk the same `karac_map_sorted_keys` buffer
+        // the for-in lowering uses, then look each value up by key
+        // (`karac_map_get` into a val_size scratch — BODIES only, so running
+        // them on the copy is exactly as observable as on the slot). Falls
+        // back to the bucket walk when the key type has no codegen
+        // comparator (struct keys — the same `emit_sorted_key_cmp_fn`
+        // limitation that makes sorted ITERATION of struct keys a compile
+        // error; SortedSet[DropT] necessarily has struct elements, so it
+        // keeps bucket order until struct comparators exist). Unsorted
+        // Map/Set stay bucket-order by design — their drop order is
+        // unspecified, like their iteration order.
+        let is_sorted = matches!(
+            p.segments.last().map(|s| s.as_str()),
+            Some("SortedMap") | Some("SortedSet")
+        );
+        let sorted_cmp = if is_sorted {
+            match args.first() {
+                Some(crate::ast::GenericArg::Type(key_te)) => {
+                    let key_te = key_te.clone();
+                    self.emit_sorted_key_cmp_fn(&key_te).ok()
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(cmp_fn) = sorted_cmp {
+            let walker = self.module.add_function(
+                &fn_name,
+                self.context.void_type().fn_type(&[ptr_ty.into()], false),
+                Some(Linkage::Internal),
+            );
+            let entry = self.context.append_basic_block(walker, "entry");
+            let walk = self.context.append_basic_block(walker, "walk");
+            let loop_bb = self.context.append_basic_block(walker, "loop");
+            let body_bb = self.context.append_basic_block(walker, "body");
+            let done_bb = self.context.append_basic_block(walker, "done");
+            let exit = self.context.append_basic_block(walker, "exit");
+
+            self.builder.position_at_end(entry);
+            let slot = walker.get_nth_param(0).unwrap().into_pointer_value();
+            let handle = self
+                .builder
+                .build_load(ptr_ty, slot, "ds.handle")
+                .unwrap()
+                .into_pointer_value();
+            let is_null = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    handle,
+                    ptr_ty.const_null(),
+                    "ds.isnull",
+                )
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_null, exit, walk)
+                .unwrap();
+
+            self.builder.position_at_end(walk);
+            let hdr = |cg: &Self, off: u64, ty: inkwell::types::BasicTypeEnum<'ctx>, name: &str| {
+                let ptr = unsafe {
+                    cg.builder
+                        .build_in_bounds_gep(i8_t, handle, &[i64_t.const_int(off, false)], name)
+                        .unwrap()
+                };
+                cg.builder.build_load(ty, ptr, name).unwrap()
+            };
+            let key_size = hdr(self, 40, i64_t.into(), "ds.ksz").into_int_value();
+            let val_size = hdr(self, 48, i64_t.into(), "ds.vsz").into_int_value();
+            let len_slot = self.builder.build_alloca(i64_t, "ds.len").unwrap();
+            let idx_slot = self.builder.build_alloca(i64_t, "ds.i").unwrap();
+            let cmp_ptr = cmp_fn.as_global_value().as_pointer_value();
+            let kbuf = self
+                .builder
+                .build_call(
+                    self.karac_map_sorted_keys_fn,
+                    &[handle.into(), len_slot.into(), cmp_ptr.into()],
+                    "ds.kbuf",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_load(i64_t, len_slot, "ds.len.v")
+                .unwrap()
+                .into_int_value();
+            let scratch = if at_key_half {
+                None
+            } else {
+                Some(
+                    self.builder
+                        .build_call(self.malloc_fn, &[val_size.into()], "ds.scratch")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_pointer_value(),
+                )
+            };
+            self.builder
+                .build_store(idx_slot, i64_t.const_zero())
+                .unwrap();
+            self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+            self.builder.position_at_end(loop_bb);
+            let i = self
+                .builder
+                .build_load(i64_t, idx_slot, "ds.i.v")
+                .unwrap()
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, i, len, "ds.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(more, body_bb, done_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            let koff = self.builder.build_int_mul(i, key_size, "ds.koff").unwrap();
+            let kptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_t, kbuf, &[koff], "ds.k.p")
+                    .unwrap()
+            };
+            let tptr = match scratch {
+                Some(s) => {
+                    self.builder
+                        .build_call(
+                            self.karac_map_get_fn,
+                            &[handle.into(), kptr.into(), s.into()],
+                            "ds.get",
+                        )
+                        .unwrap();
+                    s
+                }
+                None => kptr,
+            };
+            let owns_body = self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
+            if owns_body {
+                if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
+                    self.builder.build_call(f, &[tptr.into()], "").unwrap();
+                }
+            }
+            if let Some(f) =
+                self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
+            {
+                self.builder.build_call(f, &[tptr.into()], "").unwrap();
+            }
+            let next_i = self
+                .builder
+                .build_int_add(i, i64_t.const_int(1, false), "ds.i.next")
+                .unwrap();
+            self.builder.build_store(idx_slot, next_i).unwrap();
+            self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+            self.builder.position_at_end(done_bb);
+            self.builder
+                .build_call(self.free_fn, &[kbuf.into()], "")
+                .unwrap();
+            if let Some(s) = scratch {
+                self.builder
+                    .build_call(self.free_fn, &[s.into()], "")
+                    .unwrap();
+            }
+            self.builder.build_unconditional_branch(exit).unwrap();
+
+            self.builder.position_at_end(exit);
+            self.builder.build_return(None).unwrap();
+            if let Some(bb) = saved {
+                self.builder.position_at_end(bb);
+            }
+            return Some(walker);
+        }
+
         let walker = self.module.add_function(
             &fn_name,
             self.context.void_type().fn_type(&[ptr_ty.into()], false),

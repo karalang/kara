@@ -696,11 +696,11 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         let is_string = elem_name == "String";
         if !is_int && !is_string {
-            return Err(format!(
-                "codegen: `SortedSet`/`SortedMap` with element/key type `{elem_name}` is not yet \
-                 supported under `karac build` (only integer and String keys sort in codegen); \
-                 run under `karac run` for other `Ord` element types."
-            ));
+            // B-2026-08-01-17 — a plain struct key sorts field-wise in
+            // declaration order (derived `Ord` semantics), unlocking sorted
+            // iteration AND sorted element-Drop drains for
+            // `SortedSet[StructT]` / `SortedMap[StructT, V]`.
+            return self.emit_sorted_struct_key_cmp_fn(&elem_name, &fn_name);
         }
         let ctx = self.context;
         let i32_t = ctx.i32_type();
@@ -830,6 +830,224 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         self.builder.build_return(Some(&res)).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Ok(func)
+    }
+
+    /// B-2026-08-01-17 — `karac_sortcmp_<Struct>`: field-wise lexicographic
+    /// comparison in DECLARATION order, the derived-`Ord` semantics the
+    /// interpreter applies. Each field compares like a top-level key of its
+    /// type (widened int compare / `karac_string_cmp`), short-circuiting on
+    /// the first non-equal field. Supported fields: the integer family
+    /// (including `char`/`bool`, matching the top-level key rule) and
+    /// `String`. Anything else — floats, nested structs, enums, generics,
+    /// `shared` — declines with the same actionable error the non-struct
+    /// path used, since a wrong-order comparator would be a silent
+    /// miscompile while the error is loud and names the escape hatch.
+    fn emit_sorted_struct_key_cmp_fn(
+        &mut self,
+        elem_name: &str,
+        fn_name: &str,
+    ) -> Result<inkwell::values::FunctionValue<'ctx>, String> {
+        let unsupported = || {
+            format!(
+                "codegen: `SortedSet`/`SortedMap` with element/key type `{elem_name}` is not \
+                 yet supported under `karac build` (integer and String keys sort in codegen, \
+                 plus structs whose fields are all integers or Strings); run under `karac run` \
+                 for other `Ord` element types."
+            )
+        };
+        if self.shared_types.contains_key(elem_name)
+            || !self.struct_types.contains_key(elem_name)
+            || self
+                .struct_generic_params
+                .get(elem_name)
+                .is_some_and(|ps| !ps.is_empty())
+        {
+            return Err(unsupported());
+        }
+        let field_tes = self
+            .struct_field_type_exprs
+            .get(elem_name)
+            .cloned()
+            .ok_or_else(unsupported)?;
+        enum FieldCmp {
+            Int { unsigned: bool },
+            Str,
+        }
+        let mut kinds: Vec<FieldCmp> = Vec::new();
+        for te in &field_tes {
+            let fname = match &te.kind {
+                TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                _ => String::new(),
+            };
+            let f_uint = matches!(fname.as_str(), "u8" | "u16" | "u32" | "u64" | "usize");
+            let f_int = f_uint
+                || matches!(
+                    fname.as_str(),
+                    "i8" | "i16" | "i32" | "i64" | "isize" | "char" | "bool"
+                );
+            if f_int {
+                kinds.push(FieldCmp::Int { unsigned: f_uint });
+            } else if fname == "String" {
+                kinds.push(FieldCmp::Str);
+            } else {
+                return Err(unsupported());
+            }
+        }
+        let st_ty = *self.struct_types.get(elem_name).ok_or_else(unsupported)?;
+
+        let ctx = self.context;
+        let i32_t = ctx.i32_type();
+        let i64_t = ctx.i64_type();
+        let ptr_ty = ctx.ptr_type(AddressSpace::default());
+        let fn_ty = i32_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let func =
+            self.module
+                .add_function(fn_name, fn_ty, Some(inkwell::module::Linkage::LinkOnceODR));
+        let saved = self.builder.get_insert_block();
+        let entry = ctx.append_basic_block(func, "entry");
+        let ret_neg = ctx.append_basic_block(func, "ret.neg");
+        let ret_pos = ctx.append_basic_block(func, "ret.pos");
+        let ret_eq = ctx.append_basic_block(func, "ret.eq");
+        self.builder.position_at_end(entry);
+        let a = func.get_nth_param(0).unwrap().into_pointer_value();
+        let b = func.get_nth_param(1).unwrap().into_pointer_value();
+
+        let string_cmp = self
+            .module
+            .get_function("karac_string_cmp")
+            .unwrap_or_else(|| {
+                let ft = i64_t.fn_type(
+                    &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                    false,
+                );
+                self.module.add_function(
+                    "karac_string_cmp",
+                    ft,
+                    Some(inkwell::module::Linkage::External),
+                )
+            });
+
+        for (idx, kind) in kinds.iter().enumerate() {
+            let ap = self
+                .builder
+                .build_struct_gep(st_ty, a, idx as u32, &format!("scf.a{idx}.p"))
+                .map_err(|_| unsupported())?;
+            let bp = self
+                .builder
+                .build_struct_gep(st_ty, b, idx as u32, &format!("scf.b{idx}.p"))
+                .map_err(|_| unsupported())?;
+            let (lt, gt) = match kind {
+                FieldCmp::Int { unsigned } => {
+                    let fty = self
+                        .llvm_type_for_type_expr(&field_tes[idx])
+                        .into_int_type();
+                    let av = self
+                        .builder
+                        .build_load(fty, ap, &format!("scf.a{idx}"))
+                        .unwrap()
+                        .into_int_value();
+                    let bv = self
+                        .builder
+                        .build_load(fty, bp, &format!("scf.b{idx}"))
+                        .unwrap()
+                        .into_int_value();
+                    let widen = |v: IntValue<'ctx>, s: &mut Self| -> IntValue<'ctx> {
+                        if v.get_type().get_bit_width() >= 64 {
+                            v
+                        } else if *unsigned {
+                            s.builder.build_int_z_extend(v, i64_t, "scf.w").unwrap()
+                        } else {
+                            s.builder.build_int_s_extend(v, i64_t, "scf.w").unwrap()
+                        }
+                    };
+                    let aw = widen(av, self);
+                    let bw = widen(bv, self);
+                    (
+                        self.builder
+                            .build_int_compare(inkwell::IntPredicate::SLT, aw, bw, "scf.lt")
+                            .unwrap(),
+                        self.builder
+                            .build_int_compare(inkwell::IntPredicate::SGT, aw, bw, "scf.gt")
+                            .unwrap(),
+                    )
+                }
+                FieldCmp::Str => {
+                    let vec_ty = self.vec_struct_type();
+                    let half = |base: PointerValue<'ctx>,
+                                tag: &str,
+                                s: &mut Self|
+                     -> (PointerValue<'ctx>, IntValue<'ctx>) {
+                        let pp = s
+                            .builder
+                            .build_struct_gep(vec_ty, base, 0, &format!("{tag}.pp"))
+                            .unwrap();
+                        let p = s
+                            .builder
+                            .build_load(ptr_ty, pp, &format!("{tag}.p"))
+                            .unwrap()
+                            .into_pointer_value();
+                        let lp = s
+                            .builder
+                            .build_struct_gep(vec_ty, base, 1, &format!("{tag}.lp"))
+                            .unwrap();
+                        let l = s
+                            .builder
+                            .build_load(i64_t, lp, &format!("{tag}.l"))
+                            .unwrap()
+                            .into_int_value();
+                        (p, l)
+                    };
+                    let (a_ptr, a_len) = half(ap, &format!("scf.a{idx}s"), self);
+                    let (b_ptr, b_len) = half(bp, &format!("scf.b{idx}s"), self);
+                    let raw = self
+                        .builder
+                        .build_call(
+                            string_cmp,
+                            &[a_ptr.into(), a_len.into(), b_ptr.into(), b_len.into()],
+                            "scf.scmp",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    let zero = i64_t.const_zero();
+                    (
+                        self.builder
+                            .build_int_compare(inkwell::IntPredicate::SLT, raw, zero, "scf.lt")
+                            .unwrap(),
+                        self.builder
+                            .build_int_compare(inkwell::IntPredicate::SGT, raw, zero, "scf.gt")
+                            .unwrap(),
+                    )
+                }
+            };
+            let chk_gt = ctx.append_basic_block(func, &format!("scf.chkgt{idx}"));
+            let next = ctx.append_basic_block(func, &format!("scf.next{idx}"));
+            self.builder
+                .build_conditional_branch(lt, ret_neg, chk_gt)
+                .unwrap();
+            self.builder.position_at_end(chk_gt);
+            self.builder
+                .build_conditional_branch(gt, ret_pos, next)
+                .unwrap();
+            self.builder.position_at_end(next);
+        }
+        self.builder.build_unconditional_branch(ret_eq).unwrap();
+
+        self.builder.position_at_end(ret_neg);
+        let neg1 = i32_t.const_int((-1i64) as u64, true);
+        self.builder.build_return(Some(&neg1)).unwrap();
+        self.builder.position_at_end(ret_pos);
+        let pos1 = i32_t.const_int(1, false);
+        self.builder.build_return(Some(&pos1)).unwrap();
+        self.builder.position_at_end(ret_eq);
+        let zero32 = i32_t.const_zero();
+        self.builder.build_return(Some(&zero32)).unwrap();
+
         if let Some(bb) = saved {
             self.builder.position_at_end(bb);
         }
