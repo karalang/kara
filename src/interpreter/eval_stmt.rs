@@ -2272,6 +2272,57 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
+                // B-2026-08-01-21 — INDEX-target sibling: `v[i] = <new>`
+                // displaces the old element, whose Drop bodies were silent
+                // (the memory side is codegen-only — interp values are
+                // GC'd). Simple index shapes only, mirroring the codegen
+                // twin's effect-free re-evaluation rule.
+                if let ExprKind::Index { object, index } = &target.kind {
+                    if let ExprKind::Identifier(vname) = &object.kind {
+                        let simple_index = matches!(
+                            &index.kind,
+                            ExprKind::Integer(_, _) | ExprKind::Identifier(_)
+                        );
+                        if simple_index
+                            && !self.moved_out_user_drop_bindings.contains(vname.as_str())
+                            && !crate::deque_head::expr_mentions_name_deep(value, vname)
+                        {
+                            let idx = match self.eval_expr_inner(index) {
+                                Value::Int(i) if i >= 0 => Some(i as usize),
+                                _ => None,
+                            };
+                            let old_elem = match (idx, self.env.get(vname)) {
+                                (Some(i), Some(Value::Array(rc))) => {
+                                    let guard = rc.read().unwrap();
+                                    guard.get(i).cloned()
+                                }
+                                _ => None,
+                            };
+                            if let Some(old) = old_elem {
+                                match &old {
+                                    Value::Struct { name: tn, .. } => {
+                                        if self.program.drop_method_keys.contains_key(tn) {
+                                            let tn = tn.clone();
+                                            self.run_user_drop_body_on_value(&tn, old);
+                                        } else if self.value_runs_user_drop(&old) {
+                                            self.drop_user_drop_fields_of_value(&old);
+                                        }
+                                    }
+                                    Value::EnumVariant { enum_name, .. }
+                                        if enum_name != "Option" && enum_name != "Result" =>
+                                    {
+                                        if self.program.drop_method_keys.contains_key(enum_name) {
+                                            let tn = enum_name.clone();
+                                            self.run_user_drop_body_on_value(&tn, old.clone());
+                                        }
+                                        self.run_enum_payload_user_drops_value(&old);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
                 if !self.assign_to_place(target, val) {
                     unreachable!(
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",

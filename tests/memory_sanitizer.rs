@@ -16988,6 +16988,41 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-21 — `v[i] = Res { .. }` over a struct element with
+    /// heap fields leaked the displaced element's field buffers (the
+    /// element-reassign machinery freed direct {ptr,len,cap} elements but
+    /// never walked struct fields). The displacement path now runs the
+    /// cap-guarded field-heap synthesizer (plus the bodies walk) on the
+    /// old element before the store. LSan (Linux CI) gates the leak; ASAN
+    /// guards the new pre-store release against double-freeing the
+    /// element the Vec's own scope-exit drop covers.
+    #[test]
+    fn asan_index_assign_displaced_elem_fields_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Plain { id: i64, name: String }
+fn main() {
+    println("a");
+    let mut v: Vec[Res] = Vec.new();
+    v.push(Res { id: 9, name: f"z{9}" });
+    v[0] = Res { id: 5, name: f"y{5}" };
+    println(f"held {v[0].id}");
+    let mut p: Vec[Plain] = Vec.new();
+    p.push(Plain { id: 3, name: f"w{3}" });
+    p[0] = Plain { id: 4, name: f"v{4}" };
+    println(f"kept {p[0].id}");
+    println("end");
+}
+"#,
+            &["a", "drop 9 z9", "held 5", "drop 5 y5", "kept 4", "end"],
+            "index_assign_displaced_elem_fields_freed",
+        );
+    }
+
     /// B-2026-08-01-18 — a Set/SortedSet ELEMENT (or Map KEY) that is a
     /// struct owning heap fields leaked those fields' buffers at scope
     /// exit: the handle free released the bucket storage but never walked

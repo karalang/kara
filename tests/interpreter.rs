@@ -27047,6 +27047,30 @@ fn test_param_view_rebind_single_caller_fire() {
     );
 }
 
+/// B-2026-08-01-21 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_index_assign_displaced_elem_bodies`, same source and expected
+/// string (the interp leg is bodies-only; memory is GC'd).
+#[test]
+fn test_index_assign_displaced_elem_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut v: Vec[Res] = Vec.new();\n\
+                 v.push(Res { id: 9, name: f\"z{9}\" });\n\
+                 v[0] = Res { id: 5, name: f\"y{5}\" };\n\
+                 println(f\"held {v[0].id}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n"
+    );
+}
+
 /// B-2026-08-01-20 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_field_assign_displaced_bodies`, same source and expected string.
 #[test]

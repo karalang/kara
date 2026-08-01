@@ -7287,6 +7287,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.try_compile_heap_env_vec_elem_reassign(object, index, val, value)? {
                         return Ok(());
                     }
+                    // B-2026-08-01-21 — displaced STRUCT/ENUM element:
+                    // `v[i] = <new>` freed a direct {ptr,len,cap} element but
+                    // never walked a struct element's heap FIELDS (a
+                    // per-reassign leak) nor ran its Drop bodies. Bodies +
+                    // cap-guarded field-heap release on the old element slot
+                    // before the store. Simple index shapes only (the element
+                    // pointer is computed here AND in the store below, so the
+                    // index expression must be re-evaluable without effects).
+                    self.emit_displaced_index_elem_drop(object, index, value);
                     self.compile_index_store(object, index, val, rhs_is_fresh)?;
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
                     // slot (`v[i] = f"…"`). `compile_vec_index_store` already
@@ -9213,6 +9222,95 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shadowed by a local binding (closure semantics unproven), and every
     /// non-`Call` shape (method calls, ctors, block tails — conservative
     /// silence, the pre-fix behavior).
+    /// B-2026-08-01-21 — displaced STRUCT/ENUM Vec element at
+    /// `v[i] = <new>`: run the old element's Drop bodies AND its
+    /// cap-guarded field-heap release before the store. The element
+    /// reassign machinery frees direct {ptr,len,cap} elements but never
+    /// walked a struct element's heap fields (a per-reassign leak) or ran
+    /// its bodies. Simple index shapes only (Integer / Identifier — the
+    /// element pointer is computed here and again by the store, so the
+    /// index must be effect-free to re-evaluate); direct Identifier
+    /// containers that are owning Vecs (slices, map-index, SoA excluded);
+    /// non-generic, non-shared user struct / value-enum elements. An RHS
+    /// mentioning the container declines (uncertain ⇒ silent).
+    fn emit_displaced_index_elem_drop(&mut self, object: &Expr, index: &Expr, rhs: &Expr) {
+        let ExprKind::Identifier(container) = &object.kind else {
+            return;
+        };
+        if !matches!(
+            &index.kind,
+            ExprKind::Integer(_, _) | ExprKind::Identifier(_)
+        ) {
+            return;
+        }
+        if crate::deque_head::expr_mentions_name_deep(rhs, container) {
+            return;
+        }
+        if self.slice_elem_types.contains_key(container.as_str())
+            || self.map_key_types.contains_key(container.as_str())
+            || self.active_soa_layout(container).is_some()
+        {
+            return;
+        }
+        let Some(elem_te) = self.var_elem_type_exprs.get(container.as_str()).cloned() else {
+            return;
+        };
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return;
+        };
+        let Some(etn) = p.segments.first().cloned() else {
+            return;
+        };
+        if self.shared_types.contains_key(&etn)
+            || self
+                .struct_generic_params
+                .get(&etn)
+                .is_some_and(|ps| !ps.is_empty())
+        {
+            return;
+        }
+        let is_struct = self.struct_types.contains_key(&etn);
+        let is_enum = etn != "Option"
+            && etn != "Result"
+            && self.enum_layouts.get(&etn).is_some_and(|l| !l.is_shared);
+        if !is_struct && !is_enum {
+            return;
+        }
+        let container = container.clone();
+        let Ok((elem_ptr, _)) = self.lower_indexed_elem_ptr_vec(&container, index) else {
+            return;
+        };
+        if self.type_runs_user_drop(&etn, &mut Vec::new()) {
+            let owns_body = self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|prog| prog.drop_method_keys.contains_key(etn.as_str()));
+            if owns_body {
+                if let Some(f) = self.module.get_function(&format!("{etn}.drop")) {
+                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                }
+            }
+            if is_struct {
+                if let Some(f) =
+                    self.emit_user_drop_field_bodies_fn(&etn, &std::collections::HashMap::new())
+                {
+                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                }
+            } else if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&etn) {
+                self.builder.build_call(w, &[elem_ptr.into()], "").unwrap();
+            }
+        }
+        // Memory: the cap-guarded synthesizer closes the field-buffer leak;
+        // a moved-out / already-freed element no-ops on the cap guards.
+        if is_struct {
+            if let Some(f) = self.emit_struct_drop_synthesis(&etn) {
+                self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+            }
+        } else if let Some(f) = self.emit_enum_drop_switch(&etn) {
+            self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+        }
+    }
+
     /// B-2026-08-01-20 — run the displaced old FIELD value's Drop bodies
     /// before a `base.field = <new>` store overwrites it. Bodies only —
     /// the memory side rides `compile_field_store`'s old-value drop.

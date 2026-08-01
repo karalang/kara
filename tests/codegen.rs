@@ -6817,6 +6817,37 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-21 — an INDEX-assign over a struct element with heap
+    /// fields (`v[i] = Res { .. }`) displaces the old element: its Drop
+    /// bodies fire and its field buffers free before the store (pre-fix:
+    /// bodies silent on both backends, field buffers leaked under karac
+    /// build). Twin of `tests/interpreter.rs`'s
+    /// `test_index_assign_displaced_elem_bodies`; the leak itself is
+    /// pinned by `tests/memory_sanitizer.rs`'s
+    /// `asan_index_assign_displaced_elem_fields_freed`.
+    #[test]
+    fn e2e_index_assign_displaced_elem_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut v: Vec[Res] = Vec.new();\n\
+             \x20   v.push(Res { id: 9, name: f\"z{9}\" });\n\
+             \x20   v[0] = Res { id: 5, name: f\"y{5}\" };\n\
+             \x20   println(f\"held {v[0].id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n");
+    }
+
     /// B-2026-08-01-20 — a FIELD-assign displaces the old field value,
     /// whose Drop bodies now fire before the store (both backends were
     /// silent; the memory side always freed). Struct fields with Drop
