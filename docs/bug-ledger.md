@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 201 | 0 |
 | leak | 115 | 0 |
 | codegen-gap | 88 | 0 |
-| double-free | 85 | 0 |
+| double-free | 86 | 1 |
 | missing-feature | 72 | 0 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 606 | 0 |
+| codegen | 607 | 1 |
 | typecheck | 109 | 0 |
 | interp | 101 | 0 |
 | ownership | 36 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **842 surfaced · 0 open · 834 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **843 surfaced · 1 open · 834 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-01-28 | 2026-08-01 | codegen | high | The B-2026-08-01-24 for-loop element double-free through the remaining consume arms: `m.insert(k, h)`, `set.insert(p)`, and `names.push(h.name)` over a for-loop element binding all abort with free(): double free under JIT and AOT (interp correct) — the 7225d0a fix covered the five Vec append arms only. | src/codegen/map_method.rs (Map.insert / Set.insert arg consume — no for_loop_owned_agg_vars deep-copy at the stored slot); src/codegen/call_dispatch.rs + vec_method.rs (FieldAccess args rooted at a for-loop element binding — `names.push(h.name)`: maybe_defensive_copy_param_arg covers owned PARAMS, the b178 deep_copy_pushed_for_loop_agg_element hook covers bare-Identifier element args, but a FIELD read out of an element consumed at an arg position copies nothing) |
 
 ### Fixed (834)
 
