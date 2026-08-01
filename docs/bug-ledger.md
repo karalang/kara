@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 199 | 1 |
+| miscompile | 199 | 0 |
 | leak | 113 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 600 | 1 |
+| codegen | 600 | 0 |
 | typecheck | 108 | 0 |
-| interp | 99 | 1 |
+| interp | 99 | 0 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced · 1 open · 826 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced · 0 open · 827 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-01-20 | 2026-08-01 | interp+codegen | low | displaced-value Drop bodies at FIELD-assign targets are silent on both backends (`o.h = <new>;` frees the old field's heap without running its bodies) | — |
+_None — the ledger is fully drained._
 
-### Fixed (826)
+### Fixed (827)
 
-<details><summary>826 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>827 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -964,6 +962,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced 
 | B-2026-08-01-17 | interp+codegen | low | SortedSet[DropT] element Drop bodies drain in INSERTION order under karac build, sorted order under the interpreter (plain Set diverges too) | 96ad40a |
 | B-2026-08-01-18 | codegen | medium | Set/SortedSet element with a String field leaks the field buffer at scope exit under karac build (element blob freed, fields never walked) | eaf6c2a |
 | B-2026-08-01-19 | interp+codegen | medium | storing an owned param into a local container FIELD (`o.h = h;`) fires the caller-retained value's Drop body TWICE — container walk + caller NLL, in… | 99254ea |
+| B-2026-08-01-20 | interp+codegen | low | displaced-value Drop bodies at FIELD-assign targets are silent on both backends (`o.h = <new>;` frees the old field's heap without running its bodies) | 622946f |
 
 </details>
 
