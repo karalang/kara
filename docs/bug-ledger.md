@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 197 | 0 |
-| leak | 111 | 1 |
+| leak | 112 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
@@ -104,15 +104,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 32 | 0 |
 | diagnostics | 30 | 0 |
 | use-after-free | 11 | 0 |
-| other | 10 | 0 |
+| other | 11 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 592 | 1 |
+| codegen | 594 | 0 |
 | typecheck | 108 | 0 |
-| interp | 93 | 1 |
+| interp | 94 | 0 |
 | ownership | 35 | 0 |
 | autopar | 30 | 1 |
 | cli | 23 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **827 surfaced · 2 open · 817 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **829 surfaced · 1 open · 820 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-31-42 | 2026-07-31 | autopar | medium | The auto-par cost model has no notion of memory ACCESS PATTERN, only of statement count. Prism's `rotate` — the least arithmetic-heavy of its kernels — is the biggest fan-out win measured (3.52x) because its reads are transposed and latency-bound, and nothing in the model knows that. It cleared the gate by accident. | src/par_cost.rs::CostEstimator / body_is_memory_bound |
 
-### Fixed (817)
+### Fixed (820)
 
-<details><summary>817 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>820 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -893,6 +892,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **827 surfaced 
 | B-2026-07-30-8 | autopar | low | Auto-par's early-exit gate declines a reduction for a `break`/`continue` that targets a NESTED loop and therefore cannot exit the reduction body at a… | 3993c2e |
 | B-2026-07-30-9 | codegen | low | `println` is not line-atomic across tasks: it emits TWO separate `write_console` calls (payload, then the newline), so two spawned tasks printing con… | 36a7fa5 |
 | B-2026-07-30-10 | typecheck+codegen | low | `Result[T, E].clone()` is still rejected at typecheck (`no method 'clone' on type 'Result'`) after B-2026-07-29-31 gave `Option[T]` a callable one —… | 4b5f811 |
+| B-2026-07-30-11 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS | 8de98fe |
 | B-2026-07-30-12 | codegen | medium | A by-value owned-struct arg that the callee RETURNS mishandled its caller temp TWO ways: a fn-call arg (`pass(mk())`) leaked the orphaned buffer, and… | 3ee768a |
 | B-2026-07-30-13 | typecheck | low | An arithmetic mismatch whose wrong operand is an Option/Result was reported as an integer/floating-point mix, naming a float type that appears nowher… | 3981fef |
 | B-2026-07-30-14 | typecheck | high | A MAP LITERAL typed as `HashMap<K, V>` — a name Kāra source cannot write — so it matched no annotation: `let m: Map[String, i64] = Map["x": 1];` fail… | b9995ce |
@@ -956,6 +956,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **827 surfaced 
 | B-2026-08-01-10 | codegen | medium | bare user-enum ctor statement (`Box2.Full(Res { . | fe58e5b |
 | B-2026-08-01-11 | codegen | medium | discarded no-own-Drop struct temp with a Drop-bearing heap field (`mk_h();`, `let _ = mk_h();`) fires the field body but leaks the field's heap on bo… | fe58e5b |
 | B-2026-08-01-12 | interp | medium | struct destructure of an owned param (`let Holder { r } = h;` in the callee) fires the bound field's Drop body a second time under karac run only | b916307 |
+| B-2026-08-01-13 | interp+codegen | medium | owned enum ARG Drop-body ownership incoherent: fresh ctor arg silent when the callee drops it whole, DOUBLE body (both backends) when the callee matc… | 8de98fe |
+| B-2026-08-01-14 | codegen | medium | fresh enum-ctor arg to a passthrough callee (`pass2(E2.B(..))`) orphans the ORIGINAL payload buffer — the callee entry-copies and returns the copy | 8de98fe |
 
 </details>
 
