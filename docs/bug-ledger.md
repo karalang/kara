@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 201 | 0 |
+| miscompile | 202 | 1 |
 | leak | 117 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 88 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 612 | 1 |
+| codegen | 613 | 2 |
 | typecheck | 109 | 0 |
 | interp | 102 | 0 |
 | ownership | 37 | 1 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **849 surfaced · 2 open · 839 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **850 surfaced · 3 open · 839 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-32 | 2026-08-01 | codegen | low | Vec.filled's calloc fast path only recognises a SCALAR constant zero, so Vec.filled(n, Vec.new()) store-loops an all-zero aggregate instead of calloc'ing it — measured ~100x (117.6 ms vs 1.2 ms on a 1e6-element fill) | — |
 | B-2026-08-01-33 | 2026-08-01 | ownership | low | no way to share an immutable `shared struct` across par branches read-only: the >1-branch gate is correct (non-atomic refcount races even on reads) but the only answers are `par struct`+Mutex on an unmutated structure or N private copies — costs #133 its par lane, which its lock-free C mirror can still run | — |
+| B-2026-08-01-35 | 2026-08-01 | codegen | high | Field store through a FIELD-ROOTED indexed container (`o.hs[i].field = x` where `hs: Vec[P]` is itself a struct field) is SILENTLY DROPPED under karac build — scalar, String, and struct fields alike, literal and variable indices; the interpreter applies the write. Run-vs-build divergence on a `karac check`-clean program, no diagnostic, subsequent reads return the stale value. The identifier-rooted form (`v[i].field = x`) works. | src/codegen/expr_ops.rs compile_field_store — the nested plain-struct branch resolves the parent via nested_store_place_ptr, whose Index arm delegates to field_chain_place_ptr; a FIELD-ROOTED Index (`o.hs[i]`, the container itself a struct field) fails to resolve there, so the store falls through to the documented no-op tail and is SILENTLY dropped. The shared-element sibling was fixed in B-2026-07-13-10 (the non-identifier-index-root shared branch); the PLAIN-element sibling has no handler. |
 
 ### Fixed (839)
 
