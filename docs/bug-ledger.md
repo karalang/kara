@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 42 | 0 |
 | crash | 33 | 0 |
 | soundness | 32 | 0 |
-| diagnostics | 30 | 0 |
+| diagnostics | 31 | 1 |
 | use-after-free | 11 | 0 |
 | other | 11 | 0 |
 
@@ -119,19 +119,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 22 | 0 |
 | runtime | 18 | 0 |
 | resolver | 15 | 0 |
-| parser | 8 | 0 |
+| parser | 9 | 1 |
 | lexer | 3 | 0 |
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **839 surfaced · 2 open · 829 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **840 surfaced · 3 open · 829 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-23 | 2026-08-01 | interp+codegen | low | container-in-container element Drop bodies are silent on both backends (Vec[Vec[DropT]] inner elements, Map[K, Vec[DropT]] value-Vec elements) — memory freed, bodies never fire | — |
 | B-2026-08-01-24 | 2026-08-01 | codegen | high | Moving elements out of a BY-VALUE `Vec[S]` parameter double-frees each element's heap field: `for h in headers { out.push(h); }` frees the same String buffer from both the destination Vec and the source param. Aborts on JIT and AOT; the interpreter is correct, so it is a run-vs-build divergence as well as a memory-safety bug. | src/codegen/stmts.rs + src/codegen/control_flow_for.rs (the `for x in <by-value Vec[S]> { … }` element-move path and the param Vec's scope-exit cleanup), src/codegen/runtime.rs (suppress_source_vec_cleanup_for_arg / zero_struct_move_caps family — the disarm that does not reach a moved-out ELEMENT's fields) |
+| B-2026-08-01-25 | 2026-08-01 | parser | medium | `&&` / `||` diagnostics are emitted 2-3x per occurrence and carry NO `replacement`, so `karac fix` cannot apply a one-token substitution the message itself spells out. 11 real mistakes rendered as 24 JSON diagnostics, none machine-applicable. | src/parser/exprs.rs:379-385 (the `Token::PipePipe` / `Token::AmpAmp` arms of the Pratt infix match), src/parser.rs:635 (`fn error` — the no-replacement helper) vs src/parser/exprs.rs:487 (a sibling site that DOES set `replacement`) |
 
 ### Fixed (829)
 
