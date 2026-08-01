@@ -27013,6 +27013,50 @@ fn test_ref_self_match_borrowed_payload_silent() {
     );
 }
 
+/// B-2026-08-01-7 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_owned_self_enum_receiver_single_fire`, same source and expected
+/// string. Pre-fix both backends double-fired the match-consume shape
+/// identically (arm channel + the receiver binding's still-armed walk).
+#[test]
+fn test_owned_self_enum_receiver_single_fire() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             impl Box2 {\n\
+                 fn into_id(self) -> i64 {\n\
+                     match self {\n\
+                         Box2.Full(r) => { return r.id; }\n\
+                         Box2.Empty => { return 0; }\n\
+                     }\n\
+                 }\n\
+                 fn just_three(self) -> i64 {\n\
+                     return 3;\n\
+                 }\n\
+             }\n\
+             fn mk_e(n: i64) -> Box2 {\n\
+                 return Box2.Full(Res { id: n, name: f\"e{n}\" });\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a: owned-self match-consume fires once via the arm\");\n\
+                 let b = mk_e(7);\n\
+                 let v = b.into_id();\n\
+                 println(f\"v={v}\");\n\
+                 println(\"b: owned-self non-consuming — consumed silently\");\n\
+                 let c = mk_e(8);\n\
+                 let w = c.just_three();\n\
+                 println(f\"w={w}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a: owned-self match-consume fires once via the arm\ndrop 7 e7\nv=7\n\
+         b: owned-self non-consuming — consumed silently\nw=3\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

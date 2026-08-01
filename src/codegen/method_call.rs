@@ -5175,6 +5175,28 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(receiver_type) = self.inferred_receiver_type(object) {
             let qualified = format!("{}.{}", receiver_type, method);
             if let Some(fn_val) = self.module.get_function(&qualified) {
+                // B-2026-08-01-7: an OWNED-`self` method CONSUMES the
+                // receiver — a named value-enum binding's payload-bodies
+                // walk must disarm, exactly like `let c = b;` (the arm
+                // channel inside the method is the payload's sole owner
+                // now). Without this, `b.into_id()` fired the body twice on
+                // both backends: once from the arm channel, once from b's
+                // still-armed walk at scope exit. Enum receivers only — a
+                // struct receiver's single walk fire is the established
+                // in-parity convention (probe b159_ownstruct).
+                if let ExprKind::Identifier(recv_name) = &object.kind {
+                    if matches!(
+                        self.impl_method_self_and_borrow_return(&receiver_type, method),
+                        Some((crate::ast::SelfParam::Owned, _))
+                    ) && self
+                        .var_type_names
+                        .get(recv_name.as_str())
+                        .is_some_and(|tn| self.enum_layouts.contains_key(tn.as_str()))
+                    {
+                        let recv_name = recv_name.clone();
+                        self.suppress_container_elem_bodies_for_var(&recv_name);
+                    }
+                }
                 // Inspect the resolved fn's first param to decide the receiver
                 // calling convention: pointer-typed (ref self / mut ref self)
                 // means pass the address of the receiver's storage; struct-

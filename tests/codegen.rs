@@ -6770,6 +6770,59 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-7 — an OWNED-`self` method consumes its named value-enum
+    /// receiver: the binding's payload-bodies walk disarms at the call
+    /// (exactly like `let c = b;`), leaving the method-internal arm channel
+    /// as the payload's sole owner. Pre-fix `b.into_id()` printed the body
+    /// TWICE on both backends (arm + still-armed walk); the non-consuming
+    /// owned-self shape is silent (the consumed value's drop is the
+    /// documented owned-self residual). Twin of `tests/interpreter.rs`'s
+    /// `test_owned_self_enum_receiver_single_fire`.
+    #[test]
+    fn e2e_owned_self_enum_receiver_single_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             impl Box2 {\n\
+             \x20   fn into_id(self) -> i64 {\n\
+             \x20       match self {\n\
+             \x20           Box2.Full(r) => { return r.id; }\n\
+             \x20           Box2.Empty => { return 0; }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   fn just_three(self) -> i64 {\n\
+             \x20       return 3;\n\
+             \x20   }\n\
+             }\n\
+             fn mk_e(n: i64) -> Box2 {\n\
+             \x20   return Box2.Full(Res { id: n, name: f\"e{n}\" });\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a: owned-self match-consume fires once via the arm\");\n\
+             \x20   let b = mk_e(7);\n\
+             \x20   let v = b.into_id();\n\
+             \x20   println(f\"v={v}\");\n\
+             \x20   println(\"b: owned-self non-consuming — consumed silently\");\n\
+             \x20   let c = mk_e(8);\n\
+             \x20   let w = c.just_three();\n\
+             \x20   println(f\"w={w}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a: owned-self match-consume fires once via the arm\ndrop 7 e7\nv=7\n\
+             b: owned-self non-consuming — consumed silently\nw=3\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a

@@ -402,6 +402,21 @@ impl<'a> super::Interpreter<'a> {
                 // caller's owner fires, and `karac build` fires nothing).
                 let pushed_self_mode = match self.method_self_param(&type_name, method) {
                     Some(sp) => {
+                        // B-2026-08-01-7: an OWNED-`self` method consumes the
+                        // receiver — a named value-enum binding's payload
+                        // walk disarms like `let c = b;` would, leaving the
+                        // arm channel inside the method as the payload's
+                        // sole owner (it fired twice before: arm + walk).
+                        // Enum receivers only; the struct receiver's single
+                        // walk fire is the established in-parity convention.
+                        if matches!(sp, crate::ast::SelfParam::Owned) {
+                            if let ExprKind::Identifier(recv_name) = &object.kind {
+                                if matches!(obj, Value::EnumVariant { .. }) {
+                                    self.moved_out_container_bodies_bindings
+                                        .insert(recv_name.clone());
+                                }
+                            }
+                        }
                         self.self_param_stack.push(sp);
                         true
                     }
