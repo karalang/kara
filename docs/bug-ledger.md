@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 197 | 0 |
-| leak | 112 | 0 |
+| leak | 113 | 1 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
-| run-vs-build | 66 | 1 |
+| run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
 | perf | 42 | 0 |
 | crash | 33 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 597 | 1 |
+| codegen | 598 | 1 |
 | typecheck | 108 | 0 |
-| interp | 97 | 1 |
+| interp | 97 | 0 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **832 surfaced · 1 open · 823 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **833 surfaced · 1 open · 824 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-17 | 2026-08-01 | interp+codegen | low | SortedSet[DropT] element Drop bodies drain in INSERTION order under karac build, sorted order under the interpreter (plain Set diverges too) | — |
+| B-2026-08-01-18 | 2026-08-01 | codegen | medium | Set/SortedSet element with a String field leaks the field buffer at scope exit under karac build (element blob freed, fields never walked) | — |
 
-### Fixed (823)
+### Fixed (824)
 
-<details><summary>823 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>824 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -961,6 +961,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **832 surfaced 
 | B-2026-08-01-14 | codegen | medium | fresh enum-ctor arg to a passthrough callee (`pass2(E2.B(..))`) orphans the ORIGINAL payload buffer — the callee entry-copies and returns the copy | 8de98fe |
 | B-2026-08-01-15 | interp+codegen | medium | move-indirected param destructure (`let h2 = h; let Holder { r } = h2;` inside the callee) fires a STALE cap-zeroed body under karac build and a doub… | 309c651 |
 | B-2026-08-01-16 | interp+codegen | medium | Assign-based param rebind (`h2 = h;` onto a pre-declared local) double-fires the Drop body on both backends and silently skips the displaced value's… | e0fc863 |
+| B-2026-08-01-17 | interp+codegen | low | SortedSet[DropT] element Drop bodies drain in INSERTION order under karac build, sorted order under the interpreter (plain Set diverges too) | 96ad40a |
 
 </details>
 
