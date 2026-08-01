@@ -5099,6 +5099,66 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_ok_and(|n| n.starts_with("__karac_dropelems_"))
     }
 
+    /// Statement-end firing for FRESH TEMPORARIES' `UserDrop` actions
+    /// (B-2026-08-01-4): a Drop-bearing temp materialized inside a
+    /// statement's expression — an owned-param call arg (`let x =
+    /// consume(mk(1))`, registered as `__owned_agg_tmp`) or a fresh rvalue
+    /// arg to a `ref` param (`let y = peek(mk(2))`, `__refarg_tmp`) — dies
+    /// at the end of that statement, and the interpreter runs its body
+    /// there (`run_fresh_temp_arg_drops` fires as the call returns). The
+    /// registrations land on the enclosing SCOPE frame though, so under
+    /// `karac build` the body ran at scope exit — after every later
+    /// statement's output — a run-vs-build ordering divergence on any
+    /// RAII-observing program. `mark` is the frame's length before the
+    /// statement compiled: fire (and retire) exactly the temp-named
+    /// `UserDrop` actions pushed during it, LIFO. Firing a wrapper
+    /// (body+memory for structs) early is safe for the same reason the NLL
+    /// fire below is: the temp is dead, and the passthrough registrars
+    /// never registered an escaping value (`call_arg_flows_into_return`).
+    /// Named-binding actions and memory-channel actions (StructDrop /
+    /// EnumDrop / frees) are untouched — only these two temp names drain.
+    pub(super) fn drain_statement_temp_user_drops(&mut self, mark: usize) {
+        if self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_terminator())
+            .is_some()
+        {
+            return;
+        }
+        let due: Vec<(PointerValue<'ctx>, FunctionValue<'ctx>)> = {
+            let Some(frame) = self.scope_cleanup_actions.last_mut() else {
+                return;
+            };
+            if frame.len() <= mark {
+                return;
+            }
+            let tail = frame.split_off(mark);
+            let mut fired = Vec::new();
+            for action in tail {
+                match action {
+                    CleanupAction::UserDrop {
+                        ref binding_name,
+                        binding_ptr,
+                        drop_fn,
+                        ..
+                    } if binding_name == "__owned_agg_tmp" || binding_name == "__refarg_tmp" => {
+                        fired.push((binding_ptr, drop_fn));
+                    }
+                    other => frame.push(other),
+                }
+            }
+            fired
+        };
+        // LIFO — the last-materialized temp's body runs first, matching the
+        // one-shot discard frame's drain order.
+        for (ptr, drop_fn) in due.iter().rev() {
+            self.builder
+                .build_call(*drop_fn, &[(*ptr).into()], "")
+                .unwrap();
+        }
+    }
+
     pub(super) fn fire_due_user_drops(
         &mut self,
         last_use: &std::collections::HashMap<String, usize>,

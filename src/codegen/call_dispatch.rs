@@ -4340,6 +4340,65 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_vec_var(slot, elem_ty);
             return;
         }
+        // B-2026-08-01-4 — a fresh owned Drop-bearing STRUCT/ENUM rvalue
+        // passed to a `ref` param (`peek(mk(2))`): the callee only borrows,
+        // so the caller owns the temp, and NOTHING here registered its user
+        // Drop body — `karac run` fires it as the call returns
+        // (`run_fresh_temp_arg_drops`), `karac build` was silent forever.
+        // Register under the `__refarg_tmp` name the statement-end drain
+        // fires. Same channel selection as the discard registrar: the
+        // `karac_drop_<T>` wrapper for an own-`impl Drop` type (body, plus
+        // struct-memory synthesis — the temp is dead after the statement),
+        // the field-bodies walk for a transitively-Drop struct, the
+        // declared-type payload walker for a value enum. Shared types stay
+        // with the rc machinery; a non-fresh arg (a place rvalue) is the
+        // owner's business.
+        if val.get_type().is_struct_type() && self.expr_yields_fresh_owned_temp(arg_expr) {
+            let tn = match &arg_expr.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(n) => self
+                        .fn_return_type_names
+                        .get(n)
+                        .cloned()
+                        .or_else(|| self.enum_name_of_expr(arg_expr)),
+                    ExprKind::Path { .. } => self.enum_name_of_expr(arg_expr),
+                    _ => None,
+                },
+                ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+                _ => None,
+            };
+            if let Some(tn) = tn {
+                if !self.shared_types.contains_key(&tn) {
+                    let has_own_drop = self
+                        .program_snapshot
+                        .as_deref()
+                        .is_some_and(|p| p.drop_method_keys.contains_key(&tn));
+                    if self.enum_layouts.contains_key(&tn) {
+                        if has_own_drop {
+                            self.track_user_drop_var(&tn, "__refarg_tmp", slot);
+                        } else if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&tn) {
+                            self.track_user_drop_var_with_fn(&tn, "__refarg_tmp", slot, w);
+                        }
+                        if self.enum_has_heap_payload(&tn) {
+                            self.track_enum_var(&tn, slot);
+                        }
+                    } else if self.struct_types.contains_key(&tn) {
+                        if has_own_drop {
+                            self.track_user_drop_var(&tn, "__refarg_tmp", slot);
+                        } else if self.type_runs_user_drop(&tn, &mut Vec::new()) {
+                            if let Some(f) = self.field_bodies_fn_for_owned_temp(&tn) {
+                                self.track_user_drop_var_with_fn(&tn, "__refarg_tmp", slot, f);
+                            }
+                            self.track_struct_var(&tn, slot);
+                        } else {
+                            // No Drop anywhere: heap-field memory only.
+                            self.track_struct_var(&tn, slot);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         if !val.is_pointer_value() {
             return;
         }

@@ -26830,6 +26830,45 @@ fn test_enum_walker_rearm_after_move_reassign() {
     );
 }
 
+/// B-2026-08-01-4 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_fresh_arg_temp_drop_fires_at_statement_end`, same source and
+/// expected string. The interpreter is the semantics oracle here (fresh
+/// temps die at statement end, design.md § Drop ordering) and already
+/// passed pre-fix — this pins the target the codegen statement-end drain
+/// now meets.
+#[test]
+fn test_fresh_arg_temp_drop_fires_at_statement_end() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+                 return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn consume(r: Res) -> i64 {\n\
+                 return r.id + 100;\n\
+             }\n\
+             fn peek(r: ref Res) -> i64 {\n\
+                 return r.id;\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let x = consume(mk(1));\n\
+                 println(f\"x={x}\");\n\
+                 println(\"b\");\n\
+                 let y = peek(mk(2));\n\
+                 println(f\"y={y}\");\n\
+                 println(\"c\");\n\
+                 consume(mk(3));\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 1 r1\nx=101\nb\ndrop 2 r2\ny=2\nc\ndrop 3 r3\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

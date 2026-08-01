@@ -6563,6 +6563,55 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-4 — a fresh Drop-bearing call-arg temp in LET position
+    /// fires its body at the END OF THE STATEMENT, where the interpreter
+    /// fires it (`run_fresh_temp_arg_drops` runs as the call returns).
+    /// Pre-fix `karac build` fired the owned-param shape (`let x =
+    /// consume(mk(1))`) at SCOPE EXIT — after every later statement's
+    /// output — and the ref-param shape (`let y = peek(mk(2))`) NEVER (no
+    /// body was registered for a fresh rvalue borrowed by the callee). The
+    /// bare-statement shape (`consume(mk(3));`) was already correct via the
+    /// one-shot discard frame and pins that nothing regressed. Twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_fresh_arg_temp_drop_fires_at_statement_end`.
+    #[test]
+    fn e2e_fresh_arg_temp_drop_fires_at_statement_end() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+             \x20   return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn consume(r: Res) -> i64 {\n\
+             \x20   return r.id + 100;\n\
+             }\n\
+             fn peek(r: ref Res) -> i64 {\n\
+             \x20   return r.id;\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let x = consume(mk(1));\n\
+             \x20   println(f\"x={x}\");\n\
+             \x20   println(\"b\");\n\
+             \x20   let y = peek(mk(2));\n\
+             \x20   println(f\"y={y}\");\n\
+             \x20   println(\"c\");\n\
+             \x20   consume(mk(3));\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ndrop 1 r1\nx=101\nb\ndrop 2 r2\ny=2\nc\ndrop 3 r3\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a
