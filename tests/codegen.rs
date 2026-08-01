@@ -6956,6 +6956,36 @@ fn main() {
         assert_eq!(out, "x1\n7\ny2\n");
     }
 
+    /// B-2026-08-01-27 — compiled-backend pin for the let-move alias fix:
+    /// the interpreter moved to MATCH these (already-correct) behaviors, so
+    /// this twin guards the target semantics from drifting. Same program as
+    /// `tests/interpreter.rs`'s `test_let_move_source_frozen`.
+    #[test]
+    fn e2e_let_move_source_frozen() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let mut w: Vec[i64] = Vec.new();\n\
+             \x20   w.push(1);\n\
+             \x20   let mut v = w;\n\
+             \x20   v.push(2);\n\
+             \x20   println(w.len());\n\
+             \x20   println(v.len());\n\
+             \x20   let outer: Vec[String] = Vec.new();\n\
+             \x20   let mut grab = |x: String| {\n\
+             \x20       let mut v2 = outer;\n\
+             \x20       v2.push(x);\n\
+             \x20       v2.len()\n\
+             \x20   };\n\
+             \x20   let a = grab(String.from(\"a\"));\n\
+             \x20   let b = grab(String.from(\"b\"));\n\
+             \x20   println(a + b);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "1\n2\n2\n");
+    }
+
     /// B-2026-08-01-26 — a LOCAL closure binding shadows prelude/stdlib
     /// free-fn names at call dispatch. Pre-fix, `let take = |x| ..; take(v)`
     /// compiled a DIRECT call to the spliced `std.mem::take` (the generic-fn

@@ -27100,6 +27100,41 @@ fn test_nested_container_elem_bodies() {
     );
 }
 
+/// B-2026-08-01-27 — a `let`-move of a Vec binding no longer leaves the new
+/// binding aliasing the moved-from source's storage: `let mut v = w;
+/// v.push(2)` used to make `w.len()` read 2 under the interpreter
+/// (`Value::Array` is Arc-shared) while both compiled backends read 1 (move
+/// bit-copies the header, source frozen at pre-move state). The same alias
+/// made a closure body's `let mut v = outer; v.push(x)` accumulate across
+/// calls (3) where the compiled backends re-read the untouched env copy per
+/// call (2). The Let arm now binds a deep clone for an identifier-RHS
+/// Vec move. Codegen twin: `e2e_let_move_source_frozen` pins the same
+/// programs under the compiled backends (their behavior is unchanged — the
+/// interpreter moved to match them).
+#[test]
+fn test_let_move_source_frozen() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut w: Vec[i64] = Vec.new();\n\
+                 w.push(1);\n\
+                 let mut v = w;\n\
+                 v.push(2);\n\
+                 println(w.len());\n\
+                 println(v.len());\n\
+                 let outer: Vec[String] = Vec.new();\n\
+                 let mut grab = |x: String| {\n\
+                     let mut v2 = outer;\n\
+                     v2.push(x);\n\
+                     v2.len()\n\
+                 };\n\
+                 let a = grab(String.from(\"a\"));\n\
+                 let b = grab(String.from(\"b\"));\n\
+                 println(a + b);\n\
+             }\n"),
+        "1\n2\n2\n"
+    );
+}
+
 /// B-2026-08-01-26 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_local_closure_shadows_stdlib_names`, plus the interp-specific arm:
 /// the interpreter's own builtin-name intercept table was unguarded for

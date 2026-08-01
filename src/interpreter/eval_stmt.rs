@@ -2157,6 +2157,31 @@ impl<'a> super::Interpreter<'a> {
                 // clones froze. Capture now happens once at end of `main`
                 // (`call_function`), which is uniform across all three.
                 //
+                // B-2026-08-01-27 — a `let`-move of a Vec binding
+                // (`let mut v = w;`) must not leave the new binding ALIASING
+                // the moved-from source's storage. `Value::Array` is an
+                // `Arc<RwLock<..>>`, so the plain clone taken by RHS eval
+                // shares storage: a later `v.push(x)` was visible through
+                // `w` (and through a closure's captured env slot across
+                // calls — the `let mut v = outer; v.push(x)` body shape read
+                // 3 where both compiled backends read 2). Codegen bit-copies
+                // the header on a move, so post-move observations of the
+                // source see the frozen pre-move value; bind a deep clone
+                // here to match. Reference-semantics values inside the
+                // elements keep their identity (`deep_clone_value` Arc-bumps
+                // SharedStruct/Sender/Receiver/SharedCell/Atomic — the same
+                // tool the callee-entry param copies use). Slices are
+                // excluded: a slice rebind copies the VIEW (both windows
+                // alias one buffer) on every backend, and materializing an
+                // owned Array here would change its shape.
+                let val = if matches!(&pattern.kind, crate::ast::PatternKind::Binding(_))
+                    && matches!(&value.kind, ExprKind::Identifier(_))
+                    && matches!(&val, Value::Array(_))
+                {
+                    super::exec::deep_clone_value(&val)
+                } else {
+                    val
+                };
                 // Whole-value container moves out of the RHS (`let b = a;`,
                 // `Box2 { s: d }`, `(h, 1)`): silence the sources' walks
                 // before binding, then re-arm the freshly-bound names so a

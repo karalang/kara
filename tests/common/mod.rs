@@ -125,6 +125,12 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // These pin no-double-free / RC-fallback-boxing behavior for
     // ownership-RED programs that `karac build` tolerates (advisory
     // policy). The reuse IS the point — do not "fix" the programs.
+    //
+    // B-2026-08-01-27 — pins the compiled backends' post-move
+    // observations (source frozen at pre-move state) that the
+    // interpreter's let-move deep-clone now matches; the reuse IS the
+    // divergence surface under test.
+    "e2e_let_move_source_frozen",
     "test_e2e_byvalue_aggregate_param_read_then_reused",
     "test_e2e_owned_vec_param_let_move_param_reusable",
     "test_e2e_struct_param_field_move_out",
