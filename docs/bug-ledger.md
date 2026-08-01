@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 201 | 0 |
-| leak | 115 | 0 |
+| leak | 116 | 1 |
 | codegen-gap | 88 | 0 |
 | double-free | 86 | 0 |
 | missing-feature | 72 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 607 | 0 |
+| codegen | 608 | 1 |
 | typecheck | 109 | 0 |
 | interp | 101 | 0 |
 | ownership | 36 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **843 surfaced · 0 open · 835 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **844 surfaced · 1 open · 835 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-01-29 | 2026-08-01 | codegen | low | Duplicate-key inserts of a for-loop STRUCT element orphan the staged deep copy: `set.insert(p)` with an equal element already present, and `m.insert(p, i)` with an equal struct KEY present, leak the copy's field buffers (valgrind: 2 bytes / 1 block per duplicate). The exists path keeps the bucket's stored key and does not adopt the staged bytes, and the existing no-adopt frees only handle String/Vec-shaped keys. The recorded residual of the -28 fix, now probed live (b183_dupkey, b183_dupkey_structkey). | src/codegen/collections.rs (Set insert exists-branch no-adopt free is vec-struct-gated — skips a STRUCT element whose staged slot the B-2026-08-01-28 hook deep-copied); src/codegen/maps.rs (Map insert exists-path key free `free_str_vec_buffer_if_heap(key_val)` — same vec-struct gate, same skip for a struct KEY) |
 
 ### Fixed (835)
 
