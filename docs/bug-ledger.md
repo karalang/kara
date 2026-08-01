@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 201 | 0 |
 | leak | 115 | 0 |
 | codegen-gap | 88 | 0 |
-| double-free | 86 | 1 |
+| double-free | 86 | 0 |
 | missing-feature | 72 | 0 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 607 | 1 |
+| codegen | 607 | 0 |
 | typecheck | 109 | 0 |
 | interp | 101 | 0 |
 | ownership | 36 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **843 surfaced · 1 open · 834 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **843 surfaced · 0 open · 835 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-01-28 | 2026-08-01 | codegen | high | The B-2026-08-01-24 for-loop element double-free through the remaining consume arms: `m.insert(k, h)`, `set.insert(p)`, and `names.push(h.name)` over a for-loop element binding all abort with free(): double free under JIT and AOT (interp correct) — the 7225d0a fix covered the five Vec append arms only. | src/codegen/map_method.rs (Map.insert / Set.insert arg consume — no for_loop_owned_agg_vars deep-copy at the stored slot); src/codegen/call_dispatch.rs + vec_method.rs (FieldAccess args rooted at a for-loop element binding — `names.push(h.name)`: maybe_defensive_copy_param_arg covers owned PARAMS, the b178 deep_copy_pushed_for_loop_agg_element hook covers bare-Identifier element args, but a FIELD read out of an element consumed at an arg position copies nothing) |
+_None — the ledger is fully drained._
 
-### Fixed (834)
+### Fixed (835)
 
-<details><summary>834 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>835 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -972,6 +970,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **843 surfaced 
 | B-2026-08-01-25 | parser | medium | `&&` / `\|\|` diagnostics are emitted 2-3x per occurrence and carry NO `replacement`, so `karac fix` cannot apply a one-token substitution the message… | 28438e8 |
 | B-2026-08-01-26 | typecheck+codegen | medium | Closure that move-captures an outer Vec (`let mut v = outer` in the body) and is called TWICE: both `karac run` (JIT) and `karac build` (AOT) print g… | 8ab3b9a |
 | B-2026-08-01-27 | ownership+codegen | medium | Closure body that MOVES a captured Vec (`let mut v = outer; v.push(x); v.len()`) called twice: interpreter prints 3 (env alias — mutations accumulate… | b876cd3 |
+| B-2026-08-01-28 | codegen | high | The B-2026-08-01-24 for-loop element double-free through the remaining consume arms: `m.insert(k, h)`, `set.insert(p)`, and `names.push(h.name)` over… | 31cd03e |
 
 </details>
 
