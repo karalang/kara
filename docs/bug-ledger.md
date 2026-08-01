@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 199 | 0 |
-| leak | 113 | 0 |
+| leak | 114 | 1 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 600 | 0 |
+| codegen | 601 | 1 |
 | typecheck | 108 | 0 |
 | interp | 99 | 0 |
 | ownership | 35 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **835 surfaced · 0 open · 827 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **836 surfaced · 1 open · 827 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-01-21 | 2026-08-01 | codegen | medium | index-assign over a struct element with heap fields (`v[i] = Res { .. }`) leaks the displaced element's field buffers under karac build; its Drop bodies stay silent on both backends | — |
 
 ### Fixed (827)
 
