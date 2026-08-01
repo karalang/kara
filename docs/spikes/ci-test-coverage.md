@@ -51,7 +51,23 @@ verifiable add — a runner that has LLVM does not need node, etc.
 2. Build the native runtime staticlib (lean→full) so the E2E binaries link
    instead of vacuously skipping.
 3. `cargo test --features llvm --lib --test codegen --test interpreter --test
-   typechecker --test selfhost_lexer` (the AOT oracle).
+   typechecker --test selfhost_lexer` (the AOT oracle). **This target list is
+   a POSITIVE list — an llvm-gated test target is covered only if it appears
+   here.** B-2026-07-31-44 measured the cost of that shape: 554 tests across
+   19 targets were dark (the plain `test` job compiles `#[cfg(feature =
+   "llvm")]` modules to nothing and reports green). Closed in two waves —
+   `http_server` (c79b642), then the remaining 17 stable targets in one sweep
+   (par_codegen, drop_differential, repl, repl_jit, coro_e2e,
+   disjoint_differential, tls_codegen, lljit_e2e, ws_framing,
+   http_client_codegen, parallax, test_main_synth, parallax_lite,
+   karac_jit_runner_repl, extern_keep_list, shared_ownership_matrix,
+   tangle_corpus; ~55 s of added test time, each measured green across 8+
+   consecutive full-suite runs). Still deliberately excluded:
+   `selfhost_codegen` (~181 s single test — own runtime-budget decision),
+   `parallax_bench`/`relay_bench` (opt-in bench reproduction), `wasm_codegen`
+   (Tier 3, separate `wasm` job). **When adding a new llvm-gated test target,
+   add it to the `codegen-e2e` list in the same commit** — nothing fails when
+   you forget, which is exactly how the 19-target gap accumulated.
 4. **Then a second `--test codegen` run with `KARAC_TEST_JIT=1`** (added
    2026-07-08, LLJIT-productionization Slice 1 follow-up): routes the codegen
    harness through the `karac_jit_runner` LLJIT subprocess so the JIT

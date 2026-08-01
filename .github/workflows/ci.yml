@@ -302,7 +302,28 @@ jobs:
         # job that already runs 2 690 codegen cases plus a full JIT rerun. Every
         # server in the file binds `127.0.0.1:0` and reads back `BOUND_PORT`, so
         # no test claims a fixed port on a contended runner.
-        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server
+        #
+        # B-2026-07-31-44 closed the rest of the gap in one sweep: 554
+        # llvm-gated tests across 19 targets were dark for the same
+        # one-at-a-time reason. The 17 targets appended below were each
+        # measured green across 8+ consecutive full `cargo test --features
+        # llvm` runs on a Linux container (2026-08-01 overnight session),
+        # warm per-target runtimes in parentheses — ~55 s of added test time
+        # total: par_codegen (223 tests, 10.4 s — the entire auto-par codegen
+        # surface), drop_differential (13, 0.3 s — the interp-vs-compiled
+        # drop parity gate), repl (137, 1.2 s), repl_jit (27, 1.1 s),
+        # coro_e2e (34, 14.0 s), disjoint_differential (7, 17.7 s),
+        # tls_codegen (17, 0.3 s), lljit_e2e (16, 0.4 s), ws_framing (15,
+        # 0.2 s), http_client_codegen (12, 0.2 s), parallax (6, 0.5 s),
+        # test_main_synth (6, 0.4 s), parallax_lite (5, 0.2 s),
+        # karac_jit_runner_repl (3, 0.25 s), extern_keep_list (2, 0.1 s),
+        # shared_ownership_matrix (1, 7.3 s), tangle_corpus (1, 1.9 s).
+        # The network-adjacent targets bind ephemeral local ports like
+        # http_server does. Still deliberately excluded: selfhost_codegen
+        # (1 test, ~181 s — needs its own runtime-budget decision),
+        # parallax_bench + relay_bench (bench reproduction is opt-in by
+        # design), wasm_codegen (documented Tier 3, separate `wasm` job).
+        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus
 
       # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
       # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and
