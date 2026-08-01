@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 199 | 0 |
-| leak | 115 | 1 |
+| leak | 115 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 602 | 1 |
+| codegen | 602 | 0 |
 | typecheck | 108 | 0 |
-| interp | 100 | 1 |
+| interp | 100 | 0 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **837 surfaced · 1 open · 828 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **837 surfaced · 0 open · 829 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-01-22 | 2026-08-01 | interp+codegen | medium | struct-FIELD Vec[DropT] elements: Drop bodies never fire (owner death AND index-assign displacement, both backends); the displaced element's field buffers leak under karac build | — |
+_None — the ledger is fully drained._
 
-### Fixed (828)
+### Fixed (829)
 
-<details><summary>828 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>829 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -966,6 +964,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **837 surfaced 
 | B-2026-08-01-19 | interp+codegen | medium | storing an owned param into a local container FIELD (`o.h = h;`) fires the caller-retained value's Drop body TWICE — container walk + caller NLL, in… | 99254ea |
 | B-2026-08-01-20 | interp+codegen | low | displaced-value Drop bodies at FIELD-assign targets are silent on both backends (`o.h = <new>;` frees the old field's heap without running its bodies) | 622946f |
 | B-2026-08-01-21 | codegen | medium | index-assign over a struct element with heap fields (`v[i] = Res { . | 6aa0669 |
+| B-2026-08-01-22 | interp+codegen | medium | struct-FIELD Vec[DropT] elements: Drop bodies never fire (owner death AND index-assign displacement, both backends); the displaced element's field bu… | bc4315f |
 
 </details>
 
