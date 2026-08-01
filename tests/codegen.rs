@@ -6699,6 +6699,37 @@ fn main() {
         assert_eq!(out, "a\nloud drop\ndrop 7 l7\nb\nr4\ndrop 4 r4\nend\n");
     }
 
+    /// B-2026-08-01-10 — a bare USER-ENUM constructor statement
+    /// (`Box2.Full(Res { .. });`) discards its value: the payload's Drop
+    /// body must fire at the `;` and the payload heap must be freed, same
+    /// as the wildcard-let twin. Pre-fix the bare arm had no ctor channel
+    /// (the battery's registrar resolves fn/method return types only), so
+    /// `karac build` was body-silent while `karac run` fired — and a heap
+    /// payload leaked. A discarded unit variant stays silent. Twin of
+    /// `tests/interpreter.rs`'s `test_bare_user_enum_ctor_discard`.
+    #[test]
+    fn e2e_bare_user_enum_ctor_discard() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   Box2.Full(Res { id: 24, name: f\"h{24}\" });\n\
+             \x20   println(\"b\");\n\
+             \x20   Box2.Empty;\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 24 h24\nb\nend\n");
+    }
+
     /// B-2026-08-01-5 — fresh method-RECEIVER Drop temps: a `ref self`
     /// method's fresh receiver fires its body at STATEMENT END on both
     /// backends (pre-fix: never under `karac run`, at scope exit under

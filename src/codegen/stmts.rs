@@ -6215,6 +6215,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.free_discarded_request_builder_temp(expr, val);
                 if let Some(tail) = tail {
                     self.track_discarded_temp_cleanup(tail, val);
+                    // A discarded USER-ENUM constructor statement
+                    // (`Box2.Full(Res { id: 24 });`, b164 leg 1) — the
+                    // battery's fn-call registrar resolves return types from
+                    // the fn/method tables, which a ctor Call never hits, so
+                    // the bare statement stayed body-silent under AOT while
+                    // the interpreter's Path-ctor discard leg fired. Same
+                    // channel the wildcard-let arm gained with its
+                    // B-2026-07-30-11 leg: the arg-position aggregate
+                    // registrar for the memory half plus the payload walker
+                    // under `__disc_enum_tmp`. Option/Result ctors are
+                    // excluded — their cleanup is the trackers above and the
+                    // bodies walk below.
+                    if let ExprKind::Call { .. } = &tail.kind {
+                        if let Some(en) = self.enum_name_of_expr(tail) {
+                            if en != "Option" && en != "Result" {
+                                self.track_inline_owned_aggregate_arg(val, tail, false);
+                                if let Some(bodies) =
+                                    self.emit_enum_payload_user_drop_bodies_fn(&en)
+                                {
+                                    if let Some(cur_fn) = self
+                                        .builder
+                                        .get_insert_block()
+                                        .and_then(|bb| bb.get_parent())
+                                    {
+                                        let slot = self.create_entry_alloca(
+                                            cur_fn,
+                                            "__disc_enum_tmp",
+                                            val.get_type(),
+                                        );
+                                        self.builder.build_store(slot, val).unwrap();
+                                        self.track_user_drop_var_with_fn(
+                                            "",
+                                            "__disc_enum_tmp",
+                                            slot,
+                                            bodies,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // B-2026-07-30-11 (Option/Result bare-statement leg):
                     // payload user-Drop bodies for `mkopt(2);` — the same
                     // registrar the wildcard-let arm calls, pushed AFTER the

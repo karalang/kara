@@ -16988,6 +16988,50 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-10 + B-2026-08-01-11 — bare-statement discard gaps:
+    /// a bare USER-ENUM ctor statement (`Box2.Full(Res { .. });`) had no
+    /// codegen ctor channel, so the payload body never fired AND the
+    /// payload heap leaked (-10); and a discarded no-own-Drop struct temp
+    /// with a Drop-bearing heap field (`mk_h();` / `let _ = mk_h();`) got
+    /// a bodies-only registration — the field body fired but the String
+    /// leaked on both discard arms (-11, the struct sibling of the enum
+    /// path's `track_enum_var` memory call). LSan (Linux CI) gates both.
+    #[test]
+    fn asan_bare_discard_ctor_and_struct_temp_heap_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { r: Res }
+enum Box2 { Full(Res), Empty }
+fn mk_h(n: i64) -> Holder {
+    return Holder { r: Res { id: n, name: f"f{n}" } };
+}
+fn main() {
+    println("a");
+    Box2.Full(Res { id: 24, name: f"h{24}" });
+    println("b");
+    mk_h(64);
+    println("c");
+    let _ = mk_h(63);
+    println("end");
+}
+"#,
+            &[
+                "a",
+                "drop 24 h24",
+                "b",
+                "drop 64 f64",
+                "c",
+                "drop 63 f63",
+                "end",
+            ],
+            "bare_discard_ctor_and_struct_temp_heap_freed",
+        );
+    }
+
     #[test]
     fn asan_auto_par_vec_of_vec_freed_on_branch_exit() {
         // Vec[Vec[char]] built inside a function — the kata-6 zigzag

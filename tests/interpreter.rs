@@ -26945,6 +26945,33 @@ fn test_roundtrip_reassign_single_nll_fire() {
     );
 }
 
+/// B-2026-08-01-10 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_bare_user_enum_ctor_discard`, same source and expected string. The
+/// interpreter's bare Path-ctor discard leg (added with the
+/// B-2026-07-30-11 optres bare-statement work) already fired this shape —
+/// the pin is the parity target the bare arm's new codegen ctor channel
+/// now meets.
+#[test]
+fn test_bare_user_enum_ctor_discard() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 Box2.Full(Res { id: 24, name: f\"h{24}\" });\n\
+                 println(\"b\");\n\
+                 Box2.Empty;\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 24 h24\nb\nend\n"
+    );
+}
+
 /// B-2026-08-01-5 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_recv_temp_drop_semantics`, same source and expected string.
 /// Pre-fix the interpreter fired NO receiver-temp body ever (the free-fn

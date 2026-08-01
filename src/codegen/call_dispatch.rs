@@ -2015,6 +2015,27 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
             self.track_enum_var(&ret_ty_name, slot);
         }
+        // Struct sibling of the enum memory call above (b164 leg 2): the
+        // field-bodies walk is BODIES ONLY and the generic owned-temp
+        // chokepoint declines struct aggregates, so a discarded
+        // no-own-Drop struct temp with heap fields (`mk_h();` /
+        // `let _ = mk_h();` over `Holder { r: Res { name: String } }`)
+        // fired the field body but leaked the String on both discard
+        // arms. Register the memory-only StructDrop synthesis — same
+        // memory-before-bodies frame order, and `track_struct_var`
+        // no-ops when nothing needs freeing. Own-Drop structs are
+        // covered by their wrapper (body+memory) below; generic structs
+        // keep the conservative skip (base-name synthesis could free
+        // through the wrong element type, B-2026-07-11-35).
+        if !is_enum
+            && field_bodies_only
+            && self
+                .struct_generic_params
+                .get(ret_ty_name.as_str())
+                .is_none_or(|ps| ps.is_empty())
+        {
+            self.track_struct_var(&ret_ty_name, slot);
+        }
         match bodies_fn {
             Some(f) => self.track_user_drop_var_with_fn(&ret_ty_name, "__owned_agg_tmp", slot, f),
             None => self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot),
