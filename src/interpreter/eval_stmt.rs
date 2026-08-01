@@ -822,6 +822,28 @@ impl<'a> super::Interpreter<'a> {
             self.run_optres_payload_user_drops(name, &variant, &data);
             return;
         }
+        self.run_enum_payload_user_drops_value(value);
+    }
+
+    /// Value-level core of [`Self::run_enum_payload_user_drops`] — the
+    /// declared-type-driven payload-body walk with no binding-name disarm
+    /// checks, for values that never had a binding (discarded temps:
+    /// `let _ = mk_enum();`, `mk_enum();`). Codegen twin:
+    /// `__karac_dropelems_enum_<E>` registered on the discard frame
+    /// (B-2026-08-01-2). `Option`/`Result` have no source `EnumDef`, so
+    /// `variant_payload_decls` yields `None` and this is a no-op for them —
+    /// their discard path stays with the value-driven recursion in
+    /// `run_discarded_value_user_drops`, twin to codegen's
+    /// instantiation-driven optres registrar.
+    pub(super) fn run_enum_payload_user_drops_value(&mut self, value: &Value) {
+        let Value::EnumVariant {
+            enum_name,
+            variant,
+            data,
+        } = value
+        else {
+            return;
+        };
         let Some(decls) = self.variant_payload_decls(enum_name, variant) else {
             return;
         };
@@ -1272,32 +1294,40 @@ impl<'a> super::Interpreter<'a> {
                     "insert" | "remove" | "pop" | "pop_back" | "pop_front" | "take"
                 )
                 // B-2026-07-30-11 (user-method discard): `f.make();` — a USER
-                // impl method returning an owned struct by value produces a
-                // fresh value this discard site owns, exactly like the
-                // free-fn arm above. Admitted only when the evaluated value
-                // is a bare struct whose name matches some impl method
-                // `method`'s declared owned (Path, non-ref) return — a
-                // borrow-shaped or builtin accessor result never satisfies
-                // both (its value is an Option/copy, or no user decl names
-                // it), and the builtin borrow names are excluded outright so
-                // a user method that shadows them can never fire on the
-                // builtin's alias. Codegen twin: the MethodCall arm of
+                // impl method returning an owned struct or value enum
+                // produces a fresh value this discard site owns, exactly
+                // like the free-fn arm above. Admitted only when the
+                // evaluated value is a bare struct/enum whose name matches
+                // some impl method `method`'s declared owned (Path, non-ref)
+                // return — a borrow-shaped or builtin accessor result never
+                // satisfies both (its value is an Option/copy, or no user
+                // decl names it), and the builtin borrow names are excluded
+                // outright so a user method that shadows them can never fire
+                // on the builtin's alias. Enum returns admitted since
+                // B-2026-08-01-2. Codegen twin: the MethodCall arm of
                 // `try_track_discarded_user_drop_temp` (receiver-type keyed
                 // `Type.method` lookup, `user_ref_method_names` excluded).
                 || (!matches!(method.as_str(), "get" | "first" | "last" | "peek")
-                    && matches!(val, Value::Struct { name, .. }
-                        if self.user_method_returns_owned_struct(method, name)))
+                    && match val {
+                        Value::Struct { name, .. } => {
+                            self.user_method_returns_owned_type(method, name)
+                        }
+                        Value::EnumVariant { enum_name, .. } => {
+                            self.user_method_returns_owned_type(method, enum_name)
+                        }
+                        _ => false,
+                    })
             }
             _ => false,
         }
     }
 
     /// True when SOME user `impl` block declares a method `method` whose
-    /// return type is a bare owned `Path` naming `struct_name`. The
-    /// declared-return check is what keeps borrow accessors out: a
-    /// `ref self`-borrowing method returning `ref T` has a `Ref` return
-    /// kind and never matches.
-    fn user_method_returns_owned_struct(&self, method: &str, struct_name: &str) -> bool {
+    /// return type is a bare owned `Path` naming `type_name` (a struct or a
+    /// value enum). The declared-return check is what keeps borrow accessors
+    /// out: a `ref self`-borrowing method returning `ref T` has a `Ref`
+    /// return kind and never matches.
+    fn user_method_returns_owned_type(&self, method: &str, type_name: &str) -> bool {
         self.program.items.iter().any(|it| {
             let Item::ImplBlock(imp) = it else {
                 return false;
@@ -1309,7 +1339,7 @@ impl<'a> super::Interpreter<'a> {
                 f.name == method
                     && f.return_type.as_ref().is_some_and(|te| {
                         matches!(&te.kind, crate::ast::TypeKind::Path(p)
-                            if p.segments.last().is_some_and(|s| s == struct_name))
+                            if p.segments.last().is_some_and(|s| s == type_name))
                     })
             })
         })
@@ -1395,22 +1425,45 @@ impl<'a> super::Interpreter<'a> {
                 ref data,
                 ..
             } => {
-                if self.program.drop_method_keys.contains_key(enum_name) {
+                if enum_name == "Option" || enum_name == "Result" {
+                    // Built-ins: value-driven payload recursion. Codegen's
+                    // twin is the instantiation-driven optres registrar
+                    // (`track_discarded_optres_payload_bodies`), which
+                    // resolves the concrete payload type through the same
+                    // chain the Let arm records, so both fire on a concrete
+                    // instantiation and skip an erased one.
+                    match data {
+                        EnumData::Unit => {}
+                        EnumData::Tuple(vs) => {
+                            for v in vs.clone() {
+                                self.run_discarded_value_user_drops(v);
+                            }
+                        }
+                        EnumData::Struct(m) => {
+                            for v in m.values().cloned().collect::<Vec<_>>() {
+                                self.run_discarded_value_user_drops(v);
+                            }
+                        }
+                    }
+                } else if self.program.drop_method_keys.contains_key(enum_name) {
+                    // Own-`impl Drop` enum: OWN body only. Codegen's discard
+                    // registrar hangs the `karac_drop_<E>` wrapper (own body,
+                    // no payload walk) on the frame for this shape, and the
+                    // sibling legs (enum-assign displacement) exclude
+                    // own-Drop enums from the payload walk the same way —
+                    // firing payloads here would print bodies `karac build`
+                    // does not (B-2026-08-01-2 probe p3).
                     let tn = enum_name.clone();
                     self.run_user_drop_body_on_value(&tn, val.clone());
-                }
-                match data {
-                    EnumData::Unit => {}
-                    EnumData::Tuple(vs) => {
-                        for v in vs.clone() {
-                            self.run_discarded_value_user_drops(v);
-                        }
-                    }
-                    EnumData::Struct(m) => {
-                        for v in m.values().cloned().collect::<Vec<_>>() {
-                            self.run_discarded_value_user_drops(v);
-                        }
-                    }
+                } else {
+                    // User value enum: declared-type-driven payload walk,
+                    // the exact shape codegen's `__karac_dropelems_enum_<E>`
+                    // admits (B-2026-08-01-2). The previous value-driven
+                    // recursion here fired on erased-generic payloads that
+                    // codegen structurally cannot see (probe p5) — the walk
+                    // keeps both backends silent on those, the safe
+                    // direction.
+                    self.run_enum_payload_user_drops_value(&val);
                 }
             }
             _ => {}
@@ -2090,6 +2143,14 @@ impl<'a> super::Interpreter<'a> {
                                     // leaked that field's resource. Bodies only, as
                                     // in the arg-temp twin.
                                     self.drop_user_drop_fields_of_value(&discarded);
+                                } else if matches!(&discarded, Value::EnumVariant { .. }) {
+                                    // B-2026-08-01-2 — a discarded user-ENUM
+                                    // return (`mk_enum();`): the live variant's
+                                    // Drop-bearing payload bodies, via the same
+                                    // declared-type-driven walk the wildcard-let
+                                    // arm and codegen's shared discard battery
+                                    // (`__karac_dropelems_enum_<E>`) use.
+                                    self.run_enum_payload_user_drops_value(&discarded);
                                 }
                             }
                         }
@@ -2103,15 +2164,34 @@ impl<'a> super::Interpreter<'a> {
                     ExprKind::MethodCall { method, .. }
                         if !matches!(method.as_str(), "get" | "first" | "last" | "peek") =>
                     {
-                        if let Value::Struct { name, .. } = &discarded {
-                            let tn = name.clone();
-                            if self.user_method_returns_owned_struct(method, &tn) {
-                                if self.program.drop_method_keys.contains_key(&tn) {
-                                    self.run_user_drop_body_on_value(&tn, discarded);
-                                } else if self.value_runs_user_drop(&discarded) {
-                                    self.drop_user_drop_fields_of_value(&discarded);
+                        match &discarded {
+                            Value::Struct { name, .. } => {
+                                let tn = name.clone();
+                                if self.user_method_returns_owned_type(method, &tn) {
+                                    if self.program.drop_method_keys.contains_key(&tn) {
+                                        self.run_user_drop_body_on_value(&tn, discarded);
+                                    } else if self.value_runs_user_drop(&discarded) {
+                                        self.drop_user_drop_fields_of_value(&discarded);
+                                    }
                                 }
                             }
+                            // B-2026-08-01-2 — the enum sibling: a user
+                            // method returning a value enum by declared
+                            // owned return (`f.make();`). Own-Drop enums
+                            // run their own body (codegen hangs the
+                            // `karac_drop_<E>` wrapper); others take the
+                            // declared-type-driven payload walk.
+                            Value::EnumVariant { enum_name, .. } => {
+                                let tn = enum_name.clone();
+                                if self.user_method_returns_owned_type(method, &tn) {
+                                    if self.program.drop_method_keys.contains_key(&tn) {
+                                        self.run_user_drop_body_on_value(&tn, discarded);
+                                    } else {
+                                        self.run_enum_payload_user_drops_value(&discarded);
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}

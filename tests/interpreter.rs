@@ -26658,6 +26658,74 @@ fn test_set_element_drop_bodies_fire() {
     );
 }
 
+/// B-2026-08-01-2 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_enum_return_discard_runs_payload_body`, same source and expected
+/// string. Pre-fix the interpreter fired the wildcard-let shape but not the
+/// bare statement (its own gap), fired an own-`impl Drop` enum's payload
+/// walk codegen never runs (`drop 5 l5` after `loud drop`), and fired an
+/// erased-generic payload codegen structurally cannot see (`drop 7 g7`) —
+/// all three now follow the declared-type-driven walk codegen's
+/// `__karac_dropelems_enum_<E>` admits, so the backends agree on every
+/// quadrant.
+#[test]
+fn test_enum_return_discard_runs_payload_body() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             enum MyBox[T] { Wrap(T), Nil }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+                 fn drop(mut ref self) {\n\
+                     println(\"loud drop\")\n\
+                 }\n\
+             }\n\
+             struct Fac { tag: i64 }\n\
+             impl Fac {\n\
+                 fn make(ref self, n: i64) -> Box2 {\n\
+                     return Box2.Full(Res { id: n, name: f\"m{n}\" });\n\
+                 }\n\
+             }\n\
+             fn mk_enum(n: i64) -> Box2 {\n\
+                 return Box2.Full(Res { id: n, name: f\"h{n}\" });\n\
+             }\n\
+             fn mk_gen(n: i64) -> MyBox[Res] {\n\
+                 return MyBox.Wrap(Res { id: n, name: f\"g{n}\" });\n\
+             }\n\
+             fn mk_loud(n: i64) -> Loud {\n\
+                 return Loud.Hold(Res { id: n, name: f\"l{n}\" });\n\
+             }\n\
+             fn mk_empty() -> Box2 {\n\
+                 return Box2.Empty;\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let _ = mk_enum(1);\n\
+                 println(\"b\");\n\
+                 mk_enum(2);\n\
+                 println(\"c\");\n\
+                 let f = Fac { tag: 0 };\n\
+                 let _ = f.make(3);\n\
+                 f.make(4);\n\
+                 println(\"d\");\n\
+                 let _ = mk_loud(5);\n\
+                 mk_loud(6);\n\
+                 println(\"e\");\n\
+                 let _ = mk_gen(7);\n\
+                 mk_gen(8);\n\
+                 println(\"f\");\n\
+                 let _ = mk_empty();\n\
+                 mk_empty();\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 1 h1\nb\ndrop 2 h2\nc\ndrop 3 m3\ndrop 4 m4\nd\nloud drop\nloud drop\ne\nf\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

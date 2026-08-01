@@ -6363,6 +6363,83 @@ fn main() {
         assert_eq!(out, "a\ndrop 5\nend\n");
     }
 
+    /// B-2026-08-01-2 — a discarded user-ENUM return's Drop-bearing payload
+    /// body fires at the `;` (`let _ = mk_enum();`, `mk_enum();`, and the
+    /// user-method siblings), where it used to be silent while `karac run`
+    /// fired — a run-vs-build divergence. The discard registrar now hangs
+    /// `__karac_dropelems_enum_<E>` on the one-shot frame, with the enum
+    /// drop switch pushed FIRST so the LIFO drain runs the body before the
+    /// payload's heap is freed (the `String` in each payload pins that
+    /// ordering — the reverse printed garbage). Own-`impl Drop` enums run
+    /// their OWN body only (no payload walk, both backends), and an
+    /// erased-generic payload stays silent on both — the declared-type
+    /// rule. Twin of `tests/interpreter.rs`'s
+    /// `test_enum_return_discard_runs_payload_body`, same source and
+    /// expected string.
+    #[test]
+    fn e2e_enum_return_discard_runs_payload_body() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             enum MyBox[T] { Wrap(T), Nil }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(\"loud drop\")\n\
+             \x20   }\n\
+             }\n\
+             struct Fac { tag: i64 }\n\
+             impl Fac {\n\
+             \x20   fn make(ref self, n: i64) -> Box2 {\n\
+             \x20       return Box2.Full(Res { id: n, name: f\"m{n}\" });\n\
+             \x20   }\n\
+             }\n\
+             fn mk_enum(n: i64) -> Box2 {\n\
+             \x20   return Box2.Full(Res { id: n, name: f\"h{n}\" });\n\
+             }\n\
+             fn mk_gen(n: i64) -> MyBox[Res] {\n\
+             \x20   return MyBox.Wrap(Res { id: n, name: f\"g{n}\" });\n\
+             }\n\
+             fn mk_loud(n: i64) -> Loud {\n\
+             \x20   return Loud.Hold(Res { id: n, name: f\"l{n}\" });\n\
+             }\n\
+             fn mk_empty() -> Box2 {\n\
+             \x20   return Box2.Empty;\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let _ = mk_enum(1);\n\
+             \x20   println(\"b\");\n\
+             \x20   mk_enum(2);\n\
+             \x20   println(\"c\");\n\
+             \x20   let f = Fac { tag: 0 };\n\
+             \x20   let _ = f.make(3);\n\
+             \x20   f.make(4);\n\
+             \x20   println(\"d\");\n\
+             \x20   let _ = mk_loud(5);\n\
+             \x20   mk_loud(6);\n\
+             \x20   println(\"e\");\n\
+             \x20   let _ = mk_gen(7);\n\
+             \x20   mk_gen(8);\n\
+             \x20   println(\"f\");\n\
+             \x20   let _ = mk_empty();\n\
+             \x20   mk_empty();\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ndrop 1 h1\nb\ndrop 2 h2\nc\ndrop 3 m3\ndrop 4 m4\nd\nloud drop\nloud drop\ne\nf\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a

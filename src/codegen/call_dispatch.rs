@@ -1905,15 +1905,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             },
             // B-2026-07-30-11 (user-method discard): `f.make();` /
-            // `Fac.new();` — a USER impl method returning an owned struct by
-            // value, resolved through the qualified `Type.method` entry
-            // (only declared impl methods have one, so builtins self-gate).
-            // Borrow-returning user methods are excluded
+            // `Fac.new();` — a USER impl method returning an owned struct or
+            // value enum by value, resolved through the qualified
+            // `Type.method` entry (only declared impl methods have one, so
+            // builtins self-gate). Borrow-returning user methods are excluded
             // (`user_ref_method_names`), the builtin borrow names outright
             // (a user method shadowing `get` must not fire on an arena/
-            // container alias), and STRUCT returns only — an enum-returning
-            // method discard stays silent on both backends (residual).
-            // Interp twin: the widened MethodCall arm of
+            // container alias). Enum returns admitted since B-2026-08-01-2
+            // (the payload walker below handles them, same as the free-fn
+            // arm). Interp twin: the widened MethodCall arm of
             // `discard_rhs_produces_owned_value`.
             ExprKind::MethodCall { object, method, .. }
                 if !self.user_ref_method_names.contains(method.as_str())
@@ -1938,7 +1938,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get(&format!("{t}.{method}"))
                             .cloned()
                     })
-                    .filter(|ret| self.struct_types.contains_key(ret.as_str()))
+                    .filter(|ret| {
+                        self.struct_types.contains_key(ret.as_str())
+                            || self.enum_layouts.contains_key(ret.as_str())
+                    })
             }
             _ => None,
         };
@@ -1962,16 +1965,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // `has_field_user_drop`). Bodies only — the memory side is the discard
         // path's own business and is untouched here.
         let field_bodies_only = !has_user_drop;
-        if field_bodies_only && !self.type_runs_user_drop(&ret_ty_name, &mut Vec::new()) {
-            return;
-        }
         let is_enum = self.enum_layouts.contains_key(&ret_ty_name);
         if !is_enum && !self.struct_types.contains_key(&ret_ty_name) {
-            return;
-        }
-        // The field-body walk is struct-shaped (it GEPs the parent's fields);
-        // an enum payload is SHAPE 1 and stays out of scope.
-        if field_bodies_only && is_enum {
             return;
         }
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
@@ -1980,22 +1975,49 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(cur_fn) = self.current_fn else {
             return;
         };
-        let bodies_fn = if field_bodies_only {
-            match self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
+        let bodies_fn = if !field_bodies_only {
+            None
+        } else if is_enum {
+            // B-2026-08-01-2 — a discarded user-ENUM return whose live
+            // variant carries a Drop-bearing payload (`let _ = mk_enum();`,
+            // `mk_enum();`). This arm used to return here ("the field-body
+            // walk is struct-shaped; an enum payload is SHAPE 1 and stays
+            // out of scope"), which made `karac run` (the interpreter's
+            // discard walk fires the payload body) and `karac build`
+            // (silent) DIVERGE. The enum sibling of the struct field-body
+            // walk is `__karac_dropelems_enum_<E>` — declared-type-driven
+            // and BODIES ONLY, so an erased-generic payload stays silent on
+            // both backends and no memory free moves. `None` means no
+            // variant carries a Drop-bearing payload: nothing to run.
+            match self.emit_enum_payload_user_drop_bodies_fn(&ret_ty_name) {
                 Some(f) => Some(f),
                 None => return,
             }
         } else {
-            None
+            if !self.type_runs_user_drop(&ret_ty_name, &mut Vec::new()) {
+                return;
+            }
+            match self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
+                Some(f) => Some(f),
+                None => return,
+            }
         };
         let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
         self.builder.build_store(slot, val).unwrap();
+        // Memory BEFORE bodies, deliberately: the one-shot discard frame
+        // drains LIFO, so the later-pushed UserDrop body runs FIRST and the
+        // enum drop switch frees the payload's heap after it. The reverse
+        // order let the switch free a `String` payload before the body read
+        // it — `drop 41 h41` printed garbage under AOT/JIT while the
+        // interpreter was fine (B-2026-08-01-2; same rule as the ctor arm's
+        // "pushed AFTER the battery so the LIFO drain runs them before the
+        // battery's frees").
+        if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
+            self.track_enum_var(&ret_ty_name, slot);
+        }
         match bodies_fn {
             Some(f) => self.track_user_drop_var_with_fn(&ret_ty_name, "__owned_agg_tmp", slot, f),
             None => self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot),
-        }
-        if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
-            self.track_enum_var(&ret_ty_name, slot);
         }
     }
 
