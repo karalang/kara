@@ -6823,6 +6823,39 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (optres bare-statement leg) — a BARE discarded
+    /// `Option` temp fires its payload's Drop body exactly like the
+    /// wildcard-let shape: only the `let _ =` arm called the optres
+    /// payload-bodies registrar, so `mkopt(2);` and `Option.Some(x);` were
+    /// silent on both backends while `let _ = mkopt(1);` fired. Twin of
+    /// `tests/interpreter.rs`'s `test_optres_bare_discard_payload_body`.
+    #[test]
+    fn e2e_optres_bare_discard_payload_body() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn mkopt(n: i64) -> Option[Res] {\n\
+             \x20   return Option.Some(Res { id: n, name: f\"o{n}\" });\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let _ = mkopt(1);\n\
+             \x20   println(\"b\");\n\
+             \x20   mkopt(2);\n\
+             \x20   println(\"c\");\n\
+             \x20   Option.Some(Res { id: 3, name: f\"o3\" });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 1 o1\nb\ndrop 2 o2\nc\ndrop 3 o3\nend\n");
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a

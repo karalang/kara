@@ -6177,6 +6177,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.free_discarded_request_builder_temp(expr, val);
                 if let Some(tail) = tail {
                     self.track_discarded_temp_cleanup(tail, val);
+                    // B-2026-07-30-11 (Option/Result bare-statement leg):
+                    // payload user-Drop bodies for `mkopt(2);` — the same
+                    // registrar the wildcard-let arm calls, pushed AFTER the
+                    // battery so the LIFO drain runs the bodies before the
+                    // battery's frees. Only the `let _ =` arm had it, so the
+                    // bare statement silently skipped the payload body both
+                    // arms otherwise share.
+                    self.track_discarded_optres_payload_bodies(tail, val);
                     self.drain_top_frame_with_emit();
                 }
                 Ok(())

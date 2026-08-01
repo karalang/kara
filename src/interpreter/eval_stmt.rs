@@ -2141,7 +2141,16 @@ impl<'a> super::Interpreter<'a> {
                 // `try_track_discarded_user_drop_temp`).
                 match &expr.kind {
                     ExprKind::Call { callee, .. } => {
-                        if let ExprKind::Identifier(fn_name) = &callee.kind {
+                        // Bare Path-callee CTOR discard (`Option.Some(mk());`,
+                        // `Sig.A(g);`): the wildcard-let gate admits Path
+                        // ctors unconditionally, and codegen's bare arm now
+                        // registers the same optres/enum payload bodies —
+                        // route through the shared discard walker so both
+                        // statement shapes agree (B-2026-07-30-11, optres
+                        // bare leg).
+                        if matches!(&callee.kind, ExprKind::Path { .. }) {
+                            self.run_discarded_value_user_drops(discarded);
+                        } else if let ExprKind::Identifier(fn_name) = &callee.kind {
                             if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                                 if self.program.drop_method_keys.contains_key(&tn) {
                                     self.run_user_drop_body_on_value(&tn, discarded);
@@ -2154,12 +2163,16 @@ impl<'a> super::Interpreter<'a> {
                                     self.drop_user_drop_fields_of_value(&discarded);
                                 } else if matches!(&discarded, Value::EnumVariant { .. }) {
                                     // B-2026-08-01-2 — a discarded user-ENUM
-                                    // return (`mk_enum();`): the live variant's
-                                    // Drop-bearing payload bodies, via the same
-                                    // declared-type-driven walk the wildcard-let
-                                    // arm and codegen's shared discard battery
-                                    // (`__karac_dropelems_enum_<E>`) use.
-                                    self.run_enum_payload_user_drops_value(&discarded);
+                                    // return (`mk_enum();`): the wildcard-let
+                                    // walker, whose EnumVariant arm takes the
+                                    // declared-type-driven walk for user enums
+                                    // and the value-driven recursion for
+                                    // Option/Result (`mkopt(2);` — the bare
+                                    // sibling of the optres wildcard-let leg;
+                                    // codegen twin: the bare-statement arm now
+                                    // calls track_discarded_optres_payload_
+                                    // bodies like the `let _ =` arm).
+                                    self.run_discarded_value_user_drops(discarded);
                                 }
                             }
                         }

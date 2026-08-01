@@ -27057,6 +27057,36 @@ fn test_owned_self_enum_receiver_single_fire() {
     );
 }
 
+/// B-2026-07-30-11 (optres bare-statement leg) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_optres_bare_discard_payload_body`, same source
+/// and expected string. Pre-fix the bare Call shape hit the enum leg's
+/// declared-type walk (a no-op for the built-in `Option`) and the Path-ctor
+/// shape wasn't handled at all — both silent while `let _ =` fired.
+#[test]
+fn test_optres_bare_discard_payload_body() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             fn mkopt(n: i64) -> Option[Res] {\n\
+                 return Option.Some(Res { id: n, name: f\"o{n}\" });\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let _ = mkopt(1);\n\
+                 println(\"b\");\n\
+                 mkopt(2);\n\
+                 println(\"c\");\n\
+                 Option.Some(Res { id: 3, name: f\"o3\" });\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 1 o1\nb\ndrop 2 o2\nc\ndrop 3 o3\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed
