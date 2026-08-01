@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 201 | 0 |
-| leak | 116 | 0 |
+| leak | 117 | 1 |
 | codegen-gap | 88 | 0 |
 | double-free | 86 | 0 |
 | missing-feature | 72 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 608 | 0 |
+| codegen | 609 | 1 |
 | typecheck | 109 | 0 |
-| interp | 101 | 0 |
+| interp | 102 | 1 |
 | ownership | 36 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **844 surfaced · 0 open · 836 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **845 surfaced · 1 open · 836 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-01-30 | 2026-08-01 | codegen+interp | medium | Displacement residuals probed live (the b173/b174 recorded residuals): a DEEP-chain field assign `o.h.r = Res{..}` fires no displaced Drop body on EITHER backend (memory correct), and a COMPUTED-index assign `v[base - 1] = Res{..}` fires no displaced body on either backend AND leaks the old element's field buffers under AOT (valgrind: 2 bytes / 1 block definitely lost). | src/codegen/stmts.rs emit_displaced_field_bodies (single-level FieldAccess targets only — a DEEP chain `o.h.r = <new>` declines because the target's object is itself a FieldAccess, not an Identifier) and emit_displaced_index_elem_drop (simple-index gate Integer/Identifier — a computed index `v[base - 1] = <new>` declines); src/interpreter/eval_stmt.rs Assign FIELD/INDEX-target branches (same shape gates, same silence) |
 
 ### Fixed (836)
 
