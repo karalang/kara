@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 197 | 0 |
-| leak | 108 | 3 |
+| leak | 108 | 2 |
 | codegen-gap | 88 | 0 |
-| double-free | 83 | 0 |
+| double-free | 84 | 1 |
 | missing-feature | 72 | 0 |
 | run-vs-build | 56 | 1 |
 | false-positive | 54 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 581 | 4 |
+| codegen | 582 | 4 |
 | typecheck | 108 | 0 |
 | interp | 87 | 1 |
 | ownership | 35 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **815 surfaced · 6 open · 801 fixed** (2026-05-20 → 2026-07-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **816 surfaced · 6 open · 802 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -134,12 +134,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **815 surfaced 
 | B-2026-07-31-40 | 2026-07-31 | autopar+codegen | medium | A Map introduced INSIDE an auto-par parallel group leaks whole (handle + buckets) at branch write-back — 344 bytes definitely lost per execution of the probe shape | — |
 | B-2026-07-31-41 | 2026-07-31 | autopar+codegen | medium | User Drop timing diverges in auto-par lanes: under the DEFAULT build a displaced struct binding's body fires with the wrong id/time (drop 6 at the assignment, drop 5 after scope exit) while the sequential lanes on all three backends agree (drop 5 then drop 6) | — |
 | B-2026-07-31-42 | 2026-07-31 | autopar | medium | The auto-par cost model has no notion of memory ACCESS PATTERN, only of statement count. Prism's `rotate` — the least arithmetic-heavy of its kernels — is the biggest fan-out win measured (3.52x) because its reads are transposed and latency-bound, and nothing in the model knows that. It cleared the gate by accident. | src/par_cost.rs::CostEstimator / body_is_memory_bound |
-| B-2026-07-31-43 | 2026-07-31 | codegen | low | A chained method call on a fresh container-returning builtin receiver leaks the receiver temp: `let k = Env.args().len();` leaks the args Vec[String]'s element string(s) every execution — the receiver temporary is never registered for cleanup. | docs/bug-ledger.md |
 | B-2026-07-31-44 | 2026-07-31 | other | medium | 554 `--features llvm`-gated tests across 19 targets never run in CI — including par_codegen (220) and drop_differential (13). `cargo test --all` compiles them to nothing and reports green, and the LLVM jobs name their targets one by one, so the omission is invisible from a passing build. | .github/workflows/ci.yml (the codegen-e2e job's explicit --test list; the `test` job's bare `cargo test --all`), docs/spikes/ci-test-coverage.md (Tier 1 scope) |
+| B-2026-08-01-1 | 2026-08-01 | codegen | medium | Chained get/first().unwrap() then len() on a fresh-temp Vec[Vec[scalar]] receiver double-frees the borrowed row: let n = mk_rows().first().unwrap().len(); aborts (free(): double free detected) under AOT while the interpreter prints the length. | src/codegen/method_call.rs (len/is_empty/count intercept, try_compile_freshtemp_vec_read_method, expr_yields_fresh_owned_temp interplay), src/codegen/runtime.rs (materialize_owned_temp) |
 
-### Fixed (801)
+### Fixed (802)
 
-<details><summary>801 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>802 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -943,6 +943,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **815 surfaced 
 | B-2026-07-31-37 | interp+codegen | high | `a = b` on a struct binding runs b's user `impl Drop` body TWICE on every backend — and on a heap-bearing type codegen's second run reads the MOVED-F… | 1276227 |
 | B-2026-07-31-38 | codegen | medium | A binding moved into a variant constructor and then REASSIGNED never drops again on codegen: the ctor move retracts its UserDrop action permanently a… | 1276227 |
 | B-2026-07-31-39 | codegen | medium | Reassigning a struct binding never frees the OLD value's field heap — `let mut a = S{..String..}; a = S{..};` orphans the first String on every execu… | 1276227 |
+| B-2026-07-31-43 | codegen | low | A chained method call on a fresh container-returning builtin receiver leaks the receiver temp: `let k = Env.args().len();` leaks the args Vec[String]… | 53975c0 |
 | B-2026-07-31-45 | interp+codegen | medium | let-else with a moved Drop-bearing enum payload: the interpreter runs the payload's Drop body TWICE (once BEFORE the binding is even used) while AOT… | 2a8f4a7 |
 
 </details>
