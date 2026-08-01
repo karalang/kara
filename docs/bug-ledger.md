@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 201 | 0 |
 | leak | 117 | 1 |
 | codegen-gap | 88 | 0 |
-| double-free | 86 | 0 |
+| double-free | 87 | 1 |
 | missing-feature | 72 | 0 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 609 | 1 |
+| codegen | 610 | 2 |
 | typecheck | 109 | 0 |
 | interp | 102 | 1 |
 | ownership | 36 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **845 surfaced · 1 open · 836 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **846 surfaced · 2 open · 836 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-30 | 2026-08-01 | codegen+interp | medium | Displacement residuals probed live (the b173/b174 recorded residuals): a DEEP-chain field assign `o.h.r = Res{..}` fires no displaced Drop body on EITHER backend (memory correct), and a COMPUTED-index assign `v[base - 1] = Res{..}` fires no displaced body on either backend AND leaks the old element's field buffers under AOT (valgrind: 2 bytes / 1 block definitely lost). | src/codegen/stmts.rs emit_displaced_field_bodies (single-level FieldAccess targets only — a DEEP chain `o.h.r = <new>` declines because the target's object is itself a FieldAccess, not an Identifier) and emit_displaced_index_elem_drop (simple-index gate Integer/Identifier — a computed index `v[base - 1] = <new>` declines); src/interpreter/eval_stmt.rs Assign FIELD/INDEX-target branches (same shape gates, same silence) |
+| B-2026-08-01-31 | 2026-08-01 | codegen | high | Deep-chain field move-out (`let x = o.h.r` / `let s = o.h.name`) never cap-zeroes the source: the moved-out binding AND the root's StructDrop both free the same buffer — a `karac check`-clean double-free abort under karac build (interp fine, run-vs-build divergence). Depth-1 (`let x = h.r`) is handled; every deeper place was not. | src/codegen/param_own.rs suppress_struct_field_move_into_literal (Identifier/`self` object only — a deep-chain source `o.h.r` declines) and its enum deeper-place sibling suppress_place_field_enum_move_source (enum fields only, whose own doc records 'Vec/String/struct fields through a [deeper place] are a separate follow-on, not yet observed'); src/codegen/stmts.rs Let-arm disarm site (disarm_user_drop_fields_for_moved_field, Identifier object only); src/interpreter/eval_stmt.rs suppress_moved_out_drop_field (Identifier object only) |
 
 ### Fixed (836)
 
