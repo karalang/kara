@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 201 | 0 |
-| leak | 116 | 1 |
+| leak | 116 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 86 | 0 |
 | missing-feature | 72 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 608 | 1 |
+| codegen | 608 | 0 |
 | typecheck | 109 | 0 |
 | interp | 101 | 0 |
 | ownership | 36 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **844 surfaced · 1 open · 835 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **844 surfaced · 0 open · 836 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-01-29 | 2026-08-01 | codegen | low | Duplicate-key inserts of a for-loop STRUCT element orphan the staged deep copy: `set.insert(p)` with an equal element already present, and `m.insert(p, i)` with an equal struct KEY present, leak the copy's field buffers (valgrind: 2 bytes / 1 block per duplicate). The exists path keeps the bucket's stored key and does not adopt the staged bytes, and the existing no-adopt frees only handle String/Vec-shaped keys. The recorded residual of the -28 fix, now probed live (b183_dupkey, b183_dupkey_structkey). | src/codegen/collections.rs (Set insert exists-branch no-adopt free is vec-struct-gated — skips a STRUCT element whose staged slot the B-2026-08-01-28 hook deep-copied); src/codegen/maps.rs (Map insert exists-path key free `free_str_vec_buffer_if_heap(key_val)` — same vec-struct gate, same skip for a struct KEY) |
+_None — the ledger is fully drained._
 
-### Fixed (835)
+### Fixed (836)
 
-<details><summary>835 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>836 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -973,6 +971,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **844 surfaced 
 | B-2026-08-01-26 | typecheck+codegen | medium | Closure that move-captures an outer Vec (`let mut v = outer` in the body) and is called TWICE: both `karac run` (JIT) and `karac build` (AOT) print g… | 8ab3b9a |
 | B-2026-08-01-27 | ownership+codegen | medium | Closure body that MOVES a captured Vec (`let mut v = outer; v.push(x); v.len()`) called twice: interpreter prints 3 (env alias — mutations accumulate… | b876cd3 |
 | B-2026-08-01-28 | codegen | high | The B-2026-08-01-24 for-loop element double-free through the remaining consume arms: `m.insert(k, h)`, `set.insert(p)`, and `names.push(h.name)` over… | 31cd03e |
+| B-2026-08-01-29 | codegen | low | Duplicate-key inserts of a for-loop STRUCT element orphan the staged deep copy: `set.insert(p)` with an equal element already present, and `m.insert(… | 09c2721 |
 
 </details>
 
