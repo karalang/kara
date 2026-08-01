@@ -6271,30 +6271,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 // reassign shape double-printed the payload body on both
                 // backends).
                 self.disarm_container_bodies_move_sources(value);
-                // B-2026-08-01-19 — storing an owned param (or a param-view
-                // local) into a local container FIELD (`o.h = h;`): under
-                // caller-retains the conceptual value's Drop observability is
-                // the CALLER's, but the base binding's bodies walk would fire
-                // it again at o's death. Retract the base's bodies action —
-                // its StructDrop memory registration is name-blind and
-                // survives, so the moved entry copy's heap still frees.
-                // Over-suppression trade (documented on the row): the base's
-                // OTHER Drop-bearing fields' bodies go silent too — the
-                // fires-once-too-few side. Direct Identifier bases only;
-                // deeper chains keep today's behavior.
-                if let ExprKind::FieldAccess { object, .. } = &target.kind {
-                    if let ExprKind::Identifier(base) = &object.kind {
-                        let rhs_is_param_view = matches!(&value.kind,
-                            ExprKind::Identifier(src)
-                                if (self.current_fn_param_names.contains(src.as_str())
-                                    && !self.ref_params.contains_key(src.as_str()))
-                                    || self.param_view_locals.contains(src.as_str()));
-                        if rhs_is_param_view {
-                            let base = base.clone();
-                            self.suppress_user_drop_for_var(&base);
-                        }
-                    }
-                }
                 // B-2026-07-26-1: arm the one-shot latch when this exact
                 // statement was proven non-trapping. Taken by the first `add`
                 // the RHS reaches — which, for the recognized
@@ -7213,6 +7189,49 @@ impl<'ctx> super::Codegen<'ctx> {
                     // target, which falls through to the generic field store.
                     if self.try_compile_heap_env_field_reassign(object, field, val, value)? {
                         return Ok(());
+                    }
+                    // B-2026-08-01-20 — displaced FIELD value's Drop bodies:
+                    // `o.h = <new>;` discards the old field value's Drop work
+                    // silently (the memory side rides `compile_field_store`'s
+                    // old-value drop; bodies never ran on either backend, while
+                    // the BINDING-target displacement has fired them since the
+                    // B-2026-07-30-11 displaced-value leg). Run the field's
+                    // bodies walk on the old slot before the store. Guards
+                    // mirror the binding leg: RHS mentioning the base skips
+                    // (uncertain ⇒ silent), and the base must still carry its
+                    // FULL bodies action — a moved-out field replaced/removed
+                    // it (B-2026-07-29-39's disarm), and a param-view base had
+                    // it retracted (B-2026-08-01-19), both of which must stay
+                    // silent here (the caller / new owner fires instead).
+                    self.emit_displaced_field_bodies(object, field, value);
+                    // B-2026-08-01-19 — storing an owned param (or a
+                    // param-view local) into a local container FIELD
+                    // (`o.h = h;`): under caller-retains the conceptual
+                    // value's Drop observability is the CALLER's, but the
+                    // base binding's bodies walk would fire it again at o's
+                    // death. Retract the base's bodies action — its
+                    // StructDrop memory registration is name-blind and
+                    // survives, so the moved entry copy's heap still frees.
+                    // Placed AFTER the displaced-field bodies emission above
+                    // (B-2026-08-01-20): the DISPLACED old field value is a
+                    // real local value whose body must fire, and the
+                    // emitter's full-armed gate reads the pre-suppression
+                    // state — the interpreter sequences identically
+                    // (displaced fire during the statement, retraction in
+                    // the post-statement hook). Over-suppression trade
+                    // (documented on the -19 row): the base's OTHER
+                    // Drop-bearing fields' bodies go silent too. Direct
+                    // Identifier bases only.
+                    if let ExprKind::Identifier(base) = &object.kind {
+                        let rhs_is_param_view = matches!(&value.kind,
+                            ExprKind::Identifier(src)
+                                if (self.current_fn_param_names.contains(src.as_str())
+                                    && !self.ref_params.contains_key(src.as_str()))
+                                    || self.param_view_locals.contains(src.as_str()));
+                        if rhs_is_param_view {
+                            let base = base.clone();
+                            self.suppress_user_drop_for_var(&base);
+                        }
                     }
                     self.compile_field_store(object, field, val, rhs_is_fresh)?;
                     // B-2026-07-15-25: `compile_field_store` now drops the OLD
@@ -9194,6 +9213,123 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shadowed by a local binding (closure semantics unproven), and every
     /// non-`Call` shape (method calls, ctors, block tails — conservative
     /// silence, the pre-fix behavior).
+    /// B-2026-08-01-20 — run the displaced old FIELD value's Drop bodies
+    /// before a `base.field = <new>` store overwrites it. Bodies only —
+    /// the memory side rides `compile_field_store`'s old-value drop.
+    /// Fires for a direct Identifier base holding a plain non-shared,
+    /// non-generic struct whose named field is itself a non-generic user
+    /// struct or value enum carrying Drop work. Declines (silent, today's
+    /// behavior) when the RHS mentions the base (`o.h = f(o.h)` — the
+    /// callee's discipline covers the old value), or when the base no
+    /// longer carries its FULL bodies action: a moved-out field replaced
+    /// or removed it (B-2026-07-29-39's disarm — firing would read
+    /// cap-zeroed bits), and a param-view base had it retracted
+    /// (B-2026-08-01-19 — the caller fires instead).
+    fn emit_displaced_field_bodies(&mut self, object: &Expr, field: &str, rhs: &Expr) {
+        let ExprKind::Identifier(base) = &object.kind else {
+            return;
+        };
+        if crate::deque_head::expr_mentions_name_deep(rhs, base) {
+            return;
+        }
+        let Some(base_tn) = self.var_type_names.get(base.as_str()).cloned() else {
+            return;
+        };
+        if !self.struct_types.contains_key(&base_tn)
+            || self.shared_types.contains_key(&base_tn)
+            || self
+                .struct_generic_params
+                .get(&base_tn)
+                .is_some_and(|ps| !ps.is_empty())
+        {
+            return;
+        }
+        let Some(slot) = self.variables.get(base.as_str()).copied() else {
+            return;
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(&base_tn)
+            .and_then(|ns| ns.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        let Some(Some(ftn)) = self
+            .struct_field_type_names
+            .get(&base_tn)
+            .and_then(|v| v.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        if self.shared_types.contains_key(&ftn)
+            || self
+                .struct_generic_params
+                .get(&ftn)
+                .is_some_and(|ps| !ps.is_empty())
+        {
+            return;
+        }
+        let is_struct_field = self.struct_types.contains_key(&ftn);
+        let is_enum_field = ftn != "Option"
+            && ftn != "Result"
+            && self.enum_layouts.get(&ftn).is_some_and(|l| !l.is_shared);
+        if !is_struct_field && !is_enum_field {
+            return;
+        }
+        if !self.type_runs_user_drop(&ftn, &mut Vec::new()) {
+            return;
+        }
+        // Full-action gate: the base's UserDrop must be armed and must not
+        // be the without-field-bodies replacement a field move-out left.
+        let without = if self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(base_tn.as_str()))
+        {
+            self.emit_user_drop_wrapper_without_field_bodies(&base_tn)
+        } else {
+            None
+        };
+        let full_armed = self.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(action,
+                    super::state::CleanupAction::UserDrop { binding_ptr, drop_fn, .. }
+                        if *binding_ptr == slot.ptr && without != Some(*drop_fn))
+            })
+        });
+        if !full_armed {
+            return;
+        }
+        let Some(st_ty) = self.struct_types.get(&base_tn).copied() else {
+            return;
+        };
+        let Ok(fptr) = self
+            .builder
+            .build_struct_gep(st_ty, slot.ptr, idx as u32, "dispf.old.p")
+        else {
+            return;
+        };
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(ftn.as_str()));
+        if owns_body {
+            if let Some(f) = self.module.get_function(&format!("{ftn}.drop")) {
+                self.builder.build_call(f, &[fptr.into()], "").unwrap();
+            }
+        }
+        if is_struct_field {
+            if let Some(f) =
+                self.emit_user_drop_field_bodies_fn(&ftn, &std::collections::HashMap::new())
+            {
+                self.builder.build_call(f, &[fptr.into()], "").unwrap();
+            }
+        } else if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&ftn) {
+            self.builder.build_call(w, &[fptr.into()], "").unwrap();
+        }
+    }
+
     fn assign_rhs_is_owned_user_call(&self, value: &Expr) -> bool {
         let ExprKind::Call { callee, .. } = &value.kind else {
             return false;

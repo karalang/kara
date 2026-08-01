@@ -6817,14 +6817,44 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-20 — a FIELD-assign displaces the old field value,
+    /// whose Drop bodies now fire before the store (both backends were
+    /// silent; the memory side always freed). Struct fields with Drop
+    /// work and user value-enum fields alike; the binding-target
+    /// displacement has fired since the B-2026-07-30-11 arc. Twin of
+    /// `tests/interpreter.rs`'s `test_field_assign_displaced_bodies`.
+    #[test]
+    fn e2e_field_assign_displaced_bodies() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             struct Outer { h: Holder }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut o = Outer { h: Holder { r: Res { id: 9, name: f\"z{9}\" } } };\n\
+             \x20   o.h = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+             \x20   println(f\"held {o.h.r.id}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n");
+    }
+
     /// B-2026-08-01-19 — storing an owned param into a local container
     /// FIELD (`o.h = h;`) fired the caller-retained value's body TWICE on
     /// both backends (o's bodies walk at its death + the caller's NLL
     /// fire). The field-store now retracts the base binding's bodies
     /// action, leaving exactly the caller's single fire; o's memory
     /// registration survives so the moved copy's heap still frees. The
-    /// displaced old field's body staying silent is B-2026-08-01-20 (open;
-    /// its fix will add `drop 9 z9` to this expectation). Twin of
+    /// displaced old field's body (`drop 9 z9`) fires per B-2026-08-01-20 —
+    /// the displaced value is a real local, distinct from the param. Twin of
     /// `tests/interpreter.rs`'s `test_param_field_store_single_caller_fire`.
     #[test]
     fn e2e_param_field_store_single_caller_fire() {
@@ -6852,7 +6882,7 @@ fn main() {
         ) else {
             return;
         };
-        assert_eq!(out, "a\nheld 5\ntake done\ndrop 5 y5\nend\n");
+        assert_eq!(out, "a\ndrop 9 z9\nheld 5\ntake done\ndrop 5 y5\nend\n");
     }
 
     /// B-2026-08-01-16 — the ASSIGN sibling of the param-view rebind:

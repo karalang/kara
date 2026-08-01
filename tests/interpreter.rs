@@ -27047,6 +27047,30 @@ fn test_param_view_rebind_single_caller_fire() {
     );
 }
 
+/// B-2026-08-01-20 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_field_assign_displaced_bodies`, same source and expected string.
+#[test]
+fn test_field_assign_displaced_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             struct Outer { h: Holder }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut o = Outer { h: Holder { r: Res { id: 9, name: f\"z{9}\" } } };\n\
+                 o.h = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+                 println(f\"held {o.h.r.id}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 9 z9\nheld 5\ndrop 5 y5\nend\n"
+    );
+}
+
 /// B-2026-08-01-19 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_param_field_store_single_caller_fire`, same source and expected
 /// string. Pre-fix the base binding's Drop slot fired the caller-retained
@@ -27075,7 +27099,7 @@ fn test_param_field_store_single_caller_fire() {
                  take(x);\n\
                  println(\"end\");\n\
              }\n"),
-        "a\nheld 5\ntake done\ndrop 5 y5\nend\n"
+        "a\ndrop 9 z9\nheld 5\ntake done\ndrop 5 y5\nend\n"
     );
 }
 

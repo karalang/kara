@@ -2227,6 +2227,51 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
+                // B-2026-08-01-20 — FIELD-target sibling of the leg above:
+                // `o.h = <new>;` displaces the old field value, whose Drop
+                // work was silently discarded (the memory side has its own
+                // machinery; bodies never ran on either backend). Same
+                // guards, value-based fire (a field has no binding name for
+                // the disarm sets — the BASE-coarse move record stands in,
+                // matching the codegen twin's armed-action gate).
+                if let ExprKind::FieldAccess { object, field } = &target.kind {
+                    if let ExprKind::Identifier(base) = &object.kind {
+                        if !self.moved_out_user_drop_bindings.contains(base.as_str())
+                            && !self.moved_out_drop_field_bindings.contains(base.as_str())
+                            && !crate::deque_head::expr_mentions_name_deep(value, base)
+                        {
+                            let old_field = match self.env.get(base) {
+                                Some(Value::Struct { fields, .. }) => fields
+                                    .iter()
+                                    .find(|(n, _)| n.as_str() == field.as_str())
+                                    .map(|(_, v)| v.clone()),
+                                _ => None,
+                            };
+                            if let Some(old) = old_field {
+                                match &old {
+                                    Value::Struct { name: tn, .. } => {
+                                        if self.program.drop_method_keys.contains_key(tn) {
+                                            let tn = tn.clone();
+                                            self.run_user_drop_body_on_value(&tn, old);
+                                        } else if self.value_runs_user_drop(&old) {
+                                            self.drop_user_drop_fields_of_value(&old);
+                                        }
+                                    }
+                                    Value::EnumVariant { enum_name, .. }
+                                        if enum_name != "Option" && enum_name != "Result" =>
+                                    {
+                                        if self.program.drop_method_keys.contains_key(enum_name) {
+                                            let tn = enum_name.clone();
+                                            self.run_user_drop_body_on_value(&tn, old.clone());
+                                        }
+                                        self.run_enum_payload_user_drops_value(&old);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
                 if !self.assign_to_place(target, val) {
                     unreachable!(
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",
