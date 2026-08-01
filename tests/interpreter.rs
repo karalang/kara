@@ -26629,6 +26629,35 @@ fn test_discarded_user_method_return_runs_drop() {
     );
 }
 
+/// B-2026-07-30-11 (Set-elements leg) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_set_element_drop_bodies_fire`, same source and
+/// expected string. A `Set[DropStruct]` element's body never fired at the
+/// binding's death — Set lowers to the KEY half of the map table, and the
+/// values walk never looked there. Single element keeps the expected
+/// string deterministic (a multi-element Set walk is storage-ordered under
+/// codegen vs insertion-ordered here — the same unordered-container
+/// difference `for x in s` has; the two-element parity + valgrind evidence
+/// lives in the session probes).
+#[test]
+fn test_set_element_drop_bodies_fire() {
+    assert_eq!(
+        run("#[derive(Hash, Eq)]\n\
+             struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut s: Set[Res] = Set.new();\n\
+                 s.insert(Res { id: 5 });\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 5\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

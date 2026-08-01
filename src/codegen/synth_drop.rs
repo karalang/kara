@@ -5826,14 +5826,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let TypeKind::Path(p) = &map_te.kind else {
             return None;
         };
-        if !matches!(
-            p.segments.last().map(|s| s.as_str()),
-            Some("Map") | Some("SortedMap")
-        ) {
-            return None;
-        }
+        // Set/SortedSet share the KaracMap table (val_size == 0, elements in
+        // the KEY half), so the walk is the key-side sibling: element type is
+        // generic arg 0 and the blob offset skips the +key_size step
+        // (B-2026-07-30-11 Set-elements leg).
+        let (elem_idx, at_key_half) = match p.segments.last().map(|s| s.as_str()) {
+            Some("Map") | Some("SortedMap") => (1usize, false),
+            Some("Set") | Some("SortedSet") => (0usize, true),
+            _ => return None,
+        };
         let args = p.generic_args.as_ref()?;
-        let crate::ast::GenericArg::Type(val_te) = args.get(1)? else {
+        let crate::ast::GenericArg::Type(val_te) = args.get(elem_idx)? else {
             return None;
         };
         let TypeKind::Path(vp) = &val_te.kind else {
@@ -5949,10 +5952,15 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(body_bb);
         let off = self.builder.build_int_mul(i, stride, "dm.off").unwrap();
-        let voff = self
-            .builder
-            .build_int_add(off, key_size, "dm.voff")
-            .unwrap();
+        // Map/SortedMap: the walked blob is the VALUE half (skip the key).
+        // Set/SortedSet: the ELEMENT lives in the key half (offset 0).
+        let voff = if at_key_half {
+            off
+        } else {
+            self.builder
+                .build_int_add(off, key_size, "dm.voff")
+                .unwrap()
+        };
         let vptr = unsafe {
             self.builder
                 .build_in_bounds_gep(i8_t, kv_ptr, &[voff], "dm.v.p")

@@ -3350,6 +3350,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         let name = var_name.clone();
                         self.compile_set_new_stmt(&name)?;
+                        // B-2026-07-30-11 (Set-elements leg): mirror the
+                        // Map.new() arm — this early return bypasses the
+                        // general registration below, so the element-bodies
+                        // walk (the key-half sibling of the values walk)
+                        // registers here.
+                        self.register_map_val_bodies(&name, ty.as_ref(), value);
                         // (No snapshot capture here either — see the
                         // Map.new() arm above. End-of-cell capture only.)
                         return Ok(());

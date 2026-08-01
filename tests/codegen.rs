@@ -6335,6 +6335,34 @@ fn main() {
         assert_eq!(out, "a\ndrop 13\nb\ndrop 13\nc\ndrop 13\nend\n");
     }
 
+    /// B-2026-07-30-11 (Set-elements leg) — a `Set[DropStruct]` element's
+    /// body fires at the binding's death: Set lowers to the KEY half of the
+    /// KaracMap table, so the walk is the key-side sibling of the values
+    /// walk (`__karac_dropelems_map_*` with the element at blob offset 0).
+    /// Twin of `tests/interpreter.rs`'s `test_set_element_drop_bodies_fire`,
+    /// same source and expected string.
+    #[test]
+    fn e2e_set_element_drop_bodies_fire() {
+        let Some(out) = run_program(
+            "#[derive(Hash, Eq)]\n\
+             struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut s: Set[Res] = Set.new();\n\
+             \x20   s.insert(Res { id: 5 });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 5\nend\n");
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a

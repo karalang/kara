@@ -1648,14 +1648,17 @@ impl<'a> super::Interpreter<'a> {
             let TypeKind::Path(p) = &te.kind else {
                 return false;
             };
-            if !matches!(
-                p.segments.last().map(String::as_str),
-                Some("Map") | Some("SortedMap")
-            ) {
-                return false;
-            }
+            // Map/SortedMap gate on the VALUE arg; Set/SortedSet on the
+            // ELEMENT arg (B-2026-07-30-11 Set-elements leg — a Set lowers
+            // to the key half of the same table, so the walk is the
+            // key-side sibling of the values walk).
+            let elem_idx = match p.segments.last().map(String::as_str) {
+                Some("Map") | Some("SortedMap") => 1usize,
+                Some("Set") | Some("SortedSet") => 0usize,
+                _ => return false,
+            };
             matches!(
-                p.generic_args.as_ref().and_then(|a| a.get(1)),
+                p.generic_args.as_ref().and_then(|a| a.get(elem_idx)),
                 Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
             )
         });
@@ -1681,6 +1684,10 @@ impl<'a> super::Interpreter<'a> {
         let vals: Vec<Value> = match self.env.get(name) {
             Some(Value::Map(entries)) => entries.into_iter().map(|(_, v)| v).collect(),
             Some(Value::SortedMap(entries)) => entries.into_values().collect(),
+            // Set-elements leg (B-2026-07-30-11): the walked values are the
+            // ELEMENTS — the key half of the same table shape.
+            Some(Value::Set(items)) => items,
+            Some(Value::SortedSet(items)) => items.into_keys().map(|k| k.0).collect(),
             _ => return false,
         };
         if self.moved_out_container_bodies_bindings.contains(name) {
@@ -1692,8 +1699,12 @@ impl<'a> super::Interpreter<'a> {
         let TypeKind::Path(p) = &te.kind else {
             return true;
         };
+        let elem_idx = match p.segments.last().map(String::as_str) {
+            Some("Set") | Some("SortedSet") => 0usize,
+            _ => 1usize,
+        };
         let Some(crate::ast::GenericArg::Type(val_te)) =
-            p.generic_args.as_ref().and_then(|a| a.get(1))
+            p.generic_args.as_ref().and_then(|a| a.get(elem_idx))
         else {
             return true;
         };
