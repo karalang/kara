@@ -1698,7 +1698,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // passthrough are unaffected (`arg_is_entry_copied_heap_struct`
             // matches only copy-supported heap structs).
             let flows_into_return = self.call_arg_flows_into_return(&name, i);
-            if !flows_into_return || self.arg_is_entry_copied_heap_struct(&a.value) {
+            if !flows_into_return
+                || self.arg_is_entry_copied_heap_struct(&a.value)
+                // B-2026-08-01-14 — enum ctor args are entry-copied too:
+                // a passthrough callee returns the COPY, so the original
+                // must still be freed caller-side (memory only, inside
+                // the registrar's enum arm).
+                || self.arg_is_entry_copied_heap_enum(&a.value)
+            {
                 self.track_inline_owned_aggregate_arg(val, &a.value, flows_into_return);
             }
             // B-2026-07-10-4 residual — an inline-heap `Option[String]`/
@@ -2231,16 +2238,49 @@ impl<'ctx> super::Codegen<'ctx> {
                 .as_deref()
                 .map(|p| p.drop_method_keys.contains_key(&enum_name))
                 .unwrap_or(false);
-            let user_drop = has_user_drop && !self.shared_types.contains_key(&enum_name);
+            let shared = self.shared_types.contains_key(&enum_name);
+            let user_drop = has_user_drop && !shared;
             let heap_payload = self.enum_has_heap_payload(&enum_name);
-            if user_drop || heap_payload {
+            // B-2026-08-01-14 — entry-copy passthrough (`pass2(E2.B(..))`
+            // where the callee returns its param): the callee deep-copies
+            // the payload at entry and the COPY flows out to the result's
+            // consumer, so the ORIGINAL aggregate here is orphaned — free
+            // it, MEMORY ONLY (the bodies belong to the result's consumer,
+            // exactly the B-2026-07-30-12 struct rule).
+            if arg_flows_into_return {
+                if heap_payload && !shared {
+                    let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                    self.builder.build_store(slot, val).unwrap();
+                    self.track_enum_var(&enum_name, slot);
+                }
+                return;
+            }
+            // B-2026-08-01-13 (c1/c5) — the payload-bodies WALKER, the
+            // declared-type-driven `__karac_dropelems_enum_<E>` the ctor
+            // arm never registered: `check(E2.B(Res { .. }))` fired no
+            // payload body on either backend when the callee dropped the
+            // enum whole (a destructuring callee's arm channel is now
+            // param-gated, so this caller-side fire is the single owner).
+            // Option/Result stay with their own payload machinery.
+            let walker = if !shared && enum_name != "Option" && enum_name != "Result" {
+                self.emit_enum_payload_user_drop_bodies_fn(&enum_name)
+            } else {
+                None
+            };
+            if user_drop || heap_payload || walker.is_some() {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
-                if user_drop {
-                    self.track_user_drop_var(&enum_name, "__owned_agg_tmp", slot);
-                }
+                // Memory first — the frame drains LIFO, so the bodies
+                // pushed below fire before the switch frees what they read
+                // (the B-2026-08-01-2 rule).
                 if heap_payload {
                     self.track_enum_var(&enum_name, slot);
+                }
+                if let Some(w) = walker {
+                    self.track_user_drop_var_with_fn("", "__owned_agg_tmp", slot, w);
+                }
+                if user_drop {
+                    self.track_user_drop_var(&enum_name, "__owned_agg_tmp", slot);
                 }
             }
         } else if let ExprKind::Tuple(tuple_elems) = &arg.kind {
@@ -2564,6 +2604,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 .struct_field_type_exprs
                 .get(name.as_str())
                 .is_some_and(|ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)))
+    }
+
+    /// B-2026-08-01-14 — the ENUM sibling of
+    /// [`Self::arg_is_entry_copied_heap_struct`]: a fresh value-enum ctor
+    /// arg (`pass2(E2.B(Res { .. }))`) whose enum carries a heap payload is
+    /// ENTRY-COPIED by the callee (the owned-enum-param dcopy region), so
+    /// on a return-passthrough the callee returns the COPY and the
+    /// ORIGINAL aggregate is orphaned — the caller must free it (memory
+    /// only; the bodies belong to the result's consumer). Same premise
+    /// break B-2026-07-08-6 fixed for heap structs, one type shape over.
+    pub(super) fn arg_is_entry_copied_heap_enum(&self, arg: &Expr) -> bool {
+        if !matches!(
+            &arg.kind,
+            ExprKind::Call { .. } | ExprKind::Path { .. } | ExprKind::StructLiteral { .. }
+        ) {
+            return false;
+        }
+        self.enum_name_of_expr(arg).is_some_and(|en| {
+            en != "Option"
+                && en != "Result"
+                && !self.shared_types.contains_key(en.as_str())
+                && self.enum_has_heap_payload(&en)
+        })
     }
 
     /// #21 — best-effort `TypeExpr` for a tuple-literal arg ELEMENT, so its

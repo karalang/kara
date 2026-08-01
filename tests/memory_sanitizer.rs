@@ -17032,6 +17032,36 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-14 — a fresh enum-ctor arg to a PASSTHROUGH callee
+    /// (`pass2(E2.B(Res { .. }))` where the callee returns its param): the
+    /// callee entry-copies the payload and returns the COPY, so the
+    /// ORIGINAL aggregate was orphaned — one payload buffer lost per call
+    /// (the enum sibling of B-2026-07-08-6's struct entry-copy premise
+    /// break). The caller now frees the original, memory only. LSan gates
+    /// the leak; ASAN guards the eager free against the copy the result
+    /// binding owns.
+    #[test]
+    fn asan_enum_ctor_arg_passthrough_original_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+enum E2 { B(Res), Empty }
+fn pass2(w: E2) -> E2 { println("passing"); return w; }
+fn main() {
+    println("a");
+    let f = pass2(E2.B(Res { id: 8, name: f"x{8}" }));
+    println("mid");
+    println("end");
+}
+"#,
+            &["a", "passing", "drop 8 x8", "mid", "end"],
+            "enum_ctor_arg_passthrough_original_freed",
+        );
+    }
+
     #[test]
     fn asan_auto_par_vec_of_vec_freed_on_branch_exit() {
         // Vec[Vec[char]] built inside a function — the kata-6 zigzag

@@ -27008,6 +27008,62 @@ fn test_param_struct_destructure_single_caller_fire() {
     );
 }
 
+/// B-2026-08-01-13 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_owned_enum_arg_payload_body_single_caller_fire`, same source and
+/// expected string. Pre-fix the interpreter was silent for the
+/// whole-drop shapes (no payload walk in the fresh-arg hook) and DOUBLE
+/// for the identifier-arg match/if-let shapes (arm stash + caller NLL);
+/// the param-scrutinee gate plus the fresh-arg payload walk leave exactly
+/// the caller's single fire everywhere.
+#[test]
+fn test_owned_enum_arg_payload_body_single_caller_fire() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+                 fn drop(mut ref self) {\n\
+                     println(\"loud drop\")\n\
+                 }\n\
+             }\n\
+             enum E2 { B(Res), Empty }\n\
+             fn check(w: E2) { println(\"checked\"); }\n\
+             fn check_match(w: E2) {\n\
+                 match w {\n\
+                     E2.B(r2) => { println(f\"got {r2.id}\"); }\n\
+                     E2.Empty => { println(\"none\"); }\n\
+                 }\n\
+                 println(\"match done\");\n\
+             }\n\
+             fn check_iflet(w: E2) {\n\
+                 if let E2.B(r2) = w {\n\
+                     println(f\"if {r2.id}\");\n\
+                 }\n\
+                 println(\"iflet done\");\n\
+             }\n\
+             fn check_loud(w: Loud) { println(\"loudcheck\"); }\n\
+             fn mk(n: i64) -> E2 { return E2.B(Res { id: n, name: f\"x{n}\" }); }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 check(E2.B(Res { id: 55, name: f\"x{55}\" }));\n\
+                 println(\"b\");\n\
+                 check_loud(Loud.Hold(Res { id: 9, name: f\"l{9}\" }));\n\
+                 println(\"c\");\n\
+                 let e = mk(53);\n\
+                 check_match(e);\n\
+                 println(\"d\");\n\
+                 check_iflet(E2.B(Res { id: 6, name: f\"x{6}\" }));\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\nchecked\ndrop 55 x55\nb\nloudcheck\nloud drop\ndrop 9 l9\nc\ngot 53\n\
+         match done\ndrop 53 x53\nd\nif 6\niflet done\ndrop 6 x6\nend\n"
+    );
+}
+
 /// B-2026-08-01-5 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_recv_temp_drop_semantics`, same source and expected string.
 /// Pre-fix the interpreter fired NO receiver-temp body ever (the free-fn

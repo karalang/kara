@@ -422,11 +422,19 @@ impl<'a> super::Interpreter<'a> {
                     }
                     None => false,
                 };
+                // B-2026-08-01-13: expose the method's OWNED param names to
+                // the body's param-scrutinee / destructure gates, exactly as
+                // `eval_call` does for free fns — codegen's
+                // `current_fn_param_names` covers methods, so the interp
+                // stack must too or the gates diverge per-backend.
+                self.owned_param_names_stack
+                    .push(self.method_owned_param_names(&type_name, method));
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
+                self.owned_param_names_stack.pop();
                 if pushed_self_mode {
                     self.self_param_stack.pop();
                 }

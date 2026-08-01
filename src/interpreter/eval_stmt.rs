@@ -991,10 +991,20 @@ impl<'a> super::Interpreter<'a> {
     /// stays registered — the move-indirected double is a recorded
     /// residual, matching codegen's depth-0 behavior.
     fn let_destructures_owned_param(&self, stmt: &Stmt) -> bool {
-        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
-            return false;
+        let (pattern, value) = match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } => (pattern, value),
+            // B-2026-08-01-13 widening: `let Full(r2) = w else { … }` on an
+            // owned enum param is the same view-bind — codegen's let-else
+            // route shares the pattern-binding param gate, so the interp
+            // slot registration must stay silent too (the caller's
+            // fresh-arg / NLL fire is the single owner).
+            StmtKind::LetElse { pattern, value, .. } => (pattern, value),
+            _ => return false,
         };
-        if !matches!(pattern.kind, PatternKind::Struct { .. }) {
+        if !matches!(
+            pattern.kind,
+            PatternKind::Struct { .. } | PatternKind::TupleVariant { .. }
+        ) {
             return false;
         }
         let ExprKind::Identifier(n) = &value.kind else {

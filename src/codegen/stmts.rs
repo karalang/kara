@@ -2326,33 +2326,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // — the battery's fn-call registrar only resolves bare-
                 // identifier callees, so route ctor Calls through the
                 // arg-position aggregate registrar (its enum arm: the
-                // `karac_drop_<E>` wrapper + payload walk). Option/Result
-                // ctors are excluded — their payload cleanup belongs to the
-                // trackers above and the bodies walk below.
+                // `karac_drop_<E>` wrapper + memory + the payload-bodies
+                // walker, the latter added by B-2026-08-01-13 — this site's
+                // explicit `__disc_enum_tmp` walker registration became a
+                // DOUBLE fire the moment the registrar gained its own and
+                // was removed). Option/Result ctors are excluded — their
+                // payload cleanup belongs to the trackers above and the
+                // bodies walk below.
                 if let ExprKind::Call { .. } = &tail.kind {
                     if let Some(en) = self.enum_name_of_expr(tail) {
                         if en != "Option" && en != "Result" {
                             self.track_inline_owned_aggregate_arg(val, tail, false);
-                            if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&en) {
-                                if let Some(cur_fn) = self
-                                    .builder
-                                    .get_insert_block()
-                                    .and_then(|bb| bb.get_parent())
-                                {
-                                    let slot = self.create_entry_alloca(
-                                        cur_fn,
-                                        "__disc_enum_tmp",
-                                        val.get_type(),
-                                    );
-                                    self.builder.build_store(slot, val).unwrap();
-                                    self.track_user_drop_var_with_fn(
-                                        "",
-                                        "__disc_enum_tmp",
-                                        slot,
-                                        bodies,
-                                    );
-                                }
-                            }
                         }
                     }
                 }
@@ -6220,39 +6204,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // battery's fn-call registrar resolves return types from
                     // the fn/method tables, which a ctor Call never hits, so
                     // the bare statement stayed body-silent under AOT while
-                    // the interpreter's Path-ctor discard leg fired. Same
-                    // channel the wildcard-let arm gained with its
-                    // B-2026-07-30-11 leg: the arg-position aggregate
-                    // registrar for the memory half plus the payload walker
-                    // under `__disc_enum_tmp`. Option/Result ctors are
+                    // the interpreter's Path-ctor discard leg fired. Route
+                    // through the arg-position aggregate registrar, which
+                    // carries the memory half AND (B-2026-08-01-13) the
+                    // payload-bodies walker. Option/Result ctors are
                     // excluded — their cleanup is the trackers above and the
                     // bodies walk below.
                     if let ExprKind::Call { .. } = &tail.kind {
                         if let Some(en) = self.enum_name_of_expr(tail) {
                             if en != "Option" && en != "Result" {
                                 self.track_inline_owned_aggregate_arg(val, tail, false);
-                                if let Some(bodies) =
-                                    self.emit_enum_payload_user_drop_bodies_fn(&en)
-                                {
-                                    if let Some(cur_fn) = self
-                                        .builder
-                                        .get_insert_block()
-                                        .and_then(|bb| bb.get_parent())
-                                    {
-                                        let slot = self.create_entry_alloca(
-                                            cur_fn,
-                                            "__disc_enum_tmp",
-                                            val.get_type(),
-                                        );
-                                        self.builder.build_store(slot, val).unwrap();
-                                        self.track_user_drop_var_with_fn(
-                                            "",
-                                            "__disc_enum_tmp",
-                                            slot,
-                                            bodies,
-                                        );
-                                    }
-                                }
                             }
                         }
                     }

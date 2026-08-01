@@ -543,15 +543,19 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         pattern: &Pattern,
         scrutinee: &Expr,
-    ) -> (bool, usize, bool, bool) {
+    ) -> (bool, usize, bool, bool, bool) {
         let saved = (
             self.pattern_binding_scrutinee_is_option_result,
             self.pattern_binding_scrutinee_optres_area,
             self.pattern_binding_scrutinee_is_shared_enum,
             self.pattern_binding_scrutinee_is_fresh_owning_temp,
+            self.pattern_binding_scrutinee_is_owned_param,
         );
         self.pattern_binding_scrutinee_is_fresh_owning_temp =
             self.scrutinee_expr_is_owning_fresh_temp(scrutinee);
+        // B-2026-08-01-13 — see `compile_match`'s twin derivation.
+        self.pattern_binding_scrutinee_is_owned_param =
+            self.scrutinee_is_owned_param_binding(scrutinee);
         let en = self.variant_pattern_enum_name(pattern);
         self.pattern_binding_scrutinee_is_option_result =
             matches!(en.as_deref(), Some("Option") | Some("Result"));
@@ -566,12 +570,25 @@ impl<'ctx> super::Codegen<'ctx> {
         saved
     }
 
-    /// Restore the quadruple saved by `set_scrutinee_shape_flags_for_pattern`.
-    pub(super) fn restore_scrutinee_shape_flags(&mut self, saved: (bool, usize, bool, bool)) {
+    /// Restore the quintuple saved by `set_scrutinee_shape_flags_for_pattern`.
+    pub(super) fn restore_scrutinee_shape_flags(&mut self, saved: (bool, usize, bool, bool, bool)) {
         self.pattern_binding_scrutinee_is_option_result = saved.0;
         self.pattern_binding_scrutinee_optres_area = saved.1;
         self.pattern_binding_scrutinee_is_shared_enum = saved.2;
         self.pattern_binding_scrutinee_is_fresh_owning_temp = saved.3;
+        self.pattern_binding_scrutinee_is_owned_param = saved.4;
+    }
+
+    /// B-2026-08-01-13 — is the scrutinee an Identifier naming an OWNED
+    /// (by-value, non-`ref`) parameter of the current function? Payload
+    /// bindings destructured from one are views of the callee's entry copy
+    /// under the caller-retains convention — their Drop bodies belong to
+    /// the caller's fire, so the pattern-binding registration goes
+    /// memory-only.
+    pub(super) fn scrutinee_is_owned_param_binding(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n)
+            if self.current_fn_param_names.contains(n.as_str())
+                && !self.ref_params.contains_key(n.as_str()))
     }
 
     /// Is this scrutinee expression a FRESH OWNING temp — a call, or a

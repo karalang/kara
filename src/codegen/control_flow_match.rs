@@ -281,6 +281,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .and_then(|n| self.shared_types.get(&n).cloned())
                 .is_some_and(|i| i.is_enum)
         });
+        // B-2026-08-01-13 — scrutinee is an OWNED param: payload bindings
+        // are views of the callee's entry copy; their Drop bodies belong to
+        // the caller (caller-retains), so `bind_pattern_values` registers
+        // memory only.
+        let saved_owned_param_flag = self.pattern_binding_scrutinee_is_owned_param;
+        self.pattern_binding_scrutinee_is_owned_param =
+            self.scrutinee_is_owned_param_binding(scrutinee);
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -769,6 +776,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_scrutinee_optres_area = saved_optres_area;
         self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
         self.pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
+        self.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
         self.match_scrutinee_enum_hint = saved_scrut_enum_hint;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of

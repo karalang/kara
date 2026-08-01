@@ -2513,6 +2513,15 @@ pub(super) struct Codegen<'ctx> {
     /// channel, and a second registration double-ran a mutating body
     /// (`self.buf.clear()` freed the buffer twice).
     pub(crate) pattern_binding_scrutinee_is_fresh_owning_temp: bool,
+    /// B-2026-08-01-13 — true while binding a pattern whose scrutinee is an
+    /// OWNED (by-value) param of the current function. Under the
+    /// caller-retains convention the param holds the callee's entry copy;
+    /// a payload bound out of it is a view whose Drop BODY belongs to the
+    /// caller (its NLL / fresh-arg fire reads the original), so the
+    /// pattern-binding registration goes MEMORY-ONLY (`track_struct_var`)
+    /// instead of the body+memory wrapper — firing here too doubled the
+    /// body on both backends (`match w { E2.B(r2) => … }` with `w: E2`).
+    pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
     /// B-2026-07-10-3 — the inline payload-area word budget of the
     /// `Option`/`Result` scrutinee currently being compiled: 3 for `Option`,
     /// 5 for `Result`, 0 when the scrutinee is neither (the same fixed areas
@@ -7620,6 +7629,7 @@ impl<'ctx> Codegen<'ctx> {
             copy_support_for_loop_shared_mode: false,
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_is_fresh_owning_temp: false,
+            pattern_binding_scrutinee_is_owned_param: false,
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,
             match_scrutinee_enum_hint: None,

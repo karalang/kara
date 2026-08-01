@@ -834,10 +834,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // let-rebind, return) retracts UserDrop by
                                 // name, so an arm body that moves the binding
                                 // on composes unchanged.
+                                // B-2026-08-01-13 — a payload bound out of an
+                                // OWNED PARAM scrutinee is a view of the
+                                // callee's entry copy: its Drop BODY belongs
+                                // to the caller's fire (caller-retains), so
+                                // the registration goes memory-only (the
+                                // `else` arm) — the wrapper here doubled the
+                                // body on both backends.
                                 if self.user_drop_wrapper_fns.contains_key(tn)
                                     && self
                                         .current_variant_payload_bindings
                                         .contains(name.as_str())
+                                    && !self.pattern_binding_scrutinee_is_owned_param
                                 {
                                     let tn_owned = tn.to_string();
                                     let name_owned = name.clone();

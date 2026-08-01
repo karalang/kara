@@ -979,6 +979,52 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// Owned (by-value) parameter names of the impl method
+    /// `type_name.method`, for the param-scrutinee / destructure gates
+    /// (B-2026-08-01-13) — the impl-method sibling of `eval_call`'s
+    /// `owned_param_names_of_fn`, resolved through the same
+    /// program-then-stdlib chain as [`Self::method_self_param`]. `ref` /
+    /// `mut ref` params take no ownership and stay out of the set.
+    pub(crate) fn method_owned_param_names(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> HashSet<String> {
+        fn find_in(items: &[Item], type_name: &str, method: &str) -> Option<HashSet<String>> {
+            items.iter().find_map(|item| match item {
+                Item::ImplBlock(imp) => {
+                    let target = match &imp.target_type.kind {
+                        TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                        _ => None,
+                    };
+                    if target != Some(type_name) {
+                        return None;
+                    }
+                    imp.items.iter().find_map(|it| match it {
+                        ImplItem::Method(m) if m.name == method => Some(
+                            m.params
+                                .iter()
+                                .filter(|p| {
+                                    !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_))
+                                })
+                                .filter_map(|p| p.name().map(str::to_string))
+                                .collect(),
+                        ),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+        }
+        find_in(&self.program.items, type_name, method)
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| find_in(&p.items, type_name, method))
+            })
+            .unwrap_or_default()
+    }
+
     /// Walk a contract expression and, for every `old(arg)` occurrence,
     /// evaluate `arg` *now* (function entry, pre-state) and record the value
     /// in `snap` keyed by the arg's span. Used to build the `old(...)`

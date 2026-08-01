@@ -2116,9 +2116,25 @@ impl<'a> super::Interpreter<'a> {
             };
             let Some(tn) = type_name else { continue };
             let Some(v) = arg_vals.get(i) else { continue };
+            // B-2026-08-01-13 (c1/c5) — a fresh USER-enum arg's payload
+            // bodies: own body first (below, when the enum declares Drop),
+            // then the declared-type payload walk — the caller-side single
+            // owner now that a destructuring callee's arm channel is
+            // param-gated. Option/Result stay with their own machinery;
+            // the struct fields walk below is unreachable for an
+            // EnumVariant value (`value_runs_user_drop` is Struct-shaped).
+            let is_user_enum_value = tn != "Option"
+                && tn != "Result"
+                && matches!(v, super::value::Value::EnumVariant { .. });
             if self.program.drop_method_keys.contains_key(&tn) {
                 self.run_user_drop_body_on_value(&tn, v.clone());
-            } else if self.value_runs_user_drop(v) {
+            }
+            if is_user_enum_value {
+                let v = v.clone();
+                self.run_enum_payload_user_drops_value(&v);
+                continue;
+            }
+            if !self.program.drop_method_keys.contains_key(&tn) && self.value_runs_user_drop(v) {
                 // B-2026-07-30-11 SHAPE 2 — the temp's OWN type declares no
                 // `Drop`, but it carries a Drop-bearing FIELD, so a body still
                 // has to run when it dies (`struct Holder { r: Res }` passed as

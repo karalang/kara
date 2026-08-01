@@ -259,9 +259,21 @@ impl<'a> super::Interpreter<'a> {
     /// The active receiver mode comes from `self_param_stack`, pushed
     /// around each impl-method body by `try_eval_impl_method`; an empty
     /// stack means no method context, where `self` cannot occur.
+    /// B-2026-08-01-13: an Identifier scrutinee naming an OWNED PARAM of
+    /// the current function is a view of the callee's entry copy — its
+    /// payload's Drop observability belongs to the CALLER (caller-retains:
+    /// the caller's NLL / fresh-arg fire reads the original), so the arm
+    /// stash must stay silent, mirroring codegen's
+    /// `pattern_binding_scrutinee_is_owned_param` memory-only gate. Firing
+    /// here doubled the payload body against the caller's fire (identifier
+    /// args) and orphaned the ownership story for fresh ctor args.
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Identifier(_) | ExprKind::Call { .. } => true,
+            ExprKind::Identifier(n) => !self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|params| params.contains(n.as_str())),
+            ExprKind::Call { .. } => true,
             ExprKind::SelfValue => matches!(
                 self.self_param_stack.last(),
                 Some(crate::ast::SelfParam::Owned)

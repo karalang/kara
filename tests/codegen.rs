@@ -6772,6 +6772,70 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-13 — owned enum ARG body ownership, the coherent
+    /// caller-retains rule: a fresh enum-ctor arg's payload body fires
+    /// exactly once, CALLER-side, at the arg's statement end — whether the
+    /// callee drops the enum whole (was: silent on both backends), matches
+    /// it (was: single by accident of two bugs cancelling — output
+    /// unchanged, channel flipped to the caller), or if-lets an identifier
+    /// arg (was: DOUBLE on both backends — the callee's arm channel fired
+    /// on top of the caller's NLL fire). An own-Drop enum fires its own
+    /// body then the payload walk. Twin of `tests/interpreter.rs`'s
+    /// `test_owned_enum_arg_payload_body_single_caller_fire`.
+    #[test]
+    fn e2e_owned_enum_arg_payload_body_single_caller_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(\"loud drop\")\n\
+             \x20   }\n\
+             }\n\
+             enum E2 { B(Res), Empty }\n\
+             fn check(w: E2) { println(\"checked\"); }\n\
+             fn check_match(w: E2) {\n\
+             \x20   match w {\n\
+             \x20       E2.B(r2) => { println(f\"got {r2.id}\"); }\n\
+             \x20       E2.Empty => { println(\"none\"); }\n\
+             \x20   }\n\
+             \x20   println(\"match done\");\n\
+             }\n\
+             fn check_iflet(w: E2) {\n\
+             \x20   if let E2.B(r2) = w {\n\
+             \x20       println(f\"if {r2.id}\");\n\
+             \x20   }\n\
+             \x20   println(\"iflet done\");\n\
+             }\n\
+             fn check_loud(w: Loud) { println(\"loudcheck\"); }\n\
+             fn mk(n: i64) -> E2 { return E2.B(Res { id: n, name: f\"x{n}\" }); }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   check(E2.B(Res { id: 55, name: f\"x{55}\" }));\n\
+             \x20   println(\"b\");\n\
+             \x20   check_loud(Loud.Hold(Res { id: 9, name: f\"l{9}\" }));\n\
+             \x20   println(\"c\");\n\
+             \x20   let e = mk(53);\n\
+             \x20   check_match(e);\n\
+             \x20   println(\"d\");\n\
+             \x20   check_iflet(E2.B(Res { id: 6, name: f\"x{6}\" }));\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\nchecked\ndrop 55 x55\nb\nloudcheck\nloud drop\ndrop 9 l9\nc\ngot 53\n\
+             match done\ndrop 53 x53\nd\nif 6\niflet done\ndrop 6 x6\nend\n"
+        );
+    }
+
     /// B-2026-08-01-5 — fresh method-RECEIVER Drop temps: a `ref self`
     /// method's fresh receiver fires its body at STATEMENT END on both
     /// backends (pre-fix: never under `karac run`, at scope exit under
