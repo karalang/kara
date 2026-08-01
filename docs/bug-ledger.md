@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 201 | 0 |
-| leak | 117 | 1 |
+| leak | 117 | 0 |
 | codegen-gap | 88 | 0 |
-| double-free | 87 | 1 |
+| double-free | 87 | 0 |
 | missing-feature | 73 | 1 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 611 | 3 |
+| codegen | 611 | 1 |
 | typecheck | 109 | 0 |
-| interp | 102 | 1 |
+| interp | 102 | 0 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,20 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **848 surfaced · 4 open · 836 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **848 surfaced · 2 open · 838 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-30 | 2026-08-01 | codegen+interp | medium | Displacement residuals probed live (the b173/b174 recorded residuals): a DEEP-chain field assign `o.h.r = Res{..}` fires no displaced Drop body on EITHER backend (memory correct), and a COMPUTED-index assign `v[base - 1] = Res{..}` fires no displaced body on either backend AND leaks the old element's field buffers under AOT (valgrind: 2 bytes / 1 block definitely lost). | src/codegen/stmts.rs emit_displaced_field_bodies (single-level FieldAccess targets only — a DEEP chain `o.h.r = <new>` declines because the target's object is itself a FieldAccess, not an Identifier) and emit_displaced_index_elem_drop (simple-index gate Integer/Identifier — a computed index `v[base - 1] = <new>` declines); src/interpreter/eval_stmt.rs Assign FIELD/INDEX-target branches (same shape gates, same silence) |
-| B-2026-08-01-31 | 2026-08-01 | codegen | high | Deep-chain field move-out (`let x = o.h.r` / `let s = o.h.name`) never cap-zeroes the source: the moved-out binding AND the root's StructDrop both free the same buffer — a `karac check`-clean double-free abort under karac build (interp fine, run-vs-build divergence). Depth-1 (`let x = h.r`) is handled; every deeper place was not. | src/codegen/param_own.rs suppress_struct_field_move_into_literal (Identifier/`self` object only — a deep-chain source `o.h.r` declines) and its enum deeper-place sibling suppress_place_field_enum_move_source (enum fields only, whose own doc records 'Vec/String/struct fields through a [deeper place] are a separate follow-on, not yet observed'); src/codegen/stmts.rs Let-arm disarm site (disarm_user_drop_fields_for_moved_field, Identifier object only); src/interpreter/eval_stmt.rs suppress_moved_out_drop_field (Identifier object only) |
 | B-2026-08-01-32 | 2026-08-01 | codegen | low | Vec.filled's calloc fast path only recognises a SCALAR constant zero, so Vec.filled(n, Vec.new()) store-loops an all-zero aggregate instead of calloc'ing it — measured ~100x (117.6 ms vs 1.2 ms on a 1e6-element fill) | — |
 | B-2026-08-01-33 | 2026-08-01 | ownership | low | no way to share an immutable `shared struct` across par branches read-only: the >1-branch gate is correct (non-atomic refcount races even on reads) but the only answers are `par struct`+Mutex on an unmutated structure or N private copies — costs #133 its par lane, which its lock-free C mirror can still run | — |
 
-### Fixed (836)
+### Fixed (838)
 
-<details><summary>836 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>838 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -977,6 +975,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **848 surfaced 
 | B-2026-08-01-27 | ownership+codegen | medium | Closure body that MOVES a captured Vec (`let mut v = outer; v.push(x); v.len()`) called twice: interpreter prints 3 (env alias — mutations accumulate… | b876cd3 |
 | B-2026-08-01-28 | codegen | high | The B-2026-08-01-24 for-loop element double-free through the remaining consume arms: `m.insert(k, h)`, `set.insert(p)`, and `names.push(h.name)` over… | 31cd03e |
 | B-2026-08-01-29 | codegen | low | Duplicate-key inserts of a for-loop STRUCT element orphan the staged deep copy: `set.insert(p)` with an equal element already present, and `m.insert(… | 09c2721 |
+| B-2026-08-01-30 | codegen+interp | medium | Displacement residuals probed live (the b173/b174 recorded residuals): a DEEP-chain field assign `o.h.r = Res{..}` fires no displaced Drop body on EI… | e23c570 |
+| B-2026-08-01-31 | codegen | high | Deep-chain field move-out (`let x = o.h.r` / `let s = o.h.name`) never cap-zeroes the source: the moved-out binding AND the root's StructDrop both fr… | e23c570 |
 
 </details>
 
