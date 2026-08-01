@@ -1592,6 +1592,54 @@ fn main() {
     /// Auto-par ordered output (phase-6-runtime.md "Auto-par ordered output").
     /// Three independent `fetch_*` calls reading disjoint resources auto-
     /// parallelize into one group — each prints two trace lines AND an int.
+    /// B-2026-07-31-40 — a Drop-valued `Map` introduced inside an auto-par
+    /// parallel group keeps its full cleanup across the branch write-back.
+    /// The binding carries TWO transferable actions (`FreeMapHandle` + the
+    /// B-2026-07-30-11 value-bodies `UserDrop` walker); the single-slot
+    /// `slot_ownership` map let the second overwrite the first, so the
+    /// parent re-registered only the bodies walk and the handle free was
+    /// emitted NOWHERE in the binary (leak — LSan twin
+    /// `asan_auto_par_ingroup_dropval_map_freed`). This guards the value
+    /// path: displaced-insert Drop bodies still fire in source order and
+    /// the program output is byte-identical to sequential.
+    #[test]
+    fn test_e2e_auto_par_ingroup_dropval_map_output() {
+        let out = run_program(
+            r#"
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+fn work(n: i64) -> i64 {
+    let a = n + 1;
+    let mut m: Map[i64, Res] = Map.new();
+    let _ = m.insert(1, Res { id: 7 });
+    let _ = m.insert(1, Res { id: 8 });
+    a + m.len()
+}
+fn main() {
+    let mut k = 0i64;
+    let mut sum = 0i64;
+    while k < 10 {
+        sum = sum + work(k);
+        k = k + 1;
+    }
+    println(f"{sum}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let mut expected = String::new();
+            for _ in 0..10 {
+                expected.push_str("drop 7\ndrop 8\n");
+            }
+            expected.push_str("65\n");
+            assert_eq!(out, expected);
+        }
+    }
+
     /// The runtime captures each branch's console output and replays it in
     /// branch (= source) order at the join, so the observable stdout is
     /// byte-identical to sequential execution: every branch's lines stay
@@ -9152,5 +9200,89 @@ fn main() {
         if let Some(out) = out {
             assert_eq!(out.trim(), "50\n50\n50", "got {out:?}");
         }
+    }
+}
+
+#[cfg(feature = "llvm")]
+mod auto_par_ingroup_map_ir {
+    /// B-2026-07-31-40 (IR leg) — the parent-side handle free for a
+    /// Drop-valued `Map` introduced inside an auto-par group must survive
+    /// the slot-ownership transfer. The binding queues TWO transferable
+    /// branch-side actions (`FreeMapHandle` + the B-2026-07-30-11
+    /// value-bodies `UserDrop` walker); pre-fix the single-slot
+    /// `slot_ownership` map let the second overwrite the first, so NO
+    /// `karac_map_free*` call was emitted anywhere in the module (proven by
+    /// objdump on the pre-fix object) and the whole map leaked at parent
+    /// scope exit. Asserted at the IR level on purpose: the runtime leak is
+    /// invisible to the LSan harness — unoptimized code plus parked pool
+    /// threads leave stale copies of the handle pointer inside scanned
+    /// stack regions, so LSan classifies the block reachable (the CLI's
+    /// -O2 build clobbers those slots, which is why valgrind catches it on
+    /// shipped binaries). The IR presence check is optimizer-independent
+    /// and bites regardless.
+    #[test]
+    fn test_ir_auto_par_ingroup_dropval_map_transfers_handle_free() {
+        let src = r#"
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+fn work(n: i64) -> i64 {
+    let a = n + 1;
+    let mut m: Map[i64, Res] = Map.new();
+    let _ = m.insert(1, Res { id: 7 });
+    let _ = m.insert(1, Res { id: 8 });
+    a + m.len()
+}
+fn main() {
+    let mut k = 0i64;
+    let mut sum = 0i64;
+    while k < 10 {
+        sum = sum + work(k);
+        k = k + 1;
+    }
+    println(f"{sum}");
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        karac::desugar_program(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+        // Guard the premise: `work`'s two lets must still form a parallel
+        // group. If the analyzer stops grouping this shape, the free
+        // assertion below would pass vacuously (sequential lowering always
+        // frees) — fail loudly instead so the test gets re-shaped.
+        let work = analysis
+            .function_decisions
+            .get("work")
+            .expect("analysis entry for fn work");
+        assert!(
+            work.parallel_groups.iter().any(|g| !g.is_trivial),
+            "expected a non-trivial parallel group in fn work; analyzer \
+             grouping changed — re-shape this test's source"
+        );
+        let ir = karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), Some(&analysis))
+            .expect("compile_to_ir");
+        assert!(
+            ir.contains("__par_branch"),
+            "map let must land in a par branch (grouping not lowered?)"
+        );
+        // A CALL line, not a mere `declare` — the runtime symbol is
+        // declared up-front whether or not any cleanup uses it, so a
+        // substring-only check passes vacuously on the broken module.
+        assert!(
+            ir.lines()
+                .any(|l| l.contains("call") && l.contains("karac_map_free")),
+            "no karac_map_free* CALL in the module: the in-group Map's \
+             FreeMapHandle transfer was lost at the branch write-back \
+             (B-2026-07-31-40 regressed)"
+        );
     }
 }

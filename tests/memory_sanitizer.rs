@@ -16824,6 +16824,56 @@ fn main() {
         );
     }
 
+    /// B-2026-07-31-40 — a Drop-valued `Map` introduced INSIDE an auto-par
+    /// parallel group keeps working end-to-end across the multi-action
+    /// slot-ownership transfer. NOTE this ASAN test guards the
+    /// DOUBLE-FREE/UAF side only (a wrong transfer that re-registered the
+    /// handle free twice, or dropped the branch-side suppression, aborts
+    /// here): the pre-fix LEAK is NOT LSan-visible under this harness —
+    /// unoptimized code plus parked pool threads leave stale copies of the
+    /// handle pointer inside scanned stack regions, so LSan classifies the
+    /// lost blocks as reachable. The leak side is pinned by the
+    /// optimizer-independent IR assertion in `tests/par_codegen.rs`
+    /// (`test_ir_auto_par_ingroup_dropval_map_transfers_handle_free`),
+    /// which was proven failing pre-fix.
+    #[test]
+    fn asan_auto_par_ingroup_dropval_map_freed() {
+        let mut expected: Vec<&str> = Vec::new();
+        for _ in 0..10 {
+            expected.push("drop 7");
+            expected.push("drop 8");
+        }
+        expected.push("65");
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+fn work(n: i64) -> i64 {
+    let a = n + 1;
+    let mut m: Map[i64, Res] = Map.new();
+    let _ = m.insert(1, Res { id: 7 });
+    let _ = m.insert(1, Res { id: 8 });
+    a + m.len()
+}
+fn main() {
+    let mut k = 0i64;
+    let mut sum = 0i64;
+    while k < 10 {
+        sum = sum + work(k);
+        k = k + 1;
+    }
+    println(f"{sum}");
+}
+"#,
+            &expected,
+            "auto_par_ingroup_dropval_map_freed",
+        );
+    }
+
     #[test]
     fn asan_auto_par_vec_of_vec_freed_on_branch_exit() {
         // Vec[Vec[char]] built inside a function — the kata-6 zigzag

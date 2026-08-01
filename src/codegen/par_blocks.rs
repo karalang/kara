@@ -35,7 +35,16 @@ type ParRunResult<'ctx> = (
     // records (see `SlotOwnership`). Empty for the 0-/1-stmt
     // sequential fast paths (the binding compiles directly in the
     // parent frame there, so ownership never leaves it).
-    HashMap<String, SlotOwnership<'ctx>>,
+    //
+    // A Vec per binding, in the BRANCH frame's push order: one binding
+    // can carry SEVERAL transferable actions — a Drop-valued `Map` queues
+    // both its `FreeMapHandle` and the B-2026-07-30-11 value-bodies
+    // `UserDrop` walker — and a single-slot map let the second transfer
+    // OVERWRITE the first, losing the handle free entirely (the whole
+    // map leaked at parent scope exit, B-2026-07-31-40). The rebinding
+    // sites re-register every entry, preserving order so the parent's
+    // LIFO drain keeps the bodies-before-free sequencing the branch had.
+    HashMap<String, Vec<SlotOwnership<'ctx>>>,
 );
 
 /// Parent-allocated state surfaced from `emit_par_run` to
@@ -482,11 +491,27 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         binding_name: &str,
         parent_alloca: PointerValue<'ctx>,
-        slot_ownership: &HashMap<String, SlotOwnership<'ctx>>,
+        slot_ownership: &HashMap<String, Vec<SlotOwnership<'ctx>>>,
     ) {
-        let Some(transfer) = slot_ownership.get(binding_name) else {
+        let Some(transfers) = slot_ownership.get(binding_name) else {
             return;
         };
+        // Re-register EVERY transferred action, in the branch frame's push
+        // order, so the parent's LIFO drain replays the branch's intended
+        // sequencing (a Drop-valued Map's value-bodies walker runs before
+        // its handle free — the walker reads live bucket bytes;
+        // B-2026-07-31-40).
+        for transfer in transfers {
+            self.register_one_slot_ownership(binding_name, parent_alloca, transfer);
+        }
+    }
+
+    fn register_one_slot_ownership(
+        &mut self,
+        binding_name: &str,
+        parent_alloca: PointerValue<'ctx>,
+        transfer: &SlotOwnership<'ctx>,
+    ) {
         let action = match *transfer {
             SlotOwnership::Map {
                 key_is_vec,
@@ -898,7 +923,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // cleanup was removed at branch end — each branch fn drains
         // its own slots' actions into this map; the parent rebinding
         // sites consume it (returned as ParRunResult's third element).
-        let mut slot_ownership: HashMap<String, SlotOwnership<'ctx>> = HashMap::new();
+        let mut slot_ownership: HashMap<String, Vec<SlotOwnership<'ctx>>> = HashMap::new();
         for (i, stmt) in stmts.iter().enumerate() {
             // Per-branch slot list: only the slots whose `branch_index`
             // matches this branch flow into `emit_par_branch_fn` for
@@ -1571,7 +1596,7 @@ impl<'ctx> super::Codegen<'ctx> {
         branch_result_slot: Option<ResultSlot>,
         par_earliest_err_idx: usize,
         par_capture_modes: Option<&[(String, crate::ownership::ParCaptureMode)]>,
-        slot_ownership: &mut HashMap<String, SlotOwnership<'ctx>>,
+        slot_ownership: &mut HashMap<String, Vec<SlotOwnership<'ctx>>>,
     ) -> Result<PointerValue<'ctx>, String> {
         let fn_name = format!("__par_branch_{}_{}", par_id, index);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2321,7 +2346,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         };
                         match transfer {
                             Some(t) => {
-                                slot_ownership.insert(slot.binding_name.clone(), t);
+                                // Push, don't insert: one binding can carry
+                                // several transferable actions (Drop-valued
+                                // Map = handle free + value-bodies walker;
+                                // B-2026-07-31-40), and each must reach the
+                                // parent. `retain` visits in frame order, so
+                                // the Vec preserves the branch's push order.
+                                slot_ownership
+                                    .entry(slot.binding_name.clone())
+                                    .or_default()
+                                    .push(t);
                                 false
                             }
                             None => true,
