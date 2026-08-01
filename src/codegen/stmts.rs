@@ -2380,6 +2380,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     .discarded_owned_literal_tail(value)
                     .expect("guard guarantees a discarded literal tail")
                     .clone();
+                // B-2026-08-01-8: a PLACE element the tuple moved
+                // (`let _ = (r, 20);` — Identifier of a Drop-bearing
+                // struct) has no owning destination, so the SOURCE's
+                // UserDrop must retract — the tuple temp's element walk
+                // below is the single owner. Left armed, the source's
+                // wrapper fired over the moved-from slot (empty-name body)
+                // and the moved heap leaked. Interp twin:
+                // `suppress_discarded_tuple_moved_elem_user_drops`.
+                if let ExprKind::Tuple(elems) = &tail.kind {
+                    let moved: Vec<String> = elems
+                        .iter()
+                        .filter(|e| self.tuple_elem_is_movable_drop_struct_place(e))
+                        .filter_map(|e| match &e.kind {
+                            ExprKind::Identifier(n) => Some(n.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    for n in moved {
+                        self.suppress_user_drop_for_var(&n);
+                    }
+                }
                 self.scope_cleanup_actions.push(Vec::new());
                 let val = self.compile_expr(value)?;
                 // Struct-literal tails: the UserDrop wrapper / field-bodies
@@ -2389,6 +2410,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // so it is the single owner for both call-arg and discard
                 // positions (registering bodies here too double-fired).
                 self.track_inline_owned_aggregate_arg(val, &tail, false);
+                // B-2026-08-01-8: the registrar's internal bodies leg is
+                // gated ALL-FRESH (shared with the call-arg position, where
+                // a place element's body belongs to its binding), so a
+                // MIXED tuple's bodies register here instead — the moved
+                // place element's source was retracted above, making this
+                // walk its single owner. Pure-fresh tuples keep the
+                // registrar's internal call (this one skips them), so
+                // exactly one bodies walk registers either way.
+                if let ExprKind::Tuple(elems) = &tail.kind {
+                    let any_place = elems
+                        .iter()
+                        .any(|e| self.tuple_elem_is_movable_drop_struct_place(e));
+                    if any_place {
+                        let elems = elems.clone();
+                        self.track_discarded_tuple_elem_bodies(&elems, val);
+                    }
+                }
                 self.drain_top_frame_with_emit();
                 Ok(())
             }
@@ -9175,6 +9213,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// moved source's still-armed slot on this backend, and the interpreter
     /// retracts the source and fires via its discard walk — one body each,
     /// so neither backend registers the temp for it.
+    /// B-2026-08-01-8 — is this tuple element an Identifier naming a tracked
+    /// non-shared Drop-bearing struct binding? The one PLACE shape the
+    /// discarded-tuple path admits: its move has no owning destination, so
+    /// the wildcard-let arm retracts the source's UserDrop and the tuple
+    /// temp's element walk owns body + free.
+    pub(super) fn tuple_elem_is_movable_drop_struct_place(&self, e: &Expr) -> bool {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return false;
+        };
+        self.var_type_names.get(n.as_str()).is_some_and(|tn| {
+            self.struct_types.contains_key(tn.as_str())
+                && !self.shared_types.contains_key(tn.as_str())
+                && self.type_runs_user_drop(tn.as_str(), &mut Vec::new())
+        })
+    }
+
     pub(super) fn discarded_owned_literal_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
         match &expr.kind {
             ExprKind::StructLiteral { fields, spread, .. }
@@ -9185,10 +9239,20 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 Some(expr)
             }
+            // Elements must be FRESH — or (B-2026-08-01-8) an Identifier
+            // naming a tracked non-shared Drop-bearing STRUCT binding: the
+            // move into the discarded tuple has no owning destination, so
+            // the caller retracts the source's UserDrop action and this
+            // temp's element walk becomes the single owner (pre-fix the
+            // source's wrapper fired over a zeroed slot — `drop 2 ` with an
+            // empty name — and the moved String leaked). Other place kinds
+            // (Vec/Map/scalar identifiers, projections) keep the all-fresh
+            // requirement.
             ExprKind::Tuple(elems)
-                if elems
-                    .iter()
-                    .all(|e| self.discard_tuple_elem_is_fresh_expr(e)) =>
+                if elems.iter().all(|e| {
+                    self.discard_tuple_elem_is_fresh_expr(e)
+                        || self.tuple_elem_is_movable_drop_struct_place(e)
+                }) =>
             {
                 Some(expr)
             }
@@ -9265,6 +9329,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(te) = self.fn_return_type_exprs.get(n.as_str()) {
                         return te.clone();
                     }
+                }
+            }
+        }
+        // B-2026-08-01-8: an Identifier element — the one place shape the
+        // discarded-tuple gate admits (a moved Drop-bearing struct binding)
+        // — resolves through the binding's recorded type name; the
+        // arg-position derivation below has no binding arm, so the moved
+        // element's body was silently skipped.
+        if self.tuple_elem_is_movable_drop_struct_place(e) {
+            if let ExprKind::Identifier(n) = &e.kind {
+                if let Some(tn) = self.var_type_names.get(n.as_str()) {
+                    return crate::ast::TypeExpr {
+                        kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec![tn.clone()],
+                            generic_args: None,
+                            span: e.span.clone(),
+                        }),
+                        span: e.span.clone(),
+                    };
                 }
             }
         }

@@ -6856,6 +6856,50 @@ fn main() {
         assert_eq!(out, "a\ndrop 1 o1\nb\ndrop 2 o2\nc\ndrop 3 o3\nend\n");
     }
 
+    /// B-2026-08-01-8 — a MIXED fresh+place tuple discard (`let _ = (r,
+    /// 20);` where `r` is a Drop-bearing struct binding): the moved place
+    /// element's source retracts and the discarded tuple temp's element
+    /// walk becomes the single owner, firing the body with the value INTACT
+    /// and freeing its heap once. Pre-fix `karac build` fired the source's
+    /// wrapper over a zeroed slot (`drop 2 ` with an empty name) and leaked
+    /// the moved String; `karac run` fired intact via the source's NLL walk
+    /// — a three-way divergence. All-fresh (a) and scalar-projection (c)
+    /// shapes pin the unchanged behavior. Twin of `tests/interpreter.rs`'s
+    /// `test_mixed_place_tuple_discard_single_intact_fire`.
+    #[test]
+    fn e2e_mixed_place_tuple_discard_single_intact_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+             \x20   return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a: all-fresh tuple discard\");\n\
+             \x20   let _ = (mk(1), 10);\n\
+             \x20   println(\"b: mixed fresh+place tuple discard\");\n\
+             \x20   let r = mk(2);\n\
+             \x20   let _ = (r, 20);\n\
+             \x20   println(\"c: place still-owned after\");\n\
+             \x20   let s = mk(3);\n\
+             \x20   let _ = (s.id, 30);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a: all-fresh tuple discard\ndrop 1 r1\n\
+             b: mixed fresh+place tuple discard\ndrop 2 r2\n\
+             c: place still-owned after\ndrop 3 r3\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a

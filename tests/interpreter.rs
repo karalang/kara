@@ -27087,6 +27087,42 @@ fn test_optres_bare_discard_payload_body() {
     );
 }
 
+/// B-2026-08-01-8 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_mixed_place_tuple_discard_single_intact_fire`, same source and
+/// expected string. The interpreter's output text was already right (the
+/// source binding's NLL walk fired intact); the fix moves the single fire
+/// to the discard walk — the source's Drop action retracts at the
+/// statement and the widened tuple gate admits the place element — so both
+/// backends share one owner and one mechanism.
+#[test]
+fn test_mixed_place_tuple_discard_single_intact_fire() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             fn mk(n: i64) -> Res {\n\
+                 return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a: all-fresh tuple discard\");\n\
+                 let _ = (mk(1), 10);\n\
+                 println(\"b: mixed fresh+place tuple discard\");\n\
+                 let r = mk(2);\n\
+                 let _ = (r, 20);\n\
+                 println(\"c: place still-owned after\");\n\
+                 let s = mk(3);\n\
+                 let _ = (s.id, 30);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a: all-fresh tuple discard\ndrop 1 r1\n\
+         b: mixed fresh+place tuple discard\ndrop 2 r2\n\
+         c: place still-owned after\ndrop 3 r3\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

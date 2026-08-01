@@ -191,6 +191,7 @@ impl<'a> super::Interpreter<'a> {
             // NLL placement / scope-exit ordering tests for plain
             // bindings stay unchanged.
             self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
+            self.suppress_discarded_tuple_moved_elem_user_drops(stmt, &mut cleanup);
             // B-2026-07-30-11 (displaced-value leg): `a = b;` moves b's value
             // into `a` exactly as the let-rebind above does — the source's
             // Drop slot must be retracted or its body fires a second time on
@@ -1180,6 +1181,42 @@ impl<'a> super::Interpreter<'a> {
     /// No-op when the let statement isn't `Binding = Identifier` or
     /// when the source type isn't user-Drop — non-user-Drop bindings
     /// keep their existing drop_trace records.
+    /// B-2026-08-01-8 — `let _ = (r, 20);` moves a Drop-bearing STRUCT
+    /// binding into a DISCARDED tuple: no owning destination exists, so the
+    /// source's `CleanupAction::Drop` must retract and the discard walk
+    /// (`run_discarded_value_user_drops`, whose tuple gate now admits the
+    /// place element) becomes the single owner — the codegen twin retracts
+    /// via `suppress_user_drop_for_var` and lets the tuple temp's element
+    /// walk fire body + free at the `;`. Wildcard-let tuple literals only;
+    /// every other shape keeps its existing channels.
+    fn suppress_discarded_tuple_moved_elem_user_drops(
+        &mut self,
+        stmt: &Stmt,
+        cleanup: &mut Vec<CleanupAction>,
+    ) {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return;
+        };
+        if !matches!(pattern.kind, PatternKind::Wildcard) {
+            return;
+        }
+        let ExprKind::Tuple(elems) = &value.kind else {
+            return;
+        };
+        for e in elems {
+            let ExprKind::Identifier(n) = &e.kind else {
+                continue;
+            };
+            let Some(v) = self.env.get(n) else {
+                continue;
+            };
+            if matches!(&v, Value::Struct { .. }) && self.value_runs_user_drop(&v) {
+                cleanup
+                    .retain(|a| !matches!(a, CleanupAction::Drop { name } if name == n.as_str()));
+            }
+        }
+    }
+
     fn suppress_let_rebind_user_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
         let StmtKind::Let { value, .. } = &stmt.kind else {
             return;
@@ -1277,7 +1314,7 @@ impl<'a> super::Interpreter<'a> {
             // rule (scalar-ness there is the element's inferred TypeExpr;
             // here it is the evaluated element value).
             ExprKind::Tuple(elems) => {
-                matches!(val, Value::Tuple(items) if self.discard_tuple_all_elems_safe(elems, items))
+                matches!(val, Value::Tuple(items) if self.discard_tuple_all_elems_safe(elems, items, true))
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
@@ -1350,7 +1387,12 @@ impl<'a> super::Interpreter<'a> {
     /// (`discard_tuple_elem_is_fresh`), a scalar copy (Int/Float/Bool/
     /// Char/Unit — no cleanup can alias it), or a nested tuple that
     /// satisfies the same rule.
-    pub(super) fn discard_tuple_all_elems_safe(&self, elems: &[Expr], items: &[Value]) -> bool {
+    pub(super) fn discard_tuple_all_elems_safe(
+        &self,
+        elems: &[Expr],
+        items: &[Value],
+        allow_moved_place: bool,
+    ) -> bool {
         if elems.len() != items.len() {
             return false;
         }
@@ -1360,7 +1402,16 @@ impl<'a> super::Interpreter<'a> {
             }
             match (&e.kind, v) {
                 (ExprKind::Tuple(ie), Value::Tuple(iv)) => {
-                    self.discard_tuple_all_elems_safe(ie, iv)
+                    self.discard_tuple_all_elems_safe(ie, iv, allow_moved_place)
+                }
+                // B-2026-08-01-8: an Identifier element holding a
+                // Drop-bearing STRUCT is admitted — its source binding's
+                // Drop action was retracted at the statement
+                // (`suppress_discarded_tuple_moved_elem_user_drops`), so
+                // the discard walk here is the single owner. Codegen twin:
+                // `tuple_elem_is_movable_drop_struct_place`.
+                (ExprKind::Identifier(_), Value::Struct { .. }) => {
+                    allow_moved_place && self.value_runs_user_drop(v)
                 }
                 _ => matches!(
                     v,

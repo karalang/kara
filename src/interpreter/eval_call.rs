@@ -2030,7 +2030,11 @@ impl<'a> super::Interpreter<'a> {
             // armed, so firing the walk too would double its body.
             if let ExprKind::Tuple(elems) = &arg.value.kind {
                 if let Some(Value::Tuple(items)) = arg_vals.get(i) {
-                    if self.discard_tuple_all_elems_safe(elems, items) {
+                    // Place elements stay EXCLUDED in arg position — the
+                    // binding's own Drop covers them (B-2026-08-01-8's
+                    // wildcard-let widening must not reach here; the full
+                    // suite caught the double fire on `take_tuple((h, 20))`).
+                    if self.discard_tuple_all_elems_safe(elems, items, false) {
                         self.run_discarded_value_user_drops(Value::Tuple(items.clone()));
                     }
                 }
