@@ -18346,6 +18346,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_sigv4_example() {
+        // examples/sigv4.kara — AWS Signature Version 4 request signing, built
+        // on sha256.kara's primitives. Two vectors: AWS's own documented
+        // `get-vanilla` case (the AKIDEXAMPLE credentials and 20150830T123600Z
+        // timestamp), and a second constructed to exercise what the first
+        // cannot — query parameters supplied out of order, values needing
+        // percent-encoding including a `/` that must encode in a VALUE but not
+        // in the PATH, headers in mixed case and out of order, and a header
+        // value with runs of internal whitespace the spec collapses.
+        //
+        // The expected values were cross-checked against an independent Python
+        // stdlib implementation (hashlib + hmac) rather than transcribed, so a
+        // divergence here means the two implementations disagree on a byte-exact
+        // signature — not that a constant was copied wrong.
+        //
+        // This example found B-2026-08-01-24: moving elements out of a by-value
+        // `Vec[S]` parameter (what `sort_headers` does) double-freed each
+        // element's heap field, aborting the compiled binary while the
+        // interpreter was correct. Keeping the run-vs-build equality asserted
+        // here is what would catch its return.
+        if let Some(out) = run_program(include_str!("../examples/sigv4.kara")) {
+            assert_eq!(out, include_str!("../examples/sigv4.expected"));
+        }
+    }
+
+    #[test]
     fn test_e2e_heap_example() {
         // examples/heap.kara — a generic binary MIN-heap `Heap[T: Ord]` +
         // heapsort. Validates the GENERIC-MONOMORPHIZATION surface end to end,

@@ -1,0 +1,202 @@
+// Canonical request builder — stage 1 of AWS SigV4, extracted from
+// `examples/sigv4.kara` so the unit is writable from a prompt and has a
+// deterministic stdout oracle without pulling in SHA-256.
+//
+// The interesting work is all here: percent-encoding with a path/value split,
+// header canonicalization, and two sorts with different comparison keys.
+
+// ── SigV4 ───────────────────────────────────────────────────────────────
+
+// A request header. Kept as a pair so the canonicalization can sort and
+// rewrite both halves.
+struct Header {
+    name: String,
+    value: String,
+}
+
+struct QueryParam {
+    key: String,
+    value: String,
+}
+
+// ASCII lowercase. Works in BYTES rather than chars because `i64 as char` is
+// rejected (E_INT_AS_CHAR — not every integer is a scalar value), while
+// `u8 as char` is fine; header names are ASCII by the HTTP grammar, so the
+// byte path is exact here rather than a shortcut.
+fn lower(s: String) -> String {
+    let mut out = String.new();
+    for b in s.bytes() {
+        if b >= 65u8 and b <= 90u8 {
+            out.push((b + 32u8) as char);
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
+// Collapse runs of spaces and strip the ends — the spec's "trimall" for a
+// non-quoted header value.
+fn trimall(s: String) -> String {
+    let mut out = String.new();
+    let mut pending = false;
+    let mut seen = false;
+    for ch in s.chars() {
+        if ch == ' ' {
+            if seen {
+                pending = true;
+            }
+        } else {
+            if pending {
+                out.push(' ');
+            }
+            pending = false;
+            seen = true;
+            out.push(ch);
+        }
+    }
+    out
+}
+
+// RFC 3986 unreserved: A-Z a-z 0-9 - _ . ~ pass through; everything else
+// becomes %XX with UPPERCASE hex. `keep_slash` is the one difference between
+// encoding a path (where `/` separates segments) and a query value (where it
+// does not).
+fn uri_encode(s: String, keep_slash: bool) -> String {
+    let digits = "0123456789ABCDEF".bytes();
+    let mut out = String.new();
+    for b in s.bytes() {
+        let c = b as char;
+        let unreserved = (c >= 'A' and c <= 'Z')
+            or (c >= 'a' and c <= 'z')
+            or (c >= '0' and c <= '9')
+            or c == '-' or c == '_' or c == '.' or c == '~';
+        if unreserved {
+            out.push(c);
+        } else {
+            if c == '/' and keep_slash {
+                out.push(c);
+            } else {
+                let v = b as i64;
+                out.push('%');
+                out.push(digits[v / 16] as char);
+                out.push(digits[v % 16] as char);
+            }
+        }
+    }
+    out
+}
+
+// Insertion sort by canonical name. Small n, and it keeps the comparison in
+// one place — the spec orders headers by lowercased name and query params by
+// encoded key.
+fn sort_headers(headers: Vec[Header]) -> Vec[Header] {
+    let mut out: Vec[Header] = Vec.new();
+    for h in headers {
+        let key = lower(h.name.clone());
+        let mut at = out.len();
+        let mut i = 0;
+        while i < out.len() {
+            if key < lower(out[i].name.clone()) {
+                at = i;
+                i = out.len();
+            } else {
+                i = i + 1;
+            }
+        }
+        out.insert(at, h);
+    }
+    out
+}
+
+fn sort_params(params: Vec[QueryParam]) -> Vec[QueryParam] {
+    let mut out: Vec[QueryParam] = Vec.new();
+    for p in params {
+        let key = uri_encode(p.key.clone(), false);
+        let mut at = out.len();
+        let mut i = 0;
+        while i < out.len() {
+            if key < uri_encode(out[i].key.clone(), false) {
+                at = i;
+                i = out.len();
+            } else {
+                i = i + 1;
+            }
+        }
+        out.insert(at, p);
+    }
+    out
+}
+
+fn canonical_query(params: Vec[QueryParam]) -> String {
+    let sorted = sort_params(params);
+    let mut out = String.new();
+    let mut first = true;
+    for p in sorted {
+        if not first {
+            out = out + "&";
+        }
+        out = out + uri_encode(p.key, false) + "=" + uri_encode(p.value, false);
+        first = false;
+    }
+    out
+}
+
+// Stage 1 — the canonical request. Its SHA-256 is what gets signed.
+fn canonical_request(
+    method: String,
+    path: String,
+    params: Vec[QueryParam],
+    headers: Vec[Header],
+    payload_hash: String,
+) -> String {
+    let sorted = sort_headers(headers);
+    let mut canon_headers = String.new();
+    let mut signed = String.new();
+    let mut first = true;
+    for h in sorted {
+        let name = lower(h.name);
+        canon_headers = canon_headers + name.clone() + ":" + trimall(h.value) + "\n";
+        if not first {
+            signed = signed + ";";
+        }
+        signed = signed + name;
+        first = false;
+    }
+    method + "\n" + uri_encode(path, true) + "\n" + canonical_query(params) + "\n"
+        + canon_headers + "\n" + signed + "\n" + payload_hash
+}
+
+
+fn header(name: String, value: String) -> Header {
+    Header { name: name, value: value }
+}
+
+fn param(key: String, value: String) -> QueryParam {
+    QueryParam { key: key, value: value }
+}
+
+fn main() {
+    let mut params: Vec[QueryParam] = Vec.new();
+    params.push(param("Zed", "1"));
+    params.push(param("alpha", "a b"));
+    params.push(param("Mid", "x/y"));
+
+    let mut headers: Vec[Header] = Vec.new();
+    headers.push(header("X-Amz-Date", "20150830T123600Z"));
+    headers.push(header("Host", "example.amazonaws.com"));
+    headers.push(header("My-Header", "  a  b  "));
+
+    println(canonical_request(
+        "GET",
+        "/my path/doc",
+        params,
+        headers,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ));
+    println("---");
+    println(uri_encode("a/b c~d_e.f-g", true));
+    println(uri_encode("a/b c~d_e.f-g", false));
+    println("[" + trimall("  a  b  ") + "]");
+    println(lower("X-Amz-DATE"));
+}

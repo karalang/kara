@@ -1,0 +1,14 @@
+GET
+/my%20path/doc
+Mid=x%2Fy&Zed=1&alpha=a%20b
+host:example.amazonaws.com
+my-header:a b
+x-amz-date:20150830T123600Z
+
+host;my-header;x-amz-date
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+---
+a/b%20c~d_e.f-g
+a%2Fb%20c~d_e.f-g
+[a b]
+x-amz-date
