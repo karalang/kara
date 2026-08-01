@@ -5023,6 +5023,42 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Re-arm placement variant of [`Self::track_user_drop_var_with_fn`] for
+    /// the enum walker (own-Drop enum reassign leg): when the binding's OWN
+    /// `karac_drop_<E>` action survived (payload move-out shape), the
+    /// re-registered walker must drain AFTER it — own body first, then the
+    /// payload walk, the interpreter's order. LIFO drain runs later vector
+    /// entries first, so the walker is INSERTED at the own action's index in
+    /// its frame (pushing the own action later). With no surviving own
+    /// action, this is a plain innermost-frame push.
+    pub(super) fn track_container_elem_bodies_before_own(
+        &mut self,
+        type_name: &str,
+        binding_name: &str,
+        binding_ptr: PointerValue<'ctx>,
+        drop_fn: FunctionValue<'ctx>,
+    ) {
+        let action = CleanupAction::UserDrop {
+            binding_name: binding_name.to_string(),
+            binding_ptr,
+            drop_fn,
+            type_name: type_name.to_string(),
+        };
+        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+            let own_idx = frame.iter().position(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name: bn, drop_fn: f, .. }
+                    if bn == binding_name && !Self::is_container_elem_bodies_fn(*f))
+            });
+            if let Some(idx) = own_idx {
+                frame.insert(idx, action);
+                return;
+            }
+        }
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(action);
+        }
+    }
+
     /// NLL live-range-end firing for user-`impl Drop` bindings
     /// (B-2026-07-21-1). design.md § Drop ordering: "Destructors fire at
     /// each binding's live-range end, not lexical scope end … a value whose
@@ -5198,6 +5234,35 @@ impl<'ctx> super::Codegen<'ctx> {
     /// it runs no body — a LEAK, which is the safe side of this trade (an
     /// under-suppressed body would print twice, an over-suppressed one prints
     /// once too few).
+    /// Walker-specific sibling of [`Self::has_armed_user_drop`]: is a
+    /// `__karac_dropelems_*` bodies action still armed for `name`? An
+    /// own-`impl Drop` enum binding with a Drop-bearing payload carries TWO
+    /// `UserDrop` actions (the `karac_drop_<E>` wrapper and the payload
+    /// walker); a match arm's payload move-out retracts only the walker, so
+    /// the coarse any-action test stays true and cannot express "the payload
+    /// is gone" — which the own-Drop enum reassign leg needs (firing either
+    /// body on a moved-out payload reads cap-zeroed bits: `drop 0`).
+    pub(super) fn has_armed_container_elem_bodies(&self, name: &str) -> bool {
+        self.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(action, CleanupAction::UserDrop { binding_name, drop_fn, .. }
+                    if binding_name == name && Self::is_container_elem_bodies_fn(*drop_fn))
+            })
+        })
+    }
+
+    /// Own-wrapper-specific sibling of [`Self::has_armed_user_drop`]: a
+    /// `UserDrop` action for `name` that is NOT a `__karac_dropelems_*`
+    /// walker — i.e. the binding's own `karac_drop_<T>` body is still armed.
+    pub(super) fn has_armed_own_user_drop(&self, name: &str) -> bool {
+        self.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(action, CleanupAction::UserDrop { binding_name, drop_fn, .. }
+                    if binding_name == name && !Self::is_container_elem_bodies_fn(*drop_fn))
+            })
+        })
+    }
+
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
         for frame in self.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {

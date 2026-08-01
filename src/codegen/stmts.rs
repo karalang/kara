@@ -6767,11 +6767,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // value had its walk action retracted, and replaying it
                     // would double the payload's body. USER value enums only:
                     // Option/Result reassign rides its own inline-payload
-                    // machinery, shared enums are RC-driven, and an enum with
-                    // its OWN `impl Drop` is excluded (wrapper + walk action
-                    // pair whose assign-site sequencing is unsettled — the
-                    // interpreter twin excludes it identically, so the
-                    // backends stay in step).
+                    // machinery and shared enums are RC-driven. An enum with
+                    // its OWN `impl Drop` fires that body FIRST (a direct
+                    // `{E}.drop` call — bodies only, never the wrapper, so no
+                    // memory work moves), then the payload walk — the struct
+                    // twin's own-body-then-members order, settled by the
+                    // own-Drop-enum reassign leg; the interpreter twin
+                    // sequences identically.
                     let lhs_is_tracked_value_enum =
                         self.var_type_names.get(name.as_str()).is_some_and(|tn| {
                             tn != "Option"
@@ -6780,23 +6782,61 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .enum_layouts
                                     .get(tn.as_str())
                                     .is_some_and(|l| !l.is_shared)
-                                && !self
-                                    .program_snapshot
-                                    .as_deref()
-                                    .is_some_and(|p| p.drop_method_keys.contains_key(tn.as_str()))
                         });
                     if lhs_is_tracked_value_enum
                         && !rhs_is_self_alias
                         && !crate::deque_head::expr_mentions_name_deep(value, name)
-                        && self.has_armed_user_drop(name.as_str())
                     {
                         if let (Some(tn), Some(slot)) = (
                             self.var_type_names.get(name.as_str()).cloned(),
                             self.variables.get(name).copied(),
                         ) {
-                            if let Some(walker) = self.emit_enum_payload_user_drop_bodies_fn(&tn) {
+                            let walker = self.emit_enum_payload_user_drop_bodies_fn(&tn);
+                            // A payload moved out by a match/if-let arm
+                            // retracted the WALKER action (only) — the old
+                            // value no longer owns its payload, so NEITHER
+                            // body fires; firing the own body here while the
+                            // interpreter's moved_out_enum_payload_bindings
+                            // guard skips both would diverge, and the walker
+                            // would read cap-zeroed bits (`drop 0`). A
+                            // whole-value move retracted both actions, so
+                            // the per-action armed tests below cover it.
+                            let payload_disarmed = walker.is_some()
+                                && !self.has_armed_container_elem_bodies(name.as_str());
+                            if !payload_disarmed {
+                                let has_own_drop = self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .is_some_and(|p| p.drop_method_keys.contains_key(tn.as_str()));
+                                if has_own_drop && self.has_armed_own_user_drop(name.as_str()) {
+                                    if let Some(f) = self.module.get_function(&format!("{tn}.drop"))
+                                    {
+                                        self.builder.build_call(f, &[slot.ptr.into()], "").unwrap();
+                                    }
+                                }
+                                if self.has_armed_container_elem_bodies(name.as_str()) {
+                                    if let Some(w) = walker {
+                                        self.builder.build_call(w, &[slot.ptr.into()], "").unwrap();
+                                    }
+                                }
+                            }
+                            // Memory sibling (B-2026-08-01-3): the displaced
+                            // old value's payload HEAP was never freed — the
+                            // eager-free ladder above has Vec/Map/struct legs
+                            // but no enum leg, so `a = mk(2);` over
+                            // `Full(Res { name: String })` leaked the old
+                            // String on every reassign (DCE-masked in trivial
+                            // probes until the bodies walk made the value
+                            // live). Run the `__karac_drop_<E>` switch on the
+                            // old slot AFTER the bodies, BEFORE the store —
+                            // it is tag-dispatched and cap-guarded, so a
+                            // moved-out (cap-zeroed) payload and a
+                            // payload-free variant both no-op, and the
+                            // binding's scope-exit EnumDrop reads the slot
+                            // after the store, covering only the new value.
+                            if let Some(switch_fn) = self.emit_enum_drop_switch(&tn) {
                                 self.builder
-                                    .build_call(walker, &[slot.ptr.into()], "")
+                                    .build_call(switch_fn, &[slot.ptr.into()], "")
                                     .unwrap();
                             }
                         }
@@ -6833,6 +6873,44 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(slot) = self.variables.get(name).copied() {
                                     let name = name.clone();
                                     self.track_user_drop_var(&tn, &name, slot.ptr);
+                                }
+                            }
+                        }
+                    }
+                    // B-2026-07-31-38, ENUM sibling (own-Drop enum reassign
+                    // leg): a move retraction (whole-value `let c = b;`, or a
+                    // match arm's payload move-out) removed the binding's
+                    // `__karac_dropelems_enum_<E>` walker, and a later
+                    // reassign stores a fresh owned value whose payload
+                    // bodies then never fire at exit — while the interpreter
+                    // re-arms (its move records are cleared on assign) and
+                    // fires them. Re-register the walker, EXCEPT when the
+                    // enum declares its own `impl Drop` and that action is
+                    // gone too (the whole-move shape): there the interpreter
+                    // stays fully silent for the new value — its Drop action
+                    // was name-retracted at the move — so re-arming would
+                    // diverge the other way. Same innermost-frame placement
+                    // caveat as the struct leg above.
+                    if lhs_is_tracked_value_enum
+                        && !rhs_is_self_alias
+                        && !self.has_armed_container_elem_bodies(name.as_str())
+                    {
+                        if let (Some(tn), Some(slot)) = (
+                            self.var_type_names.get(name.as_str()).cloned(),
+                            self.variables.get(name).copied(),
+                        ) {
+                            let has_own_drop = self
+                                .program_snapshot
+                                .as_deref()
+                                .is_some_and(|p| p.drop_method_keys.contains_key(tn.as_str()));
+                            if !has_own_drop || self.has_armed_own_user_drop(name.as_str()) {
+                                if let Some(walker) =
+                                    self.emit_enum_payload_user_drop_bodies_fn(&tn)
+                                {
+                                    let name = name.clone();
+                                    self.track_container_elem_bodies_before_own(
+                                        &tn, &name, slot.ptr, walker,
+                                    );
                                 }
                             }
                         }

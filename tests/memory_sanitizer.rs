@@ -16874,6 +16874,60 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-3 — reassigning an enum binding over a variant whose
+    /// STRUCT payload carries interior heap (`Full(Res { name: String })`)
+    /// leaked the displaced payload's String on every assignment: the
+    /// Assign arm's eager-free ladder had Vec/Map/struct legs but no enum
+    /// leg. The leak was DCE-masked until the payload-bodies walk
+    /// (B-2026-07-30-11's enum-assign leg) made the old value live. The fix
+    /// runs the tag-dispatched `__karac_drop_<E>` switch on the old slot
+    /// after the bodies, before the store. Covers both the plain and the
+    /// own-`impl Drop` enum shapes; LSan (Linux CI) is the leak-side gate,
+    /// ASAN guards the switch against double-freeing what the bodies read.
+    #[test]
+    fn asan_enum_reassign_displaced_payload_heap_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+enum SBox { Full(Res), Empty }
+enum Loud { Hold(Res), Quiet }
+impl Drop for Loud {
+    fn drop(mut ref self) {
+        println("loud drop")
+    }
+}
+fn mk(n: i64) -> SBox {
+    return SBox.Full(Res { id: n, name: f"s{n}" });
+}
+fn mk_loud(n: i64) -> Loud {
+    return Loud.Hold(Res { id: n, name: f"l{n}" });
+}
+fn main() {
+    let mut a = mk(1);
+    a = mk(2);
+    let mut b = mk_loud(3);
+    b = mk_loud(4);
+    println("end");
+}
+"#,
+            &[
+                "drop 1 s1",
+                "drop 2 s2",
+                "loud drop",
+                "drop 3 l3",
+                "loud drop",
+                "drop 4 l4",
+                "end",
+            ],
+            "enum_reassign_displaced_payload_heap_freed",
+        );
+    }
+
     #[test]
     fn asan_auto_par_vec_of_vec_freed_on_branch_exit() {
         // Vec[Vec[char]] built inside a function — the kata-6 zigzag

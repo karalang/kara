@@ -6440,6 +6440,129 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (own-Drop enum reassign leg) + B-2026-08-01-3 — the
+    /// displaced old value of an own-`impl Drop` enum reassign fires its own
+    /// body then its payload bodies at the assignment (the struct twin's
+    /// order), and the displaced payload's heap is freed (the eager-free
+    /// ladder gained its enum leg). The matrix also pins: whole-value move +
+    /// reassign stays silent for the new value (m2 — the interpreter's Drop
+    /// action was name-retracted at the move), payload move-out + reassign
+    /// fires nothing at the assign site but re-arms the walker so the NEW
+    /// value's payload body fires at exit AFTER the own body (m3 — the
+    /// insert-before-own placement), a self-mention RHS is skipped (m4), and
+    /// Quiet transitions fire exactly once per held payload (m5). Twin of
+    /// `tests/interpreter.rs`'s `test_own_drop_enum_reassign_sequencing`.
+    #[test]
+    fn e2e_own_drop_enum_reassign_sequencing() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(\"loud drop\")\n\
+             \x20   }\n\
+             }\n\
+             fn mk_loud(n: i64) -> Loud {\n\
+             \x20   return Loud.Hold(Res { id: n, name: f\"l{n}\" });\n\
+             }\n\
+             fn use_res(r: Res) {\n\
+             \x20   println(f\"took {r.id}\");\n\
+             }\n\
+             fn pass(b: Loud) -> Loud {\n\
+             \x20   return b;\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"m1: plain reassign\");\n\
+             \x20   let mut a = mk_loud(1);\n\
+             \x20   a = mk_loud(2);\n\
+             \x20   println(\"m1 end\");\n\
+             \x20   println(\"m2: reassign after whole-value move\");\n\
+             \x20   let mut b = mk_loud(3);\n\
+             \x20   let c = b;\n\
+             \x20   b = mk_loud(4);\n\
+             \x20   println(\"m2 end\");\n\
+             \x20   println(\"m3: reassign after payload move-out\");\n\
+             \x20   let mut d = mk_loud(5);\n\
+             \x20   match d {\n\
+             \x20       Loud.Hold(r) => { use_res(r); }\n\
+             \x20       Loud.Quiet => {}\n\
+             \x20   }\n\
+             \x20   d = mk_loud(6);\n\
+             \x20   println(\"m3 end\");\n\
+             \x20   println(\"m4: self-mention\");\n\
+             \x20   let mut e = mk_loud(7);\n\
+             \x20   e = pass(e);\n\
+             \x20   println(\"m4 end\");\n\
+             \x20   println(\"m5: quiet-to-full and full-to-quiet\");\n\
+             \x20   let mut g = mk_loud(8);\n\
+             \x20   g = Loud.Quiet;\n\
+             \x20   g = mk_loud(9);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "m1: plain reassign\nloud drop\ndrop 1 l1\nloud drop\ndrop 2 l2\nm1 end\n\
+             m2: reassign after whole-value move\nloud drop\ndrop 3 l3\nm2 end\n\
+             m3: reassign after payload move-out\ntook 5\ndrop 5 l5\nloud drop\ndrop 6 l6\nm3 end\n\
+             m4: self-mention\nloud drop\ndrop 7 l7\nm4 end\n\
+             m5: quiet-to-full and full-to-quiet\nloud drop\ndrop 8 l8\nloud drop\nloud drop\ndrop 9 l9\nend\n"
+        );
+    }
+
+    /// B-2026-07-31-38 (enum sibling) — a plain value enum whose walker
+    /// action was retracted by a move (whole-value `let c = b;`, or a match
+    /// arm's payload move-out) gets it RE-ARMED on reassign, so the fresh
+    /// value's payload body fires at exit under `karac build` exactly as the
+    /// interpreter fires it (both `drop 4 s4` and `drop 6 s6` were
+    /// AOT-silent). Twin of `tests/interpreter.rs`'s
+    /// `test_enum_walker_rearm_after_move_reassign`.
+    #[test]
+    fn e2e_enum_walker_rearm_after_move_reassign() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum SBox { Full(Res), Empty }\n\
+             fn mk(n: i64) -> SBox {\n\
+             \x20   return SBox.Full(Res { id: n, name: f\"s{n}\" });\n\
+             }\n\
+             fn use_res(r: Res) {\n\
+             \x20   println(f\"took {r.id}\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut b = mk(3);\n\
+             \x20   let c = b;\n\
+             \x20   b = mk(4);\n\
+             \x20   println(\"m\");\n\
+             \x20   let mut d = mk(5);\n\
+             \x20   match d {\n\
+             \x20       SBox.Full(r) => { use_res(r); }\n\
+             \x20       SBox.Empty => {}\n\
+             \x20   }\n\
+             \x20   d = mk(6);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ndrop 3 s3\ndrop 4 s4\nm\ntook 5\ndrop 5 s5\ndrop 6 s6\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a

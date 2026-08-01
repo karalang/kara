@@ -2041,17 +2041,26 @@ impl<'a> super::Interpreter<'a> {
                                 // scope-exit payload walk (same moved-out
                                 // guards, same forward order as codegen's
                                 // `__karac_dropelems_enum_<E>`). An enum with
-                                // its OWN `impl Drop` is excluded — its
-                                // reassign shape carries a wrapper + walk
-                                // action pair whose assign-site sequencing is
-                                // unsettled; keeping it silent preserves
-                                // parity (codegen twin excludes it too).
+                                // its OWN `impl Drop` fires that body FIRST,
+                                // then the payload walk — the struct twin's
+                                // own-body-then-members order (settled by the
+                                // own-Drop-enum reassign leg; previously
+                                // excluded as unsettled and the old value's
+                                // work was silently lost on both backends).
+                                // The own body respects the same disarm sets
+                                // the payload walk checks internally: a
+                                // moved-out value runs nothing.
                                 Value::EnumVariant { enum_name, .. } => {
-                                    if !self.program.drop_method_keys.contains_key(enum_name) {
-                                        let t = t.clone();
-                                        let old = old.clone();
-                                        self.run_enum_payload_user_drops(&t, &old);
+                                    let t = t.clone();
+                                    let old = old.clone();
+                                    if !self.moved_out_enum_payload_bindings.contains(&t)
+                                        && !self.moved_out_container_bodies_bindings.contains(&t)
+                                        && self.program.drop_method_keys.contains_key(enum_name)
+                                    {
+                                        let tn = enum_name.clone();
+                                        self.run_user_drop_body_on_value(&tn, old.clone());
                                     }
+                                    self.run_enum_payload_user_drops(&t, &old);
                                 }
                                 _ => {}
                             }

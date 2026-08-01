@@ -26726,6 +26726,110 @@ fn test_enum_return_discard_runs_payload_body() {
     );
 }
 
+/// B-2026-07-30-11 (own-Drop enum reassign leg) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_own_drop_enum_reassign_sequencing`, same source
+/// and expected string. Pre-fix the interpreter's Assign displacement arm
+/// excluded own-`impl Drop` enums entirely ("sequencing unsettled"), so the
+/// overwritten value's own body and payload body were silently lost (m1/m5).
+#[test]
+fn test_own_drop_enum_reassign_sequencing() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+                 fn drop(mut ref self) {\n\
+                     println(\"loud drop\")\n\
+                 }\n\
+             }\n\
+             fn mk_loud(n: i64) -> Loud {\n\
+                 return Loud.Hold(Res { id: n, name: f\"l{n}\" });\n\
+             }\n\
+             fn use_res(r: Res) {\n\
+                 println(f\"took {r.id}\");\n\
+             }\n\
+             fn pass(b: Loud) -> Loud {\n\
+                 return b;\n\
+             }\n\
+             fn main() {\n\
+                 println(\"m1: plain reassign\");\n\
+                 let mut a = mk_loud(1);\n\
+                 a = mk_loud(2);\n\
+                 println(\"m1 end\");\n\
+                 println(\"m2: reassign after whole-value move\");\n\
+                 let mut b = mk_loud(3);\n\
+                 let c = b;\n\
+                 b = mk_loud(4);\n\
+                 println(\"m2 end\");\n\
+                 println(\"m3: reassign after payload move-out\");\n\
+                 let mut d = mk_loud(5);\n\
+                 match d {\n\
+                     Loud.Hold(r) => { use_res(r); }\n\
+                     Loud.Quiet => {}\n\
+                 }\n\
+                 d = mk_loud(6);\n\
+                 println(\"m3 end\");\n\
+                 println(\"m4: self-mention\");\n\
+                 let mut e = mk_loud(7);\n\
+                 e = pass(e);\n\
+                 println(\"m4 end\");\n\
+                 println(\"m5: quiet-to-full and full-to-quiet\");\n\
+                 let mut g = mk_loud(8);\n\
+                 g = Loud.Quiet;\n\
+                 g = mk_loud(9);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "m1: plain reassign\nloud drop\ndrop 1 l1\nloud drop\ndrop 2 l2\nm1 end\n\
+         m2: reassign after whole-value move\nloud drop\ndrop 3 l3\nm2 end\n\
+         m3: reassign after payload move-out\ntook 5\ndrop 5 l5\nloud drop\ndrop 6 l6\nm3 end\n\
+         m4: self-mention\nloud drop\ndrop 7 l7\nm4 end\n\
+         m5: quiet-to-full and full-to-quiet\nloud drop\ndrop 8 l8\nloud drop\nloud drop\ndrop 9 l9\nend\n"
+    );
+}
+
+/// B-2026-07-31-38 (enum sibling) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_enum_walker_rearm_after_move_reassign`, same source and expected
+/// string. The interpreter already fired both exit bodies (its move records
+/// are cleared on assign); the test pins that as the parity target the
+/// codegen re-arm now meets.
+#[test]
+fn test_enum_walker_rearm_after_move_reassign() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum SBox { Full(Res), Empty }\n\
+             fn mk(n: i64) -> SBox {\n\
+                 return SBox.Full(Res { id: n, name: f\"s{n}\" });\n\
+             }\n\
+             fn use_res(r: Res) {\n\
+                 println(f\"took {r.id}\");\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut b = mk(3);\n\
+                 let c = b;\n\
+                 b = mk(4);\n\
+                 println(\"m\");\n\
+                 let mut d = mk(5);\n\
+                 match d {\n\
+                     SBox.Full(r) => { use_res(r); }\n\
+                     SBox.Empty => {}\n\
+                 }\n\
+                 d = mk(6);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 3 s3\ndrop 4 s4\nm\ntook 5\ndrop 5 s5\ndrop 6 s6\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed
