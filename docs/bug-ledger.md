@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 201 | 1 |
+| miscompile | 201 | 0 |
 | leak | 115 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 85 | 0 |
@@ -100,8 +100,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
 | perf | 42 | 0 |
+| soundness | 33 | 1 |
 | crash | 33 | 0 |
-| soundness | 32 | 0 |
 | diagnostics | 31 | 0 |
 | use-after-free | 11 | 0 |
 | other | 11 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 605 | 1 |
-| typecheck | 109 | 1 |
+| codegen | 606 | 1 |
+| typecheck | 109 | 0 |
 | interp | 101 | 0 |
-| ownership | 35 | 0 |
+| ownership | 36 | 1 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
 | other | 22 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **841 surfaced · 1 open · 832 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **842 surfaced · 1 open · 833 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-26 | 2026-08-01 | typecheck+codegen | medium | Closure that move-captures an outer Vec (`let mut v = outer` in the body) and is called TWICE: both `karac run` (JIT) and `karac build` (AOT) print garbage (a raw pointer-sized integer, e.g. 188975220501568) where the interpreter prints 3 — and no phase rejects the program even though the second call re-moves an already-moved binding. | src/codegen/closures.rs (env capture of a MOVED-IN outer Vec binding + the `let mut v = outer` re-read inside the body across two calls); src/ownership.rs + src/typechecker.rs (no phase rejects the double-move: the closure body moves `outer` on EVERY call, so the second call moves an already-moved binding) |
+| B-2026-08-01-27 | 2026-08-01 | ownership+codegen | medium | Closure body that MOVES a captured Vec (`let mut v = outer; v.push(x); v.len()`) called twice: interpreter prints 3 (env alias — mutations accumulate across calls), JIT/AOT print 2 (env bit-copy per call), and no phase rejects the repeated move of the captured binding. Split out of B-2026-08-01-26 once its garbage half proved to be stdlib-name shadowing. | src/ownership.rs (no rejection of a closure body moving a captured binding — the closure is de facto single-call but nothing enforces it); src/interpreter (env capture aliases: `let mut v = outer` inside the closure mutates the captured env value in place, so state accumulates across calls); src/codegen/closures.rs (env capture bit-copies into the body local each call) |
 
-### Fixed (832)
+### Fixed (833)
 
-<details><summary>832 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>833 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -970,6 +970,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **841 surfaced 
 | B-2026-08-01-23 | interp+codegen | low | container-in-container element Drop bodies are silent on both backends (Vec[Vec[DropT]] inner elements, Map[K, Vec[DropT]] value-Vec elements) — memo… | ca37e65 |
 | B-2026-08-01-24 | codegen | high | Moving elements out of a BY-VALUE `Vec[S]` parameter double-frees each element's heap field: `for h in headers { out.push(h); }` frees the same Strin… | 7225d0a |
 | B-2026-08-01-25 | parser | medium | `&&` / `\|\|` diagnostics are emitted 2-3x per occurrence and carry NO `replacement`, so `karac fix` cannot apply a one-token substitution the message… | 28438e8 |
+| B-2026-08-01-26 | typecheck+codegen | medium | Closure that move-captures an outer Vec (`let mut v = outer` in the body) and is called TWICE: both `karac run` (JIT) and `karac build` (AOT) print g… | 8ab3b9a |
 
 </details>
 
