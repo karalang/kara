@@ -1266,12 +1266,53 @@ impl<'a> super::Interpreter<'a> {
                     .any(|it| matches!(it, Item::Function(f) if &f.name == n)),
                 _ => false,
             },
-            ExprKind::MethodCall { method, .. } => matches!(
-                method.as_str(),
-                "insert" | "remove" | "pop" | "pop_back" | "pop_front" | "take"
-            ),
+            ExprKind::MethodCall { method, .. } => {
+                matches!(
+                    method.as_str(),
+                    "insert" | "remove" | "pop" | "pop_back" | "pop_front" | "take"
+                )
+                // B-2026-07-30-11 (user-method discard): `f.make();` — a USER
+                // impl method returning an owned struct by value produces a
+                // fresh value this discard site owns, exactly like the
+                // free-fn arm above. Admitted only when the evaluated value
+                // is a bare struct whose name matches some impl method
+                // `method`'s declared owned (Path, non-ref) return — a
+                // borrow-shaped or builtin accessor result never satisfies
+                // both (its value is an Option/copy, or no user decl names
+                // it), and the builtin borrow names are excluded outright so
+                // a user method that shadows them can never fire on the
+                // builtin's alias. Codegen twin: the MethodCall arm of
+                // `try_track_discarded_user_drop_temp` (receiver-type keyed
+                // `Type.method` lookup, `user_ref_method_names` excluded).
+                || (!matches!(method.as_str(), "get" | "first" | "last" | "peek")
+                    && matches!(val, Value::Struct { name, .. }
+                        if self.user_method_returns_owned_struct(method, name)))
+            }
             _ => false,
         }
+    }
+
+    /// True when SOME user `impl` block declares a method `method` whose
+    /// return type is a bare owned `Path` naming `struct_name`. The
+    /// declared-return check is what keeps borrow accessors out: a
+    /// `ref self`-borrowing method returning `ref T` has a `Ref` return
+    /// kind and never matches.
+    fn user_method_returns_owned_struct(&self, method: &str, struct_name: &str) -> bool {
+        self.program.items.iter().any(|it| {
+            let Item::ImplBlock(imp) = it else {
+                return false;
+            };
+            imp.items.iter().any(|ii| {
+                let crate::ast::ImplItem::Method(f) = ii else {
+                    return false;
+                };
+                f.name == method
+                    && f.return_type.as_ref().is_some_and(|te| {
+                        matches!(&te.kind, crate::ast::TypeKind::Path(p)
+                            if p.segments.last().is_some_and(|s| s == struct_name))
+                    })
+            })
+        })
     }
 
     /// Zip-walk of a discarded tuple literal's element exprs against the
@@ -2025,21 +2066,44 @@ impl<'a> super::Interpreter<'a> {
                 // callee's declared return type has a user `impl Drop` —
                 // the discarded temp's body must fire (codegen twin:
                 // `try_track_discarded_user_drop_temp`).
-                if let ExprKind::Call { callee, .. } = &expr.kind {
-                    if let ExprKind::Identifier(fn_name) = &callee.kind {
-                        if let Some(tn) = self.user_fn_return_type_name(fn_name) {
-                            if self.program.drop_method_keys.contains_key(&tn) {
-                                self.run_user_drop_body_on_value(&tn, discarded);
-                            } else if self.value_runs_user_drop(&discarded) {
-                                // B-2026-07-30-11 SHAPE 2, discard position —
-                                // the return type declares no `Drop` of its own
-                                // but carries a Drop-bearing field, so `make();`
-                                // leaked that field's resource. Bodies only, as
-                                // in the arg-temp twin.
-                                self.drop_user_drop_fields_of_value(&discarded);
+                match &expr.kind {
+                    ExprKind::Call { callee, .. } => {
+                        if let ExprKind::Identifier(fn_name) = &callee.kind {
+                            if let Some(tn) = self.user_fn_return_type_name(fn_name) {
+                                if self.program.drop_method_keys.contains_key(&tn) {
+                                    self.run_user_drop_body_on_value(&tn, discarded);
+                                } else if self.value_runs_user_drop(&discarded) {
+                                    // B-2026-07-30-11 SHAPE 2, discard position —
+                                    // the return type declares no `Drop` of its own
+                                    // but carries a Drop-bearing field, so `make();`
+                                    // leaked that field's resource. Bodies only, as
+                                    // in the arg-temp twin.
+                                    self.drop_user_drop_fields_of_value(&discarded);
+                                }
                             }
                         }
                     }
+                    // B-2026-07-30-11 (user-method discard): `f.make();` — the
+                    // METHOD sibling of the free-fn arm above, admitted under
+                    // the same declared-owned-return rule the wildcard-let
+                    // gate uses (`user_method_returns_owned_struct`; builtin
+                    // borrow names excluded outright). Codegen twin: the
+                    // MethodCall arm of `try_track_discarded_user_drop_temp`.
+                    ExprKind::MethodCall { method, .. }
+                        if !matches!(method.as_str(), "get" | "first" | "last" | "peek") =>
+                    {
+                        if let Value::Struct { name, .. } = &discarded {
+                            let tn = name.clone();
+                            if self.user_method_returns_owned_struct(method, &tn) {
+                                if self.program.drop_method_keys.contains_key(&tn) {
+                                    self.run_user_drop_body_on_value(&tn, discarded);
+                                } else if self.value_runs_user_drop(&discarded) {
+                                    self.drop_user_drop_fields_of_value(&discarded);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

@@ -1899,13 +1899,50 @@ impl<'ctx> super::Codegen<'ctx> {
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
     ) {
-        let ExprKind::Call { callee, .. } = &tail.kind else {
-            return;
+        let ret_ty_name = match &tail.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(fn_name) => self.fn_return_type_names.get(fn_name).cloned(),
+                _ => None,
+            },
+            // B-2026-07-30-11 (user-method discard): `f.make();` /
+            // `Fac.new();` — a USER impl method returning an owned struct by
+            // value, resolved through the qualified `Type.method` entry
+            // (only declared impl methods have one, so builtins self-gate).
+            // Borrow-returning user methods are excluded
+            // (`user_ref_method_names`), the builtin borrow names outright
+            // (a user method shadowing `get` must not fire on an arena/
+            // container alias), and STRUCT returns only — an enum-returning
+            // method discard stays silent on both backends (residual).
+            // Interp twin: the widened MethodCall arm of
+            // `discard_rhs_produces_owned_value`.
+            ExprKind::MethodCall { object, method, .. }
+                if !self.user_ref_method_names.contains(method.as_str())
+                    && !matches!(method.as_str(), "get" | "first" | "last" | "peek") =>
+            {
+                let recv_ty = match &object.kind {
+                    // Associated call: `Type.new(...)` parses as a MethodCall
+                    // whose receiver Identifier names a type, not a variable
+                    // (same disambiguation as `type_name_of_expr`).
+                    ExprKind::Identifier(recv)
+                        if !self.var_type_names.contains_key(recv.as_str())
+                            && (self.struct_types.contains_key(recv.as_str())
+                                || self.enum_layouts.contains_key(recv.as_str())) =>
+                    {
+                        Some(recv.clone())
+                    }
+                    _ => self.type_name_of_expr(object),
+                };
+                recv_ty
+                    .and_then(|t| {
+                        self.fn_return_type_names
+                            .get(&format!("{t}.{method}"))
+                            .cloned()
+                    })
+                    .filter(|ret| self.struct_types.contains_key(ret.as_str()))
+            }
+            _ => None,
         };
-        let ExprKind::Identifier(fn_name) = &callee.kind else {
-            return;
-        };
-        let Some(ret_ty_name) = self.fn_return_type_names.get(fn_name).cloned() else {
+        let Some(ret_ty_name) = ret_ty_name else {
             return;
         };
         let has_user_drop = self

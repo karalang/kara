@@ -26592,6 +26592,43 @@ fn test_enum_assign_displacement_runs_payload_body() {
     );
 }
 
+/// B-2026-07-30-11 (user-method discard) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_discarded_user_method_return_runs_drop`, same
+/// source and expected string. Pre-fix a USER impl method's owned Drop
+/// return discarded in statement position (`f.make();`) or via wildcard-let
+/// (`let _ = f.make();`) fired no body in either backend — the discard
+/// gates admitted only free-fn calls and the owning container methods.
+#[test]
+fn test_discarded_user_method_return_runs_drop() {
+    assert_eq!(
+        run("struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id}\")\n\
+                 }\n\
+             }\n\
+             struct Fac { n: i64 }\n\
+             impl Fac {\n\
+                 fn make(ref self) -> Res {\n\
+                     return Res { id: self.n };\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let f = Fac { n: 13 };\n\
+                 println(\"a\");\n\
+                 f.make();\n\
+                 println(\"b\");\n\
+                 let _ = f.make();\n\
+                 println(\"c\");\n\
+                 let r = f.make();\n\
+                 println(\"end\");\n\
+             }\n"),
+        // The bound `r` is unused after its let, so its NLL fire lands
+        // before `end` — same position as the probe on both backends.
+        "a\ndrop 13\nb\ndrop 13\nc\ndrop 13\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

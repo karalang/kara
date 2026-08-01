@@ -6299,6 +6299,42 @@ fn main() {
         );
     }
 
+    /// B-2026-07-30-11 (user-method discard) — a USER impl method's owned
+    /// Drop return discarded bare (`f.make();`) or via wildcard-let runs its
+    /// body at the discard point. Twin of `tests/interpreter.rs`'s
+    /// `test_discarded_user_method_return_runs_drop`, same source and
+    /// expected string.
+    #[test]
+    fn e2e_discarded_user_method_return_runs_drop() {
+        let Some(out) = run_program(
+            "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Fac { n: i64 }\n\
+             impl Fac {\n\
+             \x20   fn make(ref self) -> Res {\n\
+             \x20       return Res { id: self.n };\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let f = Fac { n: 13 };\n\
+             \x20   println(\"a\");\n\
+             \x20   f.make();\n\
+             \x20   println(\"b\");\n\
+             \x20   let _ = f.make();\n\
+             \x20   println(\"c\");\n\
+             \x20   let r = f.make();\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ndrop 13\nb\ndrop 13\nc\ndrop 13\nend\n");
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a
