@@ -1369,6 +1369,21 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return;
             }
+            // B-2026-08-01-19 — FieldAccess target (`o.h = h;`): the base
+            // binding's Drop slot would fire the caller-retained value a
+            // second time at o's death. Retract it — the caller keeps the
+            // single fire. Same over-suppression trade as the codegen twin
+            // (o's other Drop-bearing fields go silent); direct Identifier
+            // bases only.
+            if let ExprKind::FieldAccess { object, .. } = &target.kind {
+                if let ExprKind::Identifier(base) = &object.kind {
+                    cleanup.retain(|action| match action {
+                        CleanupAction::Drop { name } => name != base,
+                        _ => true,
+                    });
+                    return;
+                }
+            }
         }
         let type_name = match self.env.get(source_name) {
             Some(Value::Struct { name, .. }) => name,

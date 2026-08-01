@@ -6271,6 +6271,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 // reassign shape double-printed the payload body on both
                 // backends).
                 self.disarm_container_bodies_move_sources(value);
+                // B-2026-08-01-19 — storing an owned param (or a param-view
+                // local) into a local container FIELD (`o.h = h;`): under
+                // caller-retains the conceptual value's Drop observability is
+                // the CALLER's, but the base binding's bodies walk would fire
+                // it again at o's death. Retract the base's bodies action —
+                // its StructDrop memory registration is name-blind and
+                // survives, so the moved entry copy's heap still frees.
+                // Over-suppression trade (documented on the row): the base's
+                // OTHER Drop-bearing fields' bodies go silent too — the
+                // fires-once-too-few side. Direct Identifier bases only;
+                // deeper chains keep today's behavior.
+                if let ExprKind::FieldAccess { object, .. } = &target.kind {
+                    if let ExprKind::Identifier(base) = &object.kind {
+                        let rhs_is_param_view = matches!(&value.kind,
+                            ExprKind::Identifier(src)
+                                if (self.current_fn_param_names.contains(src.as_str())
+                                    && !self.ref_params.contains_key(src.as_str()))
+                                    || self.param_view_locals.contains(src.as_str()));
+                        if rhs_is_param_view {
+                            let base = base.clone();
+                            self.suppress_user_drop_for_var(&base);
+                        }
+                    }
+                }
                 // B-2026-07-26-1: arm the one-shot latch when this exact
                 // statement was proven non-trapping. Taken by the first `add`
                 // the RHS reaches — which, for the recognized
