@@ -5771,6 +5771,59 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_strided_gather_escapes_memory_bound_gate() {
+        // B-2026-07-31-42 — the stride escape: the SAME find_min shape as
+        // `test_ir_memory_bound_body_skips_par_reduce` above, except the
+        // read is `nums[i * 16]` — a strided GATHER, latency-bound rather
+        // than bandwidth-bound (essentially every read misses cache, and
+        // more cores hide latency well: a 4 MiB-stride-16 sum measured
+        // 137 ms sequential vs 47 ms fanned on this 4-core class, ~4.9x
+        // with setup subtracted; Prism's transposed `rotate` measured
+        // 3.52x). `body_has_strided_gather` classifies the index as
+        // non-unit-stride in the loop var, so the memory-bound decline is
+        // skipped and the lowering proceeds — par_reduce IS emitted. The
+        // unit-stride twin above stays declined: the two shapes were
+        // indistinguishable to the model before the stride signal.
+        let src = r#"
+fn find_min_strided(nums: Slice[i64]) -> i64 {
+    let n = 65536i64;
+    let mut m = nums[0];
+    for i in 1i64..n {
+        let x = nums[i * 16];
+        if x < m {
+            m = x;
+        }
+    }
+    m
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.filled(1048576i64, 5i64);
+    println(find_min_strided(v.as_slice()));
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "strided-gather body (nums[i * 16]) should escape the memory-bound gate \
+             and fan out; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_memory_bound_gate_allows_substantial_call() {
         // Mirror of the memory-bound test: body has Index AND a free-fn
         // Call. The call signals "compute work beyond the memory access"

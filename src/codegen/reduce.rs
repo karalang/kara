@@ -262,6 +262,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.program_snapshot.as_deref(),
             self.reduction_bound_references_param(&shape),
             acc_int.is_some(),
+            Some(&shape.loop_var),
         );
         if !verdict.is_fanout() {
             return Ok(None);

@@ -425,6 +425,7 @@ fn disjoint_loop_verdict(
         // Indexed-write loops have no scalar accumulator; the type gate
         // does not apply (B-2026-07-31-14).
         true,
+        Some(&shape.loop_var),
     ))
 }
 
@@ -525,6 +526,7 @@ fn reduction_loop_verdict(
         // #[fp_reassoc] opt-in that does not exist in v1), so the query
         // must decline them too. Collect entries record no type and pass.
         crate::par_cost::accumulator_type_fans_out(r.accumulator_type.as_deref()),
+        Some(&shape.loop_var),
     ))
 }
 

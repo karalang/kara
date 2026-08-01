@@ -133,6 +133,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Indexed-write loops have no scalar accumulator; the type gate
             // does not apply (B-2026-07-31-14).
             true,
+            Some(&shape.loop_var),
         );
         if !verdict.is_fanout() {
             return Ok(None);

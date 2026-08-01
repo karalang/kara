@@ -220,6 +220,7 @@ pub fn fanout_verdict(
     program: Option<&Program>,
     bound_references_param: bool,
     accumulator_fans_out: bool,
+    loop_var: Option<&str>,
 ) -> FanoutVerdict {
     fanout_verdict_with_cost(
         body,
@@ -228,6 +229,7 @@ pub fn fanout_verdict(
         program,
         bound_references_param,
         accumulator_fans_out,
+        loop_var,
     )
     .0
 }
@@ -249,6 +251,7 @@ pub fn fanout_verdict_with_cost(
     program: Option<&Program>,
     bound_references_param: bool,
     accumulator_fans_out: bool,
+    loop_var: Option<&str>,
 ) -> (FanoutVerdict, u64) {
     let per_iter_cost = match program {
         Some(prog) => CostEstimator::new(prog).estimate_body(body),
@@ -262,6 +265,15 @@ pub fn fanout_verdict_with_cost(
         return (FanoutVerdict::DeclinedNonIntegerAccumulator, per_iter_cost);
     }
     let substantial = per_iter_cost >= VARIABLE_K_PER_ITER_FLOOR_UNITS;
+    let memory_bound = body_is_memory_bound(body);
+    // B-2026-07-31-42 — the stride escape: a memory-bound body whose
+    // top-level reads GATHER (strided / transposed / indirect in the loop
+    // var) is latency-bound, and latency is what more cores hide well —
+    // measured 2.12x-3.52x inside the very bucket this gate declines. Only
+    // the unit-stride streaming class the gate was calibrated on
+    // (kata-153) stays declined. `None` (a caller with no induction var)
+    // keeps the pre-signal behavior.
+    let strided_gather = memory_bound && loop_var.is_some_and(|v| body_has_strided_gather(body, v));
     // `KARAC_COST_DEBUG=1` prints the numbers behind the verdict. The tags on
     // `FanoutVerdict` name WHICH gate fired but never the estimate that decided
     // it, so "why is this body above/below the floor?" meant hand-counting AST
@@ -272,14 +284,16 @@ pub fn fanout_verdict_with_cost(
     // `index_disjoint.rs`, which covers the proof side one phase earlier.
     if std::env::var("KARAC_COST_DEBUG").as_deref() == Ok("1") {
         eprintln!(
-            "karac-cost-debug: per_iter_cost={} floor={} substantial={} memory_bound={}",
+            "karac-cost-debug: per_iter_cost={} floor={} substantial={} memory_bound={} \
+             strided_gather={}",
             per_iter_cost,
             VARIABLE_K_PER_ITER_FLOOR_UNITS,
             substantial,
-            body_is_memory_bound(body)
+            memory_bound,
+            strided_gather
         );
     }
-    if !substantial && body_is_memory_bound(body) {
+    if !substantial && memory_bound && !strided_gather {
         return (FanoutVerdict::DeclinedMemoryBound, per_iter_cost);
     }
     if let Some(k) = const_eval_iter_count(end_expr, lo_expr) {
@@ -929,6 +943,175 @@ impl MemoryBoundDetector {
             // "fixing" this.
             _ => {}
         }
+    }
+}
+
+/// B-2026-07-31-42 — the stride/locality signal the memory-bound gate
+/// lacked: true when the body has at least one TOP-LEVEL index read whose
+/// index expression mentions the fanout loop variable in a NON-unit-stride
+/// form — `nums[i * 16]` (strided), `src[(y0 + i) * sw + x]` (transposed
+/// row gather), `nums[idx[i]]` (indirect gather). Such a body is
+/// LATENCY-bound, not bandwidth-bound: essentially every read misses cache,
+/// and more cores hide latency well (more outstanding misses in flight).
+/// Measured evidence, all on 4 cores: Prism's transposed `rotate` at
+/// **3.52x** — the best fan-out win of its whole kernel set despite doing
+/// no arithmetic — while its contiguous `crop` twin managed 1.08x; a 32 MiB
+/// strided sum at **2.12x** (the nest-aware-detector rejection measurement
+/// on [`fanout_verdict`]). `body_is_memory_bound` cannot tell these apart —
+/// it was calibrated on kata-153's unit-stride stream, the case where
+/// fan-out genuinely buys nothing — so the decline gate uses THIS predicate
+/// to let the strided class through.
+///
+/// Same traversal discipline as [`MemoryBoundDetector`], deliberately:
+/// nest-blind (`While`/`For`/`Loop` fall through), so the two predicates
+/// always describe the same set of reads. Unit-stride means the index is
+/// the loop var itself or `var ± loop-invariant`, in both the pre-lowering
+/// `Binary` and post-lowering `Call(Path([ty, "add"/"sub"]), ..)` forms
+/// (the `parse_lt_condition` precedent). Anything else that mentions the
+/// var — a multiply, a nested index, a call — classifies as a gather:
+/// over-classifying toward "strided" only ever ADMITS a fan-out the cost
+/// threshold below still has to clear, never declines one.
+pub(crate) fn body_has_strided_gather(body: &Block, loop_var: &str) -> bool {
+    let mut detector = StridedGatherDetector {
+        loop_var,
+        found: false,
+    };
+    detector.visit_body(body);
+    detector.found
+}
+
+struct StridedGatherDetector<'a> {
+    loop_var: &'a str,
+    found: bool,
+}
+
+impl StridedGatherDetector<'_> {
+    fn visit_body(&mut self, body: &Block) {
+        for stmt in &body.stmts {
+            self.visit_stmt(stmt);
+        }
+        if let Some(e) = &body.final_expr {
+            self.visit_expr(e);
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => self.visit_expr(value),
+            StmtKind::Assign { target, value } => {
+                self.visit_expr(target);
+                self.visit_expr(value);
+            }
+            StmtKind::CompoundAssign { target, value, .. } => {
+                self.visit_expr(target);
+                self.visit_expr(value);
+            }
+            StmtKind::Expr(e) => self.visit_expr(e),
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.visit_body(body),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Index { object, index } => {
+                if crate::deque_head::expr_mentions_name_deep(index, self.loop_var)
+                    && !index_is_unit_stride_affine(index, self.loop_var)
+                {
+                    self.found = true;
+                }
+                self.visit_expr(object);
+                self.visit_expr(index);
+            }
+            ExprKind::FieldAccess { object, .. } => self.visit_expr(object),
+            ExprKind::Call { callee, args } => {
+                self.visit_expr(callee);
+                for arg in args {
+                    self.visit_expr(&arg.value);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                self.visit_expr(object);
+                for arg in args {
+                    self.visit_expr(&arg.value);
+                }
+            }
+            ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
+                self.visit_expr(left);
+                self.visit_expr(right);
+            }
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+                self.visit_expr(operand);
+            }
+            ExprKind::Cast { expr: inner, .. } => self.visit_expr(inner),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.visit_expr(condition);
+                self.visit_body(then_block);
+                if let Some(e) = else_branch {
+                    self.visit_expr(e);
+                }
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.visit_body(b),
+            // Nest-blind like `MemoryBoundDetector` — `While`/`For`/`Loop`
+            // land here, so this predicate and the memory-bound one always
+            // describe the same top-level read set.
+            _ => {}
+        }
+    }
+}
+
+/// Is `idx` a unit-stride affine function of `var` — `var` itself, or
+/// `var ± <loop-invariant>` (nested: `(var + a) - b` still qualifies)?
+/// Handles both the pre-lowering `Binary` form and the post-lowering
+/// `Call(Path([ty, "add"/"sub"]), [a, b])` form. Consecutive iterations of
+/// such an index touch adjacent elements — the bandwidth-bound streaming
+/// pattern the memory-bound gate was calibrated on.
+fn index_is_unit_stride_affine(idx: &Expr, var: &str) -> bool {
+    let mentions = |e: &Expr| crate::deque_head::expr_mentions_name_deep(e, var);
+    match &idx.kind {
+        ExprKind::Identifier(n) => n == var,
+        ExprKind::Binary {
+            op: BinOp::Add,
+            left,
+            right,
+        } => {
+            (index_is_unit_stride_affine(left, var) && !mentions(right))
+                || (!mentions(left) && index_is_unit_stride_affine(right, var))
+        }
+        ExprKind::Binary {
+            op: BinOp::Sub,
+            left,
+            right,
+        } => index_is_unit_stride_affine(left, var) && !mentions(right),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return false;
+            };
+            if segments.len() != 2 {
+                return false;
+            }
+            let (l, r) = (&args[0].value, &args[1].value);
+            match segments[1].as_str() {
+                "add" => {
+                    (index_is_unit_stride_affine(l, var) && !mentions(r))
+                        || (!mentions(l) && index_is_unit_stride_affine(r, var))
+                }
+                "sub" => index_is_unit_stride_affine(l, var) && !mentions(r),
+                _ => false,
+            }
+        }
+        _ => false,
     }
 }
 
