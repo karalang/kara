@@ -2218,11 +2218,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// self-gates as the enum sibling: deeper-place object only (shallow
     /// forms keep their dedicated suppressor), non-owned-param root. Field
     /// dispatch mirrors `suppress_struct_field_move_into_literal`: a named
-    /// non-shared, non-generic struct routes through `zero_struct_move_caps`
-    /// (generic monomorphs decline — the base-layout GEP would mis-offset,
-    /// the B-2026-07-15-24 class — keeping today's behavior); a direct
-    /// Vec/String field cap-zeroes. Shared / Option / Map / Set fields keep
-    /// their existing paths.
+    /// non-shared struct routes through `zero_struct_move_caps_mono` — for a
+    /// GENERIC monomorph field on a NON-generic parent (B-2026-08-01-34,
+    /// `let g = o.h.b` with `b: Boxy[String]`) the declared field TypeExpr
+    /// is already the concrete instantiation, so the per-monomorph subst
+    /// comes straight from it (the depth-1 site's
+    /// `field_move_out_struct_inst` equivalent) and the zeroing GEPs the
+    /// mono layout; a generic field on a generic PARENT declines (its field
+    /// TE can carry bare params — the B-2026-07-15-24 base-layout caution).
+    /// A direct Vec/String field cap-zeroes. Shared / Option / Map / Set
+    /// fields keep their existing paths.
     pub(super) fn suppress_place_field_struct_move_source(&mut self, value: &Expr) {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
             return;
@@ -2253,17 +2258,42 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        let parent_generic = self
+            .struct_generic_params
+            .get(obj_ty.as_str())
+            .is_some_and(|ps| !ps.is_empty());
+        let mut mono_subst: Option<std::collections::HashMap<String, TypeExpr>> = None;
         let struct_field_name: Option<String> = match &fte.kind {
             TypeKind::Path(p) => p
                 .segments
                 .last()
                 .filter(|n| {
-                    self.struct_types.contains_key(n.as_str())
-                        && !self.shared_types.contains_key(n.as_str())
-                        && self
-                            .struct_generic_params
-                            .get(n.as_str())
-                            .is_none_or(|ps| ps.is_empty())
+                    if !self.struct_types.contains_key(n.as_str())
+                        || self.shared_types.contains_key(n.as_str())
+                    {
+                        return false;
+                    }
+                    let field_generic = self
+                        .struct_generic_params
+                        .get(n.as_str())
+                        .is_some_and(|ps| !ps.is_empty());
+                    if !field_generic {
+                        return true;
+                    }
+                    // B-2026-08-01-34: a generic-monomorph field on a
+                    // NON-generic parent — the declared TE is the concrete
+                    // instantiation; derive the mono subst from it so the
+                    // zeroing GEPs the per-monomorph layout. Generic
+                    // parents decline (bare-param field TEs).
+                    if parent_generic {
+                        return false;
+                    }
+                    let subst = self.generic_struct_subst_from_inst(n.as_str(), &fte);
+                    if subst.is_empty() {
+                        return false;
+                    }
+                    mono_subst = Some(subst);
+                    true
                 })
                 .cloned(),
             _ => None,
@@ -2286,7 +2316,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         if let Some(name) = struct_field_name {
-            self.zero_struct_move_caps(field_ptr, &name);
+            self.zero_struct_move_caps_mono(field_ptr, &name, mono_subst.as_ref());
         } else if let Ok(cap_ptr) =
             self.builder
                 .build_struct_gep(self.vec_struct_type(), field_ptr, 2, "p31.stmv.cap")

@@ -17081,6 +17081,43 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-34 — a GENERIC-monomorph field moved out of a deep
+    /// chain (`let g = o.h.b` with `b: Boxy[String]`) still double-freed
+    /// after the -31 fix: the deeper-place suppressor declined generic
+    /// field types outright. On a NON-generic parent the declared field
+    /// TypeExpr is already the concrete instantiation, so the suppressor
+    /// now derives the per-monomorph subst from it and zeroes through
+    /// `zero_struct_move_caps_mono` (generic parents keep declining —
+    /// bare-param field TEs, the B-2026-07-15-24 base-layout caution).
+    /// Both a String and a WIDER Vec[i64] instantiation, so a
+    /// layout-widening arg exercises the mono GEPs.
+    #[test]
+    fn asan_deep_chain_generic_mono_field_move_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct Boxy[T] { v: T }
+struct Hg { b: Boxy[String] }
+struct Og { h: Hg }
+struct Hgv { b: Boxy[Vec[i64]] }
+struct Ogv { h: Hgv }
+fn main() {
+    let o = Og { h: Hg { b: Boxy { v: f"s{7}" } } };
+    let g = o.h.b;
+    println(f"g {g.v}");
+    let mut bx = Boxy { v: Vec.new() };
+    bx.v.push(5);
+    bx.v.push(6);
+    let o2 = Ogv { h: Hgv { b: bx } };
+    let g2 = o2.h.b;
+    println(f"g0 {g2.v[0]} g1 {g2.v[1]}");
+    println("end");
+}
+"#,
+            &["g s7", "g0 5 g1 6", "end"],
+            "deep_chain_generic_mono_field_move_no_double_free",
+        );
+    }
+
     /// B-2026-08-01-30 (memory leg) — the nested plain-parent field store
     /// (`o.h.r = <new>`, depth >= 2) was a BARE overwrite: the displaced
     /// old value's heap was never freed. LLVM DCE masked the leak whenever
