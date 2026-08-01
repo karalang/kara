@@ -6771,6 +6771,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     // per-instantiation, B-2026-07-11-35 — a base-name
                     // synthesis could free through the wrong element type;
                     // documented residual).
+                    // Caller-retained roundtrip (B-2026-08-01-3 residual):
+                    // `s = pass(s)` / `s = mk(s.id + 1)` — the RHS mentions
+                    // the target, but when it is a free-fn call to a USER
+                    // function returning an owned value, the old value did
+                    // NOT move into the callee: owned args are deep-copied
+                    // at callee entry (caller-retains), a ref arg only
+                    // borrows, and a legitimately moved heap field has its
+                    // cap zeroed by the move machinery. The store then
+                    // orphans whatever the old slot still owns — a hard
+                    // leak. Free the old slot's heap (cap-guarded, MEMORY
+                    // ONLY — the NLL channel fires the user bodies at
+                    // statement end, matching the interpreter's single
+                    // fire) before the store. Shape-gated to exactly the
+                    // proven-safe RHS: a top-level user fn (not a ctor,
+                    // not a method, not shadowed by a local) whose return
+                    // is not a borrow — a borrow return could alias the
+                    // old heap and dangle.
+                    let rhs_mentions_lhs = crate::deque_head::expr_mentions_name_deep(value, name);
+                    let roundtrip_frees_old =
+                        rhs_mentions_lhs && self.assign_rhs_is_owned_user_call(value);
                     if lhs_is_tracked_struct
                         && !rhs_is_self_alias
                         && self.var_type_names.get(name.as_str()).is_some_and(|tn| {
@@ -6778,13 +6798,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .get(tn.as_str())
                                 .is_none_or(|ps| ps.is_empty())
                         })
-                        && !crate::deque_head::expr_mentions_name_deep(value, name)
+                        && (!rhs_mentions_lhs || roundtrip_frees_old)
                     {
                         if let (Some(tn), Some(slot)) = (
                             self.var_type_names.get(name.as_str()).cloned(),
                             self.variables.get(name).copied(),
                         ) {
                             match self.user_drop_wrapper_fns.get(tn.as_str()).copied() {
+                                // Roundtrip: field-heap cleanup only, for
+                                // Drop and non-Drop structs alike — the
+                                // wrapper would also run the body, doubling
+                                // the NLL fire.
+                                _ if roundtrip_frees_old => {
+                                    if let Some(f) = self.emit_struct_drop_synthesis(&tn) {
+                                        self.builder.build_call(f, &[slot.ptr.into()], "").unwrap();
+                                    }
+                                }
                                 // A Drop-declaring type fires only while the
                                 // binding still OWNS a value — a value moved
                                 // out earlier (variant ctor, `let g = f`) had
@@ -6845,12 +6874,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         });
                     if lhs_is_tracked_value_enum
                         && !rhs_is_self_alias
-                        && !crate::deque_head::expr_mentions_name_deep(value, name)
+                        && (!rhs_mentions_lhs || roundtrip_frees_old)
                     {
                         if let (Some(tn), Some(slot)) = (
                             self.var_type_names.get(name.as_str()).cloned(),
                             self.variables.get(name).copied(),
                         ) {
+                            // Caller-retained roundtrip (`e = pass(e)`):
+                            // memory only — the bodies section below is
+                            // skipped (the NLL channel fires the bodies at
+                            // statement end, matching the interpreter's
+                            // single fire); only the cap-guarded drop
+                            // switch runs, freeing whatever the old slot
+                            // still owns before the store orphans it.
                             let walker = self.emit_enum_payload_user_drop_bodies_fn(&tn);
                             // A payload moved out by a match/if-let arm
                             // retracted the WALKER action (only) — the old
@@ -6863,7 +6899,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the per-action armed tests below cover it.
                             let payload_disarmed = walker.is_some()
                                 && !self.has_armed_container_elem_bodies(name.as_str());
-                            if !payload_disarmed {
+                            if !payload_disarmed && !roundtrip_frees_old {
                                 let has_own_drop = self
                                     .program_snapshot
                                     .as_deref()
@@ -9008,6 +9044,44 @@ impl<'ctx> super::Codegen<'ctx> {
             &expr.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
         ) && !self.is_borrow_returning_call_expr(expr)
+    }
+
+    /// Caller-retained roundtrip gate (B-2026-08-01-3 residual): is an
+    /// Assign RHS a free-fn call to a top-level USER function returning an
+    /// owned (non-borrow) value? For such an RHS — `s = pass(s)`,
+    /// `s = mk(s.id + 1)` — the LHS binding's old value did NOT move into
+    /// the callee even though the RHS mentions it: an owned arg is
+    /// deep-copied at callee entry (the caller-retains convention), a `ref`
+    /// arg only borrows, and a legitimately moved heap field has its cap
+    /// zeroed by the move machinery. The returned value therefore never
+    /// aliases the old slot's still-owned heap, so the Assign arm may
+    /// eager-free it (cap-guarded, memory only) before the store — without
+    /// this the store orphans the old buffers, a hard leak. Declines a
+    /// borrow-returning callee (the returned alias would dangle), a name
+    /// shadowed by a local binding (closure semantics unproven), and every
+    /// non-`Call` shape (method calls, ctors, block tails — conservative
+    /// silence, the pre-fix behavior).
+    fn assign_rhs_is_owned_user_call(&self, value: &Expr) -> bool {
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(fname) = &callee.kind else {
+            return false;
+        };
+        if self.variables.contains_key(fname.as_str()) {
+            return false;
+        }
+        let Some(prog) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        prog.items.iter().any(|item| {
+            matches!(item, crate::ast::Item::Function(f)
+            if f.name == *fname
+                && !matches!(
+                    f.return_type.as_ref().map(|t| &t.kind),
+                    Some(crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_))
+                ))
+        })
     }
 
     /// True if `expr` is a `String[a..b]` / `String[a..=b]` range-index slice

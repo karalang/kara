@@ -16928,6 +16928,66 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-3 residual (pass-roundtrip) — `e = pass(e)` over an
+    /// own-Drop enum, plus the struct twins (`s = pass_res(s)`,
+    /// `p = remake(p)` with a scalar-field mention), leaked the OLD value's
+    /// heap: owned args are caller-retains (the callee deep-copies at entry
+    /// and frees its copy), but the Assign arm's mentions-guard assumed the
+    /// old value moved into the callee and skipped the eager free — the
+    /// store then orphaned the original buffer. The fix eager-frees the old
+    /// slot (cap-guarded, memory only — the NLL channel fires the bodies)
+    /// when the RHS is a free-fn call to a user function returning an owned
+    /// value. LSan (Linux CI) is the leak gate; ASAN guards the eager free
+    /// against dangling the value the callee's copy returned.
+    #[test]
+    fn asan_roundtrip_reassign_frees_displaced_original() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+enum Loud { Hold(Res), Quiet }
+impl Drop for Loud {
+    fn drop(mut ref self) { println("loud drop") }
+}
+struct Plain { id: i64, name: String }
+fn mk_loud(n: i64) -> Loud { return Loud.Hold(Res { id: n, name: f"l{n}" }); }
+fn pass(b: Loud) -> Loud { return b; }
+fn mk_res(n: i64) -> Res { return Res { id: n, name: f"r{n}" }; }
+fn pass_res(b: Res) -> Res { return b; }
+fn mk_plain(n: i64) -> Plain { return Plain { id: n, name: f"p{n}" }; }
+fn remake(b: Plain) -> Plain { return Plain { id: b.id + 1, name: f"p{b.id + 1}" }; }
+fn main() {
+    let mut e = mk_loud(7);
+    e = pass(e);
+    println("s1");
+    let mut s = mk_res(4);
+    s = pass_res(s);
+    println(s.name);
+    println("s2");
+    let mut p = mk_plain(1);
+    println(p.name);
+    p = remake(p);
+    println(p.name);
+    println("end");
+}
+"#,
+            &[
+                "loud drop",
+                "drop 7 l7",
+                "s1",
+                "r4",
+                "drop 4 r4",
+                "s2",
+                "p1",
+                "p2",
+                "end",
+            ],
+            "roundtrip_reassign_frees_displaced_original",
+        );
+    }
+
     #[test]
     fn asan_auto_par_vec_of_vec_freed_on_branch_exit() {
         // Vec[Vec[char]] built inside a function — the kata-6 zigzag

@@ -6645,6 +6645,60 @@ fn main() {
         assert_eq!(out, "a\ndrop 4 r4\nz=4\nb\ndrop 5 r5\nend\n");
     }
 
+    /// B-2026-08-01-3 residual (pass-roundtrip, closed) — `e = pass(e)` /
+    /// `s = pass_res(s)` / `p = remake(p)`: the RHS mentions the target,
+    /// but owned args are caller-retains (the callee deep-copies at entry),
+    /// so the OLD value never moved and must be eager-freed before the
+    /// store orphans it. The fix is MEMORY ONLY — the NLL channel fires the
+    /// user bodies exactly once at the binding's last-use statement, so
+    /// this pin asserts the output is unchanged from the pre-fix parity
+    /// (the leak itself is gated by `tests/memory_sanitizer.rs`'s
+    /// `asan_roundtrip_reassign_frees_displaced_original`, which fails
+    /// pre-fix under LSan). Twin of `tests/interpreter.rs`'s
+    /// `test_roundtrip_reassign_single_nll_fire`.
+    #[test]
+    fn e2e_roundtrip_reassign_single_nll_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(\"loud drop\")\n\
+             \x20   }\n\
+             }\n\
+             fn mk_loud(n: i64) -> Loud {\n\
+             \x20   return Loud.Hold(Res { id: n, name: f\"l{n}\" });\n\
+             }\n\
+             fn pass(b: Loud) -> Loud {\n\
+             \x20   return b;\n\
+             }\n\
+             fn mk_res(n: i64) -> Res {\n\
+             \x20   return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn pass_res(b: Res) -> Res {\n\
+             \x20   return b;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut e = mk_loud(7);\n\
+             \x20   println(\"a\");\n\
+             \x20   e = pass(e);\n\
+             \x20   println(\"b\");\n\
+             \x20   let mut s = mk_res(4);\n\
+             \x20   s = pass_res(s);\n\
+             \x20   println(s.name);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\nloud drop\ndrop 7 l7\nb\nr4\ndrop 4 r4\nend\n");
+    }
+
     /// B-2026-08-01-5 — fresh method-RECEIVER Drop temps: a `ref self`
     /// method's fresh receiver fires its body at STATEMENT END on both
     /// backends (pre-fix: never under `karac run`, at scope exit under

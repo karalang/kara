@@ -26898,6 +26898,53 @@ fn test_struct_literal_ref_param_arg_drop() {
     );
 }
 
+/// B-2026-08-01-3 residual (pass-roundtrip, closed) — interpreter twin of
+/// `tests/codegen.rs`'s `e2e_roundtrip_reassign_single_nll_fire`, same
+/// source and expected string. The interpreter fires the bodies exactly
+/// once at the binding's NLL last-use statement and manages memory in Rust
+/// — this pin is the parity target the codegen memory-only eager free must
+/// not disturb (the AOT leak itself is gated by the LSan suite).
+#[test]
+fn test_roundtrip_reassign_single_nll_fire() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum Loud { Hold(Res), Quiet }\n\
+             impl Drop for Loud {\n\
+                 fn drop(mut ref self) {\n\
+                     println(\"loud drop\")\n\
+                 }\n\
+             }\n\
+             fn mk_loud(n: i64) -> Loud {\n\
+                 return Loud.Hold(Res { id: n, name: f\"l{n}\" });\n\
+             }\n\
+             fn pass(b: Loud) -> Loud {\n\
+                 return b;\n\
+             }\n\
+             fn mk_res(n: i64) -> Res {\n\
+                 return Res { id: n, name: f\"r{n}\" };\n\
+             }\n\
+             fn pass_res(b: Res) -> Res {\n\
+                 return b;\n\
+             }\n\
+             fn main() {\n\
+                 let mut e = mk_loud(7);\n\
+                 println(\"a\");\n\
+                 e = pass(e);\n\
+                 println(\"b\");\n\
+                 let mut s = mk_res(4);\n\
+                 s = pass_res(s);\n\
+                 println(s.name);\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\nloud drop\ndrop 7 l7\nb\nr4\ndrop 4 r4\nend\n"
+    );
+}
+
 /// B-2026-08-01-5 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_recv_temp_drop_semantics`, same source and expected string.
 /// Pre-fix the interpreter fired NO receiver-temp body ever (the free-fn
