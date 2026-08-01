@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
-| run-vs-build | 57 | 0 |
+| run-vs-build | 59 | 1 |
 | false-positive | 54 | 0 |
 | perf | 42 | 1 |
 | crash | 33 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 584 | 1 |
+| codegen | 586 | 2 |
 | typecheck | 108 | 0 |
-| interp | 88 | 1 |
+| interp | 89 | 2 |
 | ownership | 35 | 0 |
 | autopar | 30 | 1 |
 | cli | 23 | 0 |
@@ -124,18 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **818 surfaced · 2 open · 808 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **820 surfaced · 3 open · 809 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-07-30-11 | 2026-07-30 | interp+codegen | high | A user `impl Drop` body ran only for a value reachable from a direct binding through STRUCT FIELDS. Fixed so far: owned aggregate temps (d794aad), Vec/VecDeque elements (b55743b, which also taught the NLL channel to carry container bindings), tuple elements at the let-site (9edc231), value-enum payloads at the let-site, Option/Result payloads at the let-site (with the ctor-arg + consuming-combinator + wrapper-name-collision fixes). Still silent: non-let positions only (tuple match/param/temp sites, the match arm binding that receives a moved payload, displaced/overwritten values). | src/codegen/call_dispatch.rs (field_bodies_fn_for_owned_temp, track_inline_owned_aggregate_arg, try_track_discarded_user_drop_temp), src/interpreter/eval_call.rs (run_fresh_temp_arg_drops), src/interpreter/eval_stmt.rs (drop_user_drop_fields_of_value), src/codegen/synth_drop.rs (emit_user_drop_field_bodies_fn) |
 | B-2026-07-31-42 | 2026-07-31 | autopar | medium | The auto-par cost model has no notion of memory ACCESS PATTERN, only of statement count. Prism's `rotate` — the least arithmetic-heavy of its kernels — is the biggest fan-out win measured (3.52x) because its reads are transposed and latency-bound, and nothing in the model knows that. It cleared the gate by accident. | src/par_cost.rs::CostEstimator / body_is_memory_bound |
+| B-2026-08-01-5 | 2026-08-01 | interp+codegen | medium | fresh method-RECEIVER Drop temps: interp never fires their bodies, karac build fires them at scope exit — and owned-self passthrough chains DOUBLE-fire with stale slots | — |
 
-### Fixed (808)
+### Fixed (809)
 
-<details><summary>808 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>809 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -947,6 +948,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **818 surfaced 
 | B-2026-08-01-1 | codegen | medium | Chained get/first().unwrap() then len() on a fresh-temp Vec[Vec[scalar]] receiver double-frees the borrowed row: let n = mk_rows().first().unwrap().l… | 54ac148 |
 | B-2026-08-01-2 | interp+codegen | medium | wildcard-let user-enum discard fires the Drop payload body under karac run but not karac build (+ own-Drop-enum and erased-generic sibling divergence… | 6915b47 |
 | B-2026-08-01-3 | codegen | medium | enum reassign never frees the displaced payload's interior heap — Full(Res{name: String}) leaks the old String on every assignment (DCE-masked until… | fff43cb |
+| B-2026-08-01-4 | codegen | medium | fresh Drop-bearing call-arg temp in let position fires its body at scope exit (owned param) or never (ref param) under karac build; the interpreter f… | d88686c |
 
 </details>
 
