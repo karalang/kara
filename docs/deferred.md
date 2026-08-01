@@ -3092,6 +3092,25 @@ User-extensible scheduler — pluggable executor implementations replacing the v
 
 ---
 
+### Binding Generator (`kara-bindgen`) — Mechanizing the C-Shim Consume Path
+
+**Decision:** Defer the *tool*; take the *worked example* pre-launch. The consume-direction FFI surface is fully shipped (`unsafe extern "C" { }` blocks, effect defaults, opaque types, unions — roadmap L149/L381), and the C-shim pattern for Rust crates is settled policy (`spikes/additive-interop-adoption.md` Correction 1). What is NOT tracked anywhere until this entry is the tooling that mechanizes hand-writing bindings: (a) a **C-header importer** — Rust's `bindgen` analogue, `.h` → generated `unsafe extern "C" { }` declarations with effect-annotation decisions; (b) a **Rust-crate shim generator** — crate → `extern "C"` shim crate + effect-annotated Kāra declarations, mechanizing what the runtime's regex/arrow/wgpu/rustls bridges do by hand. Filed 2026-08-01 after launch-prep research (gowthamswe/notes `kara-launch/faq.md`, ecosystem-objection entry) confirmed no tracker entry existed.
+
+**Why the tool is deferred, not taken now — even though it answers HN's top objection.** The launch-timing question was considered explicitly and the answer is: a generator rushed for launch is the V failure mode in miniature. Whatever it's demoed on, HN will point it at a real header (`sqlite3.h`, `curl.h`, `glibc`) within the hour, and real C headers are a tarpit — function-like macros, conditional compilation, varargs, bitfields, function pointers; Rust's `bindgen` rides libclang and took years to be trustworthy. A half-working generator converts an honest limitation ("bindings are hand-written today; here's the pattern, a real worked binding, and the tracked tool") into a broken promise — and per the launch research, an uncashable claim is more damaging on HN than the gap it papers over. The generator also gets strictly *better* by waiting: each hand-written binding becomes validation corpus + oracle for the tool (the Mend task+oracle shape), and the effect-annotation heuristics (when to default `{blocks}`, when to flag known-allocating patterns — seeded by the linter hints in `design.md § Effect defaults for extern functions`) need that corpus to be tuned honestly.
+
+**The pre-launch slice that IS worth taking now:** a worked consume-direction binding of a real C library (zlib or a sqlite3 subset) as `examples/` + a short binding guide — the demonstration that hand-binding is cheap (~tens of lines), effect-honest, and A/B verified. `examples/interop/` currently covers ONLY the produce direction (Kāra kernel in a C/Rust host); no consume-direction worked example exists in-tree. This is a days-scale docs+example task, it completes the launch answer's third leg (pattern → proof → tracked tool), and it starts the corpus the generator needs anyway. Developed through the Mend loop like any Kāra artifact.
+
+**Why non-breaking:** Purely additive tooling — generated declarations are ordinary `unsafe extern { }` blocks; no language surface changes. The worked example is examples/docs only.
+
+**Promotion gates (build the generator when any of):**
+1. Post-launch feedback shows binding *cost* — not binding *possibility* — is the recurring adoption objection (the signal the tool answers, distinguished from the objection the worked example answers).
+2. A corpus of 3+ hand-written bindings exists in-tree/katas to serve as the tool's validation oracles.
+3. The header-importer scope gets a cheap first leg: evaluate riding libclang (as Rust's bindgen does) vs. a declaration-subset parser before any greenfield parsing work — this fork is the slice-0 spike, not a settled design.
+
+**Cross-reference:** `roadmap.md` L673 (consume-side `[x]` baseline, do-not-rescope); `spikes/additive-interop-adoption.md` Corrections 1–2 (Rust-via-C-shim policy; produce-direction gap now closed); `design.md § FFI` / `§ Effect defaults for extern functions` (the surface the generator emits into, and the linter-hint machinery that seeds its effect heuristics); gowthamswe/notes `kara-launch/faq.md` (the launch-research entry that surfaced the tracking gap).
+
+---
+
 ## P3 — Post-v1 Build Targets (library / ecosystem)
 
 Items that are **not language features** and will not be added to `design.md` — they are libraries or frameworks built on top of the language. They live here because, post-v1, the project author may choose to build them directly rather than wait for community ownership. Each entry describes the scope, what it rests on in the language, and what would need to be in place before building it.
