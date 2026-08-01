@@ -442,6 +442,11 @@ pub struct Interpreter<'a> {
     /// binding codegen registered no walker for — the mirrored chain is what
     /// keeps the two backends firing on the same set of bindings.
     pub(crate) optres_payload_bodies_tes: HashMap<String, TypeExpr>,
+    /// Active impl-method receiver modes, innermost last — pushed around
+    /// each user method body by `try_eval_impl_method`. Read by
+    /// `scrutinee_expr_is_consuming`: a `self` scrutinee is consuming only
+    /// under an OWNED receiver (B-2026-08-01-6).
+    pub(crate) self_param_stack: Vec<crate::ast::SelfParam>,
     /// Bindings whose WHOLE value moved into a variant constructor
     /// (`Ok(h)`, `Some(h)`, `Slot.Held(r)`). Every drop the source would run
     /// — own `impl Drop` body and container walks — is silenced; the enum's
@@ -743,6 +748,7 @@ impl<'a> Interpreter<'a> {
             moved_out_enum_payload_bindings: HashSet::new(),
             moved_out_container_bodies_bindings: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
+            self_param_stack: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
             pending_arm_drop_bindings: Vec::new(),
             map_val_bodies_tes: HashMap::new(),

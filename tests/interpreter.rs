@@ -26965,6 +26965,54 @@ fn test_owned_self_chain_no_double_drop() {
     );
 }
 
+/// B-2026-08-01-6 — a `match self { Full(r) => .. }` under a `ref self`
+/// method binds a BORROWED view: the arm stash must stay silent (the
+/// receiver's real owner fires the body). Pre-fix the interpreter treated
+/// the `self` scrutinee as consuming and fired the payload body inside the
+/// method — `karac run` printed `drop 5 e5` where `karac build` printed
+/// nothing (fresh receiver, shape a) and double-fired the named-binding
+/// shape (b). `scrutinee_expr_is_consuming` now reads the receiver mode
+/// from `self_param_stack`: `self` is consuming only under an OWNED
+/// receiver. Twin of `tests/codegen.rs`'s
+/// `e2e_ref_self_match_borrowed_payload_silent`, same source and expected
+/// string (the codegen side was already correct — its twin is the parity
+/// pin).
+#[test]
+fn test_ref_self_match_borrowed_payload_silent() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             impl Box2 {\n\
+                 fn tag(ref self) -> i64 {\n\
+                     match self {\n\
+                         Box2.Full(r) => { return 1; }\n\
+                         Box2.Empty => { return 0; }\n\
+                     }\n\
+                 }\n\
+             }\n\
+             fn mk_e(n: i64) -> Box2 {\n\
+                 return Box2.Full(Res { id: n, name: f\"e{n}\" });\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a: ref-self match on fresh receiver\");\n\
+                 let t = mk_e(5).tag();\n\
+                 println(f\"t={t}\");\n\
+                 println(\"b: ref-self match on named binding\");\n\
+                 let bx = mk_e(8);\n\
+                 let u = bx.tag();\n\
+                 println(f\"u={u}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a: ref-self match on fresh receiver\nt=1\n\
+         b: ref-self match on named binding\ndrop 8 e8\nu=1\nend\n"
+    );
+}
+
 /// B-2026-07-30-11 (owning-temp arm channel) — interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_channel_owning_temp_vs_borrow_scrutinees`,
 /// same source and expected string. The pre-fix interpreter never stashed

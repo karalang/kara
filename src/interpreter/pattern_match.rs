@@ -58,7 +58,7 @@ impl<'a> super::Interpreter<'a> {
                 // walks, and a borrow accessor's payload aliases the
                 // container's element (see `scrutinee_expr_is_consuming`).
                 let consuming_scrutinee = matches!(scrutinee, Value::EnumVariant { .. })
-                    && scrutinee_place.is_none_or(Self::scrutinee_expr_is_consuming);
+                    && scrutinee_place.is_none_or(|sp| self.scrutinee_expr_is_consuming(sp));
                 if consuming_scrutinee {
                     if let Value::EnumVariant { enum_name, .. } = scrutinee {
                         for n in self.arm_moved_user_drop_payload_bindings(enum_name, &arm.pattern)
@@ -243,16 +243,29 @@ impl<'a> super::Interpreter<'a> {
     /// collector (a tuple scrutinee's element walk stays armed and fires, the
     /// shape-B behavior pinned by `b3011_nonlet1`).
     /// Shared consuming-scrutinee shape gate for the match / if-let /
-    /// while-let arm-drop stashes: an identifier or `self` place (whose
-    /// payload walk the disarm retracted), or an OWNING fresh temp (a call,
-    /// or a method call that isn't a borrow accessor). `get`/`first`/`last`
-    /// yield an Option whose payload ALIASES the container's element — the
-    /// container's own walk runs the body, so a stash fire would double it;
-    /// the exclusion set mirrors codegen's `scrutinee_is_borrow_call`.
-    /// Projections and unknown shapes stay non-consuming.
-    pub(super) fn scrutinee_expr_is_consuming(e: &Expr) -> bool {
+    /// while-let arm-drop stashes: an identifier place (whose payload walk
+    /// the disarm retracted), a `self` place under an OWNED receiver, or an
+    /// OWNING fresh temp (a call, or a method call that isn't a borrow
+    /// accessor). `get`/`first`/`last` yield an Option whose payload ALIASES
+    /// the container's element — the container's own walk runs the body, so
+    /// a stash fire would double it; the exclusion set mirrors codegen's
+    /// `scrutinee_is_borrow_call`. Projections and unknown shapes stay
+    /// non-consuming.
+    ///
+    /// B-2026-08-01-6: `self` under a `ref self` / `mut ref self` method is
+    /// a BORROWED view — its match arms bind aliases the caller's receiver
+    /// still owns, and `karac build` fires nothing for them, so the stash
+    /// must stay silent (this fired `drop 5 e5` under `karac run` only).
+    /// The active receiver mode comes from `self_param_stack`, pushed
+    /// around each impl-method body by `try_eval_impl_method`; an empty
+    /// stack means no method context, where `self` cannot occur.
+    pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Identifier(_) | ExprKind::SelfValue | ExprKind::Call { .. } => true,
+            ExprKind::Identifier(_) | ExprKind::Call { .. } => true,
+            ExprKind::SelfValue => matches!(
+                self.self_param_stack.last(),
+                Some(crate::ast::SelfParam::Owned)
+            ),
             ExprKind::MethodCall { method, .. } => {
                 !matches!(method.as_str(), "get" | "first" | "last")
             }

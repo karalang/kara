@@ -768,7 +768,7 @@ impl<'a> super::Interpreter<'a> {
                     // the body against the container's own walk (the same
                     // exclusion codegen's `scrutinee_is_borrow_call` makes).
                     let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
-                        && Self::scrutinee_expr_is_consuming(value);
+                        && self.scrutinee_expr_is_consuming(value);
                     let stash_names: Vec<String> = if consuming_scrutinee {
                         if let Value::EnumVariant { ref enum_name, .. } = val {
                             self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
@@ -909,7 +909,7 @@ impl<'a> super::Interpreter<'a> {
                     // gate: owning fresh temps and identifier/`self` places;
                     // borrow accessors excluded.
                     let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
-                        && Self::scrutinee_expr_is_consuming(value);
+                        && self.scrutinee_expr_is_consuming(value);
                     let stash_names: Vec<String> = if consuming_scrutinee {
                         if let Value::EnumVariant { ref enum_name, .. } = val {
                             self.arm_moved_user_drop_payload_bindings(enum_name, pattern)

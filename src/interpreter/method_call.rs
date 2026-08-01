@@ -395,11 +395,26 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
 
+                // B-2026-08-01-6: expose the receiver mode to the body's
+                // match machinery — `scrutinee_expr_is_consuming` treats a
+                // `self` scrutinee as consuming only under an OWNED receiver
+                // (a `ref self` match binds borrowed views whose bodies the
+                // caller's owner fires, and `karac build` fires nothing).
+                let pushed_self_mode = match self.method_self_param(&type_name, method) {
+                    Some(sp) => {
+                        self.self_param_stack.push(sp);
+                        true
+                    }
+                    None => false,
+                };
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
+                if pushed_self_mode {
+                    self.self_param_stack.pop();
+                }
 
                 if contract_fault.is_none() {
                     if let Some((_, ensures)) = &mcontract {

@@ -6722,6 +6722,54 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-6 — codegen parity pin for `tests/interpreter.rs`'s
+    /// `test_ref_self_match_borrowed_payload_silent` (same source and
+    /// expected string): a `ref self` method matching on `self` binds
+    /// borrowed views, so no payload body fires inside the method — the
+    /// fresh-receiver shape stays silent and the named-binding shape fires
+    /// exactly once via the binding's own walk. This side was already
+    /// correct; the interpreter's stash was the diverging half.
+    #[test]
+    fn e2e_ref_self_match_borrowed_payload_silent() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             enum Box2 { Full(Res), Empty }\n\
+             impl Box2 {\n\
+             \x20   fn tag(ref self) -> i64 {\n\
+             \x20       match self {\n\
+             \x20           Box2.Full(r) => { return 1; }\n\
+             \x20           Box2.Empty => { return 0; }\n\
+             \x20       }\n\
+             \x20   }\n\
+             }\n\
+             fn mk_e(n: i64) -> Box2 {\n\
+             \x20   return Box2.Full(Res { id: n, name: f\"e{n}\" });\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a: ref-self match on fresh receiver\");\n\
+             \x20   let t = mk_e(5).tag();\n\
+             \x20   println(f\"t={t}\");\n\
+             \x20   println(\"b: ref-self match on named binding\");\n\
+             \x20   let bx = mk_e(8);\n\
+             \x20   let u = bx.tag();\n\
+             \x20   println(f\"u={u}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a: ref-self match on fresh receiver\nt=1\n\
+             b: ref-self match on named binding\ndrop 8 e8\nu=1\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 (owning-temp arm channel) — a match / if-let /
     /// while-let arm binding over an OWNING fresh-temp scrutinee
     /// (`v.pop()`) runs the moved Drop payload's body at arm end, while a
