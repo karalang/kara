@@ -676,6 +676,14 @@ pub struct Program {
     /// empty otherwise. Fresh-temp `Map`/`Set` receiver types for codegen's
     /// slice-3d read-method redispatch + handle drop-tracking.
     pub temp_recv_mapset_types: TempRecvMapSetTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.temp_recv_len_elem_types`;
+    /// empty otherwise. Heap-bearing element types of fresh-temp `Vec`
+    /// receivers of `len`/`is_empty`/`count`, so codegen's intercept
+    /// drop-tracks the materialized receiver with a per-element walk instead
+    /// of an outer-buffer-only free (B-2026-07-31-43). Kept separate from
+    /// `temp_recv_elem_types` — at a span-collided chain the two tables
+    /// describe different receivers.
+    pub temp_recv_len_elem_types: TempRecvElemTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.iter_terminal_elem_types`;
     /// empty otherwise. Numeric `Iterator.sum()` / `Iterator.reduce(f)` terminal
     /// MethodCall span → yielded element `TypeExpr`, so codegen seeds the fused

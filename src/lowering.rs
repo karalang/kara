@@ -145,6 +145,15 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Heap-bearing element types of fresh-temp `Vec` receivers of the
+    // element-agnostic terminals (`len`/`is_empty`/`count`) — codegen's
+    // intercept drop-tracks the materialized receiver with a per-element walk
+    // (B-2026-07-31-43). Same keying (MethodCall span).
+    program.temp_recv_len_elem_types = tc
+        .temp_recv_len_elem_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Numeric `Iterator.sum()` / `Iterator.reduce(f)` terminal element types —
     // codegen seeds its fused-loop accumulator with a width-correct zero. Same
     // keying (MethodCall span). B-2026-07-11-19.

@@ -2039,6 +2039,29 @@ impl<'a> super::TypeChecker<'a> {
                     self.temp_recv_elem_types
                         .insert(SpanKey::from_span(span), te);
                 }
+                // `mk().len()` / `Env.args().is_empty()` — the element-agnostic
+                // read terminals on a fresh-temp receiver (B-2026-07-31-43).
+                // Codegen's `len`/`is_empty`/`count` intercept materializes the
+                // receiver and drop-tracks it, but the element type it wants
+                // from `owned_temp_drops` is span-clobbered (the parser gives a
+                // MethodCall its receiver's span, so the chain's outermost
+                // scalar result evicts the receiver's `Vec[T]` from
+                // `expr_types`) — the track degrades to an outer-buffer-only
+                // free and every heap-bearing element leaks. Record the element
+                // type in a DEDICATED table (not `temp_recv_elem_types`: at a
+                // collided span a chain's `first` record describes a DIFFERENT
+                // receiver than its `len` record — see the field doc). Only
+                // heap-bearing elements are recorded; a scalar element needs no
+                // walk, so its absence keeps today's complete outer-buffer
+                // free.
+                if recv_is_call
+                    && (is_string || is_pod_vec || is_user_struct || is_user_enum)
+                    && matches!(method, "len" | "is_empty" | "count")
+                {
+                    let te = Self::type_to_type_expr(&resolved);
+                    self.temp_recv_len_elem_types
+                        .insert(SpanKey::from_span(span), te);
+                }
             }
         }
 

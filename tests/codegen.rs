@@ -6393,6 +6393,48 @@ fn main() {
         assert_eq!(out, "a\ndrop 71\ndrop 73\ndrop 72\nb\nend\n");
     }
 
+    /// B-2026-07-31-43 — `len`/`is_empty` on a fresh-temp `Vec` receiver
+    /// with heap-bearing elements (String / user struct) keeps producing the
+    /// correct scalar while the new per-element receiver drop-track
+    /// (`temp_recv_len_elem_types` → the intercept's element walk) frees the
+    /// temp. The leak itself is pinned by `tests/memory_sanitizer.rs`'s
+    /// `asan_len_family_fresh_recv_elements_freed`; this guards the value
+    /// path (a mis-timed free before the `len` extract would corrupt the
+    /// count or crash).
+    #[test]
+    fn e2e_len_family_fresh_recv_values() {
+        let Some(out) = run_program(
+            "struct Rec { id: i64, s: String }\n\
+             fn mk(n: i64) -> Vec[String] {\n\
+             \x20   let mut v: Vec[String] = Vec.new();\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < n {\n\
+             \x20       v.push(f\"item-{i}-payload\");\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   v\n\
+             }\n\
+             fn mk_recs(n: i64) -> Vec[Rec] {\n\
+             \x20   let mut v: Vec[Rec] = Vec.new();\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < n {\n\
+             \x20       v.push(Rec { id: i, s: f\"rec-{i}-payload\" });\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   v\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(f\"{mk(3).len()}\");\n\
+             \x20   println(f\"{mk(2).is_empty()}\");\n\
+             \x20   println(f\"{mk_recs(2).len()}\");\n\
+             \x20   println(f\"{Env.args().len() >= 1}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "3\nfalse\n2\ntrue\n");
+    }
+
     /// B-2026-07-30-5 — the VecDeque head-index lowering preserves FIFO
     /// semantics across every shape it rewrites.
     ///

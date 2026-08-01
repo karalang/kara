@@ -5544,11 +5544,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     // double-free; `expr_yields_fresh_owned_temp` excludes
                     // those (and the `cap > 0` guard in `FreeVecBuffer` keeps
                     // a non-owning / borrowed value safe regardless).
+                    // For a heap-bearing element type the chokepoint's
+                    // `owned_temp_drops` hint is span-clobbered (the parser
+                    // gives a MethodCall its receiver's span, so the chain's
+                    // scalar result evicts the receiver's `Vec[T]` from
+                    // `expr_types`) and the track degrades to an
+                    // outer-buffer-only free — every element String/row/agg
+                    // leaks (B-2026-07-31-43: `Env.args().len()`). The
+                    // typechecker records the element type in the dedicated
+                    // `temp_recv_len_elem_types` table exactly for this
+                    // receiver; prefer it, falling back to the chokepoint
+                    // when absent (scalar elements — outer free is complete).
                     if self.expr_yields_fresh_owned_temp(object) {
-                        self.materialize_owned_temp(
-                            recv_val,
-                            (object.span.offset, object.span.length),
-                        );
+                        let recv_span_key = (object.span.offset, object.span.length);
+                        if !self.try_track_len_family_recv_temp(recv_val, recv_span_key) {
+                            self.materialize_owned_temp(recv_val, recv_span_key);
+                        }
                     }
                     let i64_t = self.context.i64_type();
                     let len_val = self
@@ -13665,6 +13676,53 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_type_names.remove(&synth);
 
         result.map(Some)
+    }
+
+    /// Drop-track a fresh-owned `Vec` receiver of `len`/`is_empty`/`count`
+    /// with a PER-ELEMENT walk, using the element type the typechecker
+    /// recorded in `temp_recv_len_elem_types` (B-2026-07-31-43). The generic
+    /// chokepoint (`materialize_owned_temp`) can't recover the element type
+    /// for a chained receiver — the parser gives a MethodCall its receiver's
+    /// span, so the chain's scalar result span-clobbers the receiver's
+    /// `Vec[T]` in `expr_types` and the `owned_temp_drops` hint is absent —
+    /// leaving an outer-buffer-only free that leaks every element
+    /// String/row/aggregate. Element-shape routing mirrors
+    /// `try_compile_freshtemp_vec_read_method`: a user struct/enum element
+    /// threads its synthesized per-element drop (`track_vec_of_aggs_var`);
+    /// String / nested-POD-Vec elements lower to `vec_struct_type`, which the
+    /// `FreeVecBuffer` recursion per-element frees (`track_vec_var`).
+    ///
+    /// Returns `false` when there's no recorded element type (scalar elements
+    /// — the outer-buffer free is already complete — or an unsupported shape)
+    /// or the value isn't the `{ptr,len,cap}` struct; the caller falls back
+    /// to `materialize_owned_temp` unchanged.
+    fn try_track_len_family_recv_temp(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        span_key: (usize, usize),
+    ) -> bool {
+        let Some(elem_te) = self.temp_recv_len_elem_types.get(&span_key).cloned() else {
+            return false;
+        };
+        if !self.llvm_ty_is_vec_struct(val.get_type()) {
+            return false;
+        }
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return false;
+        };
+        let elem_llvm = self.llvm_type_for_type_expr(&elem_te);
+        let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        if let Some(agg_drop) = self.vec_elem_agg_drop_for_type_expr(&elem_te) {
+            self.track_vec_of_aggs_var(slot, elem_llvm, agg_drop);
+        } else {
+            self.track_vec_var(slot, Some(elem_llvm));
+        }
+        true
     }
 
     /// General owned-temp tracking, slice 3d — read methods on a FRESH-TEMP

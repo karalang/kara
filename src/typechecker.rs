@@ -1241,6 +1241,19 @@ pub struct TypeCheckResult {
     /// mistaken for a Map *receiver*. Scalar K/V/elem only (general-owned-temp
     /// spike, slice 3d).
     pub temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
+    /// Sibling of `temp_recv_elem_types` for the element-agnostic read
+    /// terminals `len` / `is_empty` / `count` on a fresh-temp `Vec` receiver
+    /// (`mk().len()`, `Env.args().len()`): span of the MethodCall → the
+    /// receiver's element `TypeExpr`. A SEPARATE table because the parser
+    /// gives a MethodCall its receiver's span, so a whole chain shares one
+    /// span key — reusing `temp_recv_elem_types` would let a chain's
+    /// `get`/`first` record and its `len` record clobber each other, and the
+    /// two consumers materialize DIFFERENT values (the get-family receiver vs
+    /// the len-family receiver). Recorded only for heap-bearing elements
+    /// (String / Vec[scalar] / user struct / user enum) — a scalar element
+    /// needs no walk, the outer-buffer free is already complete
+    /// (B-2026-07-31-43).
+    pub temp_recv_len_elem_types: HashMap<SpanKey, TypeExpr>,
     /// Channel-op element types: span of a `Sender.send` / `Receiver.recv` /
     /// `Receiver.try_recv` MethodCall → the channel element `T` `TypeExpr`.
     /// Same key shape / no-collision rationale as `method_unwrap_inner_types`
@@ -1637,6 +1650,10 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
     /// Map/Set receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
+    /// MethodCall span → heap-bearing element `TypeExpr` of a fresh-temp `Vec`
+    /// receiver of `len`/`is_empty`/`count`. See the public copy on
+    /// `TypeCheckResult` (B-2026-07-31-43).
+    pub(super) temp_recv_len_elem_types: HashMap<SpanKey, TypeExpr>,
     /// MethodCall span → yielded element `TypeExpr` of a numeric
     /// `Iterator.sum()` / `Iterator.reduce(f)` terminal. See the public copy
     /// on `TypeCheckResult`.
@@ -1901,6 +1918,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_err_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
+            temp_recv_len_elem_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
             iter_terminal_acc_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
@@ -2096,6 +2114,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_err_types: self.method_unwrap_err_types,
             temp_recv_elem_types: self.temp_recv_elem_types,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
+            temp_recv_len_elem_types: self.temp_recv_len_elem_types,
             iter_terminal_elem_types: self.iter_terminal_elem_types,
             iter_terminal_acc_types: self.iter_terminal_acc_types,
             channel_elem_types: self.channel_elem_types,

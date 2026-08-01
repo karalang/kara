@@ -34278,6 +34278,60 @@ fn main() {
         );
     }
 
+    /// B-2026-07-31-43 — `len`/`is_empty` on a FRESH-TEMP `Vec` receiver
+    /// with heap-bearing elements frees the elements, not just the outer
+    /// buffer. The parser gives a MethodCall its receiver's span, so the
+    /// chain's scalar result span-clobbers the receiver's `Vec[T]` in
+    /// `expr_types` and the intercept's `owned_temp_drops` hint was always
+    /// absent — the drop-track degraded to an outer-buffer-only free and
+    /// every element String (`Env.args().len()`: the argv strings;
+    /// `mk(n).len()`: each runtime-built element) or struct-element heap
+    /// field leaked, once per evaluation — unbounded in the loop below.
+    /// Now the typechecker records the element type in the dedicated
+    /// `temp_recv_len_elem_types` table and the intercept walks the
+    /// elements (String via the `FreeVecBuffer` vec-struct recursion, user
+    /// structs via the per-element `__karac_drop_<S>`).
+    #[test]
+    fn asan_len_family_fresh_recv_elements_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Rec { id: i64, s: String }
+fn mk(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        v.push(f"item-{i}-payload");
+        i = i + 1i64;
+    }
+    v
+}
+fn mk_recs(n: i64) -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        v.push(Rec { id: i, s: f"rec-{i}-payload" });
+        i = i + 1i64;
+    }
+    v
+}
+fn main() {
+    let a = Env.args().len();
+    let mut total = 0i64;
+    let mut it = 0i64;
+    while it < 200i64 {
+        total = total + mk(3i64).len();
+        if mk(2i64).is_empty() { total = total - 100i64; }
+        total = total + mk_recs(2i64).len();
+        it = it + 1i64;
+    }
+    println(f"{a >= 1i64} {total}");
+}
+"#,
+            &["true 1000"],
+            "len_family_fresh_recv_elements_freed",
+        );
+    }
+
     // B-2026-07-30-5 — the VecDeque head-index lowering frees the malloc
     // base, exactly once, on every exit shape. The header's data pointer
     // never moves (only `head` advances, in a frame-local alloca), so the

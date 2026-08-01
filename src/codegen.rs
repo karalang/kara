@@ -2704,6 +2704,13 @@ pub(super) struct Codegen<'ctx> {
     /// re-dispatches through `compile_map_method` / `compile_set_method`
     /// (general-owned-temp-tracking spike, slice 3d).
     pub(crate) temp_recv_mapset_types: HashMap<(usize, usize), TypeExpr>,
+    /// Per fresh-temp `Vec` receiver of `len`/`is_empty`/`count` → the
+    /// receiver's heap-bearing element `TypeExpr` — populated from
+    /// `Program.temp_recv_len_elem_types`. The intercept's drop-track uses it
+    /// to walk the elements instead of freeing only the outer buffer
+    /// (B-2026-07-31-43). Separate from `temp_recv_elem_types` on purpose: at
+    /// a span-collided chain the two tables describe different receivers.
+    pub(crate) temp_recv_len_elem_types: HashMap<(usize, usize), TypeExpr>,
     /// Per numeric iterator-terminal MethodCall (`Iterator.sum()` /
     /// `Iterator.reduce(f)`) → yielded element `TypeExpr` side-table —
     /// populated from `Program.iter_terminal_elem_types`. Key:
@@ -7633,6 +7640,7 @@ impl<'ctx> Codegen<'ctx> {
             method_unwrap_err_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
+            temp_recv_len_elem_types: HashMap::new(),
             iter_terminal_elem_types: HashMap::new(),
             iter_terminal_acc_types: HashMap::new(),
             iter_let_bindings: HashMap::new(),
@@ -8961,6 +8969,7 @@ impl<'ctx> Codegen<'ctx> {
         self.method_unwrap_err_types = program.method_unwrap_err_types.clone();
         self.temp_recv_elem_types = program.temp_recv_elem_types.clone();
         self.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
+        self.temp_recv_len_elem_types = program.temp_recv_len_elem_types.clone();
         self.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();
         self.iter_terminal_acc_types = program.iter_terminal_acc_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
@@ -10167,6 +10176,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_method_unwrap_err_types = tp.method_unwrap_err_types.clone();
         let mut t_temp_recv_elem_types = tp.temp_recv_elem_types.clone();
         let mut t_temp_recv_mapset_types = tp.temp_recv_mapset_types.clone();
+        let mut t_temp_recv_len_elem_types = tp.temp_recv_len_elem_types.clone();
         let mut t_channel_elem_types = tp.channel_elem_types.clone();
         let mut t_ref_return_inner_types = tp.ref_return_inner_types.clone();
         let mut t_secret_inner_types = tp.secret_inner_types.clone();
@@ -10223,6 +10233,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.temp_recv_mapset_types,
                     &mut t_temp_recv_mapset_types,
+                );
+                std::mem::swap(
+                    &mut self.temp_recv_len_elem_types,
+                    &mut t_temp_recv_len_elem_types,
                 );
                 std::mem::swap(&mut self.channel_elem_types, &mut t_channel_elem_types);
                 std::mem::swap(
