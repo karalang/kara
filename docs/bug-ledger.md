@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
-| run-vs-build | 65 | 1 |
+| run-vs-build | 66 | 1 |
 | false-positive | 54 | 0 |
 | perf | 42 | 0 |
 | crash | 33 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 596 | 1 |
+| codegen | 597 | 1 |
 | typecheck | 108 | 0 |
-| interp | 96 | 1 |
+| interp | 97 | 1 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **831 surfaced · 1 open · 822 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **832 surfaced · 1 open · 823 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-16 | 2026-08-01 | interp+codegen | medium | Assign-based param rebind (`h2 = h;` onto a pre-declared local) double-fires the Drop body on both backends and silently skips the displaced value's body under karac build | — |
+| B-2026-08-01-17 | 2026-08-01 | interp+codegen | low | SortedSet[DropT] element Drop bodies drain in INSERTION order under karac build, sorted order under the interpreter (plain Set diverges too) | — |
 
-### Fixed (822)
+### Fixed (823)
 
-<details><summary>822 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>823 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -960,6 +960,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **831 surfaced 
 | B-2026-08-01-13 | interp+codegen | medium | owned enum ARG Drop-body ownership incoherent: fresh ctor arg silent when the callee drops it whole, DOUBLE body (both backends) when the callee matc… | 8de98fe |
 | B-2026-08-01-14 | codegen | medium | fresh enum-ctor arg to a passthrough callee (`pass2(E2.B(..))`) orphans the ORIGINAL payload buffer — the callee entry-copies and returns the copy | 8de98fe |
 | B-2026-08-01-15 | interp+codegen | medium | move-indirected param destructure (`let h2 = h; let Holder { r } = h2;` inside the callee) fires a STALE cap-zeroed body under karac build and a doub… | 309c651 |
+| B-2026-08-01-16 | interp+codegen | medium | Assign-based param rebind (`h2 = h;` onto a pre-declared local) double-fires the Drop body on both backends and silently skips the displaced value's… | e0fc863 |
 
 </details>
 
