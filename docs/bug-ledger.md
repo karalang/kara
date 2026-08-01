@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 88 | 0 |
 | double-free | 84 | 0 |
 | missing-feature | 72 | 0 |
-| run-vs-build | 64 | 0 |
+| run-vs-build | 65 | 1 |
 | false-positive | 54 | 0 |
 | perf | 42 | 0 |
 | crash | 33 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 595 | 0 |
+| codegen | 596 | 1 |
 | typecheck | 108 | 0 |
-| interp | 95 | 0 |
+| interp | 96 | 1 |
 | ownership | 35 | 0 |
 | autopar | 30 | 0 |
 | cli | 23 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **830 surfaced · 0 open · 822 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **831 surfaced · 1 open · 822 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-01-16 | 2026-08-01 | interp+codegen | medium | Assign-based param rebind (`h2 = h;` onto a pre-declared local) double-fires the Drop body on both backends and silently skips the displaced value's body under karac build | — |
 
 ### Fixed (822)
 
