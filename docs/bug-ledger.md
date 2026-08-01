@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 201 | 0 |
 | leak | 117 | 0 |
 | codegen-gap | 88 | 0 |
-| double-free | 87 | 0 |
+| double-free | 88 | 1 |
 | missing-feature | 73 | 1 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 611 | 1 |
+| codegen | 612 | 2 |
 | typecheck | 109 | 0 |
 | interp | 102 | 0 |
 | ownership | 37 | 1 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **848 surfaced · 2 open · 838 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **849 surfaced · 3 open · 838 fixed** (2026-05-20 → 2026-08-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-32 | 2026-08-01 | codegen | low | Vec.filled's calloc fast path only recognises a SCALAR constant zero, so Vec.filled(n, Vec.new()) store-loops an all-zero aggregate instead of calloc'ing it — measured ~100x (117.6 ms vs 1.2 ms on a 1e6-element fill) | — |
 | B-2026-08-01-33 | 2026-08-01 | ownership | low | no way to share an immutable `shared struct` across par branches read-only: the >1-branch gate is correct (non-atomic refcount races even on reads) but the only answers are `par struct`+Mutex on an unmutated structure or N private copies — costs #133 its par lane, which its lock-free C mirror can still run | — |
+| B-2026-08-01-34 | 2026-08-01 | codegen | medium | Generic-monomorph field moved out of a deep chain (`let g = o.h.b` where `b: Boxy[String]`) still double-frees — the B-2026-08-01-31 suppressor declines generic field types, so neither the moved-out binding's cleanup nor the root's StructDrop is disarmed. `karac check`-clean; interp fine (run-vs-build divergence). Depth-1 (`let g = h.b`) handles the same shape via zero_struct_move_caps_mono + the field_move_out_struct_inst subst. | src/codegen/param_own.rs suppress_place_field_struct_move_source — the B-2026-08-01-31 deeper-place suppressor consciously declines GENERIC-monomorph field types (struct_generic_params non-empty) to avoid the B-2026-07-15-24 base-layout-GEP class, so the deep-chain move of a concrete generic instantiation gets no source zeroing at all |
 
 ### Fixed (838)
 
