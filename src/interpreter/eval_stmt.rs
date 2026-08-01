@@ -990,7 +990,7 @@ impl<'a> super::Interpreter<'a> {
     /// destructure of a LOCAL (`let h2 = h; let Holder { r } = h2;`)
     /// stays registered — the move-indirected double is a recorded
     /// residual, matching codegen's depth-0 behavior.
-    fn let_destructures_owned_param(&self, stmt: &Stmt) -> bool {
+    fn let_destructures_owned_param(&mut self, stmt: &Stmt) -> bool {
         let (pattern, value) = match &stmt.kind {
             StmtKind::Let { pattern, value, .. } => (pattern, value),
             // B-2026-08-01-13 widening: `let Full(r2) = w else { … }` on an
@@ -1001,10 +1001,33 @@ impl<'a> super::Interpreter<'a> {
             StmtKind::LetElse { pattern, value, .. } => (pattern, value),
             _ => return false,
         };
+        // B-2026-08-01-15: a whole-move rebind of an owned param
+        // (`let h2 = h;`) makes h2 a param VIEW too — its Drop slot stays
+        // unregistered (the caller's fire is the single owner) and the
+        // rebind PROPAGATES the view-ness so a later destructure of h2
+        // hits the same gates the direct param destructure does. The
+        // propagation happens here (the predicate is consulted before
+        // `push_drops_for_stmt` on every let) — a query with a mutation
+        // is impure but keeps the gate and the propagation at one site.
         if !matches!(
             pattern.kind,
             PatternKind::Struct { .. } | PatternKind::TupleVariant { .. }
         ) {
+            if let (PatternKind::Binding(bname), ExprKind::Identifier(src)) =
+                (&pattern.kind, &value.kind)
+            {
+                let src_is_view = self
+                    .owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(src.as_str()));
+                if src_is_view {
+                    let bname = bname.clone();
+                    if let Some(top) = self.owned_param_names_stack.last_mut() {
+                        top.insert(bname);
+                    }
+                    return true;
+                }
+            }
             return false;
         }
         let ExprKind::Identifier(n) = &value.kind else {

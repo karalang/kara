@@ -587,8 +587,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// memory-only.
     pub(super) fn scrutinee_is_owned_param_binding(&self, e: &Expr) -> bool {
         matches!(&e.kind, ExprKind::Identifier(n)
-            if self.current_fn_param_names.contains(n.as_str())
+            if (self.current_fn_param_names.contains(n.as_str())
                 && !self.ref_params.contains_key(n.as_str()))
+                || self.param_view_locals.contains(n.as_str()))
     }
 
     /// Is this scrutinee expression a FRESH OWNING temp — a call, or a

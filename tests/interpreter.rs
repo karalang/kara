@@ -27008,6 +27008,45 @@ fn test_param_struct_destructure_single_caller_fire() {
     );
 }
 
+/// B-2026-08-01-15 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_param_view_rebind_single_caller_fire`, same source and expected
+/// string. Pre-fix the interpreter fired the destructured field's body a
+/// second time inside the callee (the rebind escaped the depth-0 param
+/// gate); the view-ness propagation in `let_destructures_owned_param`
+/// leaves exactly the caller's single fire.
+#[test]
+fn test_param_view_rebind_single_caller_fire() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             fn take(h: Holder) {\n\
+                 let h2 = h;\n\
+                 let Holder { r } = h2;\n\
+                 println(f\"got {r.id}\");\n\
+                 println(\"take done\");\n\
+             }\n\
+             fn take2(h: Holder) {\n\
+                 let h2 = h;\n\
+                 println(f\"held {h2.r.id}\");\n\
+                 println(\"take2 done\");\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let x = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+                 take(x);\n\
+                 println(\"b\");\n\
+                 take2(Holder { r: Res { id: 7, name: f\"y{7}\" } });\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ngot 5\ntake done\ndrop 5 y5\nb\nheld 7\ntake2 done\ndrop 7 y7\nend\n"
+    );
+}
+
 /// B-2026-08-01-13 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_owned_enum_arg_payload_body_single_caller_fire`, same source and
 /// expected string. Pre-fix the interpreter was silent for the

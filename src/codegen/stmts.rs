@@ -5833,8 +5833,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             // `<T>.drop`, so `self.<field>` would dereference a
                             // pointer-to-pointer and crash. Gate it out for
                             // shared structs. (phase-7 L938)
+                            // B-2026-08-01-15 — a whole-move rebind of an
+                            // owned param (`let h2 = h;`) makes h2 a param
+                            // VIEW: its BODY observability stays the
+                            // caller's (caller-retains — the caller's NLL
+                            // fire reads the original), so the let-site
+                            // registration goes memory-only; the wrapper
+                            // here fired over the cap-zeroed slot after a
+                            // later field move-out ('drop 5 ' with an
+                            // empty name). The view-ness PROPAGATES so a
+                            // destructure of h2 hits the same param gates
+                            // a direct param destructure does.
+                            let rhs_is_param_view = matches!(&value.kind,
+                                ExprKind::Identifier(src)
+                                    if (self.current_fn_param_names.contains(src.as_str())
+                                        && !self.ref_params.contains_key(src.as_str()))
+                                        || self.param_view_locals.contains(src.as_str()));
+                            if rhs_is_param_view {
+                                self.param_view_locals.insert(var_name.to_string());
+                            }
                             if struct_borrow_elided {
                                 // Borrow alias: no owned drop (see comment above).
+                            } else if rhs_is_param_view {
+                                // Memory only — the deep copy the rebind
+                                // received still frees at scope exit.
+                                let inst = self.enum_inst_var_types.get(var_name).cloned();
+                                self.track_struct_var_inst(&struct_name, alloca, inst);
                             } else if has_user_drop && !self.shared_types.contains_key(&struct_name)
                             {
                                 self.track_user_drop_var(&struct_name, var_name, alloca);

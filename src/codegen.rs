@@ -2522,6 +2522,12 @@ pub(super) struct Codegen<'ctx> {
     /// instead of the body+memory wrapper — firing here too doubled the
     /// body on both backends (`match w { E2.B(r2) => … }` with `w: E2`).
     pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
+    /// B-2026-08-01-15 — locals that are whole-move REBINDS of an owned
+    /// param (`let h2 = h;`), transitively. A destructure or match on one
+    /// is a param-view bind exactly like the direct param case
+    /// (`scrutinee_is_owned_param_binding` consults this), and its own
+    /// let-site registration is memory-only. Cleared per-function.
+    pub(crate) param_view_locals: HashSet<String>,
     /// B-2026-07-10-3 — the inline payload-area word budget of the
     /// `Option`/`Result` scrutinee currently being compiled: 3 for `Option`,
     /// 5 for `Result`, 0 when the scrutinee is neither (the same fixed areas
@@ -7630,6 +7636,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_is_fresh_owning_temp: false,
             pattern_binding_scrutinee_is_owned_param: false,
+            param_view_locals: HashSet::new(),
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,
             match_scrutinee_enum_hint: None,

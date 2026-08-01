@@ -6772,6 +6772,51 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-15 — a whole-move rebind of an owned param
+    /// (`let h2 = h;`) is a param VIEW, transitively: a destructure of h2
+    /// hits the same param gates as the direct case, and h2's own let-site
+    /// registration is memory-only. Pre-fix `karac build` fired a wrapper
+    /// over h2's cap-zeroed slot (an empty-name body before "got 5") and
+    /// `karac run` doubled the field body — divergently. Twin of
+    /// `tests/interpreter.rs`'s `test_param_view_rebind_single_caller_fire`.
+    #[test]
+    fn e2e_param_view_rebind_single_caller_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             fn take(h: Holder) {\n\
+             \x20   let h2 = h;\n\
+             \x20   let Holder { r } = h2;\n\
+             \x20   println(f\"got {r.id}\");\n\
+             \x20   println(\"take done\");\n\
+             }\n\
+             fn take2(h: Holder) {\n\
+             \x20   let h2 = h;\n\
+             \x20   println(f\"held {h2.r.id}\");\n\
+             \x20   println(\"take2 done\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let x = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+             \x20   take(x);\n\
+             \x20   println(\"b\");\n\
+             \x20   take2(Holder { r: Res { id: 7, name: f\"y{7}\" } });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ngot 5\ntake done\ndrop 5 y5\nb\nheld 7\ntake2 done\ndrop 7 y7\nend\n"
+        );
+    }
+
     /// B-2026-08-01-13 — owned enum ARG body ownership, the coherent
     /// caller-retains rule: a fresh enum-ctor arg's payload body fires
     /// exactly once, CALLER-side, at the arg's statement end — whether the
