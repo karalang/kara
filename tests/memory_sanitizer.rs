@@ -16988,6 +16988,34 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-22 leg a — `h.xs[i] = Res { .. }` (field-rooted
+    /// container) leaked the displaced element's field buffers like the
+    /// direct-binding -21 shape; the displacement emitter now resolves the
+    /// field's storage via the same synth-identifier dance the store arm
+    /// uses. LSan gates the leak; ASAN guards the pre-store release.
+    #[test]
+    fn asan_field_rooted_index_assign_displaced_elem_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res] }
+fn main() {
+    println("a");
+    let mut h = Holder { xs: Vec.new() };
+    h.xs.push(Res { id: 9, name: f"z{9}" });
+    h.xs[0] = Res { id: 5, name: f"y{5}" };
+    println(f"held {h.xs[0].id}");
+    println("end");
+}
+"#,
+            &["a", "drop 9 z9", "held 5", "end"],
+            "field_rooted_index_assign_displaced_elem_freed",
+        );
+    }
+
     /// B-2026-08-01-21 — `v[i] = Res { .. }` over a struct element with
     /// heap fields leaked the displaced element's field buffers (the
     /// element-reassign machinery freed direct {ptr,len,cap} elements but

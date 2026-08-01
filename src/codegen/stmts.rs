@@ -9234,6 +9234,57 @@ impl<'ctx> super::Codegen<'ctx> {
     /// non-generic, non-shared user struct / value-enum elements. An RHS
     /// mentioning the container declines (uncertain ⇒ silent).
     fn emit_displaced_index_elem_drop(&mut self, object: &Expr, index: &Expr, rhs: &Expr) {
+        // Field-rooted container (`h.xs[i] = <new>`, B-2026-08-01-22 leg a):
+        // resolve the field's storage pointer exactly like the store arm
+        // does — mint a synth identifier registered from the field TypeExpr
+        // and recurse into the Identifier path below. The store re-emits its
+        // own GEPs afterwards (pure duplication, harmless). Direct
+        // Identifier bases only; the mention guard runs against the ROOT.
+        if let ExprKind::FieldAccess {
+            object: inner,
+            field,
+        } = &object.kind
+        {
+            let ExprKind::Identifier(root) = &inner.kind else {
+                return;
+            };
+            if crate::deque_head::expr_mentions_name_deep(rhs, root) {
+                return;
+            }
+            let Ok(Some((field_ptr, field_ll_ty, field_te))) =
+                self.lower_field_access_ptr(inner, field, "displaced-elem lowering")
+            else {
+                return;
+            };
+            let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+            self.indexed_elem_counter += 1;
+            self.variables.insert(
+                synth.clone(),
+                super::state::VarSlot {
+                    ptr: field_ptr,
+                    ty: field_ll_ty,
+                },
+            );
+            self.register_var_from_type_expr(&synth, &field_te);
+            let synth_expr = Expr {
+                kind: ExprKind::Identifier(synth.clone()),
+                span: object.span.clone(),
+            };
+            self.emit_displaced_index_elem_drop(&synth_expr, index, rhs);
+            self.variables.remove(&synth);
+            self.vec_elem_types.remove(&synth);
+            self.slice_elem_types.remove(&synth);
+            self.var_elem_type_exprs.remove(&synth);
+            self.var_type_names.remove(&synth);
+            self.map_key_types.remove(&synth);
+            self.map_val_types.remove(&synth);
+            self.map_key_type_names.remove(&synth);
+            self.map_key_type_exprs.remove(&synth);
+            self.set_elem_types.remove(&synth);
+            self.set_elem_type_names.remove(&synth);
+            self.set_elem_type_exprs.remove(&synth);
+            return;
+        }
         let ExprKind::Identifier(container) = &object.kind else {
             return;
         };
