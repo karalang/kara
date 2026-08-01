@@ -262,6 +262,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // need a "null the slot" suppression because Map's cleanup
         // is queue-driven (skip the queue push, no further action
         // needed at scope exit).
+        // B-2026-08-01-18 — key-half mirror of the value selector: a
+        // struct KEY with heap fields needs each stored key's fields
+        // freed before the bucket storage releases. Same contract: the
+        // fn owns the whole key side, so the flag is forced off.
+        let key_drop_fn = self
+            .map_key_type_exprs
+            .get(var_name)
+            .cloned()
+            .and_then(|te| self.map_val_drop_fn_for_type_expr(&te));
+        let key_is_vec = if key_drop_fn.is_some() {
+            false
+        } else {
+            key_is_vec
+        };
         if !self.snapshot_capture.contains_key(var_name) {
             self.track_map_var_with_val_drop(
                 slot_ptr,
@@ -270,6 +284,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap,
                 key_shared_heap,
                 val_drop_fn,
+                key_drop_fn,
             );
         }
         // Record the binding's surface type name, mirroring the place-source
@@ -335,8 +350,29 @@ impl<'ctx> super::Codegen<'ctx> {
         // pointing at reclaimed memory. The slot still keeps the
         // handle so same-cell `s.insert(...)` / `s.contains(...)`
         // observe the live Set via direct slot reads.
+        // B-2026-08-01-18 — a struct ELEMENT with heap fields (the key
+        // half of the underlying `Map[T, ()]`) needs a per-element field
+        // release; see the Map path's key_drop_fn above.
+        let key_drop_fn = self
+            .set_elem_type_exprs
+            .get(var_name)
+            .cloned()
+            .and_then(|te| self.map_val_drop_fn_for_type_expr(&te));
+        let key_is_vec = if key_drop_fn.is_some() {
+            false
+        } else {
+            key_is_vec
+        };
         if !self.snapshot_capture.contains_key(var_name) {
-            self.track_map_var(slot_ptr, key_is_vec, false, None, key_shared_heap);
+            self.track_map_var_with_val_drop(
+                slot_ptr,
+                key_is_vec,
+                false,
+                None,
+                key_shared_heap,
+                None,
+                key_drop_fn,
+            );
         }
         // Record the surface type name so a bare tuple over a `Set.new()` var
         // (`let t = (d, i)`) can infer the Set leaf and register its Part A

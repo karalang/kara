@@ -519,6 +519,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap_type,
                 key_shared_heap_type,
                 val_drop_fn,
+                key_drop_fn,
             } => CleanupAction::FreeMapHandle {
                 map_alloca: parent_alloca,
                 key_is_vec,
@@ -526,6 +527,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap_type,
                 key_shared_heap_type,
                 val_drop_fn,
+                key_drop_fn,
             },
             SlotOwnership::File => CleanupAction::FreeFileHandle {
                 file_alloca: parent_alloca,
@@ -2275,12 +2277,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 val_shared_heap_type,
                                 key_shared_heap_type,
                                 val_drop_fn,
+                                key_drop_fn,
                             } if Some(*map_alloca) == local_ptr => Some(SlotOwnership::Map {
                                 key_is_vec: *key_is_vec,
                                 val_is_vec: *val_is_vec,
                                 val_shared_heap_type: *val_shared_heap_type,
                                 key_shared_heap_type: *key_shared_heap_type,
                                 val_drop_fn: *val_drop_fn,
+                                key_drop_fn: *key_drop_fn,
                             }),
                             CleanupAction::FreeFileHandle { file_alloca }
                                 if Some(*file_alloca) == local_ptr =>

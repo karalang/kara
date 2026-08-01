@@ -2658,6 +2658,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.llvm_ty_is_vec_struct(kt)
         };
         let key_shared = self.shared_heap_type_for_type_expr(key_te);
+        // B-2026-08-01-18 — key-half mirror of the value selector below.
+        let key_drop_fn = self.map_val_drop_fn_for_type_expr(key_te);
+        let key_is_vec = if key_drop_fn.is_some() {
+            false
+        } else {
+            key_is_vec
+        };
         let val_shared = self.shared_heap_type_for_type_expr(val_te);
         let val_drop_fn = self.map_val_drop_fn_for_type_expr(val_te);
         let val_is_unit = matches!(&val_te.kind, TypeKind::Tuple(elems) if elems.is_empty());
@@ -2686,6 +2693,7 @@ impl<'ctx> super::Codegen<'ctx> {
             val_shared_heap_type: val_shared,
             key_shared_heap_type: key_shared,
             val_drop_fn,
+            key_drop_fn,
         };
         self.emit_free_one_map_handle(handle, &drop);
         self.builder.build_return(None).unwrap();

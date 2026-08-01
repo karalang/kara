@@ -402,6 +402,14 @@ pub(crate) struct MapElemDrop<'ctx> {
     /// and `val_shared_heap_type`; routes the free through
     /// `karac_map_free_with_val_drop_fn`.
     pub(crate) val_drop_fn: Option<inkwell::values::FunctionValue<'ctx>>,
+    /// B-2026-08-01-18 — synthesized per-KEY drop fn, the key-half mirror
+    /// of `val_drop_fn`: a `Set[P]` / `Map[P, V]` whose key/element is a
+    /// struct owning heap fields needs each stored key's fields freed
+    /// before the bucket storage releases. Runs as a codegen-side
+    /// occupied-bucket walk (`emit_map_key_drop_fn_walk`) — no runtime
+    /// entry point. Mutually exclusive with `key_is_vec` and
+    /// `key_shared_heap_type` (the selector declines both shapes).
+    pub(crate) key_drop_fn: Option<inkwell::values::FunctionValue<'ctx>>,
 }
 
 /// Tagged kind for per-scope destructor actions emitted at scope exit.
@@ -672,6 +680,8 @@ pub(crate) enum CleanupAction<'ctx> {
         key_shared_heap_type: Option<StructType<'ctx>>,
         /// Synthesized per-VALUE drop fn — see [`MapElemDrop::val_drop_fn`].
         val_drop_fn: Option<inkwell::values::FunctionValue<'ctx>>,
+        /// Synthesized per-KEY drop fn — see [`MapElemDrop::key_drop_fn`].
+        key_drop_fn: Option<inkwell::values::FunctionValue<'ctx>>,
     },
     /// Phase 8 `File` handle slice F4b: scope-exit close for a
     /// pattern-bound File handle. The alloca holds the opaque `ptr`
@@ -1194,6 +1204,8 @@ pub(crate) enum SlotOwnership<'ctx> {
         key_shared_heap_type: Option<StructType<'ctx>>,
         /// Slice 3r per-VALUE drop fn — see [`MapElemDrop::val_drop_fn`].
         val_drop_fn: Option<FunctionValue<'ctx>>,
+        /// Per-KEY drop fn — see [`MapElemDrop::key_drop_fn`].
+        key_drop_fn: Option<FunctionValue<'ctx>>,
     },
     /// `FreeFileHandle` — close at parent scope exit.
     File,

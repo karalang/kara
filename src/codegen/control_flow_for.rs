@@ -1140,7 +1140,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // doesn't leak its entry buffers. Note the arg order: cleanup_parts yields
         // (key_is_vec, val_is_vec, key_shared, val_shared) but `track_map_var`
         // takes (.., val_shared, key_shared).
-        let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
+        let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn, key_drop_fn) =
             self.map_temp_cleanup_parts(&te);
         self.track_map_var_with_val_drop(
             alloca,
@@ -1149,6 +1149,7 @@ impl<'ctx> super::Codegen<'ctx> {
             val_shared,
             key_shared,
             val_drop_fn,
+            key_drop_fn,
         );
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),

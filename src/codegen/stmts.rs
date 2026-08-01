@@ -6030,6 +6030,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             } else {
                                 (val_is_vec, val_shared_heap)
                             };
+                            let key_drop_fn = self
+                                .map_key_type_exprs
+                                .get(var_name.as_str())
+                                .or_else(|| self.set_elem_type_exprs.get(var_name.as_str()))
+                                .cloned()
+                                .and_then(|kte| self.map_val_drop_fn_for_type_expr(&kte));
+                            let key_is_vec = if key_drop_fn.is_some() {
+                                false
+                            } else {
+                                key_is_vec
+                            };
                             self.track_map_var_with_val_drop(
                                 slot.ptr,
                                 key_is_vec,
@@ -6037,6 +6048,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 val_shared_heap,
                                 key_shared_heap,
                                 val_drop_fn,
+                                key_drop_fn,
                             );
                         }
                     }
@@ -8335,6 +8347,17 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 (val_is_vec, val_shared_heap)
             };
+            let key_drop_fn = self
+                .map_key_type_exprs
+                .get(name)
+                .or_else(|| self.set_elem_type_exprs.get(name))
+                .cloned()
+                .and_then(|kte| self.map_val_drop_fn_for_type_expr(&kte));
+            let key_is_vec = if key_drop_fn.is_some() {
+                false
+            } else {
+                key_is_vec
+            };
             self.track_map_var_with_val_drop(
                 alloca,
                 key_is_vec,
@@ -8342,6 +8365,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap,
                 key_shared_heap,
                 val_drop_fn,
+                key_drop_fn,
             );
             return;
         }
@@ -8584,6 +8608,17 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 (val_is_vec, val_shared_heap)
             };
+            let key_drop_fn = self
+                .map_key_type_exprs
+                .get(var_name)
+                .or_else(|| self.set_elem_type_exprs.get(var_name))
+                .cloned()
+                .and_then(|kte| self.map_val_drop_fn_for_type_expr(&kte));
+            let key_is_vec = if key_drop_fn.is_some() {
+                false
+            } else {
+                key_is_vec
+            };
             self.track_map_var_with_val_drop(
                 alloca,
                 key_is_vec,
@@ -8591,6 +8626,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap,
                 key_shared_heap,
                 val_drop_fn,
+                key_drop_fn,
             );
             return;
         }

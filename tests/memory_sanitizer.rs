@@ -16988,6 +16988,49 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-18 — a Set/SortedSet ELEMENT (or Map KEY) that is a
+    /// struct owning heap fields leaked those fields' buffers at scope
+    /// exit: the handle free released the bucket storage but never walked
+    /// element struct fields (the key-half sibling of the slice-3r
+    /// per-VALUE drop fn). The fix threads `key_drop_fn` through the
+    /// FreeMapHandle classification and open-codes an occupied-bucket walk
+    /// before the storage release. Drop-bearing elements keep exactly one
+    /// body fire (the NLL dropelems walker); the scope-exit walk is
+    /// memory-only. LSan (Linux CI) is the leak gate; ASAN guards the new
+    /// walk against use-after-free / double-free of the field buffers.
+    #[test]
+    fn asan_set_element_struct_field_buffers_freed() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, Ord)]
+struct P { a: i64, s: String }
+#[derive(Hash, Eq, Ord)]
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("a");
+    let mut set: Set[P] = Set.new();
+    set.insert(P { a: 2, s: f"zz{2}" });
+    set.insert(P { a: 1, s: f"bb{1}" });
+    let mut ss: SortedSet[P] = SortedSet.new();
+    ss.insert(P { a: 4, s: f"dd{4}" });
+    ss.insert(P { a: 3, s: f"cc{3}" });
+    let mut m: Map[P, i64] = Map.new();
+    let _ = m.insert(P { a: 5, s: f"k{5}" }, 50);
+    println("b");
+    let mut ds: SortedSet[Res] = SortedSet.new();
+    ds.insert(Res { id: 7, name: f"q{7}" });
+    ds.insert(Res { id: 6, name: f"p{6}" });
+    println("end");
+}
+"#,
+            &["a", "b", "drop 6 p6", "drop 7 q7", "end"],
+            "set_element_struct_field_buffers_freed",
+        );
+    }
+
     /// B-2026-08-01-10 + B-2026-08-01-11 — bare-statement discard gaps:
     /// a bare USER-ENUM ctor statement (`Box2.Full(Res { .. });`) had no
     /// codegen ctor channel, so the payload body never fired AND the

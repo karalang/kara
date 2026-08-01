@@ -4303,6 +4303,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     val_shared_heap_type,
                     key_shared_heap_type,
                     val_drop_fn,
+                    key_drop_fn,
                 } = action
                 {
                     if *map_alloca == slot_ptr {
@@ -4312,6 +4313,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             val_shared_heap_type: *val_shared_heap_type,
                             key_shared_heap_type: *key_shared_heap_type,
                             val_drop_fn: *val_drop_fn,
+                            key_drop_fn: *key_drop_fn,
                         });
                     }
                 }
@@ -4504,7 +4506,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return,
         };
         if head == "Map" || head == "Set" {
-            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
+            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn, key_drop_fn) =
                 self.map_temp_cleanup_parts(&te);
             self.track_map_var_with_val_drop(
                 slot,
@@ -4513,6 +4515,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared,
                 key_shared,
                 val_drop_fn,
+                key_drop_fn,
             );
         }
     }

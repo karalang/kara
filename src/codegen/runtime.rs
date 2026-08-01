@@ -1712,6 +1712,13 @@ impl<'ctx> super::Codegen<'ctx> {
         handle: PointerValue<'ctx>,
         drop: &crate::codegen::state::MapElemDrop<'ctx>,
     ) {
+        // B-2026-08-01-18 — per-KEY struct field release, the key-half
+        // mirror of `val_drop_fn`. Must precede the bucket-storage
+        // release below (it reads live key bytes), like the shared-half
+        // walks.
+        if let Some(key_fn) = drop.key_drop_fn {
+            self.emit_map_key_drop_fn_walk(handle, key_fn);
+        }
         if let Some(heap_ty) = drop.val_shared_heap_type {
             self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, true);
         }
@@ -1973,7 +1980,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if !val.is_pointer_value() {
                 return None;
             }
-            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
+            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn, key_drop_fn) =
                 self.map_temp_cleanup_parts(&te);
             let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
             self.builder.build_store(slot, val).unwrap();
@@ -1984,6 +1991,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared,
                 key_shared,
                 val_drop_fn,
+                key_drop_fn,
             );
             return Some(slot);
         }
@@ -2021,14 +2029,21 @@ impl<'ctx> super::Codegen<'ctx> {
         if head != "Map" && head != "Set" {
             return None;
         }
-        let (key_is_vec, val_is_vec, key_shared_heap_type, val_shared_heap_type, val_drop_fn) =
-            self.map_temp_cleanup_parts(elem_te);
+        let (
+            key_is_vec,
+            val_is_vec,
+            key_shared_heap_type,
+            val_shared_heap_type,
+            val_drop_fn,
+            key_drop_fn,
+        ) = self.map_temp_cleanup_parts(elem_te);
         Some(crate::codegen::state::MapElemDrop {
             key_is_vec,
             val_is_vec,
             val_shared_heap_type,
             key_shared_heap_type,
             val_drop_fn,
+            key_drop_fn,
         })
     }
 
@@ -2623,6 +2638,7 @@ impl<'ctx> super::Codegen<'ctx> {
         Option<StructType<'ctx>>,
         Option<StructType<'ctx>>,
         Option<FunctionValue<'ctx>>,
+        Option<FunctionValue<'ctx>>,
     ) {
         fn nth(path: &PathExpr, i: usize) -> Option<&TypeExpr> {
             match path.generic_args.as_ref()?.get(i)? {
@@ -2632,15 +2648,30 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let path = match &te.kind {
             TypeKind::Path(p) => p,
-            _ => return (false, false, None, None, None),
+            _ => return (false, false, None, None, None, None),
         };
         let head = path.segments.first().map(|s| s.as_str()).unwrap_or("");
-        let k = nth(path, 0);
+        let k = nth(path, 0).cloned();
+        let k = k.as_ref();
         let key_is_vec =
             k.is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
         let key_shared = k.and_then(|t| self.shared_heap_type_for_type_expr(t));
+        // B-2026-08-01-18 — per-KEY drop fn, the key-half mirror of the
+        // slice-3r value selector. Same helper, same contract: `Some` only
+        // when the key owns heap beyond the one-level overlay (user struct
+        // with heap fields, nested Vec, ...), in which case it owns the
+        // whole key-side release and the flag is forced off.
+        let key_te = k.cloned();
+        let key_drop_fn = key_te
+            .as_ref()
+            .and_then(|t| self.map_val_drop_fn_for_type_expr(t));
+        let key_is_vec = if key_drop_fn.is_some() {
+            false
+        } else {
+            key_is_vec
+        };
         if head == "Set" {
-            return (key_is_vec, false, key_shared, None, None);
+            return (key_is_vec, false, key_shared, None, None, key_drop_fn);
         }
         let v = nth(path, 1).cloned();
         let val_is_vec = v
@@ -2658,9 +2689,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_ref()
             .and_then(|t| self.map_val_drop_fn_for_type_expr(t));
         if val_drop_fn.is_some() {
-            return (key_is_vec, false, key_shared, None, val_drop_fn);
+            return (
+                key_is_vec,
+                false,
+                key_shared,
+                None,
+                val_drop_fn,
+                key_drop_fn,
+            );
         }
-        (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn)
+        (
+            key_is_vec,
+            val_is_vec,
+            key_shared,
+            val_shared,
+            val_drop_fn,
+            key_drop_fn,
+        )
     }
 
     /// Slice 3r (deferred gap (d)) selection: the synthesized per-VALUE
@@ -3870,30 +3915,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `key_shared_heap_type` is the symmetric K-side gate — fires
     /// the same walk against the key half of each occupied bucket
     /// (`Map[shared K, V]` / `Set[shared T]`).
-    pub(super) fn track_map_var(
-        &mut self,
-        map_alloca: PointerValue<'ctx>,
-        key_is_vec: bool,
-        val_is_vec: bool,
-        val_shared_heap_type: Option<StructType<'ctx>>,
-        key_shared_heap_type: Option<StructType<'ctx>>,
-    ) {
-        self.track_map_var_with_val_drop(
-            map_alloca,
-            key_is_vec,
-            val_is_vec,
-            val_shared_heap_type,
-            key_shared_heap_type,
-            None,
-        );
-    }
-
-    /// `track_map_var` with the slice-3r per-VALUE drop fn (deferred gap
+    ///
+    /// The slice-3r per-VALUE drop fn (deferred gap
     /// (d)): a `Some(karac_drop_<V>)` routes the scope-exit free through
     /// `karac_map_free_with_val_drop_fn`, which runs the fn on every live
     /// entry's value blob in place. Callers must keep `val_is_vec = false`
     /// and `val_shared_heap_type = None` when passing a fn — the fn owns
     /// the whole value-side release (see `map_val_drop_fn_for_type_expr`).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn track_map_var_with_val_drop(
         &mut self,
         map_alloca: PointerValue<'ctx>,
@@ -3902,6 +3931,7 @@ impl<'ctx> super::Codegen<'ctx> {
         val_shared_heap_type: Option<StructType<'ctx>>,
         key_shared_heap_type: Option<StructType<'ctx>>,
         val_drop_fn: Option<FunctionValue<'ctx>>,
+        key_drop_fn: Option<FunctionValue<'ctx>>,
     ) {
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeMapHandle {
@@ -3911,6 +3941,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap_type,
                 key_shared_heap_type,
                 val_drop_fn,
+                key_drop_fn,
             });
         }
     }
@@ -3955,6 +3986,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     val_shared_heap_type,
                     key_shared_heap_type,
                     val_drop_fn,
+                    key_drop_fn,
                 } = action
                 {
                     if *map_alloca == src_slot.ptr {
@@ -3964,13 +3996,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             *val_shared_heap_type,
                             *key_shared_heap_type,
                             *val_drop_fn,
+                            *key_drop_fn,
                         ));
                         break 'outer;
                     }
                 }
             }
         }
-        let Some((key_is_vec, val_is_vec, val_shared, key_shared, val_drop_fn)) = found else {
+        let Some((key_is_vec, val_is_vec, val_shared, key_shared, val_drop_fn, key_drop_fn)) =
+            found
+        else {
             return;
         };
         let dest_tracked = self.scope_cleanup_actions.iter().any(|frame| {
@@ -3992,6 +4027,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap_type: val_shared,
                 key_shared_heap_type: key_shared,
                 val_drop_fn,
+                key_drop_fn,
             });
         }
     }
@@ -7259,6 +7295,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_shared_heap_type,
                 key_shared_heap_type,
                 val_drop_fn,
+                key_drop_fn,
             } => {
                 let handle = self
                     .builder
@@ -7279,6 +7316,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     val_shared_heap_type: *val_shared_heap_type,
                     key_shared_heap_type: *key_shared_heap_type,
                     val_drop_fn: *val_drop_fn,
+                    key_drop_fn: *key_drop_fn,
                 };
                 self.emit_free_one_map_handle(handle, &drop);
             }
@@ -8105,6 +8143,195 @@ impl<'ctx> super::Codegen<'ctx> {
         // Continuation point — both the null-guard and the loop
         // funnel here so the caller can continue emitting the
         // `karac_map_free*` runtime call after this helper returns.
+        self.builder.position_at_end(null_skip_bb);
+    }
+
+    /// B-2026-08-01-18 — per-KEY drop-fn walk, the key-half sibling of
+    /// [`Self::emit_map_shared_half_rc_dec_walk`]: for every OCCUPIED
+    /// bucket, call `key_drop_fn` (a `karac_drop_<K>` synthesizer output)
+    /// on the key blob at offset 0 within the bucket, releasing the key's
+    /// owned heap (struct String/Vec fields, nested containers) before the
+    /// caller's `karac_map_free*` releases the bucket storage. Same pinned
+    /// `KaracMap` layout, same null guard, same continuation contract (the
+    /// builder ends positioned at the skip block). No runtime entry point
+    /// exists for the key side — the value side's
+    /// `karac_map_free_with_val_drop_fn` applies its callback at
+    /// `+key_size` only — so the walk is open-coded here.
+    pub(super) fn emit_map_key_drop_fn_walk(
+        &self,
+        map_handle: PointerValue<'ctx>,
+        key_drop_fn: FunctionValue<'ctx>,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        const STATUS_OFFSET: u64 = 0;
+        const KV_OFFSET: u64 = 8;
+        const CAPACITY_OFFSET: u64 = 16;
+        const KEY_SIZE_OFFSET: u64 = 40;
+        const VAL_SIZE_OFFSET: u64 = 48;
+
+        let is_null = self
+            .builder
+            .build_is_null(map_handle, "cleanup.map.kdrop.is_null")
+            .unwrap();
+        let null_skip_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.kdrop.null.skip");
+        let walk_entry_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.kdrop.walk.entry");
+        self.builder
+            .build_conditional_branch(is_null, null_skip_bb, walk_entry_bb)
+            .unwrap();
+
+        self.builder.position_at_end(walk_entry_bb);
+        let hdr_load = |off: u64, name: &str| {
+            let p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(i8_t, map_handle, &[i64_t.const_int(off, false)], name)
+                    .unwrap()
+            };
+            p
+        };
+        let capacity = self
+            .builder
+            .build_load(
+                i64_t,
+                hdr_load(CAPACITY_OFFSET, "cleanup.map.kdrop.cap.p"),
+                "cleanup.map.kdrop.cap",
+            )
+            .unwrap()
+            .into_int_value();
+        let status_ptr = self
+            .builder
+            .build_load(
+                ptr_ty,
+                hdr_load(STATUS_OFFSET, "cleanup.map.kdrop.status.pp"),
+                "cleanup.map.kdrop.status",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let kv_ptr = self
+            .builder
+            .build_load(
+                ptr_ty,
+                hdr_load(KV_OFFSET, "cleanup.map.kdrop.kv.pp"),
+                "cleanup.map.kdrop.kv",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let key_size = self
+            .builder
+            .build_load(
+                i64_t,
+                hdr_load(KEY_SIZE_OFFSET, "cleanup.map.kdrop.ks.p"),
+                "cleanup.map.kdrop.ks",
+            )
+            .unwrap()
+            .into_int_value();
+        let val_size = self
+            .builder
+            .build_load(
+                i64_t,
+                hdr_load(VAL_SIZE_OFFSET, "cleanup.map.kdrop.vs.p"),
+                "cleanup.map.kdrop.vs",
+            )
+            .unwrap()
+            .into_int_value();
+        let stride = self
+            .builder
+            .build_int_add(key_size, val_size, "cleanup.map.kdrop.stride")
+            .unwrap();
+
+        let counter = self.create_entry_alloca(fn_val, "cleanup.map.kdrop.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_zero())
+            .unwrap();
+
+        let cond_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.kdrop.loop.cond");
+        let body_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.kdrop.loop.body");
+        let occupied_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.kdrop.loop.occupied");
+        let next_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.kdrop.loop.next");
+        let exit_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.kdrop.loop.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i_val = self
+            .builder
+            .build_load(i64_t, counter, "cleanup.map.kdrop.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, capacity, "cleanup.map.kdrop.cont")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let status_slot_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    status_ptr,
+                    &[i_val],
+                    "cleanup.map.kdrop.status.slot.p",
+                )
+                .unwrap()
+        };
+        let status_byte = self
+            .builder
+            .build_load(i8_t, status_slot_p, "cleanup.map.kdrop.status.byte")
+            .unwrap()
+            .into_int_value();
+        let is_occupied = self.emit_map_is_occupied(status_byte, "cleanup.map.kdrop.is_occupied");
+        self.builder
+            .build_conditional_branch(is_occupied, occupied_bb, next_bb)
+            .unwrap();
+
+        self.builder.position_at_end(occupied_bb);
+        let slot_off = self
+            .builder
+            .build_int_mul(i_val, stride, "cleanup.map.kdrop.slot.off")
+            .unwrap();
+        let key_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "cleanup.map.kdrop.key.p")
+                .unwrap()
+        };
+        self.builder
+            .build_call(key_drop_fn, &[key_p.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(next_bb).unwrap();
+
+        self.builder.position_at_end(next_bb);
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "cleanup.map.kdrop.i.next")
+            .unwrap();
+        self.builder.build_store(counter, i_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_unconditional_branch(null_skip_bb)
+            .unwrap();
+
         self.builder.position_at_end(null_skip_bb);
     }
 
