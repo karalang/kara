@@ -27414,6 +27414,42 @@ fn test_computed_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-02-15 leg 2 — the interpreter evaluated an indexed receiver's
+/// SUBSCRIPT TWICE for a projection field store. `set_field`'s value-type arm
+/// is a read-modify-write-back: it evaluates the receiver to read the struct
+/// copy, then hands the SAME expression to `assign_to_place`, which evaluates
+/// it again to store. `v[f()].field = x` therefore called `f` twice, where
+/// codegen calls it once (leg 1 of the same entry). A non-pure subscript is now
+/// materialized into a literal before the read, so both halves address the same
+/// element and the call runs exactly once.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_indexed_field_store_non_pure_index_runs_once` — identical source and
+/// expected string, because the whole point is that the two backends agree.
+#[test]
+fn test_indexed_field_store_non_pure_index_runs_once() {
+    assert_eq!(
+        run("struct P { mut id: i64, mut name: String }\n\
+             struct O { mut hs: Vec[P] }\n\
+             fn idx() -> i64 {\n\
+                 println(\"eval\");\n\
+                 return 0;\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[P] = Vec.new();\n\
+                 v.push(P { id: 1, name: \"a\" });\n\
+                 v[idx()].id = 9;\n\
+                 println(f\"v={v[0].id}\");\n\
+                 let mut o = O { hs: Vec.new() };\n\
+                 o.hs.push(P { id: 1, name: \"a\" });\n\
+                 o.hs[idx()].name = f\"b\";\n\
+                 println(f\"o={o.hs[0].name}\");\n\
+             }\n"),
+        // One `eval` per store — never two.
+        "eval\nv=9\neval\no=b\n"
+    );
+}
+
 /// B-2026-08-01-35 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_field_rooted_indexed_container_field_store`, same source and
 /// expected string. The interp always applied these writes — this twin

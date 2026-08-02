@@ -2415,6 +2415,25 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Is this subscript re-evaluable without observable effect?
+    ///
+    /// Used by [`Self::set_field`] to decide whether an indexed receiver needs
+    /// its subscript materialized before the read-then-write-back (see
+    /// B-2026-08-02-15 leg 2 there). Deliberately CONSERVATIVE — anything not
+    /// obviously pure is treated as effectful and materialized, which is always
+    /// sound: evaluating once is correct for a pure subscript too, it just
+    /// costs an allocation-free rebuild of the place.
+    ///
+    /// Kept separate from `eval_stmt.rs`'s `assign_index_is_pure_scalar`, which
+    /// answers a different question (may the displaced-element Drop fire run?)
+    /// and is private to that module.
+    fn index_expr_is_pure(e: &Expr) -> bool {
+        matches!(
+            e.kind,
+            ExprKind::Integer(_, _) | ExprKind::Identifier(_) | ExprKind::Bool(_)
+        )
+    }
+
     fn set_field(&mut self, object: &Expr, field: &str, val: Value) {
         // A bare-identifier (or `self`) receiver is mutated in its env slot.
         // Plain structs are value types, so the modified struct must be
@@ -2446,6 +2465,41 @@ impl<'a> Interpreter<'a> {
         //    and write the whole updated struct back up the place chain via
         //    `assign_to_place`. Without this, nested writes (`o.inner.x = v`)
         //    were silently dropped.
+        //
+        // B-2026-08-02-15 leg 2: "once" was aspirational for the value-type
+        // arm. The read below evaluates `object`, and the write-back hands the
+        // SAME expression to `assign_to_place`, which re-evaluates it — so an
+        // indexed receiver ran its subscript TWICE (`v[f()].field = x` called
+        // `f` twice; codegen calls it once). Materialize a non-pure subscript
+        // into a literal first and use that place for both halves, so the
+        // subscript runs exactly once no matter how the receiver is written.
+        let materialized;
+        let object = match &object.kind {
+            ExprKind::Index {
+                object: container,
+                index,
+            } if !Self::index_expr_is_pure(index) => {
+                match self.eval_expr_inner(index) {
+                    Value::Int(i) => {
+                        materialized = Expr {
+                            kind: ExprKind::Index {
+                                object: container.clone(),
+                                index: Box::new(Expr {
+                                    kind: ExprKind::Integer(i, None),
+                                    span: index.span.clone(),
+                                }),
+                            },
+                            span: object.span.clone(),
+                        };
+                        &materialized
+                    }
+                    // A faulted / non-integer subscript: leave the place alone
+                    // and let the read below surface it exactly as before.
+                    _ => object,
+                }
+            }
+            _ => object,
+        };
         match self.eval_expr_inner(object) {
             Value::SharedStruct(inner) => {
                 self.write_shared_struct_field(&inner, field, val, &object.span);
