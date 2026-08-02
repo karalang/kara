@@ -86,17 +86,17 @@ net = [
     "dep:libc",
 ]
 
-# TLS surface: HTTPS server (`karac_runtime_serve_https`), the ureq-backed
-# HTTP client, WS-over-TLS, and the `tls` module. Pulls the rustls/ring
-# dependency tree. Disabling it (lean archive) drops those capabilities but
-# keeps plain-HTTP serving, TCP, plain WebSocket, and JSON.
+# TLS surface: HTTPS server (`karac_runtime_serve_https`), the hyper-based
+# HTTP client (h2 via ALPN over TLS, HTTP/1.1 otherwise), WS-over-TLS, and
+# the `tls` module. Pulls the rustls/ring dependency tree. Disabling it
+# (lean archive) drops those capabilities but keeps plain-HTTP serving,
+# TCP, plain WebSocket, and JSON.
 tls = [
     "net",
     "dep:rustls",
     "dep:rustls-pemfile",
     "dep:tokio-rustls",
     "dep:webpki-roots",
-    "dep:ureq",
 ]
 
 # Threaded wasm concurrency — phase-10 "WASM concurrency lowering —
@@ -169,7 +169,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # `serve_request` bridge is protocol-agnostic, so the same handler path
 # serves both. `server` wires up the connection-acceptor + service
 # driver.
-hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
+hyper = { version = "1", features = ["server", "client", "http1", "http2"], optional = true }
 # `hyper-util` ships hyper 1's reusable server harness (`auto::Builder`,
 # `TokioExecutor`, `TokioIo`); hyper 1 itself is just the protocol core.
 # `http2` is required for `auto::Builder` to drive the HTTP/2 path it
@@ -240,26 +240,27 @@ rustls-pemfile = { version = "2", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"], optional = true }
 
 # Phase-8 std.http client codegen path (`Client.get` / `Client.post` /
-# `karac_runtime_http_client_get` / `_post`): synchronous HTTP client.
-# `tls` enables TLS support so `https://...` URLs work; ureq pulls
-# rustls + `ring` provider (matches our `rustls = ".. features = ring"`
-# above). No JSON / cookies / proxy features at v1 — minimal surface to
-# back the get/post bodies. The interpreter path in the karac compiler
-# crate uses ureq directly; the runtime mirrors it here so karac-built
-# binaries get the same client behavior without dragging ureq into the
-# generated binaries' direct dep set.
-ureq = { version = "2", default-features = false, features = ["tls"], optional = true }
-# Phase-8 line 48 (public-CA trust default): all 4 ureq client fetch
-# sites (`_client_get` / `_post` / `_client_send` / `_builder_send`)
-# route through a shared `ureq::Agent` whose rustls ClientConfig
-# explicitly trusts `webpki_roots::TLS_SERVER_ROOTS` (Mozilla bundle).
-# ureq's `tls` feature already pulls webpki-roots transitively, but
-# pinning it as a direct dep + an explicit `with_root_certificates`
-# call makes the v1 commitment load-bearing in our code: a future ureq
-# default flip (e.g. to `rustls-native-certs`) cannot silently move us
-# off the bundled-Mozilla-roots posture, and `Client.get("https://...")`
-# keeps working on stripped images (Alpine / scratch / distroless)
-# without a system CA bundle. Version pinned to match ureq 2.12.1's
+# `Client.request(...).send()`): the client transport is hyper's
+# `client::conn` (the `client` feature on the `hyper` dep above) driven
+# on a private current-thread tokio runtime — HTTP/2 via ALPN `h2` over
+# TLS with HTTP/1.1 fallback, plain HTTP/1.1 over tcp:// (roadmap
+# HTTP/2 client leg; replaced the ureq HTTP/1.1-only transport
+# 2026-08-02). Redirect-following (5 hops, POST->GET demotion on
+# 301/302/303) and the `status >= 400 -> Err` mapping preserve the old
+# ureq/interpreter-visible contract. No JSON / cookies / proxy features
+# at v1 — minimal surface to back the get/post/send bodies. The
+# interpreter path in the karac compiler crate still uses ureq (an
+# HTTP/1.1 client); status/body/header VALUES are identical across the
+# two, which is what run-vs-build parity observes.
+#
+# Phase-8 line 48 (public-CA trust default): all 4 client fetch sites
+# (`_client_get` / `_post` / `_client_send` / `_builder_send`) route
+# through one shared rustls ClientConfig that explicitly trusts
+# `webpki_roots::TLS_SERVER_ROOTS` (Mozilla bundle) — the bundled-roots
+# posture keeps `Client.get("https://...")` working on stripped images
+# (Alpine / scratch / distroless) without a system CA bundle.
+# `KARAC_HTTP_EXTRA_CA=<pem-path>` appends private-CA roots (also what
+# the E2E tests use to trust their test-origin cert). Version pinned to
 # transitive choice — see Cargo.lock.
 webpki-roots = { version = "0.26", optional = true }
 wgpu = { version = "29.0.3", optional = true }

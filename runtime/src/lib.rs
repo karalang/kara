@@ -5600,8 +5600,9 @@ mod string_split_ffi {
 //
 // `karac_runtime_http_client_get` / `_post` back compiled-mode
 // `Client.get(url)` / `Client.post(url, body)` dispatch. Synchronous
-// `ureq`-backed HTTP/1.1; rustls + `ring` provider via ureq's `tls`
-// feature. Out-params convey either success (status > 0, body buffer)
+// facade over the hyper-based transport below (HTTP/2 via ALPN over
+// TLS, HTTP/1.1 otherwise; rustls + `ring` provider). Out-params
+// convey either success (status > 0, body buffer)
 // or transport error (status = 0, error-message buffer). Both buffers
 // are libc::malloc-allocated so the Kāra-side `String` `{ data, len,
 // cap }` value's `Drop` can free them via plain `free(data)` —
@@ -5650,54 +5651,363 @@ unsafe fn write_owned_bytes_into_out_params(
     *out_len = bytes.len() as i64;
 }
 
-/// Read a `ureq::Response` entity to raw bytes, bypassing the UTF-8
-/// validation `ureq::Response::into_string` performs. This is what lets
-/// `Response.bytes()` (phase-8 line 32) surface binary payloads (image
-/// downloads, protobuf, file transfers) intact: the body buffer the
-/// client FFI hands back holds the verbatim wire bytes rather than the
-/// empty string `into_string().unwrap_or_default()` produces on invalid
-/// UTF-8. `Response.text()` / `.body()` reinterpret the same buffer as a
-/// Kāra `String` — valid UTF-8 for the common text response, raw bytes
-/// otherwise (matching reqwest's lossy-`text` posture). A mid-stream
-/// read error yields whatever was read so far, mirroring
-/// `into_string().unwrap_or_default()`'s lenient stance.
+// ── hyper-based HTTP client — h2 via ALPN, HTTP/1.1 fallback ─────────
+//
+// All 4 client fetch sites (`_client_get` / `_post` / `_client_send` /
+// `_builder_send`) route through `http_fetch_blocking`, a one-shot
+// hyper `client::conn` transport driven on a private current-thread
+// tokio runtime (roadmap HTTP/2 client leg; replaced the ureq
+// HTTP/1.1-only transport 2026-08-02):
+//
+//   - `https://` — TCP + tokio-rustls with ALPN `["h2", "http/1.1"]`;
+//     an `h2`-negotiating origin gets a real multiplexing-capable
+//     HTTP/2 connection (`hyper::client::conn::http2`), anything else
+//     falls back to HTTP/1.1. SNI + full webpki certificate/hostname
+//     verification against the bundled Mozilla roots;
+//     `KARAC_HTTP_EXTRA_CA=<pem-path>` appends private-CA roots.
+//   - `http://` — plain HTTP/1.1 (matching curl/browser behavior;
+//     h2c prior-knowledge is a server-side affordance, not assumed of
+//     arbitrary origins).
+//
+// Contract parity with the replaced ureq transport (and with the
+// interpreter's ureq path, which run-vs-build parity observes):
+// redirects followed up to 5 hops with the 301/302/303 POST→GET
+// demotion (307/308 preserve method + body); `status >= 400` maps to
+// the Err arm with the exact ureq message shape
+// `"{url}: status code {n}"`; `timeout_ms > 0` bounds the whole
+// request; response bodies are raw bytes (binary-safe — UTF-8
+// reinterpretation happens Kāra-side in `Response.text()`).
 #[cfg(feature = "tls")]
-fn read_response_body_bytes(resp: ureq::Response) -> Vec<u8> {
-    use std::io::Read;
-    let mut buf = Vec::new();
-    let _ = resp.into_reader().read_to_end(&mut buf);
-    buf
+struct HttpFetched {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
 }
 
-// ── Shared ureq agent with explicit webpki-roots (phase-8 line 48) ────
-//
-// All 4 ureq client fetch sites (`_client_get` / `_post` / `_client_send`
-// / `_builder_send`) route through this single `ureq::Agent` whose
-// rustls `ClientConfig` explicitly trusts `webpki_roots::TLS_SERVER_ROOTS`
-// (the bundled Mozilla Root program) — same `ring` provider + safe
-// default protocol versions as `runtime/src/tls.rs::build_client_config`,
-// the direct-TLS client-side path. ureq's `tls` feature already brings
-// webpki-roots in transitively today, but pinning the choice in our own
-// config builder defends against a future ureq default flip to
-// `rustls-native-certs` and lets `Client.get("https://...")` work on
-// stripped images (Alpine / scratch / distroless) without a system CA
-// bundle reachable to the process.
+/// Private current-thread tokio runtime for the synchronous client FFI.
+/// A dedicated runtime (rather than the serve loops') keeps the client
+/// callable from anywhere: a plain thread, a serve handler running
+/// under `block_in_place`, or a test harness — `block_on` here never
+/// re-enters an outer runtime.
 #[cfg(feature = "tls")]
-fn http_client_agent() -> &'static ureq::Agent {
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| {
-        let root_store = rustls::RootCertStore {
+fn http_client_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .expect("current-thread tokio runtime for the http client")
+    })
+}
+
+/// Shared rustls `ClientConfig`: bundled Mozilla roots
+/// (`webpki_roots::TLS_SERVER_ROOTS`, so stripped images need no system
+/// CA bundle) + optional `KARAC_HTTP_EXTRA_CA` PEM append, `ring`
+/// provider, ALPN `["h2", "http/1.1"]`. Built once; the env var is read
+/// on first use.
+#[cfg(feature = "tls")]
+fn http_client_tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
+    static CFG: std::sync::OnceLock<Result<std::sync::Arc<rustls::ClientConfig>, String>> =
+        std::sync::OnceLock::new();
+    CFG.get_or_init(|| {
+        let mut root_store = rustls::RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
         };
+        if let Ok(path) = std::env::var("KARAC_HTTP_EXTRA_CA") {
+            let pem = std::fs::read(&path)
+                .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: cannot read '{path}': {e}"))?;
+            for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+                let cert =
+                    cert.map_err(|e| format!("KARAC_HTTP_EXTRA_CA: bad PEM in '{path}': {e}"))?;
+                root_store
+                    .add(cert)
+                    .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: rejected cert in '{path}': {e}"))?;
+            }
+        }
         let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-        let tls_config = rustls::ClientConfig::builder_with_provider(provider)
+        let mut config = rustls::ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .expect("rustls safe default protocol versions are always supported by ring")
             .with_root_certificates(root_store)
             .with_no_client_auth();
-        ureq::AgentBuilder::new()
-            .tls_config(std::sync::Arc::new(tls_config))
-            .build()
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        Ok(std::sync::Arc::new(config))
+    })
+    .clone()
+}
+
+/// Synchronous entry point: run the redirect-following fetch on the
+/// client runtime, bounded by `timeout_ms` when positive.
+#[cfg(feature = "tls")]
+fn http_fetch_blocking(
+    method: &str,
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+    timeout_ms: i64,
+) -> Result<HttpFetched, String> {
+    http_client_runtime().block_on(async {
+        let fut = http_fetch_redirects(method, url, body, headers);
+        if timeout_ms > 0 {
+            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms as u64), fut)
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(format!("{url}: request timed out after {timeout_ms} ms")),
+            }
+        } else {
+            fut.await
+        }
+    })
+}
+
+/// Follow up to 5 redirects (ureq's default), demoting to GET and
+/// dropping the body on 301/302/303 for non-GET/HEAD methods (307/308
+/// preserve both). A final `status >= 400` maps to `Err` with ureq's
+/// exact message shape so the codegen path and the interpreter's ureq
+/// path stay message-compatible on the deterministic error class.
+#[cfg(feature = "tls")]
+async fn http_fetch_redirects(
+    method: &str,
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+) -> Result<HttpFetched, String> {
+    let mut method = method.to_string();
+    let mut url = url.to_string();
+    let mut body = body.to_vec();
+    for _hop in 0..=5 {
+        let fetched = http_fetch_once(&method, &url, &body, headers).await?;
+        if matches!(fetched.status, 301 | 302 | 303 | 307 | 308) {
+            let loc = fetched
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("location"))
+                .map(|(_, v)| v.clone());
+            if let Some(loc) = loc {
+                url = http_resolve_location(&url, &loc)?;
+                let demote = fetched.status == 303
+                    || ((fetched.status == 301 || fetched.status == 302)
+                        && !method.eq_ignore_ascii_case("GET")
+                        && !method.eq_ignore_ascii_case("HEAD"));
+                if demote {
+                    method = "GET".to_string();
+                    body.clear();
+                }
+                continue;
+            }
+        }
+        if fetched.status >= 400 {
+            return Err(format!("{url}: status code {}", fetched.status));
+        }
+        return Ok(fetched);
+    }
+    Err(format!("{url}: too many redirects"))
+}
+
+/// Resolve a `Location` header against the current request URL:
+/// absolute URLs pass through; `//authority/...`, `/rooted`, and
+/// bare-relative forms resolve against the current scheme/authority/
+/// path per RFC 3986's common cases.
+#[cfg(feature = "tls")]
+fn http_resolve_location(current: &str, loc: &str) -> Result<String, String> {
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return Ok(loc.to_string());
+    }
+    let cur: hyper::Uri = current
+        .parse()
+        .map_err(|e| format!("{current}: bad url: {e}"))?;
+    let scheme = cur.scheme_str().unwrap_or("http");
+    let auth = cur
+        .authority()
+        .map(|a| a.as_str().to_string())
+        .ok_or_else(|| format!("{current}: url has no authority"))?;
+    if let Some(rest) = loc.strip_prefix("//") {
+        return Ok(format!("{scheme}://{rest}"));
+    }
+    if loc.starts_with('/') {
+        return Ok(format!("{scheme}://{auth}{loc}"));
+    }
+    let path = cur.path();
+    let dir_end = path.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let dir = if dir_end == 0 { "/" } else { &path[..dir_end] };
+    Ok(format!("{scheme}://{auth}{dir}{loc}"))
+}
+
+/// One request/response exchange on a fresh connection: TCP connect,
+/// TLS + ALPN when `https`, then hyper h2 or h1 `client::conn` by the
+/// negotiated protocol.
+#[cfg(feature = "tls")]
+async fn http_fetch_once(
+    method: &str,
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+) -> Result<HttpFetched, String> {
+    let uri: hyper::Uri = url.parse().map_err(|e| format!("{url}: bad url: {e}"))?;
+    let scheme = uri.scheme_str().unwrap_or("http").to_string();
+    let host = uri
+        .host()
+        .ok_or_else(|| format!("{url}: url has no host"))?
+        .to_string();
+    let port = uri
+        .port_u16()
+        .unwrap_or(if scheme == "https" { 443 } else { 80 });
+    let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|e| format!("{url}: connect failed: {e}"))?;
+    if scheme == "https" {
+        let config = http_client_tls_config()?;
+        let connector = tokio_rustls::TlsConnector::from(config);
+        let sni = rustls::pki_types::ServerName::try_from(host.clone())
+            .map_err(|e| format!("{url}: invalid TLS server name: {e}"))?;
+        let tls = connector
+            .connect(sni, tcp)
+            .await
+            .map_err(|e| format!("{url}: TLS handshake failed: {e}"))?;
+        let negotiated_h2 = tls.get_ref().1.alpn_protocol() == Some(b"h2".as_slice());
+        if negotiated_h2 {
+            http_exchange_h2(tls, method, &uri, url, body, headers).await
+        } else {
+            http_exchange_h1(tls, method, &uri, &host, port, &scheme, url, body, headers).await
+        }
+    } else {
+        http_exchange_h1(tcp, method, &uri, &host, port, &scheme, url, body, headers).await
+    }
+}
+
+/// HTTP/1.1 exchange over any duplex IO (plain TCP or a TLS stream that
+/// negotiated `http/1.1`). Origin-form request target + explicit `Host`
+/// (with port when non-default).
+#[cfg(feature = "tls")]
+#[allow(clippy::too_many_arguments)]
+async fn http_exchange_h1<T>(
+    io: T,
+    method: &str,
+    uri: &hyper::Uri,
+    host: &str,
+    port: u16,
+    scheme: &str,
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+) -> Result<HttpFetched, String>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut sender, conn) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io))
+            .await
+            .map_err(|e| format!("{url}: HTTP/1.1 handshake failed: {e}"))?;
+    tokio::task::spawn(async move {
+        let _ = conn.await;
+    });
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    let host_header = if port == default_port {
+        host.to_string()
+    } else {
+        format!("{host}:{port}")
+    };
+    let target = uri
+        .path_and_query()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let req = http_build_request(method, &target, Some(&host_header), body, headers, url)?;
+    let resp = sender
+        .send_request(req)
+        .await
+        .map_err(|e| format!("{url}: request failed: {e}"))?;
+    http_collect_response(resp, url).await
+}
+
+/// HTTP/2 exchange over a TLS stream that negotiated `h2` via ALPN. The
+/// absolute URI carries `:scheme` / `:authority`; hyper's h2 client
+/// conn maps it to pseudo-headers (no `Host` header on h2).
+#[cfg(feature = "tls")]
+async fn http_exchange_h2<T>(
+    io: T,
+    method: &str,
+    uri: &hyper::Uri,
+    url: &str,
+    body: &[u8],
+    headers: &[(String, String)],
+) -> Result<HttpFetched, String>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut sender, conn) = hyper::client::conn::http2::handshake(
+        hyper_util::rt::TokioExecutor::new(),
+        hyper_util::rt::TokioIo::new(io),
+    )
+    .await
+    .map_err(|e| format!("{url}: HTTP/2 handshake failed: {e}"))?;
+    tokio::task::spawn(async move {
+        let _ = conn.await;
+    });
+    let req = http_build_request(method, &uri.to_string(), None, body, headers, url)?;
+    let resp = sender
+        .send_request(req)
+        .await
+        .map_err(|e| format!("{url}: request failed: {e}"))?;
+    http_collect_response(resp, url).await
+}
+
+/// Assemble the hyper request: method, target (origin-form for h1,
+/// absolute for h2), optional `Host`, caller headers, `Full` body.
+#[cfg(feature = "tls")]
+fn http_build_request(
+    method: &str,
+    target: &str,
+    host_header: Option<&str>,
+    body: &[u8],
+    headers: &[(String, String)],
+    url: &str,
+) -> Result<hyper::Request<http_body_util::Full<bytes::Bytes>>, String> {
+    let method = hyper::Method::from_bytes(method.as_bytes())
+        .map_err(|e| format!("{url}: bad method: {e}"))?;
+    let mut builder = hyper::Request::builder().method(method).uri(target);
+    if let Some(host) = host_header {
+        builder = builder.header(hyper::header::HOST, host);
+    }
+    for (k, v) in headers {
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+    builder
+        .body(http_body_util::Full::new(bytes::Bytes::from(body.to_vec())))
+        .map_err(|e| format!("{url}: bad request: {e}"))
+}
+
+/// Drain a hyper response into status + header pairs + raw body bytes.
+/// Bodies stay raw (binary-safe); `Response.text()` reinterprets
+/// Kāra-side. Mid-stream errors surface as `Err` (the whole-body
+/// collect either completes or fails — no partial-body lenience to
+/// keep h1 and h2 behavior identical).
+#[cfg(feature = "tls")]
+async fn http_collect_response(
+    resp: hyper::Response<hyper::body::Incoming>,
+    url: &str,
+) -> Result<HttpFetched, String> {
+    use http_body_util::BodyExt;
+    let status = resp.status().as_u16();
+    let mut headers: Vec<(String, String)> = Vec::new();
+    for (name, value) in resp.headers() {
+        headers.push((
+            name.as_str().to_string(),
+            String::from_utf8_lossy(value.as_bytes()).into_owned(),
+        ));
+    }
+    let body = resp
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| format!("{url}: reading response body failed: {e}"))?
+        .to_bytes()
+        .to_vec();
+    Ok(HttpFetched {
+        status,
+        headers,
+        body,
     })
 }
 
@@ -5736,27 +6046,26 @@ static HTTP_RESPONSE_HEADERS: std::sync::LazyLock<
 static HTTP_RESPONSE_HEADERS_NEXT_ID: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(1);
 
-/// Capture every header on a live `ureq::Response` into the
+/// Capture every drained response header pair into the
 /// `HTTP_RESPONSE_HEADERS` side-table and return a fresh positive
 /// handle keying the stored entry (or `0` if the lock is poisoned).
-/// Must be called BEFORE `read_response_body_bytes` consumes the
-/// response — `ureq::Response::header` / `::headers_names` borrow the
-/// response, while `into_reader()` moves it. Header values containing an
-/// interior NUL (illegal per RFC 7230, but defended against) are
-/// skipped. The handle is written into the client FFI's
-/// `out_headers_handle` out-param on the Ok path; the Err path leaves it
-/// `0` so `Response.header(...)` on a (non-existent) error Response
-/// would resolve every lookup to `None`.
+/// Takes the name/value pairs `http_collect_response` drained from the
+/// hyper response (under HTTP/2 the names arrive lowercase — the
+/// protocol requires it; lookups are case-insensitive either way).
+/// Header values containing an interior NUL (illegal per RFC 7230, but
+/// defended against) are skipped. The handle is written into the client
+/// FFI's `out_headers_handle` out-param on the Ok path; the Err path
+/// leaves it `0` so `Response.header(...)` on a (non-existent) error
+/// Response would resolve every lookup to `None`.
 #[cfg(feature = "tls")]
-fn capture_response_headers(resp: &ureq::Response) -> i64 {
+fn capture_response_headers(header_pairs: &[(String, String)]) -> i64 {
     let mut pairs: CapturedResponseHeaders = Vec::new();
-    for name in resp.headers_names() {
-        if let Some(val) = resp.header(&name) {
-            if let (Ok(cname), Ok(cval)) =
-                (std::ffi::CString::new(name), std::ffi::CString::new(val))
-            {
-                pairs.push((cname, cval));
-            }
+    for (name, val) in header_pairs {
+        if let (Ok(cname), Ok(cval)) = (
+            std::ffi::CString::new(name.as_str()),
+            std::ffi::CString::new(val.as_str()),
+        ) {
+            pairs.push((cname, cval));
         }
     }
     let handle = HTTP_RESPONSE_HEADERS_NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -5832,7 +6141,7 @@ pub extern "C" fn karac_runtime_http_response_headers_count(handle: i64) -> i64 
 /// or `idx` is out of range. Backs `Response.headers()`'s counted-loop
 /// copy — each borrowed cstring is copied into a fresh owned Kāra String
 /// per call, so the resulting `Vec[(String, String)]` outlives the
-/// table. Names are returned in the order ureq surfaced them.
+/// table. Names are returned in the order the response carried them.
 #[no_mangle]
 pub extern "C" fn karac_runtime_http_response_header_key_at(
     handle: i64,
@@ -5891,7 +6200,7 @@ pub extern "C" fn karac_runtime_http_response_headers_free(handle: i64) {
 /// buffer; the other is `(null, 0)`. The success/error discriminant is
 /// `*out_status`: `> 0` means HTTP transaction completed (the server
 /// returned a status code); `0` means transport error (DNS, connect,
-/// TLS, timeout — `err_ptr` carries `ureq::Error`'s display message).
+/// TLS, timeout — `err_ptr` carries the transport's error message).
 /// Both buffers are libc::malloc-allocated; ownership transfers to
 /// the caller.
 ///
@@ -5933,15 +6242,14 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
         }
     };
 
-    match http_client_agent().get(url).call() {
-        Ok(resp) => {
-            *out_status = resp.status() as i64;
-            *out_headers_handle = capture_response_headers(&resp);
-            let body = read_response_body_bytes(resp);
-            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
+    match http_fetch_blocking("GET", url, &[], &[], 0) {
+        Ok(fetched) => {
+            *out_status = fetched.status as i64;
+            *out_headers_handle = capture_response_headers(&fetched.headers);
+            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
         }
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        Err(msg) => {
+            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
         }
     }
 }
@@ -5950,8 +6258,8 @@ pub unsafe extern "C" fn karac_runtime_http_client_get(
 /// populate the success or error out-params. Same discriminant + buffer
 /// ownership convention as `karac_runtime_http_client_get`. The body is
 /// sent verbatim as the request entity (no Content-Type defaulting at
-/// this layer — that lives in the chained-builder follow-on); `ureq`
-/// applies `Content-Length` automatically.
+/// this layer — that lives in the chained-builder follow-on); the
+/// transport applies `Content-Length` automatically.
 ///
 /// # Safety
 ///
@@ -5997,15 +6305,14 @@ pub unsafe extern "C" fn karac_runtime_http_client_post(
         std::slice::from_raw_parts(body_ptr, body_len)
     };
 
-    match http_client_agent().post(url).send_bytes(body_bytes) {
-        Ok(resp) => {
-            *out_status = resp.status() as i64;
-            *out_headers_handle = capture_response_headers(&resp);
-            let body = read_response_body_bytes(resp);
-            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
+    match http_fetch_blocking("POST", url, body_bytes, &[], 0) {
+        Ok(fetched) => {
+            *out_status = fetched.status as i64;
+            *out_headers_handle = capture_response_headers(&fetched.headers);
+            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
         }
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        Err(msg) => {
+            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
         }
     }
 }
@@ -6048,7 +6355,7 @@ unsafe fn kara_str_to_str(s: &KaracStr) -> Option<&str> {
 /// (`Client.request(method, url).header(...).body(...).timeout(...).send()`).
 /// Same out-param ownership convention as `karac_runtime_http_client_get`:
 /// `*out_status > 0` means HTTP transaction completed; `0` means
-/// transport error (`out_err_ptr` carries ureq's display message). Both
+/// transport error (`out_err_ptr` carries the transport's error message). Both
 /// `body` and `err` buffers are libc::malloc-allocated and freed by the
 /// Kāra-side `String { data, len, cap }`'s Drop.
 ///
@@ -6119,7 +6426,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
         }
     };
 
-    let mut req = http_client_agent().request(method, url);
+    let mut header_pairs: Vec<(String, String)> = Vec::new();
     if headers_count > 0 && !headers_ptr.is_null() {
         let pairs = std::slice::from_raw_parts(headers_ptr, headers_count);
         for pair in pairs {
@@ -6128,11 +6435,8 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
                 _ => continue,
             };
             let val = kara_str_to_str(&pair.val).unwrap_or("");
-            req = req.set(key, val);
+            header_pairs.push((key.to_string(), val.to_string()));
         }
-    }
-    if timeout_ms > 0 {
-        req = req.timeout(std::time::Duration::from_millis(timeout_ms as u64));
     }
 
     let body_bytes: &[u8] = if body_ptr.is_null() || body_len == 0 {
@@ -6141,21 +6445,14 @@ pub unsafe extern "C" fn karac_runtime_http_client_send(
         std::slice::from_raw_parts(body_ptr, body_len)
     };
 
-    let result = if body_bytes.is_empty() {
-        req.call()
-    } else {
-        req.send_bytes(body_bytes)
-    };
-
-    match result {
-        Ok(resp) => {
-            *out_status = resp.status() as i64;
-            *out_headers_handle = capture_response_headers(&resp);
-            let body = read_response_body_bytes(resp);
-            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
+    match http_fetch_blocking(method, url, body_bytes, &header_pairs, timeout_ms) {
+        Ok(fetched) => {
+            *out_status = fetched.status as i64;
+            *out_headers_handle = capture_response_headers(&fetched.headers);
+            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
         }
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        Err(msg) => {
+            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
         }
     }
 }
@@ -6380,29 +6677,20 @@ pub unsafe extern "C" fn karac_runtime_http_builder_send(
         }
     };
 
-    let mut req = http_client_agent().request(&state.method, &state.url);
-    for (k, v) in &state.headers {
-        req = req.set(k, v);
-    }
-    if state.timeout_ms > 0 {
-        req = req.timeout(std::time::Duration::from_millis(state.timeout_ms as u64));
-    }
-
-    let result = if state.body.is_empty() {
-        req.call()
-    } else {
-        req.send_bytes(&state.body)
-    };
-
-    match result {
-        Ok(resp) => {
-            *out_status = resp.status() as i64;
-            *out_headers_handle = capture_response_headers(&resp);
-            let body = read_response_body_bytes(resp);
-            write_owned_bytes_into_out_params(&body, out_body_ptr, out_body_len);
+    match http_fetch_blocking(
+        &state.method,
+        &state.url,
+        &state.body,
+        &state.headers,
+        state.timeout_ms,
+    ) {
+        Ok(fetched) => {
+            *out_status = fetched.status as i64;
+            *out_headers_handle = capture_response_headers(&fetched.headers);
+            write_owned_bytes_into_out_params(&fetched.body, out_body_ptr, out_body_len);
         }
-        Err(e) => {
-            write_owned_bytes_into_out_params(e.to_string().as_bytes(), out_err_ptr, out_err_len);
+        Err(msg) => {
+            write_owned_bytes_into_out_params(msg.as_bytes(), out_err_ptr, out_err_len);
         }
     }
 }
@@ -10581,27 +10869,33 @@ mod tests {
 
     /// Phase-8 line 48 — pin the shared `ureq::Agent`'s explicit
     /// webpki-roots config. ureq's `tls` feature transitively brings
-    /// webpki-roots in today, but we build our own `ClientConfig` (per
-    /// `http_client_agent`) so a future ureq default flip to
-    /// `rustls-native-certs` can't silently move us off the bundled
-    /// Mozilla Root program. Asserts: (1) the Mozilla root bundle is
-    /// non-empty (proves the `webpki-roots` dep is reachable, not a
-    /// dead crate), and (2) `http_client_agent()` returns the same
-    /// `&'static` agent across calls (proves the `OnceLock` cache is
-    /// what's serving every HTTPS request — single shared TLS config,
-    /// not a fresh build per fetch).
+    /// We build our own `ClientConfig` with an explicit
+    /// `with_root_certificates(webpki_roots::TLS_SERVER_ROOTS)` so the
+    /// bundled-Mozilla-roots posture is load-bearing in our code (no
+    /// dependency-default drift can move us off it). Asserts: (1) the
+    /// Mozilla root bundle is non-empty (proves the `webpki-roots` dep
+    /// is reachable, not a dead crate), (2) `http_client_tls_config()`
+    /// returns the same cached `Arc` across calls (single shared TLS
+    /// config, not a fresh build per fetch), and (3) the config
+    /// advertises ALPN `[h2, http/1.1]` — the HTTP/2-client negotiation
+    /// contract.
     #[test]
     #[cfg(feature = "tls")]
-    fn test_http_client_agent_uses_explicit_webpki_roots_and_is_shared() {
+    fn test_http_client_tls_config_webpki_roots_shared_and_alpn_h2() {
         assert!(
             !webpki_roots::TLS_SERVER_ROOTS.is_empty(),
             "webpki-roots Mozilla bundle must be reachable; an empty bundle would mean every HTTPS request rejects every cert"
         );
-        let a = super::http_client_agent();
-        let b = super::http_client_agent();
+        let a = super::http_client_tls_config().expect("client TLS config builds");
+        let b = super::http_client_tls_config().expect("client TLS config builds");
         assert!(
-            std::ptr::eq(a, b),
-            "http_client_agent must return the OnceLock-cached agent; a fresh build per call would mean per-request TLS handshake state setup"
+            std::sync::Arc::ptr_eq(&a, &b),
+            "http_client_tls_config must return the OnceLock-cached Arc; a fresh build per call would mean per-request root-store setup"
+        );
+        assert_eq!(
+            a.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+            "client config must offer h2 then http/1.1 via ALPN"
         );
     }
 

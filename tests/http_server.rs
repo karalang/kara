@@ -3396,4 +3396,233 @@ fn main() with sends(Network) receives(Network) {{
             panic!("shortener example E2E failed: {e}");
         }
     }
+
+    // ── Client-side HTTP/2 (roadmap h2-client leg, 2026-08-02) ────────
+    //
+    // The client transport negotiates h2 via ALPN over TLS and falls
+    // back to HTTP/1.1 — these E2Es prove both arms against an in-test
+    // TLS origin that echoes the request's negotiated HTTP version,
+    // with REAL webpki verification: the origin's per-run rcgen cert is
+    // trusted through `KARAC_HTTP_EXTRA_CA` (itself under test), not a
+    // NoVerify client. A third test pins redirect-following parity
+    // (the ureq behavior the hyper transport replaced).
+
+    /// One-shot TLS origin answering a single request with
+    /// `version=HTTP/2.0` / `version=HTTP/1.1` (the request's
+    /// negotiated version), via the same hyper auto builder the
+    /// production serve loops use. Returns (port, cert_pem, join).
+    fn spawn_tls_version_echo_origin(
+        alpn: Vec<Vec<u8>>,
+    ) -> (u16, String, std::thread::JoinHandle<()>) {
+        let cert = rcgen::generate_simple_self_signed(vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+        ])
+        .expect("rcgen self-signed cert");
+        let cert_pem = cert.cert.pem();
+        let cert_der = cert.cert.der().clone();
+        let key_der = rustls::pki_types::PrivateKeyDer::try_from(cert.signing_key.serialize_der())
+            .expect("key der");
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let mut server_config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("protocol versions")
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der], key_der)
+            .expect("server cert");
+        server_config.alpn_protocols = alpn;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind tls origin");
+        let port = listener.local_addr().expect("local_addr").port();
+        let join = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .expect("origin runtime");
+            rt.block_on(async move {
+                listener.set_nonblocking(true).expect("nonblocking");
+                let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+                let Ok((tcp, _)) = listener.accept().await else {
+                    return;
+                };
+                let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+                let Ok(tls) = acceptor.accept(tcp).await else {
+                    return;
+                };
+                let svc = hyper::service::service_fn(
+                    |req: hyper::Request<hyper::body::Incoming>| async move {
+                        let body = format!("version={:?}", req.version());
+                        Ok::<_, std::convert::Infallible>(hyper::Response::new(
+                            http_body_util::Full::new(bytes::Bytes::from(body)),
+                        ))
+                    },
+                );
+                let _ = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection(hyper_util::rt::TokioIo::new(tls), svc)
+                .await;
+            });
+        });
+        (port, cert_pem, join)
+    }
+
+    /// One-shot plain-HTTP origin answering a single request with the
+    /// supplied canned bytes (same inline pattern as the existing
+    /// client E2Es, factored for the redirect chain).
+    fn spawn_canned_origin(canned: Vec<u8>) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind canned origin");
+        let port = listener.local_addr().expect("local_addr").port();
+        let join = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let mut total = 0usize;
+                while total < buf.len() {
+                    let n = match stream.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(&canned);
+                let _ = stream.flush();
+            }
+        });
+        (port, join)
+    }
+
+    /// Compile + run a Kāra `Client.get(url)` binary (optionally with
+    /// `KARAC_HTTP_EXTRA_CA` pointing at a test-CA PEM), asserting a
+    /// clean exit and returning stdout.
+    fn run_client_get_binary(url: &str, extra_ca_pem: Option<&str>, tag: &str) -> String {
+        let src = format!(
+            r#"
+fn main() with sends(Network) receives(Network) {{
+    let url: String = "{url}";
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(resp) => {{
+            println(resp.body());
+        }}
+        Err(e) => {{
+            println("ERR");
+            println(e.message());
+        }}
+    }}
+}}
+"#
+        );
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_h2_client_{tag}_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let mut cmd = Command::new(&exe_path);
+        let ca_path = PathBuf::from(format!("/tmp/karac_h2_client_ca_{tag}_{pid}_{nanos}.pem"));
+        if let Some(pem) = extra_ca_pem {
+            std::fs::write(&ca_path, pem).expect("write test CA pem");
+            cmd.env("KARAC_HTTP_EXTRA_CA", &ca_path);
+        }
+        let output = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("run client binary");
+        let _ = std::fs::remove_file(&exe_path);
+        let _ = std::fs::remove_file(&ca_path);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            output.status.success(),
+            "client binary exited non-zero; stdout={stdout:?} stderr={stderr:?}"
+        );
+        stdout
+    }
+
+    /// `Client.get("https://...")` against an origin offering ALPN
+    /// `[h2, http/1.1]` negotiates a REAL HTTP/2 exchange — the origin
+    /// echoes the version it saw.
+    #[test]
+    fn test_client_http2_negotiated_via_alpn_over_tls() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let (port, cert_pem, join) =
+            spawn_tls_version_echo_origin(vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+        let stdout = run_client_get_binary(
+            &format!("https://localhost:{port}/v"),
+            Some(&cert_pem),
+            "h2",
+        );
+        let _ = join.join();
+        assert!(
+            stdout.contains("version=HTTP/2.0"),
+            "client must negotiate h2 via ALPN against an h2-capable origin; stdout={stdout:?}"
+        );
+    }
+
+    /// Same client against an origin whose ALPN offers only http/1.1 —
+    /// the client falls back cleanly.
+    #[test]
+    fn test_client_http1_fallback_when_origin_offers_no_h2() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let (port, cert_pem, join) = spawn_tls_version_echo_origin(vec![b"http/1.1".to_vec()]);
+        let stdout = run_client_get_binary(
+            &format!("https://localhost:{port}/v"),
+            Some(&cert_pem),
+            "h1",
+        );
+        let _ = join.join();
+        assert!(
+            stdout.contains("version=HTTP/1.1"),
+            "client must fall back to HTTP/1.1 when the origin offers no h2; stdout={stdout:?}"
+        );
+    }
+
+    /// Redirect-following parity with the replaced ureq transport: a
+    /// 302 with an absolute `Location` is followed (up to 5 hops) and
+    /// the final body is what the caller sees.
+    #[test]
+    fn test_client_follows_redirect_across_origins() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let canned_dst =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 14\r\nConnection: close\r\n\r\nafter-redirect"
+                .to_vec();
+        let (dst_port, dst_join) = spawn_canned_origin(canned_dst);
+        let canned_src = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{dst_port}/dst\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes();
+        let (src_port, src_join) = spawn_canned_origin(canned_src);
+        let stdout =
+            run_client_get_binary(&format!("http://127.0.0.1:{src_port}/start"), None, "redir");
+        let _ = src_join.join();
+        let _ = dst_join.join();
+        assert!(
+            stdout.contains("after-redirect"),
+            "client must follow the 302 to the destination origin; stdout={stdout:?}"
+        );
+    }
 }

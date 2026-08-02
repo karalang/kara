@@ -1272,6 +1272,7 @@ dependencies = [
  "llvm-sys",
  "pubgrub",
  "pulldown-cmark",
+ "rcgen",
  "regex",
  "rustls",
  "rustyline",
@@ -1280,6 +1281,7 @@ dependencies = [
  "stacker",
  "tar",
  "tokio",
+ "tokio-rustls",
  "toml",
  "ureq",
  "wasi-preview1-component-adapter-provider",
@@ -1331,7 +1333,6 @@ dependencies = [
  "socket2 0.5.10",
  "tokio",
  "tokio-rustls",
- "ureq",
  "webpki-roots 0.26.11",
  "wgpu",
 ]

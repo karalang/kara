@@ -275,10 +275,16 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 # needs none of this. All dev-only — the compiler crate's production build
 # is unaffected. (`h2` itself is already in the lockfile transitively.)
 tokio = { version = "1", features = ["rt", "net", "io-util", "time", "macros"] }
-hyper = { version = "1", features = ["client", "http2"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper = { version = "1", features = ["client", "server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 http-body-util = "0.1"
 bytes = "1"
+# Client-h2 E2E origins (tests/http_server.rs): an in-test TLS origin that
+# negotiates h2/http1.1 via ALPN (tokio-rustls acceptor + the hyper auto
+# builder above) with a per-run rcgen certificate the Kāra client trusts
+# through `KARAC_HTTP_EXTRA_CA` — real webpki verification, no fixture keys.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "crypto"] }
 
 # Registry-proxy line 930 (`HttpProxyClient` live HTTP fetch): the
 # `tests/registry_proxy_wire.rs` integration test drives the real `ureq`
