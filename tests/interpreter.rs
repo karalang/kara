@@ -27705,6 +27705,42 @@ fn test_tuple_field_parent_displaced_and_vec_elem_bodies() {
     );
 }
 
+/// B-2026-08-02-21 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_struct_field_set_and_sortedmap_bodies` (parity pin: the interp's
+/// field walk fires Set-element / SortedMap-value bodies via the
+/// B-2026-08-02-18 table arm, sorted values in key order like the b170
+/// sorted walker; the memory half is AOT-only and pinned by the asan
+/// twin).
+#[test]
+fn test_struct_field_set_and_sortedmap_bodies() {
+    assert_eq!(
+        run("#[derive(Hash, Eq)]\n\
+             struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct SetHold { s: Set[Res], tag: i64 }\n\
+             struct SmHold { m: SortedMap[i64, Res], tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut h = SetHold { s: Set.new(), tag: 1 };\n\
+                     let _ = h.s.insert(Res { id: 3, name: f\"s{3}\" });\n\
+                     println(h.tag);\n\
+                 }\n\
+                 println(\"mid\");\n\
+                 {\n\
+                     let mut g = SmHold { m: SortedMap.new(), tag: 2 };\n\
+                     let _ = g.m.insert(2, Res { id: 4, name: f\"m{4}\" });\n\
+                     let _ = g.m.insert(1, Res { id: 5, name: f\"n{5}\" });\n\
+                     println(g.tag);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n1\ndrop 3 s3\nmid\n2\ndrop 5 n5\ndrop 4 m4\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in

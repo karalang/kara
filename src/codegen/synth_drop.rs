@@ -1265,9 +1265,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|opt_name| match opt_name.as_deref() {
                 Some("Vec") | Some("VecDeque") | Some("String") => FieldDrop::VecOrString,
-                Some("Map") | Some("HashMap") | Some("Set") | Some("HashSet") => {
-                    FieldDrop::MapOrSet
-                }
+                // B-2026-08-02-21 — the Sorted variants were missing here, so
+                // a `SortedMap`/`SortedSet` FIELD classified `None` and its
+                // whole handle tree leaked at owner death (binding-death
+                // frees were fine — they route through the name-keyed
+                // cleanup channel, not this classifier).
+                Some("Map") | Some("HashMap") | Some("Set") | Some("HashSet")
+                | Some("SortedMap") | Some("SortedSet") => FieldDrop::MapOrSet,
                 _ => FieldDrop::None,
             })
             .collect();
@@ -1961,6 +1965,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // below, inside the `current_fn`-swap block, because the
                     // synthesizer may emit sibling drop fns.
                     let mut field_val_drop_fn: Option<FunctionValue<'ctx>> = None;
+                    // B-2026-08-02-21 — per-KEY drop fn for a key/element that
+                    // owns heap below the one-level overlay (a Set[Res] field's
+                    // struct elements, a Map[Res, _] field's struct keys). The
+                    // binding-death path gained this channel in B-2026-08-01-18;
+                    // this arm hand-rolls the free and never derived it, so
+                    // field-held elements' String buffers leaked.
+                    let mut field_key_drop_fn: Option<FunctionValue<'ctx>> = None;
                     // Resolve the field TE through the mono subst first
                     // (B-2026-08-02-17): a GENERIC parent's `m: Map[i64, T]`
                     // reads a bare-`T` value TE here, so
@@ -2008,6 +2019,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // only fires where the flag free was INCOMPLETE —
                             // it can add a leak fix but never a double free.
                             field_val_drop_fn = self.map_val_drop_fn_for_type_expr(&v_te);
+                            field_key_drop_fn = self.map_val_drop_fn_for_type_expr(&k_te);
                         } else if let Some(elem_te) = super::helpers::set_inner_type_expr(&field_te)
                         {
                             // `Set[T]` lowers to `Map[T, ()]`; the
@@ -2015,6 +2027,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&elem_te) {
                                 self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
                             }
+                            field_key_drop_fn = self.map_val_drop_fn_for_type_expr(&elem_te);
+                        }
+                        // Key-half release walk (B-2026-08-02-21) — before the
+                        // handle free below, exactly like the binding-death
+                        // ordering; null-guarded internally, so a moved-out
+                        // field's nulled slot no-ops.
+                        if let Some(key_fn) = field_key_drop_fn {
+                            self.emit_map_key_drop_fn_walk(handle, key_fn);
                         }
                         self.current_fn = saved_fn;
                     }
@@ -2026,12 +2046,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     // as a pointer — corruption on any occupied `Map[i64, i64]`
                     // field (B-2026-06-13-19), not the "conservative no-op" the
                     // prior comment assumed.
+                    // Subst-resolved (B-2026-08-02-21): a generic parent's
+                    // `Map[i64, T]` at T=String needs the value flag from the
+                    // MONO type, not bare `T` (which reads as no-Vec-struct).
                     let (dk, dv) = self
                         .struct_field_type_exprs
                         .get(struct_name)
                         .and_then(|v| v.get(field_idx))
-                        .map(|fte| self.map_drop_flags(fte))
+                        .map(|fte| match subst {
+                            Some(s) => self.map_drop_flags(
+                                &crate::codegen::helpers::subst_type_params_in_type_expr(fte, s),
+                            ),
+                            None => self.map_drop_flags(fte),
+                        })
                         .unwrap_or((0, 0));
+                    // A key-side drop fn owns the WHOLE key release (it frees
+                    // the key's own heap recursively) — the one-level flag
+                    // free on the same side would double-free (the
+                    // B-2026-08-01-18 contract).
+                    let dk = if field_key_drop_fn.is_some() { 0 } else { dk };
                     if let Some(val_fn) = field_val_drop_fn {
                         // B-2026-07-27-2: the value side is released by its own
                         // recursive drop fn (which walks a value Vec's elements,

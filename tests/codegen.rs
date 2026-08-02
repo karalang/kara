@@ -78592,6 +78592,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_field_set_and_sortedmap_bodies() {
+        // B-2026-08-02-21 (output regression pin — the asan twin owns the
+        // LSan pin, which is where the -21 defect was observable): a
+        // Set[Res] field's element bodies and a SortedMap[i64, Res] field's
+        // value bodies fire at owner death (the B-2026-08-02-18 table walk),
+        // values in sorted key order. The -21 fix itself is memory-only:
+        // pre-fix these bodies already fired while the SortedMap field's
+        // whole handle tree and the Set elements' String buffers leaked
+        // (Sorted heads missing from FieldDrop::MapOrSet; no per-key drop
+        // channel in the field arm).
+        let out = run_program(
+            r#"
+#[derive(Hash, Eq)]
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct SetHold { s: Set[Res], tag: i64 }
+struct SmHold { m: SortedMap[i64, Res], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut h = SetHold { s: Set.new(), tag: 1 };
+        let _ = h.s.insert(Res { id: 3, name: f"s{3}" });
+        println(h.tag);
+    }
+    println("mid");
+    {
+        let mut g = SmHold { m: SortedMap.new(), tag: 2 };
+        let _ = g.m.insert(2, Res { id: 4, name: f"m{4}" });
+        let _ = g.m.insert(1, Res { id: 5, name: f"n{5}" });
+        println(g.tag);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "a\n1\ndrop 3 s3\nmid\n2\ndrop 5 n5\ndrop 4 m4\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_owned_string_param_tail_return() {
         // `fn id(s: String) -> String { s }` — the returned value must
         // be a copy: the caller that passed `s` frees its buffer AND the

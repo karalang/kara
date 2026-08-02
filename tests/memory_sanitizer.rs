@@ -17206,6 +17206,56 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-21 — struct-field tables of Drop-struct elements:
+    /// (1) a `Set[Res]` field's element String buffers are freed at owner
+    /// death via the per-key drop channel (B-2026-08-01-18's binding-death
+    /// channel, now wired into the field arm); (2) a `SortedMap[i64, Res]`
+    /// field's WHOLE handle tree is freed — the Sorted heads were missing
+    /// from the FieldDrop::MapOrSet classification, so the field registered
+    /// no drop at all. LSan-clean, and the element/value bodies fire (the
+    /// SortedMap values in sorted key order — the b170 sorted walker).
+    #[test]
+    fn asan_struct_field_set_and_sortedmap_freed() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq)]
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct SetHold { s: Set[Res], tag: i64 }
+struct SmHold { m: SortedMap[i64, Res], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut h = SetHold { s: Set.new(), tag: 1 };
+        let _ = h.s.insert(Res { id: 3, name: f"s{3}" });
+        println(h.tag);
+    }
+    println("mid");
+    {
+        let mut g = SmHold { m: SortedMap.new(), tag: 2 };
+        let _ = g.m.insert(2, Res { id: 4, name: f"m{4}" });
+        let _ = g.m.insert(1, Res { id: 5, name: f"n{5}" });
+        println(g.tag);
+    }
+    println("end");
+}
+"#,
+            &[
+                "a",
+                "1",
+                "drop 3 s3",
+                "mid",
+                "2",
+                "drop 5 n5",
+                "drop 4 m4",
+                "end",
+            ],
+            "struct_field_set_and_sortedmap_freed",
+        );
+    }
+
     /// B-2026-08-02-14 — a GENERIC-mono parent's Drop-carrying field: the
     /// subst-aware bodies walk fires exactly once per owner death, and the
     /// mono element drop frees the element's String buffer the base
