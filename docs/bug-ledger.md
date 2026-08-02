@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 115 | 1 |
 | interp | 112 | 4 |
 | ownership | 37 | 1 |
-| autopar | 30 | 0 |
+| autopar | 31 | 1 |
 | other | 23 | 1 |
 | cli | 23 | 0 |
 | runtime | 19 | 0 |
@@ -130,7 +130,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **875 surfaced 
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-33 | 2026-08-01 | ownership | low | no FREEZE point: a type needing construction-time mutation of a COMPOUND field (cyclic graph's `mut neighbors`) must carry Mutex for life, including its read-only phase. NOTE the original 'cannot share read-only across tasks' claim was WRONG and is corrected in place — `par struct` with immutable fields shares lock-free, verified | — |
+| B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
