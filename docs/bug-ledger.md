@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 89 | 1 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 74 | 2 |
-| run-vs-build | 66 | 0 |
+| run-vs-build | 67 | 1 |
 | false-positive | 54 | 0 |
 | perf | 43 | 1 |
 | crash | 35 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 616 | 2 |
-| typecheck | 112 | 2 |
+| codegen | 617 | 3 |
+| typecheck | 113 | 3 |
 | interp | 105 | 1 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **860 surfaced · 8 open · 844 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **861 surfaced · 9 open · 844 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **860 surfaced 
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-7 | 2026-08-02 | codegen+runtime | high | An IN-PROCESS Kāra client → Kāra server exchange double-frees the response body: the handler's body buffer is freed by the runtime client path AND again by generated code. Proven by size — the double-freed block is byte-for-byte the handler's body length (1-char body → 1-byte block; 36-char body → 36-byte block). Aborts 3/3 runs. | karac_runtime_http_client_get (runtime/src — the client path that frees the response body) and the codegen-side drop emitted for the `Result[Response, …]` a `Client.get` match consumes; Server.serve's handler-response ownership on the same-process path |
 | B-2026-08-02-9 | 2026-08-02 | typecheck | medium | Pointee-changing and const->mut raw pointer casts compile OUTSIDE unsafe blocks — the spec-mandated unsafe gate on `*T as *U` is not enforced (`let w: *const u64 = d as *const u64;` and `let m: *mut u8 = c as *mut u8;` both pass in safe code) | typechecker `as`-cast classification for raw pointer types vs design.md § Unsafe Escape Hatch ('only dereference, arithmetic, unaligned/volatile access, and pointee-changing casts require unsafe { }') |
+| B-2026-08-02-10 | 2026-08-02 | typecheck+codegen | medium | Methods on tuple-element receivers (`t.0.push(x)`, `t.0.len()`) loud-bail under karac build while the interpreter runs them — the last tuple-place gap after B-2026-08-02-5/-8 made tuple-element ASSIGNMENT work. Companion typecheck wrinkle, recorded here: `Sw { t: (Vec.new(), 3) }` against a declared `(Vec[i64], i64)` field fails to unify the nested tuple literal's `Vec<?T0>` with the expected element type (both backends reject consistently), so the struct-field variant of the receiver shape can't even be written without an intermediate binding. | src/codegen/method_call.rs compile_method_call fall-through — no TupleIndex-receiver dispatcher, so `t.0.push(x)` / `t.0.len()` LOUD-bail ('no handler for method on non-identifier receiver') under karac build while the interpreter runs them (run-vs-build via honest error). Blocking sub-problem: the tuple element type registry (tuple_var_elem_type_names, stmts.rs Let arm ~5395) records NAMES only — an inferred `(Vec.new(), 3)` binding records a bare 'Vec' with no element type, and an f-string element records None — so the proven synth-identifier re-dispatch (B-2026-08-01-22-leg-a / B-2026-08-01-35 pattern) has no sound TE to register the synth receiver from. The registry needs full TypeExprs (from the annotation when present; from the typechecker's inferred type otherwise) before the dispatcher arm can land. |
 
 ### Fixed (844)
 
