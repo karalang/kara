@@ -1440,9 +1440,35 @@ impl<'ctx> super::Codegen<'ctx> {
             BasicValueEnum::FloatValue(fv) => {
                 fv.get_constant().is_some_and(|(v, _)| v.to_bits() == 0)
             }
+            // B-2026-08-01-32: a statically all-zero AGGREGATE — an
+            // empty-collection fill value (`Vec.filled(n, Vec.new())`)
+            // lowers to the uniqued constant-zero struct `{null, 0, 0}` —
+            // is zero bits too. Ref-compare against the type's
+            // `const_zero`: LLVM uniques `ConstantAggregateZero`, so a
+            // runtime-built value never matches (a safe no-op that keeps
+            // the store-loop path).
+            BasicValueEnum::StructValue(sv) => {
+                use inkwell::values::AsValueRef;
+                sv.as_value_ref() == sv.get_type().const_zero().as_value_ref()
+            }
             _ => false,
         };
-        if !needs_clone && val_is_zero_bits {
+        // B-2026-08-01-32: cloning an ALL-ZERO collection handle is the
+        // identity — an empty Vec/String/Map/Set clone allocates nothing and
+        // copies `{null,0,0}` to `{null,0,0}` — so calloc is sound even for
+        // a heap-backed (`needs_clone`) element, PROVIDED the fill value is
+        // statically all-zero. A `shared`-typed element stays excluded: its
+        // all-zero handle would be a null RC pointer whose retain is not the
+        // identity (no surface syntax constructs that value today; this
+        // guard keeps the fast path honest if one ever does).
+        let elem_is_shared = elem_te.as_ref().is_some_and(|te| match &te.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .last()
+                .is_some_and(|s| self.shared_types.contains_key(s.as_str())),
+            _ => false,
+        });
+        if val_is_zero_bits && !elem_is_shared {
             let buf = self
                 .builder
                 .build_call(

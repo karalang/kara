@@ -17141,6 +17141,34 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-32 — Vec.filled with an all-zero aggregate fill value
+    /// (Vec.new() / String.new()) takes the calloc fast path instead of a
+    /// per-slot clone loop, so the memory pairing needs pinning: pushes
+    /// into individual calloc'd slots stay independent, the pushed
+    /// element heap frees exactly once at owner death, and the untouched
+    /// all-zero slots drop as no-ops — no leak, no double-free.
+    #[test]
+    fn asan_vec_filled_empty_aggregate_fill_and_drop() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut grid: Vec[Vec[i64]] = Vec.filled(4, Vec.new());
+    grid[0].push(11);
+    grid[0].push(12);
+    grid[2].push(33);
+    println(f"g0 {grid[0].len()} {grid[0][0]} {grid[0][1]}");
+    println(f"g1 {grid[1].len()} g2 {grid[2].len()} {grid[2][0]} g3 {grid[3].len()}");
+    let mut names: Vec[String] = Vec.filled(3, String.new());
+    names[1] = f"nm{7}";
+    println(f"s {names.len()} {names[0].len()} {names[1]}");
+    println("end");
+}
+"#,
+            &["g0 2 11 12", "g1 0 g2 1 33 g3 0", "s 3 0 nm7", "end"],
+            "vec_filled_empty_aggregate_fill_and_drop",
+        );
+    }
+
     /// B-2026-08-01-34 — a GENERIC-monomorph field moved out of a deep
     /// chain (`let g = o.h.b` with `b: Boxy[String]`) still double-freed
     /// after the -31 fix: the deeper-place suppressor declined generic

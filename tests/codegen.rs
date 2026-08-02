@@ -34902,6 +34902,54 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vec_filled_empty_aggregate_uses_calloc() {
+        // B-2026-08-01-32: an EMPTY-collection fill value (`Vec.filled(n,
+        // Vec.new())` — the adjacency-list / bucket-table shape) is a
+        // statically all-zero aggregate ({null,0,0}), and cloning an
+        // all-zero collection handle is the identity — so it takes the same
+        // calloc fast path as a scalar zero instead of store-looping (and
+        // pre-fix per-element cloning) 24 bytes per slot (~10-100x on a
+        // 1e6-element fill).
+        let ir = ir_for(
+            "fn main() { let g: Vec[Vec[i64]] = Vec.filled(8, Vec.new()); println(g[0].len()); }",
+        );
+        assert!(
+            ir.contains("karac_alloc_zeroed_or_panic"),
+            "empty-aggregate fill should route through the calloc wrapper:\n{ir}"
+        );
+        assert!(
+            !ir.contains("filled.body"),
+            "empty-aggregate fill must skip the runtime fill loop entirely:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_vec_filled_empty_vec_elements_independent() {
+        // The calloc-backed empty-aggregate fill must produce INDEPENDENT
+        // elements: pushing into one slot must not alias another, String
+        // elements read back empty, and the scope-exit drops balance (the
+        // ASAN suite pins the memory side).
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let mut grid: Vec[Vec[i64]] = Vec.filled(4, Vec.new());
+    grid[0].push(11);
+    grid[0].push(12);
+    grid[2].push(33);
+    println(f"g0 {grid[0].len()} {grid[0][0]} {grid[0][1]}");
+    println(f"g1 {grid[1].len()} g2 {grid[2].len()} {grid[2][0]} g3 {grid[3].len()}");
+    let names: Vec[String] = Vec.filled(3, String.new());
+    println(f"s {names.len()} {names[0].len()}");
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "g0 2 11 12\ng1 0 g2 1 33 g3 0\ns 3 0\nend\n");
+    }
+
+    #[test]
     fn test_ir_vec_filled_nonzero_keeps_fill_loop() {
         // Regression guard: the calloc fast path must fire ONLY for a
         // compile-time zero. A non-zero fill still takes the malloc + runtime
