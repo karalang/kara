@@ -78377,6 +78377,58 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_expression_position_container_ctors() {
+        // B-2026-08-02-12 — `Map.new()` / `Set.new()` / `SortedMap.new()` in
+        // a non-`let` EXPRESSION position (push / push_back / Vec.insert
+        // args, `Vec.filled` fill values) used to compile to the silent
+        // `i64 0` assoc-call default: a NULL handle in the container slot,
+        // segfaulting at the first element use. With the fix the handle is
+        // built from the typechecker's resolved span-keyed type (the
+        // container-method arms re-record the ctor arg post-unify), so
+        // String keys get the right key size + content hash — `get` finds
+        // what `insert` stored — and filled slots deep-clone independently
+        // (incl. SortedMap, whose clone/drop/vec-elem dispatch heads were
+        // widened onto Map's KaracMap paths).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[Map[String, i64]] = Vec.new();
+    v.push(Map.new());
+    v.push(Map.new());
+    let _ = v[0].insert(f"k{1}", 5);
+    match v[0].get(f"k{1}") { Some(x) => println(f"got {x}"), None => println("miss") }
+    println(f"m0 {v[0].len()} m1 {v[1].len()}");
+    let mut g: Vec[Map[String, i64]] = Vec.filled(2, Map.new());
+    let _ = g[0].insert(f"a{2}", 7);
+    println(f"g0 {g[0].len()} g1 {g[1].len()}");
+    let mut s: Vec[Set[i64]] = Vec.new();
+    s.push(Set.new());
+    let _ = s[0].insert(9i64);
+    println(f"s0 {s[0].len()}");
+    let mut d: Vec[SortedMap[i64, i64]] = Vec.filled(2, SortedMap.new());
+    let _ = d[0].insert(7i64, 70i64);
+    println(f"d0 {d[0].len()} d1 {d[1].len()}");
+    let mut q: VecDeque[Map[String, i64]] = VecDeque.new();
+    q.push_back(Map.new());
+    let _ = q[0].insert(f"z{3}", 4);
+    match q[0].get(f"z{3}") { Some(x) => println(f"qgot {x}"), None => println("qmiss") }
+    let mut w: Vec[Set[i64]] = Vec.new();
+    w.insert(0, Set.new());
+    let _ = w[0].insert(9i64);
+    println(f"w0 {w[0].len()}");
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "got 5\nm0 1 m1 0\ng0 1 g1 0\ns0 1\nd0 1 d1 0\nqgot 4\nw0 1\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_owned_string_param_tail_return() {
         // `fn id(s: String) -> String { s }` — the returned value must
         // be a copy: the caller that passed `s` frees its buffer AND the

@@ -17141,6 +17141,35 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-12 — `Map.new()` / `Set.new()` in EXPRESSION position
+    /// (push args, `Vec.filled` fill values) used to lower to a NULL
+    /// handle (assoc-call `i64 0` default), segfaulting at the first
+    /// element use — this run crashes outright pre-fix. Post-fix the
+    /// memory pairing needs pinning: the handle is real, its String KEY
+    /// buffer transfers into the map (freed exactly once by the map's
+    /// key-walking free — the wrong-key-size handle silently skipped
+    /// that free), filled slots deep-clone independently, and the Vec's
+    /// scope-exit element walk frees every handle.
+    #[test]
+    fn asan_expression_position_map_handles_freed() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[Map[String, i64]] = Vec.new();
+    v.push(Map.new());
+    let _ = v[0].insert(f"k{1}", 5);
+    match v[0].get(f"k{1}") { Some(x) => println(f"got {x}"), None => println("miss") }
+    let mut g: Vec[Map[String, i64]] = Vec.filled(2, Map.new());
+    let _ = g[0].insert(f"a{2}", 7);
+    println(f"g0 {g[0].len()} g1 {g[1].len()}");
+    println("end");
+}
+"#,
+            &["got 5", "g0 1 g1 0", "end"],
+            "expression_position_map_handles_freed",
+        );
+    }
+
     /// B-2026-08-01-32 — Vec.filled with an all-zero aggregate fill value
     /// (Vec.new() / String.new()) takes the calloc fast path instead of a
     /// per-slot clone loop, so the memory pairing needs pinning: pushes

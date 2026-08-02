@@ -2026,7 +2026,12 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p) => p.segments.first().map(|s| s.as_str())?,
             _ => return None,
         };
-        if head != "Map" && head != "Set" {
+        // SortedMap/SortedSet included (B-2026-08-02-12 follow-on): they
+        // share Map/Set's KaracMap storage, so the same per-element
+        // `karac_map_free_with_drop_vec` walk is exact. Without these heads
+        // a `Vec[SortedMap[..]]` binding fell to plain `track_vec_var`
+        // (buffer-only free) and every element HANDLE leaked at scope exit.
+        if !matches!(head, "Map" | "Set" | "SortedMap" | "SortedSet") {
             return None;
         }
         let (

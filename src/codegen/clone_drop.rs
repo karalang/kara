@@ -54,7 +54,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_vec_clone_fn(&elem_te);
                     }
                 }
-                if head == Some("Map") {
+                // SortedMap/SortedSet share Map's `KaracMap` storage
+                // (B-2026-07-09-17) — ordering lives at OBSERVATION points
+                // (`karac_map_sorted_keys`), not in the layout — so the same
+                // entry-walking deep clone is exact for them. Without these
+                // heads a `Vec.filled(n, SortedMap.new())` clone loop fell to
+                // the shallow primitive copy: every slot ALIASED one handle,
+                // an insert through one slot was visible in all, and the
+                // per-slot frees leaked/corrupted (B-2026-08-02-12 follow-on).
+                if head == Some("Map") || head == Some("SortedMap") {
                     let args = p.generic_args.as_ref();
                     let k_te = args.and_then(|a| a.first()).and_then(|a| match a {
                         GenericArg::Type(t) => Some(t.clone()),
@@ -68,7 +76,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_map_clone_fn(&k, &v);
                     }
                 }
-                if head == Some("Set") {
+                if head == Some("Set") || head == Some("SortedSet") {
                     if let Some(GenericArg::Type(elem_te)) =
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
                     {
@@ -1857,7 +1865,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_vec_drop_fn(&elem_te);
                     }
                 }
-                if head == Some("Map") {
+                // SortedMap/SortedSet heads included — same KaracMap storage
+                // as Map/Set, so the same drop is exact (see the clone
+                // dispatcher's rationale, B-2026-08-02-12 follow-on).
+                if head == Some("Map") || head == Some("SortedMap") {
                     let args = p.generic_args.as_ref();
                     let k_te = args.and_then(|a| a.first()).and_then(|a| match a {
                         GenericArg::Type(t) => Some(t.clone()),
@@ -1871,7 +1882,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_map_drop_fn(&k, &v);
                     }
                 }
-                if head == Some("Set") {
+                if head == Some("Set") || head == Some("SortedSet") {
                     if let Some(GenericArg::Type(elem_te)) =
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
                     {

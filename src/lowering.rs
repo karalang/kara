@@ -623,7 +623,16 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             let droppable = match ty {
                 Type::Shared(_) => true,
                 Type::Named { name, .. } => {
-                    matches!(name.as_str(), "Vec" | "VecDeque" | "String" | "Map" | "Set")
+                    // SortedMap/SortedSet joined for B-2026-08-02-12: the
+                    // expression-position `X.new()` handle construction in
+                    // `compile_call` needs their inferred K/V types too. Every
+                    // downstream consumer gates on the TE head ("Map"/"Set" at
+                    // `map_temp_cleanup_parts` etc.), so the extra entries are
+                    // inert outside that intercept.
+                    matches!(
+                        name.as_str(),
+                        "Vec" | "VecDeque" | "String" | "Map" | "Set" | "SortedMap" | "SortedSet"
+                    )
                 }
                 _ => false,
             };

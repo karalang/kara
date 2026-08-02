@@ -445,6 +445,64 @@ impl<'ctx> super::Codegen<'ctx> {
                     // typechecker's recorded per-call type args.
                     return self.compile_generic_call(&qualified, args, None, call_span);
                 }
+                // B-2026-08-02-12 — `Map.new()` / `Set.new()` / `SortedMap.new()`
+                // / `SortedSet.new()` in a non-`let` EXPRESSION position (a
+                // `v.push(Map.new())` arg, a `Vec.filled(n, Map.new())` fill
+                // value, a call arg) used to fall through `compile_assoc_call`
+                // to its `i64 0` tail — a NULL handle stored wherever a real
+                // map was expected, segfaulting at the first element use
+                // (`smap[0].insert(..)`, `smap[1].len()`). The `let` /
+                // struct-literal-field paths intercept before ever compiling
+                // the expression (annotation-driven), so the only shapes that
+                // reach here are exactly the broken ones. Build the real
+                // handle from the typechecker's span-keyed inferred type; when
+                // that entry is missing, fail LOUD with an actionable hint —
+                // the null handle WILL crash at runtime, and a compile error
+                // beats a segv.
+                if segments[1] == "new"
+                    && matches!(
+                        segments[0].as_str(),
+                        "Map" | "Set" | "SortedMap" | "SortedSet"
+                    )
+                    && args.is_empty()
+                {
+                    let key = (call_span.offset, call_span.length);
+                    // The recorded TE must carry CONCRETE generic args. An
+                    // `Error`-kinded arg is the render of an unresolved
+                    // inference var — building from it would default the
+                    // key/value to i64 and produce a handle whose key size
+                    // and hash are silently wrong for `Map[String, _]`
+                    // (lookups MISS, key buffers leak at free). Loud-bail
+                    // instead so the gap is a compile error, not a
+                    // miscompiled map.
+                    let usable_te = self
+                        .owned_temp_drops
+                        .get(&key)
+                        .cloned()
+                        .filter(|te| match &te.kind {
+                            TypeKind::Path(p) => p.generic_args.as_ref().is_some_and(|ga| {
+                                !ga.is_empty()
+                                    && ga.iter().all(|g| match g {
+                                        crate::ast::GenericArg::Type(t) => {
+                                            !matches!(t.kind, TypeKind::Error)
+                                        }
+                                        _ => true,
+                                    })
+                            }),
+                            _ => false,
+                        });
+                    if let Some(te) = usable_te {
+                        if let Some(h) = self.build_map_new_handle_from_type_expr(&te) {
+                            return Ok(h.into());
+                        }
+                    }
+                    return Err(format!(
+                        "`{0}.new()` in this position has no concrete key/value type \
+                         visible to codegen; bind it first (`let m: {0}[..] = {0}.new()`) \
+                         and pass the binding instead (B-2026-08-02-12)",
+                        segments[0]
+                    ));
+                }
                 return self.compile_assoc_call(&segments[0], &segments[1], args);
             }
         }

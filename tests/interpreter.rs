@@ -27539,6 +27539,45 @@ fn test_tuple_elem_method_receivers() {
     );
 }
 
+/// B-2026-08-02-12 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_expression_position_container_ctors`, same source and expected
+/// string (the interp always built real handles for expression-position
+/// `Map.new()` / `Set.new()` / `SortedMap.new()` — this pins the parity
+/// codegen now shares).
+#[test]
+fn test_expression_position_container_ctors() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut v: Vec[Map[String, i64]] = Vec.new();\n\
+                 v.push(Map.new());\n\
+                 v.push(Map.new());\n\
+                 let _ = v[0].insert(f\"k{1}\", 5);\n\
+                 match v[0].get(f\"k{1}\") { Some(x) => println(f\"got {x}\"), None => println(\"miss\") }\n\
+                 println(f\"m0 {v[0].len()} m1 {v[1].len()}\");\n\
+                 let mut g: Vec[Map[String, i64]] = Vec.filled(2, Map.new());\n\
+                 let _ = g[0].insert(f\"a{2}\", 7);\n\
+                 println(f\"g0 {g[0].len()} g1 {g[1].len()}\");\n\
+                 let mut s: Vec[Set[i64]] = Vec.new();\n\
+                 s.push(Set.new());\n\
+                 let _ = s[0].insert(9i64);\n\
+                 println(f\"s0 {s[0].len()}\");\n\
+                 let mut d: Vec[SortedMap[i64, i64]] = Vec.filled(2, SortedMap.new());\n\
+                 let _ = d[0].insert(7i64, 70i64);\n\
+                 println(f\"d0 {d[0].len()} d1 {d[1].len()}\");\n\
+                 let mut q: VecDeque[Map[String, i64]] = VecDeque.new();\n\
+                 q.push_back(Map.new());\n\
+                 let _ = q[0].insert(f\"z{3}\", 4);\n\
+                 match q[0].get(f\"z{3}\") { Some(x) => println(f\"qgot {x}\"), None => println(\"qmiss\") }\n\
+                 let mut w: Vec[Set[i64]] = Vec.new();\n\
+                 w.insert(0, Set.new());\n\
+                 let _ = w[0].insert(9i64);\n\
+                 println(f\"w0 {w[0].len()}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "got 5\nm0 1 m1 0\ng0 1 g1 0\ns0 1\nd0 1 d1 0\nqgot 4\nw0 1\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in

@@ -28,6 +28,36 @@ use super::TypeErrorKind;
 impl<'a> super::TypeChecker<'a> {
     // ── Method Calls ────────────────────────────────────────────
 
+    /// B-2026-08-02-12 — overwrite an inference-driven collection
+    /// constructor argument's `expr_types` entry with its post-unify
+    /// RESOLVED type. Container-method args (`v.push(Map.new())`,
+    /// `v.insert(0, Set.new())`, `dq.push_back(Map.new())`) are INFERRED,
+    /// so the ctor's entry is recorded while its K/V are still fresh
+    /// typevars; lowering renders those as `Error` TypeExprs, and
+    /// codegen's expression-position `Map.new()` handle construction —
+    /// which reads this span-keyed table — then falls back to i64
+    /// key/value defaults. For a `Map[String, _]` that means the wrong
+    /// key size and a header-shaped hash: inserts appear to work, value
+    /// lookups silently MISS, and the map's free skips the key buffers
+    /// (leak). Narrowly scoped to the `X.new()` ctor shape (the same
+    /// scoping as every expected-type short-circuit in `check_expr`);
+    /// other arg shapes keep their original entry.
+    fn rerecord_resolved_ctor_arg(&mut self, arg: &crate::ast::Expr, resolved: &Type) {
+        let is_ctor = matches!(
+            &arg.kind,
+            ExprKind::Call { callee, args }
+                if args.is_empty()
+                    && matches!(
+                        &callee.kind,
+                        ExprKind::Path { segments, .. }
+                            if segments.len() == 2 && segments[1] == "new"
+                    )
+        );
+        if is_ctor {
+            self.record_expr_type(&arg.span, resolved);
+        }
+    }
+
     /// True when `name` is unresolvable as a value (no local, function,
     /// constant, or builtin), but at least one visible trait declares it as
     /// an associated function. Mirrors the resolver's `is_trait_assoc_fn_name`
@@ -4018,6 +4048,17 @@ impl<'a> super::TypeChecker<'a> {
                     &no_const_names,
                 );
                 self.check_assignable(&resolved_elem, &resolved_arg, args[0].value.span.clone());
+                // B-2026-08-02-12 — the arg was INFERRED, so an inference-
+                // driven collection constructor (`v.push(Map.new())`) recorded
+                // `Map[?K, ?V]` in `expr_types` BEFORE the unify above bound
+                // the vars; lowering renders those vars as `Error` TypeExprs
+                // and codegen's expression-position `Map.new()` handle
+                // construction then built the handle with an i64 key default —
+                // wrong key size/hash for a `Map[String, _]` (silent lookup
+                // MISses + a key-buffer leak at map free). Re-record the
+                // ctor arg's entry with the RESOLVED type so the span-keyed
+                // table codegen consults carries the concrete K/V.
+                self.rerecord_resolved_ctor_arg(&args[0].value, &resolved_arg);
                 return Type::Unit;
             }
         }
@@ -4025,6 +4066,9 @@ impl<'a> super::TypeChecker<'a> {
         // place `value` at `idx` (`idx == len` appends). Sibling of `push`
         // (same element-var unification so `let mut v = Vec.new(); v.insert(0,
         // x)` pins the element type) and `remove` (arg 0 is the i64 index).
+        //
+        // (See `rerecord_resolved_ctor_arg` in the push arm above for why the
+        // ctor-shaped value arg's expr-type entry is re-recorded post-unify.)
         if method == "insert" && args.len() == 2 {
             let element_ty = match &obj_ty {
                 Type::Named { name, args }
@@ -4073,6 +4117,9 @@ impl<'a> super::TypeChecker<'a> {
                     &no_const_names,
                 );
                 self.check_assignable(&resolved_elem, &resolved_arg, args[1].value.span.clone());
+                // Ctor-shaped value arg: re-record resolved (B-2026-08-02-12,
+                // see the push arm).
+                self.rerecord_resolved_ctor_arg(&args[1].value, &resolved_arg);
                 return Type::Unit;
             }
         }
@@ -4301,7 +4348,30 @@ impl<'a> super::TypeChecker<'a> {
                     &mut self.env.const_substitutions,
                 );
                 let resolved_elem = resolve_type_var_top(&elem, &self.env.substitutions);
-                self.check_assignable(&resolved_elem, &arg_ty, args[0].value.span.clone());
+                // Deep-resolve the ARG side too before the assignability
+                // check — `dq.push_back(Map.new())` unifies the ctor's fresh
+                // `?K/?V` against the element type, but the recorded
+                // `arg_ty` snapshot still carries the vars and was rejected
+                // as `expected 'Map<String, i64>', found 'Map<?T0, ?T1>'`
+                // (the push arm's B-2026-07-11-10 fix, mirrored here as part
+                // of B-2026-08-02-12).
+                let no_names = HashMap::new();
+                let no_const_names = HashMap::new();
+                let deep_resolved_arg = resolve_type_vars(
+                    &arg_ty,
+                    &self.env.substitutions,
+                    &no_names,
+                    &self.env.const_substitutions,
+                    &no_const_names,
+                );
+                self.check_assignable(
+                    &resolved_elem,
+                    &deep_resolved_arg,
+                    args[0].value.span.clone(),
+                );
+                // Ctor-shaped arg: re-record resolved (B-2026-08-02-12, see
+                // the push arm).
+                self.rerecord_resolved_ctor_arg(&args[0].value, &deep_resolved_arg);
                 return Type::Unit;
             }
         }
