@@ -1488,7 +1488,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // caller's struct — owned roots resolve identically to the slot.
         if matches!(
             object.kind,
-            ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+            // TupleIndex admitted for B-2026-08-02-5 (`t.0.f = v` /
+            // `o.t.0.f = v` — a field store whose parent is a tuple
+            // element): `place_chain_type_name` and
+            // `nested_store_place_ptr` both resolve tuple links, so the
+            // store lands instead of falling through to the no-op tail.
+            ExprKind::FieldAccess { .. } | ExprKind::Index { .. } | ExprKind::TupleIndex { .. }
         ) {
             if let (Some(base_ptr), Some(obj_ty)) = (
                 self.nested_store_place_ptr(object),
@@ -1994,6 +1999,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(p) => Some(p),
                 None => self.field_rooted_index_place_ptr(expr),
             },
+            // B-2026-08-02-5: a tuple-element link (`t.0.f = v` /
+            // `o.t.0.f = v`) — the chain walker's TupleIndex arm GEPs the
+            // element in place (owned roots; ref-param roots bail there).
+            ExprKind::TupleIndex { .. } => self.field_chain_place_ptr(expr),
             ExprKind::FieldAccess { object, field } => {
                 let base_ptr = self.nested_store_place_ptr(object)?;
                 let obj_ty = self.place_chain_type_name(object)?;
@@ -2089,6 +2098,86 @@ impl<'ctx> super::Codegen<'ctx> {
         self.set_elem_type_names.remove(&synth);
         self.set_elem_type_exprs.remove(&synth);
         elem
+    }
+
+    /// B-2026-08-02-5 — store into a tuple ELEMENT place (`t.0 = v`,
+    /// `o.t.0 = v`). No Assign arm matched a TupleIndex target before, so the
+    /// store fell through to the Ok(()) tail and was SILENTLY LOST (the
+    /// interpreter ICE'd on the same shape). Resolve the tuple's storage via
+    /// the place-chain machinery — `field_chain_place_ptr` handles owned
+    /// Identifier / FieldAccess / TupleIndex / `vec[i]` receivers — GEP the
+    /// element, run the displaced old element's in-place memory drop (the
+    /// nested-field-store rule, B-2026-08-01-30; scalars no-op via the
+    /// trivially-copyable gate), width-coerce, and store. A receiver shape the
+    /// chain can't resolve (e.g. a `ref`-param root, which
+    /// `field_chain_place_ptr` deliberately bails on) LOUD-bails rather than
+    /// silently dropping the write.
+    pub(super) fn compile_tuple_index_store(
+        &mut self,
+        object: &Expr,
+        index: u64,
+        new_val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let base_ptr = self.field_chain_place_ptr(object);
+        let tuple_ty = self.place_chain_aggregate_llvm_type(object);
+        let (Some(base_ptr), Some(tuple_ty)) = (base_ptr, tuple_ty) else {
+            return Err(
+                "codegen: tuple-element assignment through this receiver shape is not yet \
+                 lowered; bind the tuple to a local first"
+                    .to_string(),
+            );
+        };
+        let Ok(elem_ptr) =
+            self.builder
+                .build_struct_gep(tuple_ty, base_ptr, index as u32, "tupidx.store.p")
+        else {
+            return Err(format!(
+                "codegen: tuple-element assignment index .{index} is out of range for the \
+                 receiver's layout"
+            ));
+        };
+        let mut elem_te = self
+            .place_chain_tuple_tes(object)
+            .and_then(|tes| tes.get(index as usize).cloned());
+        // A plain tuple binding's element type NAME can be unrecorded
+        // (`let t = (f"a", 2)` — the f-string element records None, which
+        // `tuple_var_elem_tes` renders as an EMPTY path). Fall back to the
+        // LLVM layout: a vec-struct-shaped element is a String/Vec
+        // {ptr,len,cap} header, so synthesize a String TE and the displaced
+        // old buffer still gets the cap-guarded free. (A Vec-of-heap
+        // element's INNER buffers stay a recorded residual on this shape.)
+        if let Some(te) = &elem_te {
+            if matches!(&te.kind, TypeKind::Path(p) if p.segments.is_empty()) {
+                elem_te = None;
+            }
+        }
+        if elem_te.is_none() {
+            if let Some(BasicTypeEnum::StructType(st)) =
+                tuple_ty.get_field_type_at_index(index as u32)
+            {
+                if st == self.vec_struct_type() {
+                    elem_te = Some(TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: std::iter::once("String".to_string()).collect(),
+                            generic_args: None,
+                            span: crate::token::Span::default(),
+                        }),
+                        span: crate::token::Span::default(),
+                    });
+                }
+            }
+        }
+        if let Some(te) = elem_te {
+            if !super::vec_method::is_trivially_copyable_te(&te) {
+                let drop_fn = self.emit_drop_fn_for_type_expr(&te);
+                self.builder
+                    .build_call(drop_fn, &[elem_ptr.into()], "")
+                    .unwrap();
+            }
+        }
+        let new_val = self.coerce_to_struct_field_ty(tuple_ty, index as u32, new_val);
+        self.builder.build_store(elem_ptr, new_val).unwrap();
+        Ok(())
     }
 
     /// Name of field `idx` of struct `type_name` when that field's declared type

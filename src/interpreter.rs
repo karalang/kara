@@ -2406,6 +2406,11 @@ impl<'a> Interpreter<'a> {
             ExprKind::FieldAccess { object, field } => self.set_field(object, field, val),
             ExprKind::Index { object, index } => self.set_index(object, index, val),
             ExprKind::SelfValue => self.env.set("self", val),
+            // B-2026-08-02-5 — a tuple-element receiver writes back through
+            // the same place recursion assignment uses.
+            ExprKind::TupleIndex { .. } => {
+                self.assign_to_place(object, val);
+            }
             _ => {}
         }
     }
@@ -2480,6 +2485,30 @@ impl<'a> Interpreter<'a> {
             ExprKind::Index { object, index } => {
                 self.set_index(object, index, new_val);
                 true
+            }
+            // B-2026-08-02-5 — tuple-element assignment (`t.0 = v`,
+            // `o.t.0 = v`, and as the write-back hop of `t.0.f = v`):
+            // mutate the element in a copy of the tuple value and write the
+            // whole tuple back up the place chain, exactly the `set_field`
+            // projection rule. This arm was missing: a direct TupleIndex
+            // target hit the Assign arm's `unreachable!` (an ICE with a
+            // Rust backtrace on an accepted program — design.md forbids
+            // panicking diagnostics) and chained forms silently no-op'd.
+            ExprKind::TupleIndex { object, index } => {
+                let cur = match &object.kind {
+                    ExprKind::Identifier(n) => self.env.get(n),
+                    ExprKind::SelfValue => self.env.get("self"),
+                    _ => Some(self.eval_expr_inner(object)),
+                };
+                let Some(Value::Tuple(mut items)) = cur else {
+                    return false;
+                };
+                let i = *index as usize;
+                if i >= items.len() {
+                    return false;
+                }
+                items[i] = new_val;
+                self.assign_to_place(object, Value::Tuple(items))
             }
             ExprKind::Unary {
                 op: crate::ast::UnaryOp::Deref,

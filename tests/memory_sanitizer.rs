@@ -17081,6 +17081,37 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-5 — tuple-element assignment over HEAP elements: the
+    /// displaced old element's buffer frees in place (String elems via the
+    /// recorded elem TE, or the LLVM vec-struct fallback when a plain
+    /// tuple binding's element type name is unrecorded), an f-string RHS's
+    /// accumulator is neutralised after the move (else the tuple's element
+    /// drop double-frees it), and a struct element's old fields free via
+    /// its drop fn. Owner-death walks free exactly the NEW values.
+    #[test]
+    fn asan_tuple_index_assignment_heap_elems_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Ph { id: i64, name: String }
+struct Oh { t: (String, Ph) }
+fn main() {
+    let mut t = (f"a{1}", 2);
+    println(f"pre {t.0}");
+    t.0 = f"b{3}";
+    println(f"post {t.0}");
+    let mut o = Oh { t: (f"c{4}", Ph { id: 9, name: f"z{9}" }) };
+    println(f"opre {o.t.0} {o.t.1.name}");
+    o.t.0 = f"d{5}";
+    o.t.1 = Ph { id: 6, name: f"w{6}" };
+    println(f"opost {o.t.0} {o.t.1.id} {o.t.1.name}");
+    println("end");
+}
+"#,
+            &["pre a1", "post b3", "opre c4 z9", "opost d5 6 w6", "end"],
+            "tuple_index_assignment_heap_elems_freed",
+        );
+    }
+
     /// B-2026-08-01-35 — the field store through a FIELD-ROOTED indexed
     /// container now lands (it was silently dropped), so the memory
     /// pairing needs pinning: the nested store's old-value drop frees the

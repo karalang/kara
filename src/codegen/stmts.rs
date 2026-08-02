@@ -7446,6 +7446,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                } else if let ExprKind::TupleIndex { object, index } = &target.kind {
+                    // B-2026-08-02-5 — tuple-element assignment target
+                    // (`t.0 = v`, `o.t.0 = v`): previously NO arm matched, so
+                    // the store fell through to the Ok(()) tail and was
+                    // SILENTLY LOST (the interpreter ICE'd on the same shape;
+                    // design.md §7956 classifies tuple indices as first-class
+                    // mutable places). Resolve the element slot through the
+                    // place-chain machinery, drop the displaced old element's
+                    // heap in place (cap-guarded), and store. A receiver shape
+                    // the chain can't resolve loud-bails instead of silently
+                    // dropping the write.
+                    self.compile_tuple_index_store(object, *index, val)?;
+                    // An f-string RHS (`t.0 = f"…"`) MOVES the accumulator's
+                    // {ptr,len,cap} header into the element slot, so the
+                    // accumulator's own scope-exit FreeVecBuffer must be
+                    // neutralised — else it and the tuple's element drop free
+                    // the same buffer (double-free). Mirrors the Identifier-,
+                    // field-, and index-store acc-zeros (B-2026-07-11-32).
+                    if let Some(acc) = staged_fstr_acc {
+                        self.zero_vec_alloca_cap(acc);
+                    }
                 } else if let ExprKind::Unary {
                     op: UnaryOp::Deref,
                     operand,

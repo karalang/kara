@@ -7283,6 +7283,40 @@ fn main() {
         assert_eq!(out, "a\nheld 5\ndrop 5 y5\nps 4 w6\nend\n");
     }
 
+    /// B-2026-08-02-5 — tuple-element assignment targets (`t.0 = v`,
+    /// `t.0.f = v`, `o.t.0 = v`, `o.t.0.f = v`) were accepted by every
+    /// checking phase but unimplemented on both backends: direct
+    /// TupleIndex targets ICE'd the interpreter (unreachable panic) and
+    /// karac build silently dropped every shape (stale reads, no
+    /// diagnostic). The Assign arm now dispatches TupleIndex targets
+    /// through `compile_tuple_index_store` (place-chain GEP + displaced
+    /// old-element drop + width-coerced store), and the chain machinery
+    /// admits tuple links. Twin of `tests/interpreter.rs`'s
+    /// `test_tuple_index_assignment_targets`.
+    #[test]
+    fn e2e_tuple_index_assignment_targets() {
+        let Some(out) = run_program(
+            "struct Pu { id: i64, name: String }\n\
+             struct Ow { t: (Pu, i64) }\n\
+             fn main() {\n\
+             \x20   let mut t = (1, f\"a{2}\");\n\
+             \x20   t.0 = 5;\n\
+             \x20   println(f\"t0 {t.0}\");\n\
+             \x20   let mut u = (Pu { id: 9, name: f\"z{9}\" }, 3);\n\
+             \x20   u.0.id = 6;\n\
+             \x20   println(f\"u {u.0.id} {u.0.name}\");\n\
+             \x20   let mut o = Ow { t: (Pu { id: 9, name: f\"z{9}\" }, 3) };\n\
+             \x20   o.t.0 = Pu { id: 7, name: f\"y{5}\" };\n\
+             \x20   o.t.0.id = 8;\n\
+             \x20   println(f\"o {o.t.0.id} {o.t.0.name}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "t0 5\nu 6 z9\no 8 y5\nend\n");
+    }
+
     /// B-2026-08-01-31 — a deep-chain field MOVE-OUT followed by a reassign
     /// (`let x = o.h.r; o.h.r = <new>`). The move zeroes the source field
     /// and disarms the root's bodies walk (root-coarse, exactly the depth-1

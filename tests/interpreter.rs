@@ -27450,6 +27450,35 @@ fn test_field_rooted_indexed_container_field_store() {
     );
 }
 
+/// B-2026-08-02-5 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_tuple_index_assignment_targets`, same source and expected string.
+/// Pre-fix the direct TupleIndex targets hit the Assign arm's
+/// `unreachable!` — an ICE with a Rust backtrace on an accepted program —
+/// and the chained forms silently no-op'd; `assign_to_place`'s TupleIndex
+/// arm now mutates the element and writes the tuple back up the place
+/// chain.
+#[test]
+fn test_tuple_index_assignment_targets() {
+    assert_eq!(
+        run("struct Pu { id: i64, name: String }\n\
+             struct Ow { t: (Pu, i64) }\n\
+             fn main() {\n\
+                 let mut t = (1, f\"a{2}\");\n\
+                 t.0 = 5;\n\
+                 println(f\"t0 {t.0}\");\n\
+                 let mut u = (Pu { id: 9, name: f\"z{9}\" }, 3);\n\
+                 u.0.id = 6;\n\
+                 println(f\"u {u.0.id} {u.0.name}\");\n\
+                 let mut o = Ow { t: (Pu { id: 9, name: f\"z{9}\" }, 3) };\n\
+                 o.t.0 = Pu { id: 7, name: f\"y{5}\" };\n\
+                 o.t.0.id = 8;\n\
+                 println(f\"o {o.t.0.id} {o.t.0.name}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "t0 5\nu 6 z9\no 8 y5\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in
