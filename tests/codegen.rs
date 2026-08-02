@@ -78634,6 +78634,49 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_of_tuple_element_drop_bodies() {
+        // B-2026-08-02-22 — `Vec[(Res, i64)]`: the container's per-element
+        // machinery had no tuple arm on either axis, so the element's Drop
+        // body never fired (both backends) and its heap leaked. Two shapes:
+        // an INLINE element (the minimal repro — no move involved) and one
+        // built from a NAMED source, which additionally left the source's own
+        // body armed so AOT fired it early over a moved-from slot, printing
+        // an empty name. Both must now produce exactly ONE fire, at the
+        // container's death, with the correct field content. The leak half is
+        // pinned by asan_vec_of_tuple_element_heap_freed.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("inline:");
+    {
+        let mut t: Vec[(Res, i64)] = Vec.new();
+        t.push((Res { id: 9, name: f"in{9}" }, 8));
+        println(t.len());
+    }
+    println("named:");
+    {
+        let mut u: Vec[(Res, i64)] = Vec.new();
+        let r = Res { id: 4, name: f"tt{4}" };
+        u.push((r, 8));
+        println(u.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "inline:\n1\ndrop 9 in9\nnamed:\n1\ndrop 4 tt4\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_container_into_literal_field_arg_single_fire() {
         // B-2026-08-02-20 (leg 2) — a container moved into a struct literal
         // that is a CALL ARGUMENT (`v.push(Holder { xs: xs })`) must disarm

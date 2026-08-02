@@ -17206,6 +17206,52 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-22 — `Vec[(Res, i64)]`: the container's per-element
+    /// machinery had no tuple arm, so nothing freed the heap reachable
+    /// through a tuple element and every element's String buffer leaked.
+    /// The element drop now routes through the same TypeExpr-driven tuple
+    /// walk the struct-field NestedTuple arm uses. Covers both the INLINE
+    /// element (no move at all — the minimal repro that refuted this row's
+    /// first diagnosis) and the NAMED source, whose own-body action used to
+    /// stay armed and fire over the moved-from slot.
+    #[test]
+    fn asan_vec_of_tuple_element_heap_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("inline:");
+    {
+        let mut t: Vec[(Res, i64)] = Vec.new();
+        t.push((Res { id: 9, name: f"in{9}" }, 8));
+        println(t.len());
+    }
+    println("named:");
+    {
+        let mut u: Vec[(Res, i64)] = Vec.new();
+        let r = Res { id: 4, name: f"tt{4}" };
+        u.push((r, 8));
+        println(u.len());
+    }
+    println("end");
+}
+"#,
+            &[
+                "inline:",
+                "1",
+                "drop 9 in9",
+                "named:",
+                "1",
+                "drop 4 tt4",
+                "end",
+            ],
+            "vec_of_tuple_element_heap_freed",
+        );
+    }
+
     /// B-2026-08-02-21 — struct-field tables of Drop-struct elements:
     /// (1) a `Set[Res]` field's element String buffers are freed at owner
     /// death via the per-key drop channel (B-2026-08-01-18's binding-death

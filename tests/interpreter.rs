@@ -27748,6 +27748,38 @@ fn test_tuple_field_parent_displaced_and_vec_elem_bodies() {
 /// sorted walker; the memory half is AOT-only and pinned by the asan
 /// twin).
 #[test]
+fn test_vec_of_tuple_element_drop_bodies() {
+    // B-2026-08-02-22 — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_vec_of_tuple_element_drop_bodies`, same source and expected
+    // string. The interp was silent on BOTH shapes pre-fix (its Vec
+    // element-bodies loop had no Tuple arm), so this pins the parity
+    // codegen's new vec-of-tuple walker now shares.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"inline:\");\n\
+                 {\n\
+                     let mut t: Vec[(Res, i64)] = Vec.new();\n\
+                     t.push((Res { id: 9, name: f\"in{9}\" }, 8));\n\
+                     println(t.len());\n\
+                 }\n\
+                 println(\"named:\");\n\
+                 {\n\
+                     let mut u: Vec[(Res, i64)] = Vec.new();\n\
+                     let r = Res { id: 4, name: f\"tt{4}\" };\n\
+                     u.push((r, 8));\n\
+                     println(u.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "inline:\n1\ndrop 9 in9\nnamed:\n1\ndrop 4 tt4\nend\n"
+    );
+}
+
+#[test]
 fn test_container_into_literal_field_arg_single_fire() {
     // B-2026-08-02-20 (leg 2) — interpreter twin of `tests/codegen.rs`'s
     // `e2e_container_into_literal_field_arg_single_fire`, same source and

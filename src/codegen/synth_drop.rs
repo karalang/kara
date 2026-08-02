@@ -5844,6 +5844,30 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         elem_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        // B-2026-08-02-22 — a TUPLE element (`Vec[(Res, i64)]`): loop the
+        // vec's elements striding by the tuple's LLVM type and run the
+        // per-tuple bodies walker on each. Without this arm the whole fn
+        // declined on the non-Path TypeExpr and the element's Drop body was
+        // silent on both backends. Bodies only, like every sibling here —
+        // element MEMORY is freed by the tuple arm of
+        // `vec_elem_agg_drop_for_type_expr` on the scope-exit channel.
+        if let TypeKind::Tuple(tuple_elem_tes) = &elem_te.kind {
+            let tuple_elem_tes = tuple_elem_tes.clone();
+            let inkwell::types::BasicTypeEnum::StructType(agg_ty) =
+                self.llvm_type_for_type_expr(elem_te)
+            else {
+                return None;
+            };
+            let per_tuple = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &tuple_elem_tes)?;
+            return self.emit_vec_elem_walker_loop(
+                &format!(
+                    "__karac_dropelems_vecoftup_{}",
+                    Self::display_mangle_te(elem_te)
+                ),
+                agg_ty.into(),
+                per_tuple,
+            );
+        }
         let TypeKind::Path(p) = &elem_te.kind else {
             return None;
         };
@@ -5864,7 +5888,24 @@ impl<'ctx> super::Codegen<'ctx> {
             "__karac_dropelems_vecof_{}",
             Self::display_mangle_te(elem_te)
         );
-        if let Some(f) = self.module.get_function(&fn_name) {
+        let vec_ty = self.vec_struct_type();
+        self.emit_vec_elem_walker_loop(&fn_name, vec_ty.into(), inner)
+    }
+
+    /// Shared loop body behind the container-of-container bodies walkers
+    /// (B-2026-08-02-22 factored it out of `emit_nested_vec_elem_bodies_fn`
+    /// so the tuple-element arm could reuse it): emit `fn_name(vp: ptr)`
+    /// walking the `{ptr,len,cap}` header at `vp` and calling `inner` on each
+    /// element, striding by `elem_llvm_ty`. The stride type is the ONLY thing
+    /// that differs between a `Vec[Vec[..]]` element (another vec header) and
+    /// a `Vec[(..)]` element (the tuple's LLVM struct). Memoized on `fn_name`.
+    fn emit_vec_elem_walker_loop(
+        &mut self,
+        fn_name: &str,
+        elem_llvm_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        inner: FunctionValue<'ctx>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function(fn_name) {
             return Some(f);
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -5872,7 +5913,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let saved = self.builder.get_insert_block();
         let walker = self.module.add_function(
-            &fn_name,
+            fn_name,
             self.context.void_type().fn_type(&[ptr_ty.into()], false),
             Some(Linkage::Internal),
         );
@@ -5926,7 +5967,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(body);
         let ep = unsafe {
             self.builder
-                .build_in_bounds_gep(vec_ty, data, &[i], "dnv.elem")
+                .build_in_bounds_gep(elem_llvm_ty, data, &[i], "dnv.elem")
                 .unwrap()
         };
         self.builder.build_call(inner, &[ep.into()], "").unwrap();

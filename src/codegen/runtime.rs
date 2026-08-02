@@ -2074,6 +2074,29 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         elem_te: &TypeExpr,
     ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        // B-2026-08-02-22 — a TUPLE element (`Vec[(Res, i64)]`). The
+        // name-keyed dispatch below reaches only `TypeKind::Path` elements, so
+        // a tuple element got no per-element drop at all and every heap leaf
+        // inside it leaked (the direct `Vec[Res]` control is clean). Route to
+        // the same `TypeExpr`-driven tuple drop the struct-field
+        // `FieldDrop::NestedTuple` arm uses — it frees Vec/String, Map/Set,
+        // enum and nested-struct leaves, and its fn takes a pointer to one
+        // tuple, which is exactly the per-element drop ABI here.
+        if let TypeKind::Tuple(elem_tes) = &elem_te.kind {
+            if elem_tes.is_empty() {
+                return None;
+            }
+            let elem_tes = elem_tes.clone();
+            if !elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+                return None;
+            }
+            let inkwell::types::BasicTypeEnum::StructType(agg_ty) =
+                self.llvm_type_for_type_expr(elem_te)
+            else {
+                return None;
+            };
+            return self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes);
+        }
         let name = match &elem_te.kind {
             TypeKind::Path(p) => p.segments.first()?.clone(),
             _ => return None,
@@ -5501,17 +5524,31 @@ impl<'ctx> super::Codegen<'ctx> {
         match &e.kind {
             ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
             ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
+            //
+            // B-2026-08-02-22 — the aggregate arms use the STRONG disarm
+            // (`suppress_user_drop_for_var`, which drops the source's OWN body
+            // action too, not just its container-element walk). That matches
+            // what the let-RHS position already does for struct-literal
+            // sources (`struct_lit_sources` at the Let registration), and it
+            // is what an own-Drop source moved into the literal needs: with
+            // only the container-element form, `let r = Res { .. }; t.push((r,
+            // 8));` left r's own body armed and it fired at r's NLL end over a
+            // moved-from slot (printing an empty name). Safe because the
+            // container's element walk is now the owner on both axes — the
+            // vec-of-tuple bodies walker and the tuple element drop.
             ExprKind::StructLiteral { fields, .. } => {
                 for f in fields {
                     if let ExprKind::Identifier(n) = &f.value.kind {
-                        self.suppress_container_elem_bodies_for_var(n);
+                        let n = n.clone();
+                        self.suppress_user_drop_for_var(&n);
                     }
                 }
             }
             ExprKind::Tuple(elems) => {
                 for el in elems {
                     if let ExprKind::Identifier(n) = &el.kind {
-                        self.suppress_container_elem_bodies_for_var(n);
+                        let n = n.clone();
+                        self.suppress_user_drop_for_var(&n);
                     }
                 }
             }

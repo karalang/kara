@@ -677,6 +677,25 @@ impl<'a> super::Interpreter<'a> {
                 self.run_nested_array_struct_elem_bodies(&e);
                 continue;
             }
+            // B-2026-08-02-22 — a TUPLE element (`Vec[(Res, i64)]`): run each
+            // tuple item's own body (forward order, matching codegen's
+            // struct-GEP order in `__karac_dropelems_tuple_*`) and then its
+            // field bodies. Without this the element was silent while
+            // codegen's new vec-of-tuple walker fired — a run-vs-build
+            // divergence in the silent direction on this side.
+            if let Value::Tuple(items) = &e {
+                let items = items.clone();
+                for it in items {
+                    if let Value::Struct { name: tn, .. } = &it {
+                        if self.program.drop_method_keys.contains_key(tn) {
+                            let tn = tn.clone();
+                            self.run_user_drop_body_only(&tn, it.clone());
+                        }
+                        self.drop_user_drop_fields_of_value(&it);
+                    }
+                }
+                continue;
+            }
             if let Value::Struct { name: tn, .. } = &e {
                 if self.program.drop_method_keys.contains_key(tn) {
                     let tn = tn.clone();
@@ -2089,6 +2108,18 @@ impl<'a> super::Interpreter<'a> {
         };
         for n in names {
             self.record_container_move_source_name(&n);
+            // B-2026-08-02-22 — a source carrying its OWN `impl Drop` needs
+            // the whole-value channel as well: the container's element walk
+            // owns its body now, and leaving the source armed fired it early
+            // (at the source's death) in addition to the container's fire.
+            // Codegen twin: the aggregate arms of
+            // `disarm_container_bodies_for_arg` use `suppress_user_drop_for_var`,
+            // which subsumes the container-element form the same way.
+            let own_drop = matches!(self.env.get(&n), Some(Value::Struct { name: ref tn, .. })
+                if self.program.drop_method_keys.contains_key(tn));
+            if own_drop {
+                self.moved_out_user_drop_bindings.insert(n);
+            }
         }
     }
 
