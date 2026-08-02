@@ -2280,7 +2280,14 @@ fn new_crate(tag: i64, name: String) -> Crate {
     /// Two-sided, like `tests/extern_keep_list.rs`'s: `run()` reports a pin
     /// that stopped firing, so a fixed bug forces its own pin out instead of
     /// silently disarming the gate for that kind forever.
-    const KNOWN_OPEN: &[(&str, &str)] = &[("drop-never-ran", "B-2026-07-30-11")];
+    /// Repointed 2026-08-02: B-2026-07-30-11 closed in 8de98fe, and the
+    /// two-sided check did its job — `interp:drop-never-ran` stopped firing
+    /// entirely while `seq`/`autopar` kept going (13 of 30 programs, down from
+    /// ~62% on all three surfaces). The closure fixed the interpreter and left
+    /// codegen behind, converting a shared gap into a run/build split, now
+    /// filed as B-2026-08-02-25. The pin follows the live bug, not the id it
+    /// was created with.
+    const KNOWN_OPEN: &[(&str, &str)] = &[("drop-never-ran", "B-2026-08-02-25")];
 
     /// The ledger id explaining `sig`, if it is a pinned known-open kind.
     fn known_open_for(sig: &str) -> Option<&'static str> {
