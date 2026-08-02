@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 202 | 1 |
+| miscompile | 202 | 0 |
 | leak | 117 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 88 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 613 | 2 |
+| codegen | 613 | 1 |
 | typecheck | 109 | 0 |
 | interp | 102 | 0 |
 | ownership | 37 | 1 |
@@ -124,21 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 2 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **852 surfaced · 5 open · 839 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **852 surfaced · 4 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-32 | 2026-08-01 | codegen | low | Vec.filled's calloc fast path only recognises a SCALAR constant zero, so Vec.filled(n, Vec.new()) store-loops an all-zero aggregate instead of calloc'ing it — measured ~100x (117.6 ms vs 1.2 ms on a 1e6-element fill) | — |
 | B-2026-08-01-33 | 2026-08-01 | ownership | low | no way to share an immutable `shared struct` across par branches read-only: the >1-branch gate is correct (non-atomic refcount races even on reads) but the only answers are `par struct`+Mutex on an unmutated structure or N private copies — costs #133 its par lane, which its lock-free C mirror can still run | — |
-| B-2026-08-01-35 | 2026-08-01 | codegen | high | Field store through a FIELD-ROOTED indexed container (`o.hs[i].field = x` where `hs: Vec[P]` is itself a struct field) is SILENTLY DROPPED under karac build — scalar, String, and struct fields alike, literal and variable indices; the interpreter applies the write. Run-vs-build divergence on a `karac check`-clean program, no diagnostic, subsequent reads return the stale value. The identifier-rooted form (`v[i].field = x`) works. | src/codegen/expr_ops.rs compile_field_store — the nested plain-struct branch resolves the parent via nested_store_place_ptr, whose Index arm delegates to field_chain_place_ptr; a FIELD-ROOTED Index (`o.hs[i]`, the container itself a struct field) fails to resolve there, so the store falls through to the documented no-op tail and is SILENTLY dropped. The shared-element sibling was fixed in B-2026-07-13-10 (the non-identifier-index-root shared branch); the PLAIN-element sibling has no handler. |
 | B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
 
-### Fixed (839)
+### Fixed (840)
 
-<details><summary>839 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>840 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -981,6 +980,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **852 surfaced 
 | B-2026-08-01-30 | codegen+interp | medium | Displacement residuals probed live (the b173/b174 recorded residuals): a DEEP-chain field assign `o.h.r = Res{..}` fires no displaced Drop body on EI… | e23c570 |
 | B-2026-08-01-31 | codegen | high | Deep-chain field move-out (`let x = o.h.r` / `let s = o.h.name`) never cap-zeroes the source: the moved-out binding AND the root's StructDrop both fr… | e23c570 |
 | B-2026-08-01-34 | codegen | medium | Generic-monomorph field moved out of a deep chain (`let g = o.h.b` where `b: Boxy[String]`) still double-frees — the B-2026-08-01-31 suppressor decli… | f82c0db |
+| B-2026-08-01-35 | codegen | high | Field store through a FIELD-ROOTED indexed container (`o.hs[i].field = x` where `hs: Vec[P]` is itself a struct field) is SILENTLY DROPPED under kara… | 38d2d23 |
 
 </details>
 
