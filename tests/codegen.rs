@@ -7238,6 +7238,51 @@ fn main() {
         assert_eq!(out, "a\ndrop 9 z9\nheld 5\ndrop 5 y5\ndrop 8 w8\nend\n");
     }
 
+    /// B-2026-08-01-35 — a field store through a FIELD-ROOTED indexed
+    /// container (`o.hs[i].field = x`, the Vec itself a struct field) was
+    /// SILENTLY DROPPED under karac build: `nested_store_place_ptr`'s
+    /// Index arm resolved bare-Identifier containers only, so the store
+    /// exited through compile_field_store's no-op tail while the
+    /// interpreter applied the write (stale reads, no diagnostic, no
+    /// crash). Scalar, String (variable index), and struct fields alike;
+    /// the struct-field leg also pins the displaced old value's memory
+    /// release (drop 5 y5 is the NEW value at o's NLL death — the old z9
+    /// buffer frees silently via the nested store's old-value drop). Twin
+    /// of `tests/interpreter.rs`'s
+    /// `test_field_rooted_indexed_container_field_store`.
+    #[test]
+    fn e2e_field_rooted_indexed_container_field_store() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Hi { r: Res }\n\
+             struct Oi { hs: Vec[Hi] }\n\
+             struct Ps { id: i64, name: String }\n\
+             struct Os { hs: Vec[Ps] }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   let mut o = Oi { hs: Vec.new() };\n\
+             \x20   o.hs.push(Hi { r: Res { id: 9, name: f\"z{9}\" } });\n\
+             \x20   o.hs[0].r = Res { id: 5, name: f\"y{5}\" };\n\
+             \x20   println(f\"held {o.hs[0].r.id}\");\n\
+             \x20   let mut p = Os { hs: Vec.new() };\n\
+             \x20   p.hs.push(Ps { id: 9, name: f\"z{9}\" });\n\
+             \x20   p.hs[0].id = 4;\n\
+             \x20   let i = 0;\n\
+             \x20   p.hs[i].name = f\"w{6}\";\n\
+             \x20   println(f\"ps {p.hs[0].id} {p.hs[0].name}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\nheld 5\ndrop 5 y5\nps 4 w6\nend\n");
+    }
+
     /// B-2026-08-01-31 — a deep-chain field MOVE-OUT followed by a reassign
     /// (`let x = o.h.r; o.h.r = <new>`). The move zeroes the source field
     /// and disarms the root's bodies walk (root-coarse, exactly the depth-1

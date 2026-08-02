@@ -27391,6 +27391,42 @@ fn test_computed_index_assign_displaced_elem_bodies() {
     );
 }
 
+/// B-2026-08-01-35 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_field_rooted_indexed_container_field_store`, same source and
+/// expected string. The interp always applied these writes — this twin
+/// pins the sequencing both backends must share now that codegen does
+/// too.
+#[test]
+fn test_field_rooted_indexed_container_field_store() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) {\n\
+                     println(f\"drop {self.id} {self.name}\")\n\
+                 }\n\
+             }\n\
+             struct Hi { r: Res }\n\
+             struct Oi { hs: Vec[Hi] }\n\
+             struct Ps { id: i64, name: String }\n\
+             struct Os { hs: Vec[Ps] }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 let mut o = Oi { hs: Vec.new() };\n\
+                 o.hs.push(Hi { r: Res { id: 9, name: f\"z{9}\" } });\n\
+                 o.hs[0].r = Res { id: 5, name: f\"y{5}\" };\n\
+                 println(f\"held {o.hs[0].r.id}\");\n\
+                 let mut p = Os { hs: Vec.new() };\n\
+                 p.hs.push(Ps { id: 9, name: f\"z{9}\" });\n\
+                 p.hs[0].id = 4;\n\
+                 let i = 0;\n\
+                 p.hs[i].name = f\"w{6}\";\n\
+                 println(f\"ps {p.hs[0].id} {p.hs[0].name}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\nheld 5\ndrop 5 y5\nps 4 w6\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in

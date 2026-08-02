@@ -1984,7 +1984,16 @@ impl<'ctx> super::Codegen<'ctx> {
         match &expr.kind {
             ExprKind::Identifier(name) => self.get_data_ptr(name.as_str()),
             ExprKind::SelfValue => self.get_data_ptr("self"),
-            ExprKind::Index { .. } => self.field_chain_place_ptr(expr),
+            // B-2026-08-01-35: `field_chain_place_ptr`'s Index arm resolves
+            // bare-Identifier containers only, so a FIELD-ROOTED container
+            // (`o.hs[i].field = x`) returned None, the nested branch was
+            // skipped, and the store exited through the no-op tail — the
+            // write was SILENTLY LOST (interp applied it; reads were fine).
+            // Fall through to the field-rooted resolver below.
+            ExprKind::Index { .. } => match self.field_chain_place_ptr(expr) {
+                Some(p) => Some(p),
+                None => self.field_rooted_index_place_ptr(expr),
+            },
             ExprKind::FieldAccess { object, field } => {
                 let base_ptr = self.nested_store_place_ptr(object)?;
                 let obj_ty = self.place_chain_type_name(object)?;
@@ -2022,6 +2031,64 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => None,
         }
+    }
+
+    /// B-2026-08-01-35 — place pointer for a FIELD-ROOTED indexed element
+    /// (`o.hs[i]`, where the Vec container is itself a struct field), which
+    /// `field_chain_place_ptr`'s Index arm (bare-Identifier containers only)
+    /// cannot resolve. Resolve the container field's storage via
+    /// `lower_field_access_ptr` (the read path's resolver — handles owned,
+    /// `ref`-param, and nested roots uniformly), mint a synth Vec identifier
+    /// over it, and reuse the bounds-checked `vec_index_elem_ptr` — the same
+    /// synth-identifier dance the displaced-elem emitter uses
+    /// (B-2026-08-01-22 leg a). The index is compiled exactly ONCE here (the
+    /// store's single place resolution), so arbitrary index expressions are
+    /// safe — no re-evaluation rule applies. A non-Vec container (VecDeque /
+    /// Slice / Map) yields None and keeps the caller's status quo.
+    fn field_rooted_index_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return None;
+        };
+        let ExprKind::FieldAccess {
+            object: inner,
+            field,
+        } = &object.kind
+        else {
+            return None;
+        };
+        let Ok(Some((field_ptr, field_ll_ty, field_te))) =
+            self.lower_field_access_ptr(inner, field, "nested-store container lowering")
+        else {
+            return None;
+        };
+        let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            super::state::VarSlot {
+                ptr: field_ptr,
+                ty: field_ll_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &field_te);
+        let elem = if self.vec_elem_types.contains_key(synth.as_str()) {
+            self.vec_index_elem_ptr(&synth, index).ok()
+        } else {
+            None
+        };
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
+        self.map_key_types.remove(&synth);
+        self.map_val_types.remove(&synth);
+        self.map_key_type_names.remove(&synth);
+        self.map_key_type_exprs.remove(&synth);
+        self.set_elem_types.remove(&synth);
+        self.set_elem_type_names.remove(&synth);
+        self.set_elem_type_exprs.remove(&synth);
+        elem
     }
 
     /// Name of field `idx` of struct `type_name` when that field's declared type

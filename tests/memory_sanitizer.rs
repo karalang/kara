@@ -17081,6 +17081,35 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-35 — the field store through a FIELD-ROOTED indexed
+    /// container now lands (it was silently dropped), so the memory
+    /// pairing needs pinning: the nested store's old-value drop frees the
+    /// displaced z9 buffer exactly once, and the element's scope-exit
+    /// drain frees the NEW value exactly once — no leak, no double-free.
+    #[test]
+    fn asan_field_rooted_indexed_container_store_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Hi { r: Res }
+struct Oi { hs: Vec[Hi] }
+fn main() {
+    println("a");
+    let mut o = Oi { hs: Vec.new() };
+    o.hs.push(Hi { r: Res { id: 9, name: f"z{9}" } });
+    o.hs[0].r = Res { id: 5, name: f"y{5}" };
+    println(f"held {o.hs[0].r.id}");
+    println("end");
+}
+"#,
+            &["a", "held 5", "drop 5 y5", "end"],
+            "field_rooted_indexed_container_store_freed",
+        );
+    }
+
     /// B-2026-08-01-34 — a GENERIC-monomorph field moved out of a deep
     /// chain (`let g = o.h.b` with `b: Boxy[String]`) still double-freed
     /// after the -31 fix: the deeper-place suppressor declined generic
