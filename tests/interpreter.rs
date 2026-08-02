@@ -27609,6 +27609,31 @@ fn test_generic_parent_drop_field_bodies() {
     );
 }
 
+/// B-2026-08-02-16 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_generic_parent_vec_field_elem_bodies`, same source and expected
+/// string (the interp's value-driven Vec-field arm always fired — this
+/// pins the parity codegen's mono-resolved dbv walk now shares).
+#[test]
+fn test_generic_parent_vec_field_elem_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Pack[T] { items: Vec[T], tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut p: Pack[Res] = Pack { items: Vec.new(), tag: 1 };\n\
+                     p.items.push(Res { id: 7, name: f\"qq{7}\" });\n\
+                     println(f\"n {p.items.len()}\");\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\nn 1\ndrop 7 qq7\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in

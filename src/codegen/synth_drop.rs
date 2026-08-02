@@ -2564,13 +2564,24 @@ impl<'ctx> super::Codegen<'ctx> {
             // elements: loop the live elements (len-guarded, forward order —
             // the interpreter's Array-field arm iterates identically) firing
             // each element's own body + nested walks. A moved-out field has
-            // len zeroed, so the loop no-ops. Base (non-mono) parents only —
-            // generic parents keep the recorded residual.
-            if effective_subst.is_none() {
-                if let Some(elem_head) = self
-                    .struct_field_type_exprs
-                    .get(struct_name)
-                    .and_then(|tes| tes.get(field_idx))
+            // len zeroed, so the loop no-ops. GENERIC parents included
+            // (B-2026-08-02-16): the field TE is resolved through the mono
+            // subst first, so a `Pack[T] { items: Vec[T] }` at `Pack[Res]`
+            // walks `Vec[Res]` — the old `effective_subst.is_none()` gate
+            // left AOT silent while the interpreter's value-driven Vec-field
+            // arm fired (a run-vs-build divergence, not the both-silent
+            // parity the gate's comment assumed).
+            let field_te_resolved = self
+                .struct_field_type_exprs
+                .get(struct_name)
+                .and_then(|tes| tes.get(field_idx))
+                .map(|fte| match effective_subst {
+                    Some(s) => crate::codegen::helpers::subst_type_params_in_type_expr(fte, s),
+                    None => fte.clone(),
+                });
+            {
+                if let Some(elem_head) = field_te_resolved
+                    .as_ref()
                     .and_then(Self::vec_field_elem_head)
                 {
                     if self.type_runs_user_drop(&elem_head, &mut Vec::new())
@@ -2630,10 +2641,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .build_conditional_branch(more, body_bb, done_bb)
                                 .unwrap();
                             self.builder.position_at_end(body_bb);
+                            // Element LLVM type from the RESOLVED field TE —
+                            // a mono parent's `Vec[T]` must stride at the
+                            // concrete argument's width, not bare-`T`'s i64
+                            // default (B-2026-08-02-16).
                             let elem_llvm_ty = self.llvm_type_for_type_expr(
-                                self.struct_field_type_exprs
-                                    .get(struct_name)
-                                    .and_then(|tes| tes.get(field_idx))
+                                field_te_resolved
+                                    .as_ref()
                                     .and_then(|te| match &te.kind {
                                         TypeKind::Path(p) => {
                                             p.generic_args.as_ref().and_then(|ga| {

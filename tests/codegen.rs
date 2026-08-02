@@ -78470,6 +78470,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_parent_vec_field_elem_bodies() {
+        // B-2026-08-02-16 — the container-field sibling of B-2026-08-02-14:
+        // a GENERIC parent's `Vec[T]`-of-Drop field (`Pack[T] { items:
+        // Vec[T] }` at `Pack[Res]`). The dbv element walk was gated off for
+        // mono parents, so AOT stayed silent while the interpreter's
+        // value-driven Vec-field arm fired — a run-vs-build divergence.
+        // The field TE now resolves through the mono subst before the walk,
+        // so both backends print the element body at owner death.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Pack[T] { items: Vec[T], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut p: Pack[Res] = Pack { items: Vec.new(), tag: 1 };
+        p.items.push(Res { id: 7, name: f"qq{7}" });
+        println(f"n {p.items.len()}");
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "a\nn 1\ndrop 7 qq7\nend");
+        }
+    }
+
+    #[test]
     fn test_e2e_owned_string_param_tail_return() {
         // `fn id(s: String) -> String { s }` — the returned value must
         // be a copy: the caller that passed `s` frees its buffer AND the
