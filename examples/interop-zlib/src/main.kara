@@ -1,0 +1,128 @@
+// Consume-direction FFI: bind a real C library (zlib) and use it.
+//
+// The sibling examples/interop/ shows the *produce* direction (a Kāra kernel
+// linked into a C host). This is the other half: Kāra as the host, calling
+// into the system's zlib through an `unsafe extern "C" { }` block, linked by
+// the manifest's `[link] libs = ["z"]`.
+//
+// The declarations carry the effect story at the boundary:
+//   - `#[noblock]` on pure-CPU entry points opts out of the safe `{blocks}`
+//     default, so calls to them never pessimize scheduler placement.
+//   - `allocates(Heap)` is declared where zlib's default allocator mallocs
+//     internally (compress2/uncompress build their deflate/inflate state on
+//     the heap). Trusted at the boundary, per design.md § Effect defaults
+//     for `extern` functions.
+//   - `malloc`/`free` keep the `{blocks}` default: when in doubt, over-declare.
+
+// Effect resources are user-defined names; declare the one the annotations use.
+effect resource Heap;
+
+/// Bindings for zlib (`-lz`) plus libc's allocator.
+///
+/// # Safety
+///
+/// Signatures are transcribed from `zlib.h` / `zconf.h` on a 64-bit
+/// platform: `uLong`/`uLongf` → `usize`, `uInt` → `u32`, `Bytef` → `u8`,
+/// `int` → `i32`. Effects are declared from zlib's documented behavior
+/// (compress2/uncompress heap-allocate their internal state via the
+/// default allocator). Callers must pass `dest` buffers at least as large
+/// as the value behind `dest_len`, which zlib updates in place.
+unsafe extern "C" {
+    #[noblock]
+    fn compressBound(source_len: usize) -> usize;
+    #[noblock]
+    fn compress2(
+        dest: *mut u8,
+        dest_len: *mut usize,
+        source: *const u8,
+        source_len: usize,
+        level: i32,
+    ) -> i32 with allocates(Heap);
+    #[noblock]
+    fn uncompress(
+        dest: *mut u8,
+        dest_len: *mut usize,
+        source: *const u8,
+        source_len: usize,
+    ) -> i32 with allocates(Heap);
+    #[noblock]
+    fn crc32(crc: usize, buf: *const u8, len: u32) -> usize;
+    fn malloc(n: usize) -> *mut u8 with allocates(Heap);
+    fn free(p: *mut u8);
+}
+
+fn main() {
+    // A runtime-built, highly compressible payload.
+    let mut original = "";
+    let mut i = 0;
+    while i < 32 {
+        original = original + "the quick brown fox jumps over the lazy dog. ";
+        i = i + 1;
+    }
+
+    match original.to_cstring() {
+        Ok(cs) => {
+            let src_len = cs.len() as usize;
+            let src_ptr = cs.as_ptr();
+
+            // CRC32 is specified byte-for-byte, so these numbers are stable
+            // across zlib versions — unlike the compressed size, which is not.
+            let crc_in = crc32(0, src_ptr, src_len as u32);
+
+            // Compress into a malloc'd buffer sized by compressBound.
+            // `dest_len` is zlib's classic in-out parameter: `ptr.mut(place)`
+            // takes a raw pointer to the local, zlib writes the actual
+            // compressed size back through it.
+            let bound = compressBound(src_len);
+            let dest: *mut u8 = malloc(bound);
+            let mut dest_len: usize = bound;
+            let rc = compress2(dest, ptr.mut(dest_len), src_ptr, src_len, 9);
+            if rc != 0 {
+                println("compress2 failed");
+                return;
+            }
+
+            // Decompress into a second buffer and verify the round trip.
+            // The compressed buffer is a `*mut u8` (we malloc'd it); zlib's
+            // prototypes take the source as `*const u8`. There is no implicit
+            // mut-to-const pointer weakening at call sites, so the cast is
+            // explicit (raw-to-raw casts live in `unsafe { }`).
+            let back: *mut u8 = malloc(src_len);
+            let mut back_len: usize = src_len;
+            // Safety: mut-to-const weakening of a live malloc'd buffer —
+            // same allocation, no new aliasing.
+            let dest_ro = unsafe { dest as *const u8 };
+            let rc2 = uncompress(back, ptr.mut(back_len), dest_ro, dest_len);
+            if rc2 != 0 {
+                println("uncompress failed");
+                return;
+            }
+            // Safety: same mut-to-const weakening, on the decompress buffer.
+            let back_ro = unsafe { back as *const u8 };
+            let crc_out = crc32(0, back_ro, back_len as u32);
+
+            println(f"original: {src_len as i64} bytes");
+            if (dest_len as i64) < (src_len as i64) {
+                println("compressed: smaller than original");
+            } else {
+                println("compressed: NOT smaller?!");
+            }
+            if (back_len as i64) == (src_len as i64) {
+                println("round-trip length: OK");
+            } else {
+                println("round-trip length: MISMATCH");
+            }
+            println(f"crc32 in:  {crc_in as i64}");
+            println(f"crc32 out: {crc_out as i64}");
+            if crc_in == crc_out {
+                println("round-trip: OK");
+            } else {
+                println("round-trip: MISMATCH");
+            }
+
+            free(dest);
+            free(back);
+        }
+        Err(_) => println("payload contains an interior NUL"),
+    }
+}

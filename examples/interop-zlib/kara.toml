@@ -1,0 +1,10 @@
+[package]
+name = "zpipe"
+
+# The `[link]` table names the native library and (optionally) where it lives.
+# The `unsafe extern "C" { }` block in src/main.kara names *what symbols* the
+# program imports (source-level, soundness-bearing); this table names *which
+# library* satisfies them (build-time, environment-resolved). See
+# docs/design.md § FFI, "Foreign-library linking — the [link] table".
+[link]
+libs = ["z"]

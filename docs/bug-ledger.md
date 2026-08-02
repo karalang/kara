@@ -96,13 +96,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 117 | 0 |
 | codegen-gap | 88 | 0 |
 | double-free | 88 | 0 |
-| missing-feature | 73 | 1 |
+| missing-feature | 74 | 2 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
 | perf | 43 | 1 |
+| diagnostics | 34 | 3 |
 | soundness | 33 | 0 |
 | crash | 33 | 0 |
-| diagnostics | 32 | 1 |
 | other | 12 | 1 |
 | use-after-free | 11 | 0 |
 
@@ -111,22 +111,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 613 | 1 |
-| typecheck | 109 | 0 |
-| interp | 102 | 0 |
+| typecheck | 110 | 1 |
+| interp | 103 | 1 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
 | other | 23 | 1 |
 | cli | 23 | 0 |
 | runtime | 18 | 0 |
-| resolver | 16 | 1 |
+| resolver | 17 | 2 |
 | parser | 10 | 1 |
 | lexer | 3 | 0 |
-| effect | 2 | 0 |
+| effect | 3 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **852 surfaced · 4 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **855 surfaced · 7 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **852 surfaced 
 | B-2026-08-01-33 | 2026-08-01 | ownership | low | no way to share an immutable `shared struct` across par branches read-only: the >1-branch gate is correct (non-atomic refcount races even on reads) but the only answers are `par struct`+Mutex on an unmutated structure or N private copies — costs #133 its par lane, which its lock-free C mirror can still run | — |
 | B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
+| B-2026-08-02-1 | 2026-08-02 | resolver+effect | low | FFI lint suggests `allocates(Heap)` but neither the lint nor E0100 mentions the required `effect resource Heap;` declaration — following the compiler's own suggestion verbatim produces an unexplained resolve error | src/effectchecker/extern_ffi.rs KNOWN_ALLOCATING lint text; src/resolver.rs E0100 'undefined effect resource' |
+| B-2026-08-02-2 | 2026-08-02 | typecheck | medium | No implicit `*mut T` → `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*const` foreign param needs an `unsafe { p as *const T }` cast | typechecker call-argument compatibility for raw pointer types |
+| B-2026-08-02-3 | 2026-08-02 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnostic — right message, wrong delivery | src/interpreter/method_call_seq.rs:767 (CString.as_ptr panic!) |
 
 ### Fixed (840)
 
