@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
-| run-vs-build | 71 | 2 |
+| run-vs-build | 71 | 1 |
 | false-positive | 55 | 0 |
 | perf | 43 | 0 |
 | crash | 36 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 630 | 3 |
 | typecheck | 115 | 1 |
-| interp | 112 | 3 |
+| interp | 112 | 2 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
 | other | 23 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **876 surfaced · 8 open · 860 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **876 surfaced · 7 open · 861 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,12 +136,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **876 surfaced 
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-13 | 2026-08-02 | typecheck+codegen | high | STDLIB AND USER TYPES SHARE ONE FLAT NAMESPACE, so any user struct that shadows a prelude type name silently takes over that type's codegen identity. `Response` (fixed as B-2026-08-02-7) was one instance of a class: a user `HttpError` double-frees identically, and a user `Match` crashes codegen outright. | src/prelude.rs (the flat prelude name list — `Response`, `HttpError`, `Match`, `Client`, `RequestBuilder`, `Stats`, `Regex`, …), runtime/stdlib/*.kara (where those types are declared), and every name-keyed dispatch site in src/typechecker, src/codegen and src/interpreter (~49 across 14 files) |
 | B-2026-08-02-23 | 2026-08-02 | codegen+interp | medium | aggregate-literal source disarm has depth-1 / same-frame reach: a NESTED literal or a CALLEE-built literal fires the moved source's element bodies twice on both backends | — |
-| B-2026-08-02-24 | 2026-08-02 | interp | medium | interpreter misses a Map VALUE struct's Vec-field element bodies at owner death; AOT fires them | — |
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | Displacing an Option[Drop] (`o = None` / `o = Some(new)`) and consuming one via a match arm binding never run the user `impl Drop` body under `karac build` — the interpreter now runs all three correctly, so the shipping path is the wrong one | — |
 
-### Fixed (860)
+### Fixed (861)
 
-<details><summary>860 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>861 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1005,6 +1004,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **876 surfaced 
 | B-2026-08-02-20 | codegen+interp | medium | container moved into a struct-literal FIELD keeps the source binding's element/value bodies walk armed -- interp-only early fires (Set/SortedMap) and… | 61e68c5 |
 | B-2026-08-02-21 | codegen | medium | struct-field Set[DropStruct] leaks element heap; struct-field SortedMap[K, DropStruct] leaks the WHOLE handle tree at owner death | 7cf6db5 |
 | B-2026-08-02-22 | codegen+interp | high | Vec[(T, ...)] with a heap/Drop-bearing TUPLE element: no element memory drop and no element bodies walk — heap leaks and the Drop body never fires (b… | 98b3898 |
+| B-2026-08-02-24 | interp | medium | interpreter misses a Map VALUE struct's Vec-field element bodies at owner death; AOT fires them | 0a422d8 |
 
 </details>
 
