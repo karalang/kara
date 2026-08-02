@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 67 | 0 |
 | false-positive | 55 | 0 |
 | perf | 43 | 0 |
-| crash | 36 | 2 |
+| crash | 36 | 1 |
 | soundness | 35 | 1 |
 | diagnostics | 34 | 1 |
 | other | 12 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 619 | 2 |
+| codegen | 619 | 1 |
 | typecheck | 115 | 1 |
 | interp | 105 | 1 |
 | ownership | 37 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **864 surfaced · 6 open · 850 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **864 surfaced · 5 open · 851 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,12 +134,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **864 surfaced 
 | B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
-| B-2026-08-02-12 | 2026-08-02 | codegen | high | Vec.filled(n, Map.new()) segfaults under AOT (Map handle elements not cloned per slot) | — |
 | B-2026-08-02-13 | 2026-08-02 | typecheck+codegen | high | STDLIB AND USER TYPES SHARE ONE FLAT NAMESPACE, so any user struct that shadows a prelude type name silently takes over that type's codegen identity. `Response` (fixed as B-2026-08-02-7) was one instance of a class: a user `HttpError` double-frees identically, and a user `Match` crashes codegen outright. | src/prelude.rs (the flat prelude name list — `Response`, `HttpError`, `Match`, `Client`, `RequestBuilder`, `Stats`, `Regex`, …), runtime/stdlib/*.kara (where those types are declared), and every name-keyed dispatch site in src/typechecker, src/codegen and src/interpreter (~49 across 14 files) |
 
-### Fixed (850)
+### Fixed (851)
 
-<details><summary>850 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>851 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -993,6 +992,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **864 surfaced 
 | B-2026-08-02-9 | typecheck | medium | Pointee-changing and const->mut raw pointer casts compile OUTSIDE unsafe blocks — the spec-mandated unsafe gate on `*T as *U` is not enforced (`let w… | a31d7be |
 | B-2026-08-02-10 | typecheck+codegen | medium | Methods on tuple-element receivers (`t.0.push(x)`, `t.0.len()`) loud-bail under karac build while the interpreter runs them — the last tuple-place ga… | 7b1122c |
 | B-2026-08-02-11 | typecheck | low | Tuple literals do not thread the EXPECTED element types into their elements: `let t: (Vec[i64], i64) = (Vec.new(), 3)` and `Sw { t: (Vec.new(), 3) }`… | 723336d |
+| B-2026-08-02-12 | codegen | high | Vec.filled(n, Map.new()) segfaults under AOT (Map handle elements not cloned per slot) | dce2015 |
 
 </details>
 
