@@ -799,8 +799,13 @@ impl<'a> super::Resolver<'a> {
                             });
                         }
                         None => {
+                            // Mirror resolve_effect_verb's undefined-resource
+                            // guidance (B-2026-08-02-4): name the fix inline.
                             self.errors.push(ResolveError {
-                                message: format!("undefined effect resource '{}'", b.resource),
+                                message: format!(
+                                    "undefined effect resource '{}'; declare `effect resource {};` or import one (e.g. `import std.web.{};`)",
+                                    b.resource, b.resource, b.resource
+                                ),
                                 span: b.resource_span.clone(),
                                 kind: ResolveErrorKind::UndefinedName,
                                 suggestion: None,

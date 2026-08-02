@@ -3419,6 +3419,42 @@ fn test_ffi_hint_malloc_missing_allocates() {
 }
 
 #[test]
+fn test_ffi_hint_malloc_notes_missing_heap_declaration() {
+    // B-2026-08-02-4: `Heap` is a user-defined resource name, not a builtin.
+    // When no `effect resource Heap;` exists, following the hint verbatim
+    // would hit resolve's "undefined effect resource 'Heap'" — so the hint
+    // must name the missing declaration too.
+    let hints = ffi_hints("unsafe extern \"C\" { fn malloc(size: i64) -> i64; }");
+    assert!(
+        hints
+            .iter()
+            .any(|h| h.message.contains("effect resource Heap;")),
+        "Hint must mention declaring `effect resource Heap;` when it is not in scope, got: {:?}",
+        hints
+    );
+}
+
+#[test]
+fn test_ffi_hint_malloc_omits_declaration_note_when_heap_in_scope() {
+    // With `effect resource Heap;` declared, the hint still fires (the verb
+    // is still missing) but drops the declaration note — it would be noise.
+    let hints =
+        ffi_hints("effect resource Heap;\nunsafe extern \"C\" { fn malloc(size: i64) -> i64; }");
+    assert!(
+        hints.iter().any(|h| h.message.contains("allocates(Heap)")),
+        "allocates(Heap) hint must still fire, got: {:?}",
+        hints
+    );
+    assert!(
+        !hints
+            .iter()
+            .any(|h| h.message.contains("effect resource Heap;")),
+        "Declaration note must be omitted when Heap is already declared, got: {:?}",
+        hints
+    );
+}
+
+#[test]
 fn test_ffi_hint_malloc_suppressed_when_declared() {
     // `malloc` with `allocates(Heap)` → no hint
     let hints = ffi_hints("unsafe extern \"C\" { fn malloc(size: i64) -> i64 allocates(Heap); }");

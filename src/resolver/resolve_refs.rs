@@ -608,8 +608,15 @@ impl<'a> super::Resolver<'a> {
                 let id = sym.id;
                 self.record_resolution(&resource.span, id);
             } else {
+                // Same guidance shape as the wrong-kind arm above: name the
+                // fix, don't just name the failure (B-2026-08-02-4 — the FFI
+                // lint suggests `allocates(Heap)` and users land here when
+                // no `effect resource Heap;` declaration exists).
                 self.errors.push(ResolveError {
-                    message: format!("undefined effect resource '{}'", name),
+                    message: format!(
+                        "undefined effect resource '{}'; declare `effect resource {};` or import one (e.g. `import std.web.{};`)",
+                        name, first, first
+                    ),
                     span: resource.span.clone(),
                     kind: ResolveErrorKind::UndefinedName,
                     suggestion: None,

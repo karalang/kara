@@ -227,11 +227,26 @@ impl<'a> super::EffectChecker<'a> {
         ];
 
         if KNOWN_ALLOCATING.contains(&base) && !has_verb(EffectVerbKind::Allocates, "Heap") {
+            // Effect resources are user-defined names — `Heap` is a
+            // convention, not a builtin. If the program hasn't declared it,
+            // following this hint verbatim would hit resolve's "undefined
+            // effect resource 'Heap'" (B-2026-08-02-4), so name the missing
+            // declaration in the same breath.
+            let heap_declared = self
+                .program
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::EffectResource(r) if r.name == "Heap"));
+            let decl_note = if heap_declared {
+                ""
+            } else {
+                " (and declare `effect resource Heap;` — effect resources are user-defined names)"
+            };
             self.errors.push(EffectError {
                 message: format!(
                     "FFI lint: '{}' is commonly allocating; consider adding `allocates(Heap)` \
-                     to its effect list",
-                    symbol
+                     to its effect list{}",
+                    symbol, decl_note
                 ),
                 span: span.clone(),
                 kind: EffectErrorKind::FfiLintHint,

@@ -153,6 +153,26 @@ fn test_effect_resource_registered() {
 }
 
 #[test]
+fn test_undefined_effect_resource_suggests_declaration() {
+    // B-2026-08-02-4: "undefined effect resource" must name the fix, not
+    // just the failure — the FFI lint suggests `allocates(Heap)` and users
+    // land here when no `effect resource Heap;` declaration exists. Same
+    // guidance shape as the wrong-kind arm ("is not an effect resource").
+    let errors = resolve_errors("pub fn f() with allocates(Heap) {}");
+    assert!(
+        errors.iter().any(|e| {
+            e.message.contains("undefined effect resource 'Heap'")
+                && e.message.contains("declare `effect resource Heap;`")
+        }),
+        "Undefined-resource error must suggest declaring the resource, got: {:?}",
+        errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_effect_group_registered() {
     let result = resolve_ok(
         "effect resource UserDB;\n\
