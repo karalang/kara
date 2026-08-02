@@ -27748,6 +27748,36 @@ fn test_tuple_field_parent_displaced_and_vec_elem_bodies() {
 /// sorted walker; the memory half is AOT-only and pinned by the asan
 /// twin).
 #[test]
+fn test_map_value_struct_vec_field_element_bodies() {
+    // B-2026-08-02-24 — a Map VALUE that is a struct carrying its Drop only
+    // through a Vec FIELD's elements. The interpreter's type-level gate
+    // (`type_name_runs_user_drop`) recursed into struct fields by HEAD NAME
+    // only, so `Holder { xs: Vec[Res] }` read as head "Vec" -> drop-free,
+    // the Map-value bodies registration never armed, and the element body
+    // was silent while AOT printed it — a run-vs-build divergence. The gate
+    // now sees one container level, matching codegen's `type_runs_user_drop`.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Holder { xs: Vec[Res], tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut m: Map[i64, Holder] = Map.new();\n\
+                     let mut xs: Vec[Res] = Vec.new();\n\
+                     xs.push(Res { id: 3, name: f\"mm{3}\" });\n\
+                     let _ = m.insert(1, Holder { xs: xs, tag: 7 });\n\
+                     println(m.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n1\ndrop 3 mm3\nend\n"
+    );
+}
+
+#[test]
 fn test_vec_of_tuple_element_drop_bodies() {
     // B-2026-08-02-22 — interpreter twin of `tests/codegen.rs`'s
     // `e2e_vec_of_tuple_element_drop_bodies`, same source and expected

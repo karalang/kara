@@ -480,14 +480,61 @@ impl<'a> super::Interpreter<'a> {
                 _ => None,
             })
             .is_some_and(|s| {
-                s.fields.iter().any(|f| match &f.ty.kind {
-                    TypeKind::Path(p) => p
+                let fields: Vec<TypeExpr> = s.fields.iter().map(|f| f.ty.clone()).collect();
+                fields
+                    .iter()
+                    .any(|fty| self.field_te_runs_user_drop(fty, seen))
+            })
+    }
+
+    /// B-2026-08-02-24 — does a struct FIELD's declared type reach user-Drop
+    /// work? The head-name recursion alone read a `Vec[Res]` field as the
+    /// head `"Vec"` (no struct def, no Drop) and declined, so a struct
+    /// carrying its Drop only through a container field classified as
+    /// drop-free — which is what left the interpreter's Map-value bodies
+    /// registration unarmed for `Map[i64, Holder]` with `Holder { xs:
+    /// Vec[Res] }`. This is the interp twin of codegen's container widening
+    /// in `type_runs_user_drop` (B-2026-08-01-22 leg b, extended by
+    /// B-2026-08-02-18): ONE container level, covering Vec/VecDeque
+    /// elements, Map/SortedMap values, Set/SortedSet elements, and tuple
+    /// elements, so both backends' type-level gates classify identically.
+    fn field_te_runs_user_drop(&self, fty: &TypeExpr, seen: &mut Vec<String>) -> bool {
+        match &fty.kind {
+            TypeKind::Path(p) => {
+                let Some(head) = p.segments.first() else {
+                    return false;
+                };
+                if self.type_name_runs_user_drop(head, seen) {
+                    return true;
+                }
+                let inner_idx = match head.as_str() {
+                    "Vec" | "VecDeque" | "Set" | "SortedSet" => 0usize,
+                    "Map" | "SortedMap" => 1usize,
+                    _ => return false,
+                };
+                match p.generic_args.as_ref().and_then(|a| a.get(inner_idx)) {
+                    Some(crate::ast::GenericArg::Type(inner)) => match &inner.kind {
+                        TypeKind::Path(ip) => ip
+                            .segments
+                            .first()
+                            .is_some_and(|h| self.type_name_runs_user_drop(h, seen)),
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            }
+            TypeKind::Tuple(elems) => {
+                let elems = elems.clone();
+                elems.iter().any(|e| match &e.kind {
+                    TypeKind::Path(ep) => ep
                         .segments
                         .first()
                         .is_some_and(|h| self.type_name_runs_user_drop(h, seen)),
                     _ => false,
                 })
-            })
+            }
+            _ => false,
+        }
     }
 
     /// B-2026-07-23-12: is `place` a bare-identifier / `self` scrutinee whose
