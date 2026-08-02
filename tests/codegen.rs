@@ -78502,6 +78502,96 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_field_tuple_and_map_drop_bodies() {
+        // B-2026-08-02-18 — TUPLE-held and Map-VALUE-held Drop values in
+        // struct fields: the owner-death bodies walk now has a tuple arm
+        // (reusing the __karac_dropelems_tuple walker on the field slot) and
+        // a Map/Set arm (reusing __karac_dropelems_map), on both backends.
+        // The generic block additionally pins B-2026-08-02-19: the mono
+        // parent's NestedTuple memory drop resolves `(T, i64)` through the
+        // subst, so the tuple-held String is freed (the asan twin proves the
+        // memory half; here the body line proves dispatch).
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct DuoR { pair: (Res, i64), tag: i64 }
+struct Duo[T] { pair: (T, i64), tag: i64 }
+struct MapHold { m: Map[i64, Res], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let d = DuoR { pair: (Res { id: 1, name: f"aa{1}" }, 5), tag: 7 };
+        println(d.tag);
+    }
+    println("b");
+    {
+        let g: Duo[Res] = Duo { pair: (Res { id: 2, name: f"bb{2}" }, 6), tag: 8 };
+        println(g.tag);
+    }
+    println("c");
+    {
+        let mut h = MapHold { m: Map.new(), tag: 9 };
+        h.m.insert(1i64, Res { id: 3, name: f"cc{3}" });
+        println(h.tag);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "a\n7\ndrop 1 aa1\nb\n8\ndrop 2 bb2\nc\n9\ndrop 3 cc3\nend"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tuple_field_parent_displaced_and_vec_elem_bodies() {
+        // B-2026-08-02-18 (gate legs) — a parent whose ONLY Drop content is
+        // a tuple field now classifies Drop-relevant on both backends'
+        // widened gates: the displaced old value fires its tuple-held body
+        // at reassignment, and a Vec element of such a parent fires it at
+        // the container's death (the interp side pins the
+        // field_value_carries_user_drop widening; pre-fix the interp was
+        // silent on both while AOT fired — a run-vs-build divergence).
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct DuoR { pair: (Res, i64), tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut x = DuoR { pair: (Res { id: 1, name: f"a{1}" }, 5), tag: 7 };
+        println(x.tag);
+        x = DuoR { pair: (Res { id: 2, name: f"b{2}" }, 6), tag: 8 };
+        println(x.tag);
+    }
+    println("mid");
+    {
+        let mut v: Vec[DuoR] = Vec.new();
+        v.push(DuoR { pair: (Res { id: 3, name: f"x{3}" }, 5), tag: 9 });
+        println(v.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "a\n7\ndrop 1 a1\n8\ndrop 2 b2\nmid\n1\ndrop 3 x3\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_owned_string_param_tail_return() {
         // `fn id(s: String) -> String { s }` — the returned value must
         // be a copy: the caller that passed `s` frees its buffer AND the

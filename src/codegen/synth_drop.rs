@@ -1393,14 +1393,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct leaf is seen; the LLVM-type-driven
                 // `aggregate_has_heap_field` is enum-blind. Fall back to the
                 // type-driven check only when no tuple `TypeExpr` is recorded.
+                // B-2026-08-02-19 — resolve the tuple TE through the active
+                // mono subst BEFORE the heap classification: a generic
+                // parent's `(T, i64)` reads as no-heap at the declared TE, so
+                // the mono instantiation's element heap (`(Res, i64)` with a
+                // String-bearing Res) was never freed (latent — LLVM elides
+                // the dead alloc until something reads the field, e.g. the
+                // B-2026-08-02-18 bodies walk). Non-generic parents pass
+                // `subst == None` and are untouched.
                 let tuple_needs_drop = match self
                     .struct_field_type_exprs
                     .get(struct_name)
                     .and_then(|v| v.get(idx))
-                    .map(|te| &te.kind)
                 {
-                    Some(TypeKind::Tuple(elems)) => {
-                        Some(elems.iter().any(|e| self.type_expr_has_drop_heap(e)))
+                    Some(te) if matches!(&te.kind, TypeKind::Tuple(_)) => {
+                        let rte = match subst {
+                            Some(s) => {
+                                crate::codegen::helpers::subst_type_params_in_type_expr(te, s)
+                            }
+                            None => te.clone(),
+                        };
+                        match &rte.kind {
+                            TypeKind::Tuple(elems) => {
+                                Some(elems.iter().any(|e| self.type_expr_has_drop_heap(e)))
+                            }
+                            _ => None,
+                        }
                     }
                     _ => None,
                 };
@@ -2130,13 +2148,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // element `TypeExpr`s: the emit walk below takes `&mut self`
                     // (synthesizes nested drop fns), which can't coexist with an
                     // immutable borrow of `struct_field_type_exprs`.
+                    // B-2026-08-02-19 — resolve through the mono subst so the
+                    // walk frees at the instantiated element types (`(Res,
+                    // i64)`), not the declared erased `(T, i64)`; `st` is
+                    // already the mono layout, so `fst` below strides right.
                     let elem_tes: Vec<TypeExpr> = match self
                         .struct_field_type_exprs
                         .get(struct_name)
                         .and_then(|v| v.get(field_idx))
-                        .map(|te| &te.kind)
+                        .map(|te| match subst {
+                            Some(s) => {
+                                crate::codegen::helpers::subst_type_params_in_type_expr(te, s)
+                            }
+                            None => te.clone(),
+                        })
+                        .map(|te| te.kind)
                     {
-                        Some(TypeKind::Tuple(elems)) => elems.clone(),
+                        Some(TypeKind::Tuple(elems)) => elems,
                         _ => continue,
                     };
                     let fst = match st.get_field_type_at_index(field_idx as u32) {
@@ -2310,11 +2338,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`Vec[Vec[Res]]`) is the recorded residual.
         if !found {
             if let Some(tes) = self.struct_field_type_exprs.get(type_name) {
-                for te in tes {
+                'tes: for te in tes {
                     if let Some(elem) = Self::vec_field_elem_head(te) {
                         if self.type_runs_user_drop(&elem, seen) {
                             found = true;
                             break;
+                        }
+                    }
+                    // B-2026-08-02-18 — the same one-container-level widening
+                    // for the two other droppable field positions: a
+                    // Map/SortedMap VALUE (Set/SortedSet ELEMENT) and a tuple
+                    // element.
+                    if let Some(val) = Self::map_or_set_field_val_head(te) {
+                        if self.type_runs_user_drop(&val, seen) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    for eh in Self::tuple_field_elem_heads(te) {
+                        if self.type_runs_user_drop(&eh, seen) {
+                            found = true;
+                            break 'tes;
                         }
                     }
                 }
@@ -2342,6 +2386,44 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             _ => None,
         }
+    }
+
+    /// The VALUE head name of a `Map[K,V]` / `SortedMap[K,V]` (ELEMENT head of
+    /// a `Set[E]` / `SortedSet[E]`) TypeExpr whose value/element is a plain
+    /// named type — `None` for any other shape. The table sibling of
+    /// [`Self::vec_field_elem_head`] (B-2026-08-02-18).
+    pub(super) fn map_or_set_field_val_head(te: &TypeExpr) -> Option<String> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let idx = match p.segments.first()?.as_str() {
+            "Map" | "SortedMap" => 1usize,
+            "Set" | "SortedSet" => 0usize,
+            _ => return None,
+        };
+        match p.generic_args.as_ref()?.get(idx)? {
+            GenericArg::Type(elem) => match &elem.kind {
+                TypeKind::Path(ep) => ep.segments.first().cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Element head names of a tuple TypeExpr's plain-named elements —
+    /// empty for any non-tuple shape. Tuple sibling of
+    /// [`Self::vec_field_elem_head`] (B-2026-08-02-18).
+    pub(super) fn tuple_field_elem_heads(te: &TypeExpr) -> Vec<String> {
+        let TypeKind::Tuple(elems) = &te.kind else {
+            return Vec::new();
+        };
+        elems
+            .iter()
+            .filter_map(|e| match &e.kind {
+                TypeKind::Path(p) => p.segments.first().cloned(),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Resolve a declared field type NAME through a generic-mono subst: a
@@ -2387,16 +2469,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     let resolved = self.resolve_field_head_mono(n, subst);
                     self.type_runs_user_drop(&resolved, &mut Vec::new())
                 });
-                let vec_elem = self
+                let field_te = self
                     .struct_field_type_exprs
                     .get(struct_name)
-                    .and_then(|tes| tes.get(idx))
+                    .and_then(|tes| tes.get(idx));
+                let vec_elem = field_te
                     .and_then(Self::vec_field_elem_head)
                     .is_some_and(|e| {
                         let resolved = self.resolve_field_head_mono(&e, subst);
                         self.type_runs_user_drop(&resolved, &mut Vec::new())
                     });
-                (direct || vec_elem).then_some(idx)
+                // B-2026-08-02-18 — Map/SortedMap VALUES (Set/SortedSet
+                // ELEMENTS) and tuple elements are droppable field content
+                // too, resolved through the mono subst like the Vec leg.
+                let map_val = field_te
+                    .and_then(Self::map_or_set_field_val_head)
+                    .is_some_and(|v| {
+                        let resolved = self.resolve_field_head_mono(&v, subst);
+                        self.type_runs_user_drop(&resolved, &mut Vec::new())
+                    });
+                let tuple_elem = field_te.is_some_and(|te| {
+                    Self::tuple_field_elem_heads(te).iter().any(|h| {
+                        let resolved = self.resolve_field_head_mono(h, subst);
+                        self.type_runs_user_drop(&resolved, &mut Vec::new())
+                    })
+                });
+                (direct || vec_elem || map_val || tuple_elem).then_some(idx)
             })
             .collect()
     }
@@ -2558,13 +2656,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // value` walks the same order, which is what the run/build parity gate
         // pins.
         for &field_idx in field_idxs.iter().rev() {
-            let Some(Some(field_type)) = field_kinds.get(field_idx).cloned() else {
-                continue;
-            };
-            // Resolve a bare-param field name through the mono subst
-            // (`item: T` under `T → Res` dispatches `Res.drop`, not the
-            // non-existent `T.drop`) — B-2026-08-02-14.
-            let field_type = self.resolve_field_head_mono(&field_type, subst);
             let field_ptr = self
                 .builder
                 .build_struct_gep(
@@ -2593,6 +2684,48 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some(s) => crate::codegen::helpers::subst_type_params_in_type_expr(fte, s),
                     None => fte.clone(),
                 });
+            // B-2026-08-02-18 — a TUPLE field's Drop-running elements: reuse
+            // the binding-death tuple walker (BODIES ONLY — the tuple's heap
+            // is still freed by the parent's memory drop) against the field
+            // slot. Placed before the head-name gate below because a tuple
+            // field has no head name (`field_kinds` holds `None` for it).
+            if let Some(fte) = field_te_resolved.as_ref() {
+                if let TypeKind::Tuple(elem_tes) = &fte.kind {
+                    let elem_tes = elem_tes.clone();
+                    if let inkwell::types::BasicTypeEnum::StructType(agg) =
+                        self.llvm_type_for_type_expr(fte)
+                    {
+                        if let Some(w) = self.emit_tuple_elem_user_drop_bodies_fn(agg, &elem_tes) {
+                            self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                        }
+                    }
+                    continue;
+                }
+                // B-2026-08-02-18 — a Map/SortedMap field's VALUES
+                // (Set/SortedSet ELEMENTS): reuse the binding-death table
+                // walker (BODIES ONLY; the handle free with its val-drop fn
+                // stays on the scope-exit channel). `field_ptr` IS the slot
+                // the walker loads the handle from, and a moved-out field's
+                // slot is nulled, so the walker's null check no-ops then.
+                let is_table_field = matches!(&fte.kind, TypeKind::Path(p) if matches!(
+                    p.segments.first().map(|s| s.as_str()),
+                    Some("Map") | Some("SortedMap") | Some("Set") | Some("SortedSet")
+                ));
+                if is_table_field {
+                    let fte = fte.clone();
+                    if let Some(w) = self.emit_map_val_user_drop_bodies_fn(&fte) {
+                        self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                    }
+                    continue;
+                }
+            }
+            let Some(Some(field_type)) = field_kinds.get(field_idx).cloned() else {
+                continue;
+            };
+            // Resolve a bare-param field name through the mono subst
+            // (`item: T` under `T → Res` dispatches `Res.drop`, not the
+            // non-existent `T.drop`) — B-2026-08-02-14.
+            let field_type = self.resolve_field_head_mono(&field_type, subst);
             {
                 if let Some(elem_head) = field_te_resolved
                     .as_ref()

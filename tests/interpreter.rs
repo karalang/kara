@@ -27634,6 +27634,77 @@ fn test_generic_parent_vec_field_elem_bodies() {
     );
 }
 
+/// B-2026-08-02-18 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_struct_field_tuple_and_map_drop_bodies` (STASH-PROVEN pin: the
+/// interp's field walk had no tuple or Map/Set arm, so all three drop
+/// lines were missing pre-fix). Same source and expected string.
+#[test]
+fn test_struct_field_tuple_and_map_drop_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct DuoR { pair: (Res, i64), tag: i64 }\n\
+             struct Duo[T] { pair: (T, i64), tag: i64 }\n\
+             struct MapHold { m: Map[i64, Res], tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let d = DuoR { pair: (Res { id: 1, name: f\"aa{1}\" }, 5), tag: 7 };\n\
+                     println(d.tag);\n\
+                 }\n\
+                 println(\"b\");\n\
+                 {\n\
+                     let g: Duo[Res] = Duo { pair: (Res { id: 2, name: f\"bb{2}\" }, 6), tag: 8 };\n\
+                     println(g.tag);\n\
+                 }\n\
+                 println(\"c\");\n\
+                 {\n\
+                     let mut h = MapHold { m: Map.new(), tag: 9 };\n\
+                     h.m.insert(1i64, Res { id: 3, name: f\"cc{3}\" });\n\
+                     println(h.tag);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n7\ndrop 1 aa1\nb\n8\ndrop 2 bb2\nc\n9\ndrop 3 cc3\nend\n"
+    );
+}
+
+/// B-2026-08-02-18 (gate legs) — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_tuple_field_parent_displaced_and_vec_elem_bodies` (STASH-PROVEN
+/// pin for the `field_value_carries_user_drop` widening: pre-fix the
+/// interp's displaced-value and Vec-element gates classified a parent
+/// whose only Drop content is a tuple field as no-drop, so the `drop 1
+/// a1` and `drop 3 x3` lines were missing while AOT printed them).
+#[test]
+fn test_tuple_field_parent_displaced_and_vec_elem_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct DuoR { pair: (Res, i64), tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut x = DuoR { pair: (Res { id: 1, name: f\"a{1}\" }, 5), tag: 7 };\n\
+                     println(x.tag);\n\
+                     x = DuoR { pair: (Res { id: 2, name: f\"b{2}\" }, 6), tag: 8 };\n\
+                     println(x.tag);\n\
+                 }\n\
+                 println(\"mid\");\n\
+                 {\n\
+                     let mut v: Vec[DuoR] = Vec.new();\n\
+                     v.push(DuoR { pair: (Res { id: 3, name: f\"x{3}\" }, 5), tag: 9 });\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n7\ndrop 1 a1\n8\ndrop 2 b2\nmid\n1\ndrop 3 x3\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in

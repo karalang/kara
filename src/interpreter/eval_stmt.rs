@@ -1137,7 +1137,38 @@ impl<'a> super::Interpreter<'a> {
             return false;
         };
         self.program.drop_method_keys.contains_key(name)
-            || fields.values().any(|v| self.value_runs_user_drop(v))
+            || fields
+                .values()
+                .any(|v| self.field_value_carries_user_drop(v))
+    }
+
+    /// Field-content half of [`Self::value_runs_user_drop`]: does a struct
+    /// FIELD's value carry user-Drop work the walk arms of
+    /// `drop_user_drop_fields_of_value` can reach? Sees through one container
+    /// level — Vec/VecDeque elements, tuple elements, Map/SortedMap values,
+    /// Set/SortedSet elements — mirroring codegen's `type_runs_user_drop`
+    /// container widening (B-2026-08-01-22 leg b + B-2026-08-02-18) so the
+    /// two backends' gates classify identically at displacement/discard/
+    /// element sites. TOP-LEVEL classification is unchanged: a bare
+    /// Array/Tuple/Map value still classifies `false` through
+    /// `value_runs_user_drop`, keeping the dedicated container walkers the
+    /// sole firers for direct bindings.
+    fn field_value_carries_user_drop(&self, v: &Value) -> bool {
+        match v {
+            Value::Struct { .. } => self.value_runs_user_drop(v),
+            Value::Array(rc) => rc
+                .read()
+                .map(|g| g.iter().any(|e| self.value_runs_user_drop(e)))
+                .unwrap_or(false),
+            Value::Tuple(items) => items.iter().any(|e| self.value_runs_user_drop(e)),
+            Value::Map(entries) => entries
+                .iter()
+                .any(|(_, val)| self.value_runs_user_drop(val)),
+            Value::SortedMap(entries) => entries.values().any(|val| self.value_runs_user_drop(val)),
+            Value::Set(items) => items.iter().any(|e| self.value_runs_user_drop(e)),
+            Value::SortedSet(items) => items.keys().any(|k| self.value_runs_user_drop(&k.0)),
+            _ => false,
+        }
     }
 
     /// Value-level worker for [`Self::drop_user_drop_fields_of_binding`].
@@ -1165,12 +1196,21 @@ impl<'a> super::Interpreter<'a> {
         let Some(def) = self.find_struct_def(struct_name) else {
             return;
         };
-        // (field name, declared head type name). The DECLARED type is what
-        // gates the walk — see `declared_field_type_head`.
-        let declared: Vec<(String, Option<String>)> = def
+        // (field name, declared head type name, declared TypeExpr). The
+        // DECLARED type is what gates the walk — see
+        // `declared_field_type_head`. The full TypeExpr feeds the tuple and
+        // Map/Set arms (B-2026-08-02-18), whose element/value types live in
+        // the TE's structure rather than its head name.
+        let declared: Vec<(String, Option<String>, TypeExpr)> = def
             .fields
             .iter()
-            .map(|f| (f.name.clone(), Self::declared_field_type_head(&f.ty)))
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    Self::declared_field_type_head(&f.ty),
+                    f.ty.clone(),
+                )
+            })
             .collect();
         // The struct's own generic param names (B-2026-08-02-14): a field
         // whose declared head is one of these is type-ERASED at the decl —
@@ -1181,7 +1221,7 @@ impl<'a> super::Interpreter<'a> {
             .as_ref()
             .map(|gp| gp.params.iter().map(|p| p.name.clone()).collect())
             .unwrap_or_default();
-        for (field, declared_head) in declared.into_iter().rev() {
+        for (field, declared_head, declared_te) in declared.into_iter().rev() {
             let Some(field_value) = fields.get(&field).cloned() else {
                 continue;
             };
@@ -1217,6 +1257,51 @@ impl<'a> super::Interpreter<'a> {
                 }
                 continue;
             }
+            // B-2026-08-02-18 — a TUPLE field's Drop-running elements:
+            // forward element order (codegen's __karac_dropelems_tuple
+            // walker fires its struct-GEP targets in element order).
+            // Declared-element-type gated, with the same own-generic-param
+            // exception the struct arm below documents; struct elements
+            // only, matching the codegen walker's scope (enum elements stay
+            // silent on both backends — recorded residual).
+            if let Value::Tuple(items) = &field_value {
+                if let TypeKind::Tuple(elem_tes) = &declared_te.kind {
+                    let pairs: Vec<(Value, TypeExpr)> = items
+                        .iter()
+                        .cloned()
+                        .zip(elem_tes.iter().cloned())
+                        .collect();
+                    for (e, ete) in pairs {
+                        let Value::Struct { name: tn, .. } = &e else {
+                            continue;
+                        };
+                        let eh = Self::declared_field_type_head(&ete);
+                        let elem_is_own_param = eh
+                            .as_deref()
+                            .is_some_and(|h| generic_param_names.iter().any(|p| p == h));
+                        if eh.as_deref() != Some(tn.as_str()) && !elem_is_own_param {
+                            continue;
+                        }
+                        if self.program.drop_method_keys.contains_key(tn) {
+                            let tn = tn.clone();
+                            self.run_user_drop_body_only(&tn, e.clone());
+                        }
+                        self.drop_user_drop_fields_of_value(&e);
+                    }
+                }
+                continue;
+            }
+            // B-2026-08-02-18 — a Map/SortedMap field's VALUES
+            // (Set/SortedSet ELEMENTS): the field twin of
+            // `run_map_val_user_drops`, keyed off the struct def's declared
+            // TE instead of the binding-name table.
+            if matches!(
+                &field_value,
+                Value::Map(_) | Value::SortedMap(_) | Value::Set(_) | Value::SortedSet(_)
+            ) {
+                self.run_field_map_val_user_drops(&field_value, &declared_te, &generic_param_names);
+                continue;
+            }
             let Value::Struct {
                 name: field_type, ..
             } = &field_value
@@ -1248,6 +1333,66 @@ impl<'a> super::Interpreter<'a> {
                 self.run_user_drop_body_only(&field_type, field_value.clone());
             }
             self.drop_user_drop_fields_of_value(&field_value);
+        }
+    }
+
+    /// B-2026-08-02-18 — run the user `impl Drop` bodies of a struct FIELD's
+    /// Map/SortedMap values (Set/SortedSet elements) at the owner's death.
+    /// The field twin of [`Self::run_map_val_user_drops`]: same declared-V
+    /// gate and same per-value dispatch, but the declared TE comes from the
+    /// struct def (via `drop_user_drop_fields_of_value`) rather than the
+    /// binding-name table, and a bare-generic-param V fires value-driven
+    /// (the B-2026-08-02-14 erasure exception — codegen's walker sees the
+    /// subst-resolved TE, so both backends fire).
+    fn run_field_map_val_user_drops(
+        &mut self,
+        field_value: &Value,
+        declared_te: &TypeExpr,
+        generic_param_names: &[String],
+    ) {
+        let vals: Vec<Value> = match field_value {
+            Value::Map(entries) => entries.iter().map(|(_, v)| v.clone()).collect(),
+            Value::SortedMap(entries) => entries.values().cloned().collect(),
+            Value::Set(items) => items.clone(),
+            Value::SortedSet(items) => items.keys().map(|k| k.0.clone()).collect(),
+            _ => return,
+        };
+        let TypeKind::Path(p) = &declared_te.kind else {
+            return;
+        };
+        let elem_idx = match p.segments.last().map(String::as_str) {
+            Some("Set") | Some("SortedSet") => 0usize,
+            Some("Map") | Some("SortedMap") => 1usize,
+            _ => return,
+        };
+        let Some(crate::ast::GenericArg::Type(val_te)) =
+            p.generic_args.as_ref().and_then(|a| a.get(elem_idx))
+        else {
+            return;
+        };
+        let declared_head = Self::declared_field_type_head(val_te);
+        let val_is_own_param = declared_head
+            .as_deref()
+            .is_some_and(|h| generic_param_names.iter().any(|q| q == h));
+        for v in vals {
+            if let Value::Array(_) = &v {
+                if matches!(declared_head.as_deref(), Some("Vec") | Some("VecDeque")) {
+                    self.run_nested_array_struct_elem_bodies(&v);
+                }
+                continue;
+            }
+            let Value::Struct { name: tn, .. } = &v else {
+                continue;
+            };
+            if declared_head.as_deref() != Some(tn.as_str()) && !val_is_own_param {
+                continue;
+            }
+            let tn = tn.clone();
+            if self.program.drop_method_keys.contains_key(&tn) {
+                self.run_user_drop_body_on_value(&tn, v);
+            } else if self.value_runs_user_drop(&v) {
+                self.drop_user_drop_fields_of_value(&v);
+            }
         }
     }
 

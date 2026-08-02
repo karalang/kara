@@ -17168,8 +17168,41 @@ fn main() {
     println("end");
 }
 "#,
-            &["a", "n 1", "end"],
+            // B-2026-08-02-18 — the Map-field VALUE bodies walk now fires at
+            // owner death, so the expectation gains the drop line (memory
+            // behavior unchanged: still LSan-clean).
+            &["a", "n 1", "drop 8 mm8", "end"],
             "generic_parent_map_field_value_freed",
+        );
+    }
+
+    /// B-2026-08-02-19 — a GENERIC parent's tuple field: the NestedTuple
+    /// classification and emit now resolve `(T, i64)` through the mono
+    /// subst, so the tuple-held Res's String buffer is freed at owner death.
+    /// The leak was LATENT pre- B-2026-08-02-18 (LLVM elided the dead
+    /// allocation while nothing read the field); the -18 bodies walk makes
+    /// the allocation live, so this pin holds the pair together: bodies
+    /// fire AND the mono tuple memory walk frees the element heap.
+    #[test]
+    fn asan_generic_parent_tuple_field_heap_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Duo[T] { pair: (T, i64), tag: i64 }
+fn main() {
+    println("a");
+    {
+        let d: Duo[Res] = Duo { pair: (Res { id: 5, name: f"tt{5}" }, 9), tag: 1 };
+        println(f"tag {d.tag} snd {d.pair.1}");
+    }
+    println("end");
+}
+"#,
+            &["a", "tag 1 snd 9", "drop 5 tt5", "end"],
+            "generic_parent_tuple_field_heap_freed",
         );
     }
 
