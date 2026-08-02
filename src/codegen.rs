@@ -3605,27 +3605,33 @@ pub(super) struct Codegen<'ctx> {
     /// (B-2026-07-18-7). This is the authoritative membership test. Cleared
     /// per-function.
     pub(crate) gpu_buffer_vars: HashSet<String>,
-    /// B-2026-08-02-7 — a user program declared its own `struct Response`,
-    /// so `seed_builtin_struct_types` did NOT seed the builtin HTTP client
-    /// response layout (`{ status: i64, body: String, headers: i64 }`) and
-    /// `struct_types["Response"]` is the user's shape instead.
+    /// B-2026-08-02-7 / B-2026-08-02-13 — prelude type names a user program
+    /// re-declared, shadowing the stdlib type of the same name.
     ///
-    /// This is silent memory corruption if the client path then runs: the
-    /// client FFI writes a 5-word value into a slot laid out for the user's
-    /// struct, and the user type's drop glue frees a `body` String the
-    /// client path also owns — a double free, measured with a `Response`
-    /// carrying any heap field. A scalar-only user `Response` is harmless
-    /// (its drop glue frees nothing), which is exactly why this went
-    /// unnoticed: the collision is invisible until the shadowing type owns
-    /// heap.
+    /// Stdlib and user types share ONE FLAT NAMESPACE (`prelude::PRELUDE_TYPES`
+    /// is injected unqualified) and every backend dispatches on the bare
+    /// string, so a user `struct Response` / `HttpError` / `Match` silently
+    /// takes over that type's codegen identity. The consequences measured so
+    /// far span two subsystems and two failure modes: a user `Response` or
+    /// `HttpError` makes the HTTP client double-free a `String` field, and a
+    /// user `Match` crashes codegen outright on the regex path.
     ///
-    /// Declaring `Response` is legitimate and common — it is the documented
-    /// handler-return type for `Server.serve`, so every serving program has
-    /// one. The flag therefore does NOT reject the declaration; it only
-    /// makes the CLIENT path refuse to compile against a layout it cannot
-    /// safely use, which keeps `examples/shortener` (declares `Response`,
-    /// never calls `Client`) working untouched.
-    pub(crate) user_response_shadows_builtin: bool,
+    /// Only shadowing by a struct that OWNS HEAP is dangerous today — the
+    /// damage is done by the user type's drop glue running over a builtin
+    /// value — but the set records every shadow, because the layout confusion
+    /// is not limited to drops and a scalar-only shadow becoming heap-owning
+    /// is a one-word edit.
+    ///
+    /// Declaring these names stays legal: `Response` is the documented
+    /// `Server.serve` handler-return type, so every serving program has one.
+    /// The set is consulted only where a BUILTIN PATH would consume the
+    /// shadowed type, so a program that never touches that path is unaffected
+    /// (`examples/shortener` declares `Response` and never calls `Client`).
+    ///
+    /// The real fix is module-qualified stdlib types (`http.Response` as a
+    /// distinct type); until then this converts silent corruption into an
+    /// actionable message. Tracked as B-2026-08-02-13.
+    pub(crate) user_shadowed_prelude_types: std::collections::HashSet<String>,
     /// Per-variable Map key LLVM type (variable name → K LLVM type).
     pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Per-variable Map value LLVM type (variable name → V LLVM type).
@@ -7810,7 +7816,7 @@ impl<'ctx> Codegen<'ctx> {
             provider_lookup_result_ty,
             gpu_buffer_elem_structs: HashMap::new(),
             gpu_buffer_vars: HashSet::new(),
-            user_response_shadows_builtin: false,
+            user_shadowed_prelude_types: std::collections::HashSet::new(),
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),

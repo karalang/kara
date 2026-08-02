@@ -1419,36 +1419,44 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Caller is the std.http client method-call dispatch arm in
     /// `compile_method_call`. Receiver is `ref self` on an empty
     /// `Client { }` struct — codegen ignores it.
-    /// B-2026-08-02-7 — the client path is only safe against the SEEDED
-    /// `Response` layout (`{ status: i64, body: String, headers: i64 }`).
-    /// A user program that declares its own `struct Response` suppresses
-    /// that seeding, and every client call then GEPs the wrong shape and
-    /// hands the value to the wrong drop glue.
+    /// B-2026-08-02-7 / B-2026-08-02-13 — a builtin path is only safe against
+    /// the SEEDED layouts of the stdlib types it consumes. A user program that
+    /// re-declares one of those names suppresses nothing at the type level —
+    /// stdlib and user types share one flat namespace — so the builtin path
+    /// GEPs the user's shape and hands the value to the user's drop glue.
     ///
-    /// Refusing is a strict improvement on what it replaces: a double free
-    /// that reproduced on every run with no diagnostic, and only when the
-    /// shadowing type owned heap — so a scalar-only `Response` looked fine
-    /// and the bug appeared the moment someone added a `String` field.
+    /// Refusing is a strict improvement on what it replaces. For the HTTP
+    /// client that was a double free reproducing on every run with no
+    /// diagnostic, and only when the shadowing type owned heap — so a
+    /// scalar-only shadow looked fine and the corruption appeared the moment
+    /// someone added a `String` field.
     ///
-    /// Declaring `Response` stays legal on its own. `Server.serve`'s
-    /// handler returns exactly that type, so rejecting the declaration
-    /// would break every serving program (`examples/shortener` among them);
-    /// only the CLIENT path, which cannot work with the user's layout, is
-    /// blocked. The residual is that a program wanting to both serve and
-    /// call out must rename its own struct — tracked in the ledger entry as
-    /// the ergonomic half, whose real fix is to give the builtin an
-    /// internal name so user code can use `Response` freely.
-    fn reject_shadowed_client_response(&self, what: &str) -> Result<(), String> {
-        if !self.user_response_shadows_builtin {
+    /// The declarations stay legal on their own; only the paths that would
+    /// CONSUME the shadowed type refuse. `Server.serve`'s handler returns a
+    /// user-declared `Response`, so rejecting the declaration would break every
+    /// serving program (`examples/shortener` among them).
+    ///
+    /// `names` is what the calling path actually consumes, so the message can
+    /// name the offending type rather than listing the whole prelude.
+    pub(super) fn reject_shadowed_prelude_types(
+        &self,
+        what: &str,
+        names: &[&str],
+    ) -> Result<(), String> {
+        let Some(hit) = names
+            .iter()
+            .find(|n| self.user_shadowed_prelude_types.contains(**n))
+        else {
             return Ok(());
-        }
+        };
         Err(format!(
-            "this program declares its own `struct Response`, which shadows the HTTP \
-             client's built-in response type, so `{what}` cannot be compiled safely here \
-             (the built-in layout is `{{ status: i64, body: String, headers: i64 }}`; the \
-             client would read your struct's fields and free its `body` twice). Rename the \
-             user-defined struct — e.g. `ServerResponse` — and keep `Response` for the \
-             client. A `Server.serve` handler may return the renamed type unchanged."
+            "this program declares its own `struct {hit}`, which shadows the built-in \
+             stdlib type of that name, so `{what}` cannot be compiled safely here — the \
+             built-in path would read your struct's fields and run your struct's drop \
+             glue over a built-in value. Rename the user-defined struct (e.g. \
+             `My{hit}`); a `Server.serve` handler may return the renamed type unchanged. \
+             Stdlib and user types currently share one namespace — tracked as \
+             B-2026-08-02-13."
         ))
     }
 
@@ -1457,14 +1465,13 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // B-2026-08-02-7 — refuse rather than miscompile when a user
-        // `struct Response` shadowed the builtin client-response layout.
-        // The FFI writes `{ status: i64, body: String, headers: i64 }`; the
-        // user's type is a different shape, and its drop glue frees a `body`
-        // String the client path also owns. That was a silent double free
-        // (and a layout mismatch) with no diagnostic — the worst outcome
-        // available. Bail with the rename, which is the one-line fix.
-        self.reject_shadowed_client_response("Client")?;
+        // B-2026-08-02-7 / -13 — refuse rather than miscompile when a user
+        // struct shadowed one of the stdlib types this path consumes. The
+        // client FFI writes the seeded `Response` / `HttpError` layouts; a
+        // user type of the same name is a different shape whose drop glue
+        // frees a `String` the client path also owns. That was a silent
+        // double free with no diagnostic — the worst outcome available.
+        self.reject_shadowed_prelude_types("Client", &["Response", "HttpError", "Client"])?;
         let expected_args = if method == "post" { 2 } else { 1 };
         if args.len() != expected_args {
             return Err(format!(
@@ -1951,14 +1958,13 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // B-2026-08-02-7 — refuse rather than miscompile when a user
-        // `struct Response` shadowed the builtin client-response layout.
-        // The FFI writes `{ status: i64, body: String, headers: i64 }`; the
-        // user's type is a different shape, and its drop glue frees a `body`
-        // String the client path also owns. That was a silent double free
-        // (and a layout mismatch) with no diagnostic — the worst outcome
-        // available. Bail with the rename, which is the one-line fix.
-        self.reject_shadowed_client_response("Client")?;
+        // B-2026-08-02-7 / -13 — refuse rather than miscompile when a user
+        // struct shadowed one of the stdlib types this path consumes. The
+        // client FFI writes the seeded `Response` / `HttpError` layouts; a
+        // user type of the same name is a different shape whose drop glue
+        // frees a `String` the client path also owns. That was a silent
+        // double free with no diagnostic — the worst outcome available.
+        self.reject_shadowed_prelude_types("Client", &["Response", "HttpError", "Client"])?;
         if args.len() != 2 {
             return Err(format!(
                 "Client.request expects 2 arguments (method, url), got {}",

@@ -507,7 +507,7 @@ fn main() with sends(Network) receives(Network) {
              silently miscompiled into a double free",
         );
         assert!(
-            err.contains("shadows the HTTP client's built-in response type"),
+            err.contains("shadows the built-in stdlib type"),
             "expected the shadowing diagnostic; got: {err}"
         );
     }

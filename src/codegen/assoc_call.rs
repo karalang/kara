@@ -729,6 +729,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload. (Exact regex-crate error-string parity for an INVALID
         // pattern is a later slice; the repro/oracle use valid patterns.)
         if type_name == "Regex" && method == "compile" {
+            // B-2026-08-02-13 — the regex surface consumes the seeded `Regex`,
+            // `RegexError` and `Match` layouts. A user struct of any of those
+            // names shadows them (stdlib and user types share one namespace),
+            // and the mismatch does not degrade gracefully: a user
+            // `struct Match { text: String }` CRASHES codegen with a Rust
+            // panic ("expected the StructValue variant") rather than any
+            // diagnostic. Refuse with the rename instead.
+            self.reject_shadowed_prelude_types("Regex.compile", &["Regex", "RegexError", "Match"])?;
             if _args.len() != 1 {
                 return Err(format!(
                     "Regex.compile expects 1 argument (a pattern String), got {}",

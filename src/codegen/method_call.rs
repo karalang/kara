@@ -1166,6 +1166,17 @@ impl<'ctx> super::Codegen<'ctx> {
             && args.len() == 1
             && self.type_name_of_expr(object).as_deref() == Some("Regex")
         {
+            // B-2026-08-02-13 — a user struct shadowing `Regex` / `RegexError`
+            // / `Match` takes over that stdlib type's codegen identity, and the
+            // mismatch does NOT degrade gracefully here: the receiver arrives
+            // as an i64 rather than the seeded struct and the coercion below
+            // panicked with a Rust backtrace ("expected the StructValue
+            // variant"), which is the one outcome the coding standard rules
+            // out. Refuse with the rename instead.
+            self.reject_shadowed_prelude_types(
+                &format!("Regex.{method}"),
+                &["Regex", "RegexError", "Match"],
+            )?;
             let recv = self.compile_expr(object)?;
             let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
             let s_val = self.compile_expr(&args[0].value)?;
@@ -1211,6 +1222,17 @@ impl<'ctx> super::Codegen<'ctx> {
             && args.len() == 1
             && self.type_name_of_expr(object).as_deref() == Some("Regex")
         {
+            // B-2026-08-02-13 — a user struct shadowing `Regex` / `RegexError`
+            // / `Match` takes over that stdlib type's codegen identity, and the
+            // mismatch does NOT degrade gracefully here: the receiver arrives
+            // as an i64 rather than the seeded struct and the coercion below
+            // panicked with a Rust backtrace ("expected the StructValue
+            // variant"), which is the one outcome the coding standard rules
+            // out. Refuse with the rename instead.
+            self.reject_shadowed_prelude_types(
+                &format!("Regex.{method}"),
+                &["Regex", "RegexError", "Match"],
+            )?;
             let recv = self.compile_expr(object)?;
             let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
             let s_val = self.compile_expr(&args[0].value)?;
@@ -1425,6 +1447,17 @@ impl<'ctx> super::Codegen<'ctx> {
             && args.len() == 2
             && self.type_name_of_expr(object).as_deref() == Some("Regex")
         {
+            // B-2026-08-02-13 — a user struct shadowing `Regex` / `RegexError`
+            // / `Match` takes over that stdlib type's codegen identity, and the
+            // mismatch does NOT degrade gracefully here: the receiver arrives
+            // as an i64 rather than the seeded struct and the coercion below
+            // panicked with a Rust backtrace ("expected the StructValue
+            // variant"), which is the one outcome the coding standard rules
+            // out. Refuse with the rename instead.
+            self.reject_shadowed_prelude_types(
+                &format!("Regex.{method}"),
+                &["Regex", "RegexError", "Match"],
+            )?;
             let recv = self.compile_expr(object)?;
             let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
             let s_val = self.compile_expr(&args[0].value)?;
