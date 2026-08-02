@@ -100,9 +100,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
 | perf | 43 | 1 |
+| crash | 34 | 1 |
 | diagnostics | 34 | 3 |
 | soundness | 33 | 0 |
-| crash | 33 | 0 |
 | other | 12 | 1 |
 | use-after-free | 11 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 613 | 1 |
-| typecheck | 110 | 1 |
-| interp | 103 | 1 |
+| codegen | 614 | 2 |
+| typecheck | 111 | 2 |
+| interp | 104 | 2 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
 | other | 23 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **855 surfaced · 7 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **856 surfaced · 8 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **855 surfaced 
 | B-2026-08-02-4 | 2026-08-02 | resolver+effect | low | FFI lint suggests `allocates(Heap)` but neither the lint nor E0100 mentions the required `effect resource Heap;` declaration — following the compiler's own suggestion verbatim produces an unexplained resolve error | src/effectchecker/extern_ffi.rs KNOWN_ALLOCATING lint text; src/resolver.rs E0100 'undefined effect resource' |
 | B-2026-08-02-2 | 2026-08-02 | typecheck | medium | No implicit `*mut T` → `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*const` foreign param needs an `unsafe { p as *const T }` cast | typechecker call-argument compatibility for raw pointer types |
 | B-2026-08-02-3 | 2026-08-02 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnostic — right message, wrong delivery | src/interpreter/method_call_seq.rs:767 (CString.as_ptr panic!) |
+| B-2026-08-02-5 | 2026-08-02 | typecheck+interp+codegen | medium | Tuple-element assignment targets are accepted by every checking phase but unimplemented on both backends: `t.0 = v` and `o.t.0 = v` ICE the interpreter (unreachable panic + backtrace) while karac build silently drops the store; `t.0.f = v` and `o.t.0.f = v` are silently dropped on BOTH backends (parity in wrongness, stale reads). design.md §7956 classifies tuple indices as first-class mutable places (the call-site mutation-marker rules forward through them), so the class is a missing implementation, not a rejection gap. | src/interpreter/eval_stmt.rs assign_to_place (no TupleIndex arm — a direct TupleIndex target hits the `unreachable!` at the Assign arm's tail: 'unsupported assignment target ... should be caught by parser/typechecker', an ICE with a Rust backtrace on an accepted program); src/codegen/stmts.rs Assign-arm dispatch (no TupleIndex target arm — falls through, the store is silently dropped) and expr_ops.rs nested_store_place_ptr (no TupleIndex link arm — FieldAccess-over-TupleIndex chains silently no-op on BOTH backends) |
 
 ### Fixed (840)
 
