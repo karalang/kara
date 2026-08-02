@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 202 | 0 |
+| miscompile | 203 | 1 |
 | leak | 117 | 0 |
 | double-free | 89 | 1 |
 | codegen-gap | 88 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 615 | 2 |
+| codegen | 616 | 3 |
 | typecheck | 111 | 1 |
 | interp | 105 | 1 |
 | ownership | 37 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **858 surfaced · 7 open · 843 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **859 surfaced · 8 open · 843 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **858 surfaced 
 | B-2026-08-02-2 | 2026-08-02 | typecheck | medium | No implicit `*mut T` → `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*const` foreign param needs an `unsafe { p as *const T }` cast | typechecker call-argument compatibility for raw pointer types |
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-7 | 2026-08-02 | codegen+runtime | high | An IN-PROCESS Kāra client → Kāra server exchange double-frees the response body: the handler's body buffer is freed by the runtime client path AND again by generated code. Proven by size — the double-freed block is byte-for-byte the handler's body length (1-char body → 1-byte block; 36-char body → 36-byte block). Aborts 3/3 runs. | karac_runtime_http_client_get (runtime/src — the client path that frees the response body) and the codegen-side drop emitted for the `Result[Response, …]` a `Client.get` match consumes; Server.serve's handler-response ownership on the same-process path |
+| B-2026-08-02-8 | 2026-08-02 | codegen | medium | Tuple-element COMPOUND assignment (`t.0 += 5`) is silently dropped under karac build — prints the stale value with no diagnostic — while the interpreter applies it (run-vs-build divergence, `karac check`-clean). The B-2026-08-02-5 fix covered plain `=` targets only. Companion LOUD gaps recorded here: `v[0].0 = 5` (tuple element of a Vec element) loud-bails because place_chain_aggregate_llvm_type has no Index arm, and `t.0.push(x)` (method on a tuple-element receiver) loud-bails in method dispatch — both honest errors, not silent drops. | src/codegen/stmts.rs CompoundAssign lowering — its target dispatch predates the B-2026-08-02-5 TupleIndex Assign arm, so a tuple-element compound target falls through and the read-modify-write is SILENTLY dropped under karac build; the interpreter's CompoundAssign routes through assign_to_place (which now carries the TupleIndex arm) and applies it. |
 
 ### Fixed (843)
 
