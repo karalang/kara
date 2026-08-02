@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 54 | 0 |
 | perf | 43 | 1 |
 | crash | 35 | 1 |
+| soundness | 34 | 1 |
 | diagnostics | 34 | 1 |
-| soundness | 33 | 0 |
 | other | 12 | 1 |
 | use-after-free | 11 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 616 | 3 |
-| typecheck | 111 | 1 |
+| typecheck | 112 | 2 |
 | interp | 105 | 1 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **859 surfaced · 8 open · 843 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **860 surfaced · 9 open · 843 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,10 +134,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **859 surfaced 
 | B-2026-08-01-33 | 2026-08-01 | ownership | low | no way to share an immutable `shared struct` across par branches read-only: the >1-branch gate is correct (non-atomic refcount races even on reads) but the only answers are `par struct`+Mutex on an unmutated structure or N private copies — costs #133 its par lane, which its lock-free C mirror can still run | — |
 | B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
-| B-2026-08-02-2 | 2026-08-02 | typecheck | medium | No implicit `*mut T` → `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*const` foreign param needs an `unsafe { p as *const T }` cast | typechecker call-argument compatibility for raw pointer types |
+| B-2026-08-02-2 | 2026-08-02 | typecheck | low | No implicit `*mut T` -> `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*const` foreign param needs an explicit `as *const T` cast (the cast is SAFE — earlier premise that it was unsafe-gated was wrong) | typechecker call-argument compatibility for raw pointer types |
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-7 | 2026-08-02 | codegen+runtime | high | An IN-PROCESS Kāra client → Kāra server exchange double-frees the response body: the handler's body buffer is freed by the runtime client path AND again by generated code. Proven by size — the double-freed block is byte-for-byte the handler's body length (1-char body → 1-byte block; 36-char body → 36-byte block). Aborts 3/3 runs. | karac_runtime_http_client_get (runtime/src — the client path that frees the response body) and the codegen-side drop emitted for the `Result[Response, …]` a `Client.get` match consumes; Server.serve's handler-response ownership on the same-process path |
 | B-2026-08-02-8 | 2026-08-02 | codegen | medium | Tuple-element COMPOUND assignment (`t.0 += 5`) is silently dropped under karac build — prints the stale value with no diagnostic — while the interpreter applies it (run-vs-build divergence, `karac check`-clean). The B-2026-08-02-5 fix covered plain `=` targets only. Companion LOUD gaps recorded here: `v[0].0 = 5` (tuple element of a Vec element) loud-bails because place_chain_aggregate_llvm_type has no Index arm, and `t.0.push(x)` (method on a tuple-element receiver) loud-bails in method dispatch — both honest errors, not silent drops. | src/codegen/stmts.rs CompoundAssign lowering — its target dispatch predates the B-2026-08-02-5 TupleIndex Assign arm, so a tuple-element compound target falls through and the read-modify-write is SILENTLY dropped under karac build; the interpreter's CompoundAssign routes through assign_to_place (which now carries the TupleIndex arm) and applies it. |
+| B-2026-08-02-9 | 2026-08-02 | typecheck | medium | Pointee-changing and const->mut raw pointer casts compile OUTSIDE unsafe blocks — the spec-mandated unsafe gate on `*T as *U` is not enforced (`let w: *const u64 = d as *const u64;` and `let m: *mut u8 = c as *mut u8;` both pass in safe code) | typechecker `as`-cast classification for raw pointer types vs design.md § Unsafe Escape Hatch ('only dereference, arithmetic, unaligned/volatile access, and pointee-changing casts require unsafe { }') |
 
 ### Fixed (843)
 

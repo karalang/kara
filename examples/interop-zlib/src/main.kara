@@ -85,21 +85,17 @@ fn main() {
             // Decompress into a second buffer and verify the round trip.
             // The compressed buffer is a `*mut u8` (we malloc'd it); zlib's
             // prototypes take the source as `*const u8`. There is no implicit
-            // mut-to-const pointer weakening at call sites, so the cast is
-            // explicit (raw-to-raw casts live in `unsafe { }`).
+            // mut-to-const weakening at call sites, so the cast is written
+            // out — and it is SAFE (it only drops write capability on the
+            // same allocation; no `unsafe` block involved).
             let back: *mut u8 = malloc(src_len);
             let mut back_len: usize = src_len;
-            // Safety: mut-to-const weakening of a live malloc'd buffer —
-            // same allocation, no new aliasing.
-            let dest_ro = unsafe { dest as *const u8 };
-            let rc2 = uncompress(back, ptr.mut(back_len), dest_ro, dest_len);
+            let rc2 = uncompress(back, ptr.mut(back_len), dest as *const u8, dest_len);
             if rc2 != 0 {
                 println("uncompress failed");
                 return;
             }
-            // Safety: same mut-to-const weakening, on the decompress buffer.
-            let back_ro = unsafe { back as *const u8 };
-            let crc_out = crc32(0, back_ro, back_len as u32);
+            let crc_out = crc32(0, back as *const u8, back_len as u32);
 
             println(f"original: {src_len as i64} bytes");
             if (dest_len as i64) < (src_len as i64) {
