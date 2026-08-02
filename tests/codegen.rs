@@ -7368,6 +7368,35 @@ fn main() {
         assert_eq!(out, "len 2 v0 10 v1 20\nend\n");
     }
 
+    /// B-2026-08-02-11 — tuple literals now thread the EXPECTED element
+    /// types into inference-driven constructor elements:
+    /// `let t: (Vec[i64], i64) = (Vec.new(), 3)` and
+    /// `Sw { t: (Vec.new(), 3) }` were rejected with the `Vec<?T0>`
+    /// mismatch although the expectation determines ?T0 uniquely. The
+    /// check_expr tuple intercept pushes each expected slot into `X.new()`
+    /// elements only (non-constructor elements keep synthesis mode). Rides
+    /// the B-2026-08-02-10 dispatcher for the follow-on element methods.
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_tuple_literal_expected_elem_threading`.
+    #[test]
+    fn e2e_tuple_literal_expected_elem_threading() {
+        let Some(out) = run_program(
+            "struct Sw { t: (Vec[i64], i64) }\n\
+             fn main() {\n\
+             \x20   let mut t: (Vec[i64], i64) = (Vec.new(), 3);\n\
+             \x20   t.0.push(10);\n\
+             \x20   println(f\"a {t.0.len()} {t.0[0]} {t.1}\");\n\
+             \x20   let mut o = Sw { t: (Vec.new(), 3) };\n\
+             \x20   o.t.0.push(7);\n\
+             \x20   println(f\"b {o.t.0.len()} {o.t.0[0]}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a 1 10 3\nb 1 7\nend\n");
+    }
+
     /// B-2026-08-01-31 — a deep-chain field MOVE-OUT followed by a reassign
     /// (`let x = o.h.r; o.h.r = <new>`). The move zeroes the source field
     /// and disarms the root's bodies walk (root-coarse, exactly the depth-1

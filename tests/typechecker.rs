@@ -35036,3 +35036,32 @@ fn module_binding_heap_type_non_literal_init_withholds_fix_it() {
         "gate would be unnecessary if this passed"
     );
 }
+
+#[test]
+fn tuple_literal_threads_expected_elem_types() {
+    // B-2026-08-02-11 — tuple literals thread the EXPECTED element types
+    // into inference-driven constructor elements: both the let-annotation
+    // and struct-literal-field spellings were rejected with
+    // "expected '(Vec<i64>, i64)', found '(Vec<?T0>, i64)'" although the
+    // expectation determines ?T0 uniquely.
+    typecheck_ok(
+        "struct Sw { t: (Vec[i64], i64) }\n\
+         fn main() {\n\
+             let mut t: (Vec[i64], i64) = (Vec.new(), 3);\n\
+             t.0.push(10);\n\
+             let mut o = Sw { t: (Vec.new(), 3) };\n\
+             o.t.0.push(7);\n\
+             println(f\"{t.1} {o.t.0.len()}\");\n\
+         }",
+    );
+    // The intercept must not swallow genuine mismatches: a wrong
+    // NON-constructor element still reports through the caller's
+    // compatibility check.
+    assert!(
+        !typecheck_errors(
+            "fn main() { let t: (Vec[i64], i64) = (Vec.new(), \"x\"); println(t.1); }"
+        )
+        .is_empty(),
+        "wrong non-constructor element must still be rejected"
+    );
+}

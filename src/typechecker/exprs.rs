@@ -326,6 +326,58 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-08-02-11 — tuple LITERALS at check-mode: push each expected
+        // element type into elements that are themselves type-INFERRED
+        // collection constructors (`(Vec.new(), 3)` against
+        // `(Vec[i64], i64)`, at a let annotation or a struct-literal field),
+        // which cannot resolve without the expectation — the tuple sibling
+        // of the Ok/Some payload and bare-constructor short-circuits here,
+        // with the same narrow scoping: a non-constructor element keeps
+        // synthesis mode so integer handling is unchanged, and the returned
+        // Tuple of per-element types still flows through the caller's
+        // compatibility check so a genuine mismatch elsewhere reports.
+        if let (ExprKind::Tuple(elems), Type::Tuple(exp_elems)) = (&expr.kind, expected) {
+            if !elems.is_empty() && elems.len() == exp_elems.len() {
+                let elem_is_inferred_ctor = |e: &Expr| -> bool {
+                    matches!(
+                        &e.kind,
+                        ExprKind::Call { callee, args }
+                            if args.is_empty()
+                                && matches!(
+                                    &callee.kind,
+                                    ExprKind::Path { segments, .. }
+                                        if segments.len() == 2 && segments[1] == "new"
+                                )
+                    )
+                };
+                if elems.iter().any(elem_is_inferred_ctor) {
+                    let types: Vec<Type> = elems
+                        .iter()
+                        .zip(exp_elems.iter())
+                        .map(|(e, slot)| {
+                            if elem_is_inferred_ctor(e) {
+                                self.check_expr(e, slot)
+                            } else {
+                                self.infer_expr(e)
+                            }
+                        })
+                        .collect();
+                    let result = Type::Tuple(types);
+                    // Early-return ONLY when the assembled tuple satisfies the
+                    // expectation — the Let/field callers trust check_expr's
+                    // return, so an unconditional return would swallow a
+                    // genuine mismatch in a non-constructor element
+                    // (`(Vec.new(), "x")` against `(Vec[i64], i64)`). On
+                    // mismatch, fall through to the generic path, which
+                    // re-infers and reports the standard expected/found error.
+                    if super::types::types_compatible(&result, expected) {
+                        self.record_expr_type(&expr.span, &result);
+                        return result;
+                    }
+                }
+            }
+        }
+
         // Built-in collection constructors at check-mode: `Vec.new()` /
         // `VecDeque.new()` / `Set.new()` / `SortedSet.new()` / `Map.new()`
         // resolve to the expected type directly when the surface names

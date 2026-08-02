@@ -27500,6 +27500,26 @@ fn test_tuple_index_compound_and_vec_elem_targets() {
     );
 }
 
+/// B-2026-08-02-11 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_tuple_literal_expected_elem_threading`, same source and expected
+/// string (the typecheck fix unblocks both spellings for both backends).
+#[test]
+fn test_tuple_literal_expected_elem_threading() {
+    assert_eq!(
+        run("struct Sw { t: (Vec[i64], i64) }\n\
+             fn main() {\n\
+                 let mut t: (Vec[i64], i64) = (Vec.new(), 3);\n\
+                 t.0.push(10);\n\
+                 println(f\"a {t.0.len()} {t.0[0]} {t.1}\");\n\
+                 let mut o = Sw { t: (Vec.new(), 3) };\n\
+                 o.t.0.push(7);\n\
+                 println(f\"b {o.t.0.len()} {o.t.0[0]}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a 1 10 3\nb 1 7\nend\n"
+    );
+}
+
 /// B-2026-08-02-10 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_tuple_elem_method_receivers`, same source and expected string
 /// (the interp ran these already — this pins the parity codegen now
