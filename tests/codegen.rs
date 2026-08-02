@@ -7283,6 +7283,48 @@ fn main() {
         assert_eq!(out, "a\nheld 5\ndrop 5 y5\nps 4 w6\nend\n");
     }
 
+    /// B-2026-08-02-15 — an indexed field store whose INDEX is not a bare
+    /// identifier / int literal (`v[f()].field = x`) was silently dropped on
+    /// every codegen surface, and the subscript was never evaluated at all, so
+    /// an observable side effect inside it vanished along with the write.
+    /// `field_chain_place_ptr`'s Index arm declines a non-pure subscript by
+    /// design (`vec_index_elem_ptr` re-evaluates it) and
+    /// `field_rooted_index_place_ptr` declines a bare-identifier container, so
+    /// both resolvers returned None and the store exited through
+    /// `compile_field_store`'s no-op tail — the same tail as B-2026-08-01-35 and
+    /// B-2026-07-13-10, uncovered cell: identifier-rooted container x non-pure
+    /// index. The index is now materialized ONCE into a temp and the resolvers
+    /// retried against it, so the write lands and the call runs exactly once.
+    ///
+    /// The interpreter evaluates the subscript TWICE for this shape (a separate
+    /// open defect, the second leg of the entry), so this pins the codegen
+    /// surfaces only — `eval` must appear exactly once per store.
+    #[test]
+    fn e2e_indexed_field_store_non_pure_index_runs_once() {
+        let Some(out) = run_program(
+            "struct P { mut id: i64, mut name: String }\n\
+             struct O { mut hs: Vec[P] }\n\
+             fn idx() -> i64 {\n\
+             \x20   println(\"eval\");\n\
+             \x20   return 0;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[P] = Vec.new();\n\
+             \x20   v.push(P { id: 1, name: \"a\" });\n\
+             \x20   v[idx()].id = 9;\n\
+             \x20   println(f\"v={v[0].id}\");\n\
+             \x20   let mut o = O { hs: Vec.new() };\n\
+             \x20   o.hs.push(P { id: 1, name: \"a\" });\n\
+             \x20   o.hs[idx()].name = f\"b\";\n\
+             \x20   println(f\"o={o.hs[0].name}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // One `eval` per store — never zero (dropped) and never two (re-evaluated).
+        assert_eq!(out, "eval\nv=9\neval\no=b\n");
+    }
+
     /// B-2026-08-02-5 — tuple-element assignment targets (`t.0 = v`,
     /// `t.0.f = v`, `o.t.0 = v`, `o.t.0.f = v`) were accepted by every
     /// checking phase but unimplemented on both backends: direct

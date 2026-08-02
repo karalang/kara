@@ -1995,9 +1995,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // skipped, and the store exited through the no-op tail — the
             // write was SILENTLY LOST (interp applied it; reads were fine).
             // Fall through to the field-rooted resolver below.
-            ExprKind::Index { .. } => match self.field_chain_place_ptr(expr) {
+            ExprKind::Index { object, index } => match self.field_chain_place_ptr(expr) {
                 Some(p) => Some(p),
-                None => self.field_rooted_index_place_ptr(expr),
+                None => match self.field_rooted_index_place_ptr(expr) {
+                    Some(p) => Some(p),
+                    // B-2026-08-02-15: NON-PURE index (`v[f()].field = x`).
+                    // Both resolvers above admit only a bare identifier / int
+                    // literal subscript — `field_chain_place_ptr` guards it
+                    // deliberately because `vec_index_elem_ptr` re-evaluates the
+                    // index — so a call-valued subscript declined on both and the
+                    // store fell out the no-op tail, taking the index's SIDE
+                    // EFFECTS with it (the call never ran at all).
+                    None => self.impure_index_store_place_ptr(object, index, expr),
+                },
             },
             // B-2026-08-02-5: a tuple-element link (`t.0.f = v` /
             // `o.t.0.f = v`) — the chain walker's TupleIndex arm GEPs the
@@ -2054,6 +2064,89 @@ impl<'ctx> super::Codegen<'ctx> {
     /// store's single place resolution), so arbitrary index expressions are
     /// safe — no re-evaluation rule applies. A non-Vec container (VecDeque /
     /// Slice / Map) yields None and keeps the caller's status quo.
+    /// B-2026-08-02-15 — place pointer for an indexed field store whose INDEX is
+    /// not a bare identifier / int literal (`v[f()].field = x`).
+    ///
+    /// Both sibling resolvers admit only a pure subscript. That restriction is
+    /// deliberate, not an oversight: [`Self::vec_index_elem_ptr`] RE-EVALUATES
+    /// the index to recompute the element pointer, so an impure one would run
+    /// twice. But declining left the store with nowhere to go, and it exited
+    /// through `compile_field_store`'s no-op tail — silently, on every codegen
+    /// surface, with the subscript never evaluated at all, so an observable side
+    /// effect inside it vanished along with the write.
+    ///
+    /// Evaluate the index EXACTLY ONCE into a stack temp and retry the resolvers
+    /// against a synthesized identifier subscript. That is both the fix and the
+    /// reason the purity guard no longer bites: with the value materialized,
+    /// re-evaluation is a variable load.
+    ///
+    /// Gated on container shapes the resolvers can actually place, so a store
+    /// that would still fail does not gain a side effect it never had.
+    fn impure_index_store_place_ptr(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+        expr: &Expr,
+    ) -> Option<PointerValue<'ctx>> {
+        // Pure subscripts are already handled by the callers above.
+        if matches!(index.kind, ExprKind::Identifier(_) | ExprKind::Integer(..)) {
+            return None;
+        }
+        match &object.kind {
+            // Mirror `field_chain_place_ptr`'s Index-arm guards exactly: a
+            // `ref`-param root must not be GEP'd (B-2026-07-21-5/-6), and an
+            // array-slot binding has a different representation.
+            ExprKind::Identifier(v) => {
+                if !self.vec_elem_types.contains_key(v.as_str())
+                    || self.ref_params.contains_key(v.as_str())
+                    || self
+                        .variables
+                        .get(v.as_str())
+                        .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)))
+                {
+                    return None;
+                }
+            }
+            // `field_rooted_index_place_ptr` resolves the container itself and
+            // returns None for a non-Vec field.
+            ExprKind::FieldAccess { .. } => {}
+            _ => return None,
+        }
+
+        let fn_val = self.current_fn?;
+        let idx_raw = self.compile_expr(index).ok()?;
+        let idx_val = self.coerce_to_i64(idx_raw).ok()?;
+        let i64_t = self.context.i64_type();
+        let synth = format!("__idx_once_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let slot = self.create_entry_alloca(fn_val, &synth, i64_t.into());
+        self.builder.build_store(slot, idx_val).ok()?;
+        self.variables.insert(
+            synth.clone(),
+            super::state::VarSlot {
+                ptr: slot,
+                ty: i64_t.into(),
+            },
+        );
+
+        let rewritten = Expr {
+            kind: ExprKind::Index {
+                object: Box::new(object.clone()),
+                index: Box::new(Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: index.span.clone(),
+                }),
+            },
+            span: expr.span.clone(),
+        };
+        let placed = match self.field_chain_place_ptr(&rewritten) {
+            Some(p) => Some(p),
+            None => self.field_rooted_index_place_ptr(&rewritten),
+        };
+        self.variables.remove(&synth);
+        placed
+    }
+
     fn field_rooted_index_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         let ExprKind::Index { object, index } = &expr.kind else {
             return None;
