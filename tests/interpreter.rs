@@ -27578,6 +27578,37 @@ fn test_expression_position_container_ctors() {
     );
 }
 
+/// B-2026-08-02-14 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_generic_parent_drop_field_bodies`, same source and expected
+/// string. A REAL pin on this backend too: the interp's walk was
+/// declared-type-driven and skipped bare-generic-param fields (the
+/// pre-revision B-2026-07-29-39 scoping), so it was silent pre-fix.
+#[test]
+fn test_generic_parent_drop_field_bodies() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Box2[T] { item: T, tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let b: Box2[Res] = Box2 { item: Res { id: 3, name: f\"ggg{3}\" }, tag: 1 };\n\
+                     println(f\"tag {b.tag}\");\n\
+                 }\n\
+                 println(\"mid\");\n\
+                 {\n\
+                     let mut v: Vec[Box2[Res]] = Vec.new();\n\
+                     v.push(Box2 { item: Res { id: 4, name: f\"hhhhh{4}\" }, tag: 2 });\n\
+                     println(f\"vlen {v.len()}\");\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ntag 1\ndrop 3 ggg3\nmid\nvlen 1\ndrop 4 hhhhh4\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in

@@ -78429,6 +78429,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_parent_drop_field_bodies() {
+        // B-2026-08-02-14 — a Drop-carrying field of a GENERIC-mono parent
+        // (`Box2[Res]`): the name-keyed field-bodies walk saw only the
+        // declared bare param (`item: T`) and stayed silent at owner death
+        // (both backends), and the Vec-element leg additionally leaked the
+        // element's String buffer under AOT (base struct synthesis read
+        // `T` as a scalar). The subst-aware walk fires both bodies and the
+        // mono element drop frees the heap — matching the non-generic
+        // control byte-for-byte.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Box2[T] { item: T, tag: i64 }
+fn main() {
+    println("a");
+    {
+        let b: Box2[Res] = Box2 { item: Res { id: 3, name: f"ggg{3}" }, tag: 1 };
+        println(f"tag {b.tag}");
+    }
+    println("mid");
+    {
+        let mut v: Vec[Box2[Res]] = Vec.new();
+        v.push(Box2 { item: Res { id: 4, name: f"hhhhh{4}" }, tag: 2 });
+        println(f"vlen {v.len()}");
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "a\ntag 1\ndrop 3 ggg3\nmid\nvlen 1\ndrop 4 hhhhh4\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_owned_string_param_tail_return() {
         // `fn id(s: String) -> String { s }` — the returned value must
         // be a copy: the caller that passed `s` frees its buffer AND the

@@ -2330,12 +2330,38 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// The field indices of `struct_name` whose declared type must run a user
-    /// `impl Drop` when the struct dies (B-2026-07-29-39). Companion of
-    /// [`Self::type_runs_user_drop`]; drives both the "does this struct need
-    /// field drop glue at all" decision and the emit order in
-    /// [`Self::emit_user_drop_field_bodies_fn`].
-    pub(super) fn user_drop_field_indices(&self, struct_name: &str) -> Vec<usize> {
+    /// Resolve a declared field type NAME through a generic-mono subst: a
+    /// bare param name (`T` with `T → Res`) resolves to the argument's last
+    /// path segment; anything else passes through unchanged
+    /// (B-2026-08-02-14).
+    pub(super) fn resolve_field_head_mono(
+        &self,
+        name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> String {
+        if let Some(te) = subst.get(name) {
+            if let TypeKind::Path(p) = &te.kind {
+                if let Some(last) = p.segments.last() {
+                    return last.clone();
+                }
+            }
+        }
+        name.to_string()
+    }
+
+    /// Subst-aware sibling of [`Self::user_drop_field_indices`]
+    /// (B-2026-08-02-14): a GENERIC parent's declared field names are bare
+    /// params (`item: T`), so the name-keyed walk never saw the mono
+    /// binding's Drop-carrying argument (`Box2[Res]` registered no bodies —
+    /// the field body was silent at owner death on both backends). Resolve
+    /// each field head (and each `Vec[T]`-element head) through the subst
+    /// before the drop-relevance check. An empty subst reproduces the
+    /// name-keyed behavior exactly.
+    pub(super) fn user_drop_field_indices_mono(
+        &self,
+        struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Vec<usize> {
         let Some(fields) = self.struct_field_type_names.get(struct_name) else {
             return Vec::new();
         };
@@ -2343,18 +2369,41 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .enumerate()
             .filter_map(|(idx, name)| {
-                let direct = name
-                    .as_deref()
-                    .is_some_and(|n| self.type_runs_user_drop(n, &mut Vec::new()));
+                let direct = name.as_deref().is_some_and(|n| {
+                    let resolved = self.resolve_field_head_mono(n, subst);
+                    self.type_runs_user_drop(&resolved, &mut Vec::new())
+                });
                 let vec_elem = self
                     .struct_field_type_exprs
                     .get(struct_name)
                     .and_then(|tes| tes.get(idx))
                     .and_then(Self::vec_field_elem_head)
-                    .is_some_and(|e| self.type_runs_user_drop(&e, &mut Vec::new()));
+                    .is_some_and(|e| {
+                        let resolved = self.resolve_field_head_mono(&e, subst);
+                        self.type_runs_user_drop(&resolved, &mut Vec::new())
+                    });
                 (direct || vec_elem).then_some(idx)
             })
             .collect()
+    }
+
+    /// Subst-aware sibling of [`Self::type_runs_user_drop`]
+    /// (B-2026-08-02-14): true when the MONO instantiation of
+    /// `struct_name` under `subst` carries user-Drop work its fields'
+    /// declared (param) names hide. Empty subst delegates to the
+    /// name-keyed walk.
+    pub(super) fn type_runs_user_drop_mono(
+        &self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> bool {
+        if subst.is_empty() {
+            return self.type_runs_user_drop(type_name, &mut Vec::new());
+        }
+        self.type_runs_user_drop(type_name, &mut Vec::new())
+            || !self
+                .user_drop_field_indices_mono(type_name, subst)
+                .is_empty()
     }
 
     /// B-2026-07-29-39 — emit `__karac_dropbodies_<T>(self: *mut T)`: run the
@@ -2450,7 +2499,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.shared_types.contains_key(struct_name) {
             return None;
         }
-        let field_idxs = self.user_drop_field_indices(struct_name);
+        // Subst-aware indices (B-2026-08-02-14): a generic parent's declared
+        // field names are bare params, so the name-keyed walk returned an
+        // empty set for `Box2[Res]` and this fn declined — the mono
+        // binding's Drop field was silent at owner death.
+        let field_idxs = self.user_drop_field_indices_mono(struct_name, subst);
         if field_idxs.is_empty() {
             return None;
         }
@@ -2494,6 +2547,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(Some(field_type)) = field_kinds.get(field_idx).cloned() else {
                 continue;
             };
+            // Resolve a bare-param field name through the mono subst
+            // (`item: T` under `T → Res` dispatches `Res.drop`, not the
+            // non-existent `T.drop`) — B-2026-08-02-14.
+            let field_type = self.resolve_field_head_mono(&field_type, subst);
             let field_ptr = self
                 .builder
                 .build_struct_gep(
@@ -5446,6 +5503,25 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_name: &str,
         elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_vec_elem_user_drop_bodies_fn_mono(
+            elem_name,
+            elem_ty,
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    /// Subst-aware sibling (B-2026-08-02-14): a GENERIC element
+    /// (`Vec[Box2[Res]]`) needs its field-bodies walk resolved through the
+    /// instantiation's subst — the name-keyed walker saw `item: T` and
+    /// declined, so the element's Drop-bearing field was silent at owner
+    /// death. The mono suffix keeps `Box2[Res]` / `Box2[i64]` walkers
+    /// distinct symbols. Empty subst reproduces the name-keyed behavior.
+    pub(super) fn emit_vec_elem_user_drop_bodies_fn_mono(
+        &mut self,
+        elem_name: &str,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
         if self.shared_types.contains_key(elem_name) {
             return None;
         }
@@ -5453,8 +5529,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .program_snapshot
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(elem_name));
-        let field_bodies =
-            self.emit_user_drop_field_bodies_fn(elem_name, &std::collections::HashMap::new());
+        let field_bodies = self.emit_user_drop_field_bodies_fn(elem_name, subst);
         let body_fn = if owns_body {
             self.module.get_function(&format!("{elem_name}.drop"))
         } else {
@@ -5464,7 +5539,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
 
-        let fn_name = format!("__karac_dropelems_{elem_name}");
+        let mono_suffix: String = self
+            .struct_generic_params
+            .get(elem_name)
+            .cloned()
+            .map(|params| {
+                params
+                    .iter()
+                    .filter_map(|p| subst.get(p))
+                    .map(|te| format!("${}", Self::drop_mono_mangle_component(te)))
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        let fn_name = format!("__karac_dropelems_{elem_name}{mono_suffix}");
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }

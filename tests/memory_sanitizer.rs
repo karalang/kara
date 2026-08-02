@@ -17141,6 +17141,46 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-14 — a GENERIC-mono parent's Drop-carrying field: the
+    /// subst-aware bodies walk fires exactly once per owner death, and the
+    /// mono element drop frees the element's String buffer the base
+    /// synthesis used to leak (`Vec[Box2[Res]]` leaked one name buffer per
+    /// element) — no leak, no double-free, LSan-clean.
+    #[test]
+    fn asan_generic_parent_drop_field_bodies_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Box2[T] { item: T, tag: i64 }
+fn main() {
+    println("a");
+    {
+        let b: Box2[Res] = Box2 { item: Res { id: 3, name: f"ggg{3}" }, tag: 1 };
+        println(f"tag {b.tag}");
+    }
+    {
+        let mut v: Vec[Box2[Res]] = Vec.new();
+        v.push(Box2 { item: Res { id: 4, name: f"hhhhh{4}" }, tag: 2 });
+        println(f"vlen {v.len()}");
+    }
+    println("end");
+}
+"#,
+            &[
+                "a",
+                "tag 1",
+                "drop 3 ggg3",
+                "vlen 1",
+                "drop 4 hhhhh4",
+                "end",
+            ],
+            "generic_parent_drop_field_bodies_freed",
+        );
+    }
+
     /// B-2026-08-02-12 — `Map.new()` / `Set.new()` in EXPRESSION position
     /// (push args, `Vec.filled` fill values) used to lower to a NULL
     /// handle (assoc-call `i64 0` default), segfaulting at the first

@@ -1172,6 +1172,15 @@ impl<'a> super::Interpreter<'a> {
             .iter()
             .map(|f| (f.name.clone(), Self::declared_field_type_head(&f.ty)))
             .collect();
+        // The struct's own generic param names (B-2026-08-02-14): a field
+        // whose declared head is one of these is type-ERASED at the decl —
+        // see the scoping note below for why such fields now fire
+        // value-driven.
+        let generic_param_names: Vec<String> = def
+            .generic_params
+            .as_ref()
+            .map(|gp| gp.params.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
         for (field, declared_head) in declared.into_iter().rev() {
             let Some(field_value) = fields.get(&field).cloned() else {
                 continue;
@@ -1214,19 +1223,24 @@ impl<'a> super::Interpreter<'a> {
             else {
                 continue;
             };
-            // SCOPING DECISION (B-2026-07-29-39 asked for one explicitly): the
-            // walk is DECLARED-type-driven, not value-driven. A field declared
-            // as a bare generic param — `struct W[T] { r: T }` instantiated at a
-            // Drop type — is skipped, because codegen reads the declared name
-            // (`struct_field_type_names`) and simply cannot see through the
-            // erasure at the point its glue is emitted. The interpreter, which
-            // holds the runtime value, WOULD see it; letting it fire would make
-            // `karac run` and `karac build` disagree, and the whole point of the
-            // parity gate is that they do not. So both backends skip it and the
-            // residual is a LEAK, the safe direction. Comparing the declared
-            // head against the runtime struct name is what implements that: they
-            // differ exactly when the declared type was erased.
-            if declared_head.as_deref() != Some(field_type.as_str()) {
+            // SCOPING DECISION (B-2026-07-29-39, REVISED by B-2026-08-02-14):
+            // the walk is DECLARED-type-driven — comparing the declared head
+            // against the runtime struct name skips fields whose declared
+            // type doesn't match the value. ONE exception now fires
+            // value-driven: a field declared as a bare GENERIC PARAM of this
+            // struct (`struct W[T] { r: T }` instantiated at a Drop type).
+            // The original rule skipped it because codegen read only the
+            // declared name and couldn't see through the erasure — firing
+            // here would have broken run/build parity. Codegen's walk is now
+            // mono-aware (`user_drop_field_indices_mono` resolves `T` through
+            // the binding's instantiation), so BOTH backends fire and parity
+            // holds in the firing direction instead of the silent-leak one.
+            // Any other mismatch (a genuinely differently-typed value) keeps
+            // the skip.
+            let declared_is_own_param = declared_head
+                .as_deref()
+                .is_some_and(|h| generic_param_names.iter().any(|p| p == h));
+            if declared_head.as_deref() != Some(field_type.as_str()) && !declared_is_own_param {
                 continue;
             }
             if self.program.drop_method_keys.contains_key(field_type) {

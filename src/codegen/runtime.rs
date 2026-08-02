@@ -2162,6 +2162,17 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.struct_owns_shared_field(&name, &mut Vec::new()) {
                 return self.emit_vec_elem_struct_with_shared_drop_fn(&name);
             }
+            // GENERIC element (B-2026-08-02-14): `Vec[Box2[Res]]` used to get
+            // the BASE synthesis, which reads `item: T` as a scalar — the
+            // mono binding's heap field (Res's String) was never freed (one
+            // buffer leaked per element) and its Drop body never ran. Derive
+            // the subst from the element's instantiated TE and emit the
+            // per-monomorph drop instead; an empty subst (non-generic
+            // element) keeps the base path byte-for-byte.
+            let subst = self.generic_struct_subst_from_inst(&name, elem_te);
+            if !subst.is_empty() {
+                return self.emit_struct_drop_synthesis_mono(&name, &subst);
+            }
             return self.emit_struct_drop_synthesis(&name);
         }
         if self.enum_layouts.contains_key(&name) {

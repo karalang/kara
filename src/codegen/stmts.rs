@@ -5014,8 +5014,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                         _ => None,
                                     });
                                 if let Some(en) = elem_struct_name {
-                                    if let Some(bodies) =
-                                        self.emit_vec_elem_user_drop_bodies_fn(&en, elem_ty)
+                                    // Generic element (B-2026-08-02-14):
+                                    // derive the subst from the element's
+                                    // instantiated TE so `Vec[Box2[Res]]`
+                                    // fires the mono field-bodies walk.
+                                    let elem_subst = elem_te
+                                        .as_ref()
+                                        .map(|te| self.generic_struct_subst_from_inst(&en, te))
+                                        .unwrap_or_default();
+                                    if let Some(bodies) = self
+                                        .emit_vec_elem_user_drop_bodies_fn_mono(
+                                            &en,
+                                            elem_ty,
+                                            &elem_subst,
+                                        )
                                     {
                                         self.track_user_drop_var_with_fn(
                                             &en, var_name, slot_ptr, bodies,
@@ -5651,10 +5663,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         // memory, so `track_struct_var_inst` still picks its
                         // COMBINED drop (value drop + shared-field rc-dec
                         // walker) exactly as before.
+                        // Mono-aware (B-2026-08-02-14): a GENERIC parent's
+                        // declared field names are bare params, so the
+                        // name-keyed `type_runs_user_drop("Box2")` never saw
+                        // the binding's Drop-carrying argument (`Box2[Res]`)
+                        // and the field body was silent at owner death.
+                        // Resolve through the binding's recorded
+                        // instantiation before deciding.
+                        let field_drop_subst = self
+                            .enum_inst_var_types
+                            .get(var_name.as_str())
+                            .cloned()
+                            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+                            .unwrap_or_default();
                         let has_field_user_drop = !has_user_drop
                             && self.struct_types.contains_key(&struct_name)
                             && !self.shared_types.contains_key(&struct_name)
-                            && self.type_runs_user_drop(&struct_name, &mut Vec::new());
+                            && self.type_runs_user_drop_mono(&struct_name, &field_drop_subst);
                         // Move-suppression: when the RHS is an
                         // Identifier, the source binding's value has
                         // been moved into the destination. The source

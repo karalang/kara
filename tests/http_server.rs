@@ -3631,6 +3631,7 @@ fn main() with sends(Network) receives(Network) {{
     /// Timed variant of `h2c_two_streams`: the clock starts AFTER the
     /// h2 handshake settles, so it measures only the two multiplexed
     /// request/response exchanges.
+    #[allow(clippy::type_complexity)]
     fn h2c_two_streams_timed(
         port: u16,
         p1: &str,
