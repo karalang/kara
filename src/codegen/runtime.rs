@@ -5446,18 +5446,13 @@ impl<'ctx> super::Codegen<'ctx> {
         match &value.kind {
             ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
             ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
-            ExprKind::StructLiteral { fields, .. } => {
-                for f in fields {
-                    if let ExprKind::Identifier(n) = &f.value.kind {
-                        self.suppress_container_elem_bodies_for_var(n);
-                    }
-                }
-            }
-            ExprKind::Tuple(elems) => {
-                for e in elems {
-                    if let ExprKind::Identifier(n) = &e.kind {
-                        self.suppress_container_elem_bodies_for_var(n);
-                    }
+            // Recursive through NESTED literals (B-2026-08-02-23 leg 1) —
+            // see `collect_aggregate_literal_sources`.
+            ExprKind::StructLiteral { .. } | ExprKind::Tuple(_) => {
+                let mut sources = Vec::new();
+                Self::collect_aggregate_literal_sources(value, &mut sources);
+                for n in sources {
+                    self.suppress_container_elem_bodies_for_var(&n);
                 }
             }
             _ => {}
@@ -5536,20 +5531,37 @@ impl<'ctx> super::Codegen<'ctx> {
             // moved-from slot (printing an empty name). Safe because the
             // container's element walk is now the owner on both axes — the
             // vec-of-tuple bodies walker and the tuple element drop.
+            ExprKind::StructLiteral { .. } | ExprKind::Tuple(_) => {
+                let mut sources = Vec::new();
+                Self::collect_aggregate_literal_sources(e, &mut sources);
+                for n in sources {
+                    self.suppress_user_drop_for_var(&n);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every bare-identifier source moved into an aggregate literal,
+    /// RECURSIVELY through nested literals (B-2026-08-02-23 leg 1): the
+    /// depth-1 walk saw only the outer literal's immediate fields, so
+    /// `v.push(Outer { inner: Inner { xs: xs } })` never reached `xs` and its
+    /// element body fired twice — once at `xs`'s death, once at the
+    /// container's. Nesting depth is bounded by the expression's own finite
+    /// structure, so the recursion terminates; non-literal field values
+    /// (calls, field accesses, indexes) are not move sources of a NAMED
+    /// binding and are skipped.
+    pub(super) fn collect_aggregate_literal_sources(e: &Expr, out: &mut Vec<String>) {
+        match &e.kind {
+            ExprKind::Identifier(n) => out.push(n.clone()),
             ExprKind::StructLiteral { fields, .. } => {
                 for f in fields {
-                    if let ExprKind::Identifier(n) = &f.value.kind {
-                        let n = n.clone();
-                        self.suppress_user_drop_for_var(&n);
-                    }
+                    Self::collect_aggregate_literal_sources(&f.value, out);
                 }
             }
             ExprKind::Tuple(elems) => {
                 for el in elems {
-                    if let ExprKind::Identifier(n) = &el.kind {
-                        let n = n.clone();
-                        self.suppress_user_drop_for_var(&n);
-                    }
+                    Self::collect_aggregate_literal_sources(el, out);
                 }
             }
             _ => {}

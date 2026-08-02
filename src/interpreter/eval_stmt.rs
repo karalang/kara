@@ -1986,18 +1986,36 @@ impl<'a> super::Interpreter<'a> {
         match &value.kind {
             ExprKind::Identifier(n) => self.record_container_move_source_name(n),
             ExprKind::SelfValue => self.record_container_move_source_name("self"),
+            // Recursive through NESTED literals (B-2026-08-02-23 leg 1) —
+            // the codegen twin is `collect_aggregate_literal_sources`.
+            ExprKind::StructLiteral { .. } | ExprKind::Tuple(_) => {
+                let mut names = Vec::new();
+                Self::collect_aggregate_literal_sources(value, &mut names);
+                for n in names {
+                    self.record_container_move_source_name(&n);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every bare-identifier source moved into an aggregate literal,
+    /// RECURSIVELY through nested literals (B-2026-08-02-23 leg 1): the
+    /// depth-1 walk saw only the outer literal's immediate fields, so
+    /// `v.push(Outer { inner: Inner { xs: xs } })` never reached `xs`.
+    /// Codegen twin: `collect_aggregate_literal_sources` in runtime.rs —
+    /// the two must enumerate the same sources or the disarm diverges.
+    pub(crate) fn collect_aggregate_literal_sources(e: &Expr, out: &mut Vec<String>) {
+        match &e.kind {
+            ExprKind::Identifier(n) => out.push(n.clone()),
             ExprKind::StructLiteral { fields, .. } => {
                 for f in fields {
-                    if let ExprKind::Identifier(n) = &f.value.kind {
-                        self.record_container_move_source_name(n);
-                    }
+                    Self::collect_aggregate_literal_sources(&f.value, out);
                 }
             }
             ExprKind::Tuple(elems) => {
-                for e in elems {
-                    if let ExprKind::Identifier(n) = &e.kind {
-                        self.record_container_move_source_name(n);
-                    }
+                for el in elems {
+                    Self::collect_aggregate_literal_sources(el, out);
                 }
             }
             _ => {}
@@ -2089,23 +2107,11 @@ impl<'a> super::Interpreter<'a> {
     /// (it disarms the source's OWN body too). Codegen twin: the
     /// StructLiteral / Tuple arms of `disarm_container_bodies_for_arg`.
     pub(crate) fn record_container_move_sources_in_aggregate_arg(&mut self, e: &Expr) {
-        let names: Vec<String> = match &e.kind {
-            ExprKind::StructLiteral { fields, .. } => fields
-                .iter()
-                .filter_map(|f| match &f.value.kind {
-                    ExprKind::Identifier(n) => Some(n.clone()),
-                    _ => None,
-                })
-                .collect(),
-            ExprKind::Tuple(elems) => elems
-                .iter()
-                .filter_map(|el| match &el.kind {
-                    ExprKind::Identifier(n) => Some(n.clone()),
-                    _ => None,
-                })
-                .collect(),
-            _ => return,
-        };
+        if !matches!(&e.kind, ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)) {
+            return;
+        }
+        let mut names = Vec::new();
+        Self::collect_aggregate_literal_sources(e, &mut names);
         for n in names {
             self.record_container_move_source_name(&n);
             // B-2026-08-02-22 — a source carrying its OWN `impl Drop` needs

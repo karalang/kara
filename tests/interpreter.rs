@@ -27748,6 +27748,34 @@ fn test_tuple_field_parent_displaced_and_vec_elem_bodies() {
 /// sorted walker; the memory half is AOT-only and pinned by the asan
 /// twin).
 #[test]
+fn test_nested_literal_move_source_disarm() {
+    // B-2026-08-02-23 leg 1 — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_nested_literal_move_source_disarm`, same source and expected
+    // string. Both backends double-fired pre-fix (their walks were
+    // depth-1 in the same way), so parity diffing was blind to it.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Inner { xs: Vec[Res] }\n\
+             struct Outer { inner: Inner, tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut v: Vec[Outer] = Vec.new();\n\
+                     let mut xs: Vec[Res] = Vec.new();\n\
+                     xs.push(Res { id: 1, name: f\"n{1}\" });\n\
+                     v.push(Outer { inner: Inner { xs: xs }, tag: 5 });\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n1\ndrop 1 n1\nend\n"
+    );
+}
+
+#[test]
 fn test_map_value_struct_vec_field_element_bodies() {
     // B-2026-08-02-24 — a Map VALUE that is a struct carrying its Drop only
     // through a Vec FIELD's elements. The interpreter's type-level gate

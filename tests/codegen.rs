@@ -78634,6 +78634,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_literal_move_source_disarm() {
+        // B-2026-08-02-23 leg 1 — the aggregate-literal source disarm was
+        // depth-1: `v.push(Outer { inner: Inner { xs: xs } })` inspected only
+        // the OUTER literal's immediate fields, and `inner` is a
+        // StructLiteral rather than an Identifier, so `xs` was never
+        // disarmed and its element body fired twice (once at xs's death,
+        // once at the container's) identically on both backends — a
+        // parity-equal double that only a fire-COUNT oracle catches.
+        // Exactly one fire, at the container's death, is correct.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Inner { xs: Vec[Res] }
+struct Outer { inner: Inner, tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut v: Vec[Outer] = Vec.new();
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"n{1}" });
+        v.push(Outer { inner: Inner { xs: xs }, tag: 5 });
+        println(v.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "a\n1\ndrop 1 n1\nend");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_of_tuple_element_drop_bodies() {
         // B-2026-08-02-22 — `Vec[(Res, i64)]`: the container's per-element
         // machinery had no tuple arm on either axis, so the element's Drop
