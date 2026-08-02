@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 89 | 1 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 74 | 2 |
-| run-vs-build | 67 | 1 |
-| false-positive | 54 | 0 |
+| run-vs-build | 67 | 0 |
+| false-positive | 55 | 1 |
 | perf | 43 | 1 |
 | crash | 35 | 1 |
 | soundness | 34 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 617 | 3 |
-| typecheck | 113 | 3 |
+| codegen | 617 | 2 |
+| typecheck | 114 | 3 |
 | interp | 105 | 1 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **861 surfaced · 9 open · 844 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **862 surfaced · 9 open · 845 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -138,11 +138,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **861 surfaced 
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-7 | 2026-08-02 | codegen+runtime | high | Declaring a user struct named `Response` WITH A HEAP FIELD makes every `Client.get` double-free the response body: codegen applies the USER type's drop glue to the HTTP client's builtin response. The struct need never be used. Renaming it fixes it. | codegen's type resolution for the HTTP client's response — the point where `Client.get`'s result is bound to a struct layout by NAME, letting a user `Response` shadow the builtin; and the drop glue emitted for that layout |
 | B-2026-08-02-9 | 2026-08-02 | typecheck | medium | Pointee-changing and const->mut raw pointer casts compile OUTSIDE unsafe blocks — the spec-mandated unsafe gate on `*T as *U` is not enforced (`let w: *const u64 = d as *const u64;` and `let m: *mut u8 = c as *mut u8;` both pass in safe code) | typechecker `as`-cast classification for raw pointer types vs design.md § Unsafe Escape Hatch ('only dereference, arithmetic, unaligned/volatile access, and pointee-changing casts require unsafe { }') |
-| B-2026-08-02-10 | 2026-08-02 | typecheck+codegen | medium | Methods on tuple-element receivers (`t.0.push(x)`, `t.0.len()`) loud-bail under karac build while the interpreter runs them — the last tuple-place gap after B-2026-08-02-5/-8 made tuple-element ASSIGNMENT work. Companion typecheck wrinkle, recorded here: `Sw { t: (Vec.new(), 3) }` against a declared `(Vec[i64], i64)` field fails to unify the nested tuple literal's `Vec<?T0>` with the expected element type (both backends reject consistently), so the struct-field variant of the receiver shape can't even be written without an intermediate binding. | src/codegen/method_call.rs compile_method_call fall-through — no TupleIndex-receiver dispatcher, so `t.0.push(x)` / `t.0.len()` LOUD-bail ('no handler for method on non-identifier receiver') under karac build while the interpreter runs them (run-vs-build via honest error). Blocking sub-problem: the tuple element type registry (tuple_var_elem_type_names, stmts.rs Let arm ~5395) records NAMES only — an inferred `(Vec.new(), 3)` binding records a bare 'Vec' with no element type, and an f-string element records None — so the proven synth-identifier re-dispatch (B-2026-08-01-22-leg-a / B-2026-08-01-35 pattern) has no sound TE to register the synth receiver from. The registry needs full TypeExprs (from the annotation when present; from the typechecker's inferred type otherwise) before the dispatcher arm can land. |
+| B-2026-08-02-11 | 2026-08-02 | typecheck | low | Tuple literals do not thread the EXPECTED element types into their elements: `let t: (Vec[i64], i64) = (Vec.new(), 3)` and `Sw { t: (Vec.new(), 3) }` are rejected with "expected '(Vec<i64>, i64)', found '(Vec<?T0>, i64)'" although the expected type determines ?T0 uniquely. Consistent rejection on both backends (no divergence) — an inference-precision false-positive; the non-tuple sibling `let v: Vec[i64] = Vec.new()` unifies fine. | typechecker tuple-literal inference — the expected type from a let annotation or a struct-literal field is not threaded down into the tuple literal's ELEMENTS, so an inference-dependent element (`Vec.new()`) stays `Vec<?T0>` and the whole tuple fails unification against `(Vec[i64], i64)`. Split out of B-2026-08-02-10 (whose codegen dispatcher leg is fixed in 7b1122c); this leg is what still blocks the natural one-line spelling `let t: (Vec[i64], i64) = (Vec.new(), 3)`. |
 
-### Fixed (844)
+### Fixed (845)
 
-<details><summary>844 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>845 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -990,6 +990,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **861 surfaced 
 | B-2026-08-02-3 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnosti… | 03c8d6a |
 | B-2026-08-02-5 | typecheck+interp+codegen | medium | Tuple-element assignment targets are accepted by every checking phase but unimplemented on both backends: `t.0 = v` and `o.t.0 = v` ICE the interpret… | 762a7f8 |
 | B-2026-08-02-8 | codegen | medium | Tuple-element COMPOUND assignment (`t.0 += 5`) is silently dropped under karac build — prints the stale value with no diagnostic — while the interpre… | a92ecae |
+| B-2026-08-02-10 | typecheck+codegen | medium | Methods on tuple-element receivers (`t.0.push(x)`, `t.0.len()`) loud-bail under karac build while the interpreter runs them — the last tuple-place ga… | 7b1122c |
 
 </details>
 
