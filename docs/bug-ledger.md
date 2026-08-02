@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 204 | 1 |
-| leak | 119 | 0 |
+| leak | 121 | 2 |
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 2 |
-| run-vs-build | 68 | 0 |
+| run-vs-build | 69 | 1 |
 | false-positive | 55 | 0 |
 | perf | 43 | 0 |
 | crash | 36 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 624 | 3 |
+| codegen | 627 | 6 |
 | typecheck | 115 | 1 |
-| interp | 108 | 3 |
+| interp | 109 | 4 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
 | other | 23 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **869 surfaced · 7 open · 854 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **872 surfaced · 10 open · 854 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **869 surfaced 
 | B-2026-08-02-13 | 2026-08-02 | typecheck+codegen | high | STDLIB AND USER TYPES SHARE ONE FLAT NAMESPACE, so any user struct that shadows a prelude type name silently takes over that type's codegen identity. `Response` (fixed as B-2026-08-02-7) was one instance of a class: a user `HttpError` double-frees identically, and a user `Match` crashes codegen outright. | src/prelude.rs (the flat prelude name list — `Response`, `HttpError`, `Match`, `Client`, `RequestBuilder`, `Stats`, `Regex`, …), runtime/stdlib/*.kara (where those types are declared), and every name-keyed dispatch site in src/typechecker, src/codegen and src/interpreter (~49 across 14 files) |
 | B-2026-08-02-15 | 2026-08-02 | codegen+interp | high | indexed field store with a NON-PURE index (`v[f()].field = x`) is silently dropped on every codegen surface — the store AND the index's side effect vanish, check-clean, no diagnostic; the interpreter applies it but evaluates the index TWICE. Same no-op tail as B-2026-08-01-35 / B-2026-07-13-10, uncovered cell: identifier-rooted container x non-pure index | — |
 | B-2026-08-02-18 | 2026-08-02 | codegen+interp | low | user Drop bodies silent for TUPLE-held and Map-VALUE-held Drop values in struct fields, on BOTH backends (parity holds, memory clean) | — |
+| B-2026-08-02-19 | 2026-08-02 | codegen | medium | generic parent's tuple field never frees the mono element heap: `(T, i64)` classifies no-heap at the declared TE | — |
+| B-2026-08-02-20 | 2026-08-02 | codegen+interp | medium | container moved into a struct-literal FIELD keeps the source binding's element/value bodies walk armed -- interp-only early fires (Set/SortedMap) and both-backend double fires (Vec) | — |
+| B-2026-08-02-21 | 2026-08-02 | codegen | medium | struct-field Set[DropStruct] leaks element heap; struct-field SortedMap[K, DropStruct] leaks the WHOLE handle tree at owner death | — |
 
 ### Fixed (854)
 
