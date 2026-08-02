@@ -764,15 +764,17 @@ impl<'a> super::Interpreter<'a> {
                 // identity is a compiled-mode (memory representation)
                 // concern.
                 if let Value::CStr(_) | Value::CString(_) = obj {
-                    panic!(
-                        "{}.as_ptr() at {}:{} is not supported under `karac run`: \
+                    // Structured runtime error, not a panic (B-2026-08-02-3):
+                    // same delivery as the sibling `CStr.from_ptr` /
+                    // `volatile_read` rejections in eval_call.rs.
+                    let msg = format!(
+                        "{}.as_ptr() is not supported under `karac run`: \
                          the tree-walk interpreter has no raw-pointer representation \
                          (pointers exist for FFI/host-fn boundaries, which interpreted \
                          mode cannot call). Compile with `karac build` instead.",
                         obj.variant_name(),
-                        span.line,
-                        span.column
                     );
+                    return Some(self.record_runtime_error(msg, span));
                 }
             }
             "first" => {

@@ -48,6 +48,29 @@ fn run_no_errors(source: &str) -> String {
     out.join("")
 }
 
+#[test]
+fn test_cstr_as_ptr_rejects_with_runtime_error_not_panic() {
+    // B-2026-08-02-3: the interpreter's raw-pointer refusal must be a
+    // structured RuntimeError (same delivery as the sibling `CStr.from_ptr`
+    // / `volatile_read` rejections), not a Rust panic!. Reaching these
+    // assertions at all proves the no-panic half — a panic would abort the
+    // test before `errors` could be inspected.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let p = c\"abc\".as_ptr();\n\
+             println(\"unreached\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not supported under `karac run`")
+                && e.message.contains("karac build")),
+        "as_ptr under the interpreter must produce the structured guidance error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── Arithmetic & Expressions ───────────────────────────────────
 
 #[test]
