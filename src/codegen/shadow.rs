@@ -53,6 +53,7 @@ use super::state::{ColumnVarInfo, TensorVarInfo, VarSlot};
 pub(super) struct VarMetadataSnapshot<'ctx> {
     var_type_names: Option<String>,
     tuple_var_elem_type_names: Option<Vec<Option<String>>>,
+    tuple_var_elem_type_exprs: Option<Vec<TypeExpr>>,
     atomic_var_inner_is_bool: bool,
     closure_fn_types: Option<FunctionType<'ctx>>,
     len_alias: Option<String>,
@@ -90,6 +91,7 @@ impl<'ctx> super::Codegen<'ctx> {
         VarMetadataSnapshot {
             var_type_names: self.var_type_names.remove(name),
             tuple_var_elem_type_names: self.tuple_var_elem_type_names.remove(name),
+            tuple_var_elem_type_exprs: self.tuple_var_elem_type_exprs.remove(name),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.remove(name),
             closure_fn_types: self.closure_fn_types.remove(name),
             len_alias: self.len_alias.remove(name),
@@ -131,6 +133,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some(v) = snap.tuple_var_elem_type_names {
             self.tuple_var_elem_type_names.insert(key.clone(), v);
+        }
+        if let Some(v) = snap.tuple_var_elem_type_exprs {
+            self.tuple_var_elem_type_exprs.insert(key.clone(), v);
         }
         if snap.atomic_var_inner_is_bool {
             self.atomic_var_inner_is_bool.insert(key.clone());
@@ -259,6 +264,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     for_loop_borrow_vars: HashSet<String>,
     var_type_names: HashMap<String, String>,
     tuple_var_elem_type_names: HashMap<String, Vec<Option<String>>>,
+    tuple_var_elem_type_exprs: HashMap<String, Vec<TypeExpr>>,
     atomic_var_inner_is_bool: HashSet<String>,
     closure_fn_types: HashMap<String, FunctionType<'ctx>>,
     len_alias: HashMap<String, String>,
@@ -299,6 +305,7 @@ impl<'ctx> super::Codegen<'ctx> {
             for_loop_borrow_vars: self.for_loop_borrow_vars.clone(),
             var_type_names: self.var_type_names.clone(),
             tuple_var_elem_type_names: self.tuple_var_elem_type_names.clone(),
+            tuple_var_elem_type_exprs: self.tuple_var_elem_type_exprs.clone(),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.clone(),
             closure_fn_types: self.closure_fn_types.clone(),
             len_alias: self.len_alias.clone(),
@@ -339,6 +346,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.for_loop_borrow_vars = snap.for_loop_borrow_vars;
         self.var_type_names = snap.var_type_names;
         self.tuple_var_elem_type_names = snap.tuple_var_elem_type_names;
+        self.tuple_var_elem_type_exprs = snap.tuple_var_elem_type_exprs;
         self.atomic_var_inner_is_bool = snap.atomic_var_inner_is_bool;
         self.closure_fn_types = snap.closure_fn_types;
         self.len_alias = snap.len_alias;

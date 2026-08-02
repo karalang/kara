@@ -7343,6 +7343,31 @@ fn main() {
         assert_eq!(out, "t0 15\nheld 5 z9\nend\n");
     }
 
+    /// B-2026-08-02-10 — methods on TUPLE-ELEMENT receivers (`t.0.push(x)`,
+    /// `t.0.len()`) loud-bailed under karac build while the interpreter ran
+    /// them. compile_method_call's fall-through now re-dispatches through a
+    /// synth identifier registered from the binding's ANNOTATED element
+    /// TypeExpr (the new tuple_var_elem_type_exprs registry — the names
+    /// registry erases generic args and is rejected as a synth source).
+    /// Unannotated bindings keep a loud, actionable hint. Twin of
+    /// `tests/interpreter.rs`'s `test_tuple_elem_method_receivers`.
+    #[test]
+    fn e2e_tuple_elem_method_receivers() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let v: Vec[i64] = Vec.new();\n\
+             \x20   let mut t: (Vec[i64], i64) = (v, 3);\n\
+             \x20   t.0.push(10);\n\
+             \x20   t.0.push(20);\n\
+             \x20   println(f\"len {t.0.len()} v0 {t.0[0]} v1 {t.0[1]}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "len 2 v0 10 v1 20\nend\n");
+    }
+
     /// B-2026-08-01-31 — a deep-chain field MOVE-OUT followed by a reassign
     /// (`let x = o.h.r; o.h.r = <new>`). The move zeroes the source field
     /// and disarms the root's bodies walk (root-coarse, exactly the depth-1

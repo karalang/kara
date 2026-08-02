@@ -6601,6 +6601,89 @@ impl<'ctx> super::Codegen<'ctx> {
                  classifier (tracker: phase-11-stdlib-longtail.md § Arrow IPC)"
             ));
         }
+        // B-2026-08-02-10 — a TUPLE-ELEMENT receiver (`t.0.push(x)`,
+        // `t.0.len()`): resolve the element's storage via the place-chain
+        // machinery, mint a synth identifier over it, and re-dispatch — the
+        // B-2026-08-01-35 synth dance. Requires a USABLE element TypeExpr
+        // (an annotated tuple binding's full TE; the names registry's
+        // empty-path/bare-name synthesis is rejected below), so an
+        // unannotated `(Vec.new(), 3)` binding keeps the loud fall-through
+        // with an actionable hint instead of mis-registering the synth.
+        if let ExprKind::TupleIndex {
+            object: tup_obj,
+            index,
+        } = &object.kind
+        {
+            let elem_te = self
+                .place_chain_tuple_tes(tup_obj)
+                .and_then(|tes| tes.get(*index as usize).cloned())
+                .filter(|te| match &te.kind {
+                    // An empty path is the names registry's None rendering;
+                    // a bare container name with no generic args is its
+                    // erased synthesis — both unusable as a synth source.
+                    TypeKind::Path(p) => match p.segments.as_slice() {
+                        [] => false,
+                        [only] => {
+                            let erased_container =
+                                matches!(
+                                    only.as_str(),
+                                    "Vec" | "Map" | "Set" | "VecDeque" | "SortedMap" | "SortedSet"
+                                ) && p.generic_args.as_ref().is_none_or(|g| g.is_empty());
+                            !erased_container
+                        }
+                        _ => true,
+                    },
+                    _ => true,
+                });
+            if let (Some(te), Some(elem_ptr), Some(tuple_ty)) = (
+                elem_te,
+                self.field_chain_place_ptr(object),
+                self.place_chain_aggregate_llvm_type(tup_obj),
+            ) {
+                if let Some(elem_ll) = tuple_ty.get_field_type_at_index(*index as u32) {
+                    let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    self.variables.insert(
+                        synth.clone(),
+                        super::state::VarSlot {
+                            ptr: elem_ptr,
+                            ty: elem_ll,
+                        },
+                    );
+                    self.register_var_from_type_expr(&synth, &te);
+                    let synth_expr = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: object.span.clone(),
+                    };
+                    let out = self.compile_method_call(
+                        &synth_expr,
+                        method,
+                        args,
+                        call_span,
+                        args_close_span,
+                    );
+                    self.variables.remove(&synth);
+                    self.vec_elem_types.remove(&synth);
+                    self.slice_elem_types.remove(&synth);
+                    self.var_elem_type_exprs.remove(&synth);
+                    self.var_type_names.remove(&synth);
+                    self.map_key_types.remove(&synth);
+                    self.map_val_types.remove(&synth);
+                    self.map_key_type_names.remove(&synth);
+                    self.map_key_type_exprs.remove(&synth);
+                    self.set_elem_types.remove(&synth);
+                    self.set_elem_type_names.remove(&synth);
+                    self.set_elem_type_exprs.remove(&synth);
+                    return out;
+                }
+            }
+            return Err(format!(
+                "codegen: no handler for method '{method}' on this tuple-element receiver — \
+                 annotate the tuple binding with its full element types \
+                 (`let t: (Vec[i64], i64) = …`) so the element's type is known here, or \
+                 bind the element to a local first (B-2026-08-02-10)"
+            ));
+        }
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),

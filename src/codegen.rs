@@ -1127,6 +1127,16 @@ pub(super) struct Codegen<'ctx> {
     /// (B-2026-06-11-6). `None` for a non-struct element (primitive / nested
     /// tuple / unresolved RHS — those don't field-access into a struct).
     pub(crate) tuple_var_elem_type_names: HashMap<String, Vec<Option<String>>>,
+    /// Full element `TypeExpr`s for tuple bindings whose LET carried a
+    /// tuple ANNOTATION (`let t: (Vec[i64], i64) = …`) — B-2026-08-02-10.
+    /// The names registry above erases generic arguments (a `Vec[i64]`
+    /// element records the bare name "Vec"), which is not enough to
+    /// register a synth receiver for tuple-element method dispatch or to
+    /// drop a displaced Vec-of-heap element precisely. Populated only from
+    /// annotations (full fidelity by construction); an unannotated tuple
+    /// literal records nothing here and its consumers keep their
+    /// names-registry / LLVM-layout fallbacks.
+    pub(crate) tuple_var_elem_type_exprs: HashMap<String, Vec<TypeExpr>>,
     /// Names of `Option[T]` bindings that registered a
     /// `CleanupAction::FreeInlineOptionPayload` (T is an inline heap
     /// `String`/`Vec`). A `match`/`if let` arm that binds the `Some`
@@ -7481,6 +7491,7 @@ impl<'ctx> Codegen<'ctx> {
             secret_type_is_stdlib: false,
             var_type_names: HashMap::new(),
             tuple_var_elem_type_names: HashMap::new(),
+            tuple_var_elem_type_exprs: HashMap::new(),
             inline_option_payload_vars: std::collections::HashSet::new(),
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),

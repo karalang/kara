@@ -5350,6 +5350,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// pre-existing leak, never a double-free). Returns `None` when no names
     /// were recorded, so the caller keeps the Vec-only fallback.
     pub(super) fn tuple_var_elem_tes(&self, var_name: &str) -> Option<Vec<TypeExpr>> {
+        // B-2026-08-02-10: an ANNOTATED tuple binding carries full element
+        // TypeExprs — prefer them (generic args intact: `Vec[i64]` stays
+        // `Vec[i64]`, not the erased name "Vec"). Unannotated bindings fall
+        // through to the names-derived synthesis below.
+        if let Some(tes) = self.tuple_var_elem_type_exprs.get(var_name) {
+            return Some(tes.clone());
+        }
         let names = self.tuple_var_elem_type_names.get(var_name)?;
         Some(
             names

@@ -5417,6 +5417,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.tuple_var_elem_type_names
                             .insert(var_name.clone(), names);
                     }
+                    // B-2026-08-02-10 — record the FULL element TypeExprs when
+                    // the annotation is a tuple. The names registry above
+                    // erases generic args (`Vec[i64]` → "Vec"), which cannot
+                    // register a synth receiver for tuple-element method
+                    // dispatch nor drop a displaced Vec-of-heap element
+                    // precisely. Annotations only: full fidelity by
+                    // construction; unannotated literals keep the fallbacks.
+                    if let Some(TypeKind::Tuple(elems)) = ty.as_ref().map(|te| &te.kind) {
+                        self.tuple_var_elem_type_exprs
+                            .insert(var_name.clone(), elems.clone());
+                    }
                 }
                 // B-2026-06-10-6: a let-bound `Option[String]` /
                 // `Option[Vec[_]]` whose payload is never destructured leaks
