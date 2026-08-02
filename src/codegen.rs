@@ -3605,6 +3605,27 @@ pub(super) struct Codegen<'ctx> {
     /// (B-2026-07-18-7). This is the authoritative membership test. Cleared
     /// per-function.
     pub(crate) gpu_buffer_vars: HashSet<String>,
+    /// B-2026-08-02-7 — a user program declared its own `struct Response`,
+    /// so `seed_builtin_struct_types` did NOT seed the builtin HTTP client
+    /// response layout (`{ status: i64, body: String, headers: i64 }`) and
+    /// `struct_types["Response"]` is the user's shape instead.
+    ///
+    /// This is silent memory corruption if the client path then runs: the
+    /// client FFI writes a 5-word value into a slot laid out for the user's
+    /// struct, and the user type's drop glue frees a `body` String the
+    /// client path also owns — a double free, measured with a `Response`
+    /// carrying any heap field. A scalar-only user `Response` is harmless
+    /// (its drop glue frees nothing), which is exactly why this went
+    /// unnoticed: the collision is invisible until the shadowing type owns
+    /// heap.
+    ///
+    /// Declaring `Response` is legitimate and common — it is the documented
+    /// handler-return type for `Server.serve`, so every serving program has
+    /// one. The flag therefore does NOT reject the declaration; it only
+    /// makes the CLIENT path refuse to compile against a layout it cannot
+    /// safely use, which keeps `examples/shortener` (declares `Response`,
+    /// never calls `Client`) working untouched.
+    pub(crate) user_response_shadows_builtin: bool,
     /// Per-variable Map key LLVM type (variable name → K LLVM type).
     pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Per-variable Map value LLVM type (variable name → V LLVM type).
@@ -7789,6 +7810,7 @@ impl<'ctx> Codegen<'ctx> {
             provider_lookup_result_ty,
             gpu_buffer_elem_structs: HashMap::new(),
             gpu_buffer_vars: HashSet::new(),
+            user_response_shadows_builtin: false,
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),

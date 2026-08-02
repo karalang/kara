@@ -617,6 +617,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             } else {
                 let st = self.context.struct_type(&field_types, false);
+                // B-2026-08-02-7 — `seed_builtin_struct_types` runs BEFORE this
+                // pass precisely so a user declaration can override a baked
+                // stdlib shape. For `Response` that override is unsafe: the HTTP
+                // client path still assumes the seeded
+                // `{ status: i64, body: String, headers: i64 }` layout, GEPs
+                // field 2 for the headers handle, and hands the value to drop
+                // glue built for the USER's type — which frees a `body` String
+                // the client path also owns. Record the shadowing so the client
+                // path can refuse; the declaration itself stays legal, since
+                // `Response` is the documented `Server.serve` handler-return
+                // type and every serving program declares one.
+                if s.name == "Response" && self.struct_types.contains_key("Response") {
+                    self.user_response_shadows_builtin = true;
+                }
                 self.struct_types.insert(s.name.clone(), st);
             }
         }

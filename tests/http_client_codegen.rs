@@ -24,6 +24,20 @@ mod http_client_codegen_tests {
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// Fallible sibling of [`ir_for`]: returns codegen's `Result` instead of
+    /// unwrapping, so a test can assert on a REFUSAL. `ir_for` panics on a
+    /// codegen error, which cannot express "this program must not compile".
+    fn codegen_result(src: &str) -> Result<String, String> {
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        assert!(resolved.errors.is_empty(), "resolve: {:?}", resolved.errors);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "typecheck: {:?}", typed.errors);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir(&parsed.program, None, None).map_err(|e| e.to_string())
+    }
+
     fn function_body(ir: &str, name: &str) -> Option<String> {
         let needle = format!("@{name}(");
         let mut found_define = false;
@@ -456,6 +470,63 @@ fn main() with sends(Network) receives(Network) {
             !sent_body.contains("call void @karac_runtime_http_builder_free("),
             "a sent builder is consumed by _builder_send; no _builder_free expected; \
              body was:\n{sent_body}"
+        );
+    }
+
+    /// B-2026-08-02-7 — a user `struct Response` overrides the seeded builtin
+    /// client-response layout (`seed_builtin_struct_types` deliberately runs
+    /// before `declare_structs` so user declarations can win). For `Response`
+    /// that override is unsafe: the client path still GEPs the builtin shape
+    /// and hands the value to the user type's drop glue, which frees a `body`
+    /// String the client already owns.
+    ///
+    /// It was a DOUBLE FREE on every run with no diagnostic, and only when the
+    /// shadowing struct owned heap — a scalar-only `Response` was harmless, so
+    /// the corruption appeared the moment someone added a `String` field. The
+    /// program below needs no server and never uses the struct; declaring it
+    /// is enough.
+    ///
+    /// Asserting the REFUSAL rather than success is deliberate: the ergonomic
+    /// fix (give the builtin an internal name so user code may use `Response`
+    /// freely) is not done, so the contract this pins is "refuse loudly", and
+    /// this test should be inverted when that lands.
+    #[test]
+    fn user_response_struct_is_refused_on_the_client_path() {
+        let src = r#"
+struct Response { status: i64, body: String }
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    match c.get("http://127.0.0.1:1/") {
+        Ok(r) => { println("got"); }
+        Err(e) => { println("err"); }
+    }
+}
+"#;
+        let err = codegen_result(src).expect_err(
+            "a user `struct Response` must be REFUSED on the client path, not \
+             silently miscompiled into a double free",
+        );
+        assert!(
+            err.contains("shadows the HTTP client's built-in response type"),
+            "expected the shadowing diagnostic; got: {err}"
+        );
+    }
+
+    /// The guard must be scoped to the CLIENT path only. `Server.serve`'s
+    /// handler returns a user-declared `Response` by design — every serving
+    /// program has one, `examples/shortener` included — so declaring the
+    /// struct without touching `Client` has to keep compiling.
+    #[test]
+    fn user_response_struct_alone_still_compiles() {
+        let src = r#"
+struct Response { status: i64, body: String }
+fn handle(req: Request) -> Response { Response { status: 200, body: "ok" } }
+fn main() { println("built"); }
+"#;
+        assert!(
+            codegen_result(src).is_ok(),
+            "declaring `struct Response` without using the HTTP client must stay legal \
+             — `Server.serve` handlers return exactly that type"
         );
     }
 }
