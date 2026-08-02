@@ -485,6 +485,7 @@ impl<'a> super::Interpreter<'a> {
                     // lowering).
                     if !args.is_empty() {
                         self.record_ctor_arg_moves(&args[..1]);
+                        self.record_container_move_sources_in_aggregate_arg(&args[0].value);
                     }
                     let label = match &object.kind {
                         ExprKind::Identifier(n) => n.clone(),
@@ -587,6 +588,7 @@ impl<'a> super::Interpreter<'a> {
                     // value — same full disarm as the `push` arm above.
                     if matches!(method, "push_back" | "push_front") && !args.is_empty() {
                         self.record_ctor_arg_moves(&args[..1]);
+                        self.record_container_move_sources_in_aggregate_arg(&args[0].value);
                     }
                     return Some(self.eval_vec_deque_method(method, &obj, object, args));
                 }

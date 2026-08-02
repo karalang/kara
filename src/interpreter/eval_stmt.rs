@@ -1991,7 +1991,21 @@ impl<'a> super::Interpreter<'a> {
     /// machinery.
     pub(crate) fn record_container_move_source_name(&mut self, name: &str) {
         match self.env.get(name) {
-            Some(Value::EnumVariant { .. } | Value::Array(_) | Value::Tuple(_) | Value::Map(_)) => {
+            // B-2026-08-02-20 (leg 1) — Set/SortedMap/SortedSet were missing
+            // here, so `let h = SetHold { s: s };` left the SOURCE binding's
+            // element/value bodies walk armed and it fired early, at `s`'s
+            // death rather than the holder's. Interp-only: codegen nulls the
+            // source slot at the move, so its registered walker's null check
+            // already no-ops.
+            Some(
+                Value::EnumVariant { .. }
+                | Value::Array(_)
+                | Value::Tuple(_)
+                | Value::Map(_)
+                | Value::Set(_)
+                | Value::SortedMap(_)
+                | Value::SortedSet(_),
+            ) => {
                 self.moved_out_container_bodies_bindings
                     .insert(name.to_string());
             }
@@ -2039,6 +2053,42 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_user_drop_bindings.insert(n.clone());
                 }
             }
+        }
+    }
+
+    /// B-2026-08-02-20 (leg 2) — a consuming method arg that is an AGGREGATE
+    /// LITERAL (`v.push(Holder { xs: xs })`, `m.insert(k, (a, b))`) moves each
+    /// source named in its fields/elements into the literal, which the
+    /// container then owns. Disarm those sources' element/value bodies walks,
+    /// exactly as the let-RHS sibling `record_container_bodies_move_sources`
+    /// does for `let h = Holder { xs: xs };` — without it the element body
+    /// printed twice, once at the source's death and once at the container's
+    /// (parity-equal on both backends, but two fires for one logical value).
+    ///
+    /// Aggregate shapes ONLY: a bare-identifier arg keeps the existing
+    /// whole-value channel (`record_ctor_arg_moves`), whose semantics differ
+    /// (it disarms the source's OWN body too). Codegen twin: the
+    /// StructLiteral / Tuple arms of `disarm_container_bodies_for_arg`.
+    pub(crate) fn record_container_move_sources_in_aggregate_arg(&mut self, e: &Expr) {
+        let names: Vec<String> = match &e.kind {
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .filter_map(|f| match &f.value.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    _ => None,
+                })
+                .collect(),
+            ExprKind::Tuple(elems) => elems
+                .iter()
+                .filter_map(|el| match &el.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => return,
+        };
+        for n in names {
+            self.record_container_move_source_name(&n);
         }
     }
 

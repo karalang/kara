@@ -27748,6 +27748,79 @@ fn test_tuple_field_parent_displaced_and_vec_elem_bodies() {
 /// sorted walker; the memory half is AOT-only and pinned by the asan
 /// twin).
 #[test]
+fn test_container_into_literal_field_arg_single_fire() {
+    // B-2026-08-02-20 (leg 2) — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_container_into_literal_field_arg_single_fire`, same source and
+    // expected string. Both backends double-fired pre-fix (parity-equal,
+    // which is why no existing test caught it).
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Holder { xs: Vec[Res], tag: i64 }\n\
+             fn main() {\n\
+                 println(\"let-rhs:\");\n\
+                 {\n\
+                     let mut xs: Vec[Res] = Vec.new();\n\
+                     xs.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     let h = Holder { xs: xs, tag: 3 };\n\
+                     println(h.tag);\n\
+                 }\n\
+                 println(\"call-arg:\");\n\
+                 {\n\
+                     let mut v: Vec[Holder] = Vec.new();\n\
+                     let mut ys: Vec[Res] = Vec.new();\n\
+                     ys.push(Res { id: 2, name: f\"b{2}\" });\n\
+                     v.push(Holder { xs: ys, tag: 4 });\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "let-rhs:\n3\ndrop 1 a1\ncall-arg:\n1\ndrop 2 b2\nend\n"
+    );
+}
+
+/// B-2026-08-02-20 (leg 1) — a Set/SortedMap binding moved into a
+/// struct-literal FIELD must not fire its element/value bodies at the
+/// SOURCE binding's death; the holder owns the one logical value and
+/// fires at ITS death (codegen already did, by nulling the source slot).
+/// Pre-fix `record_container_move_source_name`'s value-shape match was
+/// missing Set/SortedMap/SortedSet, so every body fired early as well —
+/// a run-vs-build divergence.
+#[test]
+fn test_set_and_sortedmap_into_literal_field_source_walk_suppressed() {
+    assert_eq!(
+        run("#[derive(Hash, Eq)]\n\
+             struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct SetHold { s: Set[Res], tag: i64 }\n\
+             struct SmHold { m: SortedMap[i64, Res], tag: i64 }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut s: Set[Res] = Set.new();\n\
+                     let _ = s.insert(Res { id: 3, name: f\"s{3}\" });\n\
+                     let h = SetHold { s: s, tag: 1 };\n\
+                     println(h.tag);\n\
+                 }\n\
+                 println(\"mid\");\n\
+                 {\n\
+                     let mut m: SortedMap[i64, Res] = SortedMap.new();\n\
+                     let _ = m.insert(2, Res { id: 4, name: f\"m{4}\" });\n\
+                     let _ = m.insert(1, Res { id: 5, name: f\"n{5}\" });\n\
+                     let g = SmHold { m: m, tag: 2 };\n\
+                     println(g.tag);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n1\ndrop 3 s3\nmid\n2\ndrop 5 n5\ndrop 4 m4\nend\n"
+    );
+}
+
+#[test]
 fn test_struct_field_set_and_sortedmap_bodies() {
     assert_eq!(
         run("#[derive(Hash, Eq)]\n\

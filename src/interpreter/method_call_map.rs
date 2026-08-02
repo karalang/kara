@@ -143,6 +143,14 @@ impl<'a> super::Interpreter<'a> {
                 }
                 if args.len() > 1 {
                     self.record_ctor_arg_moves(&args[1..2]);
+                    self.record_container_move_sources_in_aggregate_arg(&args[1].value);
+                }
+                // B-2026-08-02-20 (leg 2) — an aggregate-literal KEY/element
+                // arm too (`s.insert(Holder { xs: xs })`): the Set element
+                // half owns the sources named in the literal.
+                if let Some(arg) = args.first() {
+                    let key_expr = arg.value.clone();
+                    self.record_container_move_sources_in_aggregate_arg(&key_expr);
                 }
                 if let Value::Map(mut m) = obj {
                     // Map.insert(key, value) -> Option[V] (old value)

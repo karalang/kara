@@ -78634,6 +78634,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_container_into_literal_field_arg_single_fire() {
+        // B-2026-08-02-20 (leg 2) — a container moved into a struct literal
+        // that is a CALL ARGUMENT (`v.push(Holder { xs: xs })`) must disarm
+        // the source's element-bodies walk, exactly as the let-RHS position
+        // already did. The consuming-ARG disarm handled only bare
+        // identifiers, so the element body fired TWICE on both backends:
+        // once at the source's NLL end, once at the container's death (one
+        // logical value, two fires — parity-equal, so no test caught it).
+        // The `let-rhs` block below is the always-correct control.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn main() {
+    println("let-rhs:");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"a{1}" });
+        let h = Holder { xs: xs, tag: 3 };
+        println(h.tag);
+    }
+    println("call-arg:");
+    {
+        let mut v: Vec[Holder] = Vec.new();
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 2, name: f"b{2}" });
+        v.push(Holder { xs: ys, tag: 4 });
+        println(v.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "let-rhs:\n3\ndrop 1 a1\ncall-arg:\n1\ndrop 2 b2\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_field_set_and_sortedmap_bodies() {
         // B-2026-08-02-21 (output regression pin — the asan twin owns the
         // LSan pin, which is where the -21 defect was observable): a

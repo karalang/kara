@@ -5488,10 +5488,33 @@ impl<'ctx> super::Codegen<'ctx> {
     /// same zeroed-payload misfire follows. The container's own element walk
     /// does not (yet) reach enum elements, so the residual is a leak — the
     /// safe side — never a double body.
+    ///
+    /// B-2026-08-02-20 (leg 2) — the AGGREGATE-literal arms mirror the
+    /// let-RHS sibling: `v.push(Holder { xs: xs })` moves `xs` into the
+    /// literal, which the container then owns, so the source's element walk
+    /// must disarm exactly as it does for `let h = Holder { xs: xs };`.
+    /// Without them the element body printed twice (once at the source's
+    /// NLL end, once at the container's) on both backends. Only the sources
+    /// NAMED in the literal are disarmed — the literal's own value belongs
+    /// to the container, whose element walk runs its bodies.
     pub(super) fn disarm_container_bodies_for_arg(&mut self, e: &Expr) {
         match &e.kind {
             ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
             ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    if let ExprKind::Identifier(n) = &f.value.kind {
+                        self.suppress_container_elem_bodies_for_var(n);
+                    }
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                for el in elems {
+                    if let ExprKind::Identifier(n) = &el.kind {
+                        self.suppress_container_elem_bodies_for_var(n);
+                    }
+                }
+            }
             _ => {}
         }
     }
