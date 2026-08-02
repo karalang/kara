@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 54 | 0 |
 | perf | 43 | 1 |
 | crash | 35 | 2 |
-| diagnostics | 34 | 3 |
+| diagnostics | 34 | 2 |
 | soundness | 33 | 0 |
 | other | 12 | 1 |
 | use-after-free | 11 | 0 |
@@ -118,15 +118,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 23 | 1 |
 | cli | 23 | 0 |
 | runtime | 18 | 0 |
-| resolver | 18 | 3 |
+| resolver | 18 | 2 |
 | parser | 10 | 1 |
 | lexer | 3 | 0 |
-| effect | 3 | 1 |
+| effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **857 surfaced · 9 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **857 surfaced · 8 open · 841 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,15 +134,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **857 surfaced 
 | B-2026-08-01-33 | 2026-08-01 | ownership | low | no way to share an immutable `shared struct` across par branches read-only: the >1-branch gate is correct (non-atomic refcount races even on reads) but the only answers are `par struct`+Mutex on an unmutated structure or N private copies — costs #133 its par lane, which its lock-free C mirror can still run | — |
 | B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
-| B-2026-08-02-4 | 2026-08-02 | resolver+effect | low | FFI lint suggests `allocates(Heap)` but neither the lint nor E0100 mentions the required `effect resource Heap;` declaration — following the compiler's own suggestion verbatim produces an unexplained resolve error | src/effectchecker/extern_ffi.rs KNOWN_ALLOCATING lint text; src/resolver.rs E0100 'undefined effect resource' |
 | B-2026-08-02-2 | 2026-08-02 | typecheck | medium | No implicit `*mut T` → `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*const` foreign param needs an `unsafe { p as *const T }` cast | typechecker call-argument compatibility for raw pointer types |
 | B-2026-08-02-3 | 2026-08-02 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnostic — right message, wrong delivery | src/interpreter/method_call_seq.rs:767 (CString.as_ptr panic!) |
 | B-2026-08-02-5 | 2026-08-02 | typecheck+interp+codegen | medium | Tuple-element assignment targets are accepted by every checking phase but unimplemented on both backends: `t.0 = v` and `o.t.0 = v` ICE the interpreter (unreachable panic + backtrace) while karac build silently drops the store; `t.0.f = v` and `o.t.0.f = v` are silently dropped on BOTH backends (parity in wrongness, stale reads). design.md §7956 classifies tuple indices as first-class mutable places (the call-site mutation-marker rules forward through them), so the class is a missing implementation, not a rejection gap. | src/interpreter/eval_stmt.rs assign_to_place (no TupleIndex arm — a direct TupleIndex target hits the `unreachable!` at the Assign arm's tail: 'unsupported assignment target ... should be caught by parser/typechecker', an ICE with a Rust backtrace on an accepted program); src/codegen/stmts.rs Assign-arm dispatch (no TupleIndex target arm — falls through, the store is silently dropped) and expr_ops.rs nested_store_place_ptr (no TupleIndex link arm — FieldAccess-over-TupleIndex chains silently no-op on BOTH backends) |
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name written in block form — `spawn { … }`, `println { … }`, `assert { … }` — passes `karac check` cleanly and then panics the interpreter with an internal `unreachable!` and a Rust backtrace. The panic's own message says "should be caught by resolver". A user-defined unknown name (`notafunction { … }`) is correctly rejected. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 
-### Fixed (840)
+### Fixed (841)
 
-<details><summary>840 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>841 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -986,6 +985,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **857 surfaced 
 | B-2026-08-01-31 | codegen | high | Deep-chain field move-out (`let x = o.h.r` / `let s = o.h.name`) never cap-zeroes the source: the moved-out binding AND the root's StructDrop both fr… | e23c570 |
 | B-2026-08-01-34 | codegen | medium | Generic-monomorph field moved out of a deep chain (`let g = o.h.b` where `b: Boxy[String]`) still double-frees — the B-2026-08-01-31 suppressor decli… | f82c0db |
 | B-2026-08-01-35 | codegen | high | Field store through a FIELD-ROOTED indexed container (`o.hs[i].field = x` where `hs: Vec[P]` is itself a struct field) is SILENTLY DROPPED under kara… | 38d2d23 |
+| B-2026-08-02-4 | resolver+effect | low | FFI lint suggests `allocates(Heap)` but neither the lint nor E0100 mentions the required `effect resource Heap;` declaration — following the compiler… | 8930667 |
 
 </details>
 
