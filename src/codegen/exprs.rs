@@ -1095,7 +1095,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     let mono_ty = self
                         .struct_inst_mono_type_for_expr(expr)
                         .or_else(|| self.mono_struct_type_from_active_subst(name));
-                    self.compile_struct_init(name, fields, mono_ty)
+                    // The literal's param→arg subst rides alongside the mono
+                    // LLVM type (B-2026-08-02-17): a `Map[i64, T]` /
+                    // `Set[T]` field initialized with `Map.new()` inside the
+                    // literal must build its handle at the INSTANTIATED
+                    // key/value sizes — the declared bare-`T` TE sized the
+                    // value at i64, so inserts truncated the value and its
+                    // heap leaked. None for non-generic literals.
+                    let lit_subst = self
+                        .enum_inst_type_from_span(expr)
+                        .map(|te| self.generic_struct_subst_from_inst(name, &te))
+                        .filter(|s| !s.is_empty());
+                    self.compile_struct_init(name, fields, mono_ty, lit_subst.as_ref())
                 }
             }
             // B-2026-07-02-6: thread the contextual element width recorded
@@ -2189,6 +2200,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         fields: &[FieldInit],
         mono_ty: Option<inkwell::types::StructType<'ctx>>,
+        lit_subst: Option<&std::collections::HashMap<String, TypeExpr>>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // FFI union literal (phase 5 line 569 slice 4). The typechecker
         // already enforces exactly-one-field shape (`E_UNION_LITERAL_REQUIRES_ONE_FIELD`,
@@ -2232,11 +2244,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     let is_map_set_new = self.is_map_new_call(&field_init.value)
                         || self.is_set_new_call(&field_init.value);
                     if is_map_set_new {
+                        // Resolve through the literal's subst first
+                        // (B-2026-08-02-17): a generic parent's `Map[i64, T]`
+                        // field built its handle at bare-`T` value size (i64),
+                        // truncating every inserted value and leaking its heap.
                         let field_te = self
                             .struct_field_type_exprs
                             .get(name)
                             .and_then(|tes| tes.get(idx))
-                            .cloned();
+                            .map(|fte| match lit_subst {
+                                Some(s) => {
+                                    crate::codegen::helpers::subst_type_params_in_type_expr(fte, s)
+                                }
+                                None => fte.clone(),
+                            });
                         if let Some(handle) =
                             field_te.and_then(|te| self.build_map_new_handle_from_type_expr(&te))
                         {
@@ -2469,11 +2490,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 let is_map_set_new = self.is_map_new_call(&field_init.value)
                     || self.is_set_new_call(&field_init.value);
                 if is_map_set_new {
+                    // Resolve through the literal's subst first
+                    // (B-2026-08-02-17) — see the shared-branch sibling above.
                     let field_te = self
                         .struct_field_type_exprs
                         .get(name)
                         .and_then(|tes| tes.get(idx))
-                        .cloned();
+                        .map(|fte| match lit_subst {
+                            Some(s) => {
+                                crate::codegen::helpers::subst_type_params_in_type_expr(fte, s)
+                            }
+                            None => fte.clone(),
+                        });
                     if let Some(handle) =
                         field_te.and_then(|te| self.build_map_new_handle_from_type_expr(&te))
                     {

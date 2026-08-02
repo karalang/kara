@@ -1943,11 +1943,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     // below, inside the `current_fn`-swap block, because the
                     // synthesizer may emit sibling drop fns.
                     let mut field_val_drop_fn: Option<FunctionValue<'ctx>> = None;
+                    // Resolve the field TE through the mono subst first
+                    // (B-2026-08-02-17): a GENERIC parent's `m: Map[i64, T]`
+                    // reads a bare-`T` value TE here, so
+                    // `map_val_drop_fn_for_type_expr` returned None and the
+                    // value's heap (a Drop struct's String field) was never
+                    // freed at owner death — the non-generic control was
+                    // clean. Same declared-name-erasure family as
+                    // B-2026-08-02-14/-16, on the Map-field value-drop
+                    // channel. `None` subst leaves the TE untouched.
                     if let Some(field_te) = self
                         .struct_field_type_exprs
                         .get(struct_name)
                         .and_then(|v| v.get(field_idx))
-                        .cloned()
+                        .map(|fte| match subst {
+                            Some(s) => {
+                                crate::codegen::helpers::subst_type_params_in_type_expr(fte, s)
+                            }
+                            None => fte.clone(),
+                        })
                     {
                         // The walks build their own basic blocks via
                         // `self.current_fn.unwrap()`, which at this

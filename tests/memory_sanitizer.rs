@@ -17141,6 +17141,38 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-17 — a GENERIC parent's `Map[i64, T]` field: the
+    /// struct-literal init built the handle from the DECLARED bare-`T`
+    /// value TE (val_size = 8 instead of the instantiated struct's 32),
+    /// so inserts truncated the value and its String buffer leaked at
+    /// owner death; the drop synthesis also classified the value drop
+    /// from bare `T`. Both now resolve through the literal's / mono
+    /// subst — LSan-clean, and the non-generic control's behavior is
+    /// unchanged.
+    #[test]
+    fn asan_generic_parent_map_field_value_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Store[T] { m: Map[i64, T], tag: i64 }
+fn main() {
+    println("a");
+    {
+        let mut s: Store[Res] = Store { m: Map.new(), tag: 1 };
+        s.m.insert(1i64, Res { id: 8, name: f"mm{8}" });
+        println(f"n {s.m.len()}");
+    }
+    println("end");
+}
+"#,
+            &["a", "n 1", "end"],
+            "generic_parent_map_field_value_freed",
+        );
+    }
+
     /// B-2026-08-02-14 — a GENERIC-mono parent's Drop-carrying field: the
     /// subst-aware bodies walk fires exactly once per owner death, and the
     /// mono element drop frees the element's String buffer the base
