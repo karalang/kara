@@ -7657,6 +7657,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-02-8 — `t.0 OP= rhs`: the wildcard below
+                    // silently dropped a tuple-element compound target (the
+                    // interp applied it — run-vs-build divergence). Store the
+                    // computed result through the same place path plain
+                    // Assign uses; a scalar element never needs the displaced
+                    // old-value drop, and a heap `OP=` operand is
+                    // typecheck-rejected before reaching here.
+                    ExprKind::TupleIndex { object, index } => {
+                        self.compile_tuple_index_store(object, *index, result)?;
+                    }
                     _ => {}
                 }
                 Ok(())

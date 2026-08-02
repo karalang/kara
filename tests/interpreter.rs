@@ -27479,6 +27479,27 @@ fn test_tuple_index_assignment_targets() {
     );
 }
 
+/// B-2026-08-02-8 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_tuple_index_compound_and_vec_elem_targets`, same source and
+/// expected string (the interp applied both writes already — this pins
+/// the parity codegen now shares).
+#[test]
+fn test_tuple_index_compound_and_vec_elem_targets() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let mut t = (10, f\"a{2}\");\n\
+                 t.0 += 5;\n\
+                 println(f\"t0 {t.0}\");\n\
+                 let mut v: Vec[(i64, String)] = Vec.new();\n\
+                 v.push((9, f\"z{9}\"));\n\
+                 v[0].0 = 5;\n\
+                 println(f\"held {v[0].0} {v[0].1}\");\n\
+                 println(\"end\");\n\
+             }\n"),
+        "t0 15\nheld 5 z9\nend\n"
+    );
+}
+
 /// B-2026-08-01-31 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_deep_chain_field_move_then_reassign`, same source and expected
 /// string. The deep-chain move records the ROOT in

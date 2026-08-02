@@ -7317,6 +7317,32 @@ fn main() {
         assert_eq!(out, "t0 5\nu 6 z9\no 8 y5\nend\n");
     }
 
+    /// B-2026-08-02-8 — tuple-element COMPOUND assignment (`t.0 += 5`) was
+    /// silently dropped under karac build (the CompoundAssign place-store
+    /// match had no TupleIndex arm; the B-2026-08-02-5 fix covered plain
+    /// `=` only), and `v[0].0 = 5` (tuple element of a Vec element)
+    /// loud-bailed because `place_chain_aggregate_llvm_type` had no Index
+    /// arm. Twin of `tests/interpreter.rs`'s
+    /// `test_tuple_index_compound_and_vec_elem_targets`.
+    #[test]
+    fn e2e_tuple_index_compound_and_vec_elem_targets() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let mut t = (10, f\"a{2}\");\n\
+             \x20   t.0 += 5;\n\
+             \x20   println(f\"t0 {t.0}\");\n\
+             \x20   let mut v: Vec[(i64, String)] = Vec.new();\n\
+             \x20   v.push((9, f\"z{9}\"));\n\
+             \x20   v[0].0 = 5;\n\
+             \x20   println(f\"held {v[0].0} {v[0].1}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "t0 15\nheld 5 z9\nend\n");
+    }
+
     /// B-2026-08-01-31 — a deep-chain field MOVE-OUT followed by a reassign
     /// (`let x = o.h.r; o.h.r = <new>`). The move zeroes the source field
     /// and disarms the root's bodies walk (root-coarse, exactly the depth-1

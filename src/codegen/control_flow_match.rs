@@ -4940,6 +4940,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => None,
                 }
             }
+            // B-2026-08-02-8 — a `vec[i]` receiver (`v[0].0 = x`): the
+            // element's LLVM aggregate type from the container's recorded
+            // element type. `field_chain_place_ptr` already resolves the
+            // element POINTER for this shape; without this arm the
+            // tuple-element store loud-bailed at the aggregate lookup.
+            ExprKind::Index { object, .. } => {
+                let ExprKind::Identifier(v) = &object.kind else {
+                    return None;
+                };
+                match self.vec_elem_types.get(v.as_str())? {
+                    BasicTypeEnum::StructType(t) => Some(*t),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
