@@ -7928,16 +7928,23 @@ fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
 /// `block_in_place` via `Handle::current().block_on(...)` on the body
 /// stream's `collect().await`.
 ///
-/// **HTTP/2 multiplexing note (phase-8 line 145).** Under HTTP/2 a
-/// single connection carries many concurrent streams, each driving one
-/// `serve_request` call. Because the handler runs under
-/// `block_in_place`, sibling streams on the *same* connection cannot be
-/// polled while one handler is executing — streams within a connection
-/// are effectively serialized (tokio's worker-replacement keeps *other*
-/// connections progressing in parallel). This matches the per-connection
-/// behavior HTTP/1.1 keep-alive already had and is correct for v1; a
-/// fully-async handler ABI that would let streams on one connection run
-/// concurrently is a separate, larger slice.
+/// **HTTP/2 multiplexing note (phase-8 line 145; corrected
+/// 2026-08-02).** Under HTTP/2 a single connection carries many
+/// concurrent streams, each driving one `serve_request` call — and
+/// sibling streams on the same connection DO run concurrently: hyper's
+/// h2 server spawns each stream's service future as its own task on
+/// the `TokioExecutor`, so `block_in_place` pins only that stream's
+/// worker (which tokio replaces) while the connection task keeps
+/// polling frames and sibling handlers proceed on other workers. An
+/// earlier revision of this note claimed streams serialized per
+/// connection; the empirical pin
+/// (`tests/http_server.rs::test_http2_sibling_streams_run_concurrently`
+/// — two 500 ms handlers on one connection, both sleeps proven to have
+/// run AND overlapped) shows otherwise. The cost model to know: every
+/// in-flight handler occupies an OS thread for its duration
+/// (block_in_place worker replacement); a coroutine handler ABI that
+/// parks in-flight handlers without threads is a future efficiency
+/// item, not a concurrency gap.
 #[cfg(feature = "net")]
 async fn serve_request(
     req: hyper::Request<hyper::body::Incoming>,

@@ -3625,4 +3625,109 @@ fn main() with sends(Network) receives(Network) {{
             "client must follow the 302 to the destination origin; stdout={stdout:?}"
         );
     }
+
+    // ── H2 sibling-stream concurrency (the last HTTP/2 residual) ──────
+
+    /// Timed variant of `h2c_two_streams`: the clock starts AFTER the
+    /// h2 handshake settles, so it measures only the two multiplexed
+    /// request/response exchanges.
+    fn h2c_two_streams_timed(
+        port: u16,
+        p1: &str,
+        p2: &str,
+    ) -> Result<((u16, String), (u16, String), std::time::Duration), String> {
+        use http_body_util::BodyExt;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio rt build: {e}"))?;
+        let p1 = p1.to_string();
+        let p2 = p2.to_string();
+        rt.block_on(async move {
+            let stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+                .await
+                .map_err(|e| format!("tcp connect: {e}"))?;
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let (sender, conn) = hyper::client::conn::http2::handshake::<
+                _,
+                _,
+                http_body_util::Full<bytes::Bytes>,
+            >(hyper_util::rt::TokioExecutor::new(), io)
+            .await
+            .map_err(|e| format!("h2 handshake: {e}"))?;
+            tokio::spawn(async move {
+                let _ = conn.await;
+            });
+            let one = |mut s: hyper::client::conn::http2::SendRequest<
+                http_body_util::Full<bytes::Bytes>,
+            >,
+                       path: String| async move {
+                s.ready().await.map_err(|e| format!("ready: {e}"))?;
+                let req = hyper::Request::builder()
+                    .uri(format!("http://127.0.0.1:{port}{path}"))
+                    .body(http_body_util::Full::new(bytes::Bytes::new()))
+                    .map_err(|e| format!("build: {e}"))?;
+                let resp = s
+                    .send_request(req)
+                    .await
+                    .map_err(|e| format!("send: {e}"))?;
+                let status = resp.status().as_u16();
+                let body = resp
+                    .into_body()
+                    .collect()
+                    .await
+                    .map_err(|e| format!("collect: {e}"))?
+                    .to_bytes();
+                Ok::<(u16, String), String>((status, String::from_utf8_lossy(&body).into_owned()))
+            };
+            let started = std::time::Instant::now();
+            let (r1, r2) = tokio::try_join!(one(sender.clone(), p1), one(sender, p2))?;
+            Ok((r1, r2, started.elapsed()))
+        })
+    }
+
+    /// Two sibling streams on ONE h2c connection, each driving a
+    /// handler that sleeps 500 ms, must complete in well under the
+    /// ~1000 ms a serialized per-connection dispatch would need —
+    /// the empirical pin for h2 stream concurrency.
+    #[test]
+    fn test_http2_sibling_streams_run_concurrently() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                sleep_ms(500);
+                Response { status: 200, body: req.path() }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((mut child, port, exe_path)) = spawn_kara_server(src, "karac_h2_overlap") else {
+            return;
+        };
+        let result = retry_until_ok(|| h2c_two_streams_timed(port, "/a", "/b"));
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        let ((s1, _b1), (s2, _b2), elapsed) = result.expect("timed h2c requests never succeeded");
+        assert_eq!(s1, 200);
+        assert_eq!(s2, 200);
+        // Lower bound guards against a vacuous pass: if the handler's
+        // sleep never ran (compile shape drift, sleep_ms regression),
+        // elapsed would be near-zero and the concurrency conclusion
+        // unearned. ≥ 500 ms proves at least one full sleep happened;
+        // < 900 ms proves the two sleeps overlapped.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(500),
+            "two 500 ms handlers finished in {elapsed:?} — the handler sleep did not run, so this test proves nothing"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(900),
+            "two 500 ms handlers on one h2 connection took {elapsed:?} — sibling streams are serializing"
+        );
+    }
 }
