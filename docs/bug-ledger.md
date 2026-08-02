@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
-| run-vs-build | 69 | 1 |
+| run-vs-build | 69 | 0 |
 | false-positive | 55 | 0 |
 | perf | 43 | 0 |
 | crash | 36 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 627 | 2 |
+| codegen | 627 | 1 |
 | typecheck | 115 | 1 |
-| interp | 109 | 2 |
+| interp | 109 | 1 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
 | other | 23 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **872 surfaced · 6 open · 858 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **872 surfaced · 5 open · 859 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,11 +135,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **872 surfaced 
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-13 | 2026-08-02 | typecheck+codegen | high | STDLIB AND USER TYPES SHARE ONE FLAT NAMESPACE, so any user struct that shadows a prelude type name silently takes over that type's codegen identity. `Response` (fixed as B-2026-08-02-7) was one instance of a class: a user `HttpError` double-frees identically, and a user `Match` crashes codegen outright. | src/prelude.rs (the flat prelude name list — `Response`, `HttpError`, `Match`, `Client`, `RequestBuilder`, `Stats`, `Regex`, …), runtime/stdlib/*.kara (where those types are declared), and every name-keyed dispatch site in src/typechecker, src/codegen and src/interpreter (~49 across 14 files) |
-| B-2026-08-02-20 | 2026-08-02 | codegen+interp | medium | container moved into a struct-literal FIELD keeps the source binding's element/value bodies walk armed -- interp-only early fires (Set/SortedMap) and both-backend double fires (Vec) | — |
 
-### Fixed (858)
+### Fixed (859)
 
-<details><summary>858 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>859 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1000,6 +999,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **872 surfaced 
 | B-2026-08-02-17 | codegen | medium | Map[K, T] field of a GENERIC parent: the value's heap is never freed at owner death under AOT | db367df |
 | B-2026-08-02-18 | codegen+interp | low | user Drop bodies silent for TUPLE-held and Map-VALUE-held Drop values in struct fields, on BOTH backends (parity holds, memory clean) | d6e9beb |
 | B-2026-08-02-19 | codegen | medium | generic parent's tuple field never frees the mono element heap: `(T, i64)` classifies no-heap at the declared TE | d6e9beb |
+| B-2026-08-02-20 | codegen+interp | medium | container moved into a struct-literal FIELD keeps the source binding's element/value bodies walk armed -- interp-only early fires (Set/SortedMap) and… | 61e68c5 |
 | B-2026-08-02-21 | codegen | medium | struct-field Set[DropStruct] leaks element heap; struct-field SortedMap[K, DropStruct] leaks the WHOLE handle tree at owner death | 7cf6db5 |
 
 </details>
