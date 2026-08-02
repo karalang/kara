@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 204 | 1 |
-| leak | 119 | 1 |
+| leak | 119 | 0 |
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 74 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 623 | 3 |
+| codegen | 623 | 2 |
 | typecheck | 115 | 1 |
 | interp | 107 | 2 |
 | ownership | 37 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **868 surfaced · 7 open · 853 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **868 surfaced · 6 open · 854 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,11 +136,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **868 surfaced 
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-13 | 2026-08-02 | typecheck+codegen | high | STDLIB AND USER TYPES SHARE ONE FLAT NAMESPACE, so any user struct that shadows a prelude type name silently takes over that type's codegen identity. `Response` (fixed as B-2026-08-02-7) was one instance of a class: a user `HttpError` double-frees identically, and a user `Match` crashes codegen outright. | src/prelude.rs (the flat prelude name list — `Response`, `HttpError`, `Match`, `Client`, `RequestBuilder`, `Stats`, `Regex`, …), runtime/stdlib/*.kara (where those types are declared), and every name-keyed dispatch site in src/typechecker, src/codegen and src/interpreter (~49 across 14 files) |
 | B-2026-08-02-15 | 2026-08-02 | codegen+interp | high | indexed field store with a NON-PURE index (`v[f()].field = x`) is silently dropped on every codegen surface — the store AND the index's side effect vanish, check-clean, no diagnostic; the interpreter applies it but evaluates the index TWICE. Same no-op tail as B-2026-08-01-35 / B-2026-07-13-10, uncovered cell: identifier-rooted container x non-pure index | — |
-| B-2026-08-02-17 | 2026-08-02 | codegen | medium | Map[K, T] field of a GENERIC parent: the value's heap is never freed at owner death under AOT | — |
 
-### Fixed (853)
+### Fixed (854)
 
-<details><summary>853 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>854 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -997,6 +996,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **868 surfaced 
 | B-2026-08-02-12 | codegen | high | Vec.filled(n, Map.new()) segfaults under AOT (Map handle elements not cloned per slot) | dce2015 |
 | B-2026-08-02-14 | codegen+interp | medium | Drop-carrying field of a GENERIC-mono parent struct: body silent at owner death (both backends) + Vec-element String buffer leaks under AOT | 6ff8614 |
 | B-2026-08-02-16 | codegen | medium | Vec[T]-of-Drop field of a GENERIC parent: element Drop bodies fire under karac run but stay silent under AOT | 8f3b456 |
+| B-2026-08-02-17 | codegen | medium | Map[K, T] field of a GENERIC parent: the value's heap is never freed at owner death under AOT | db367df |
 
 </details>
 
