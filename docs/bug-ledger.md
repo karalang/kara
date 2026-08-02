@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
 | perf | 43 | 1 |
-| crash | 34 | 1 |
+| crash | 35 | 2 |
 | diagnostics | 34 | 3 |
 | soundness | 33 | 0 |
 | other | 12 | 1 |
@@ -112,21 +112,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 614 | 2 |
 | typecheck | 111 | 2 |
-| interp | 104 | 2 |
+| interp | 105 | 3 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
 | other | 23 | 1 |
 | cli | 23 | 0 |
 | runtime | 18 | 0 |
-| resolver | 17 | 2 |
+| resolver | 18 | 3 |
 | parser | 10 | 1 |
 | lexer | 3 | 0 |
 | effect | 3 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **856 surfaced · 8 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **857 surfaced · 9 open · 840 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **856 surfaced 
 | B-2026-08-02-2 | 2026-08-02 | typecheck | medium | No implicit `*mut T` → `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*const` foreign param needs an `unsafe { p as *const T }` cast | typechecker call-argument compatibility for raw pointer types |
 | B-2026-08-02-3 | 2026-08-02 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnostic — right message, wrong delivery | src/interpreter/method_call_seq.rs:767 (CString.as_ptr panic!) |
 | B-2026-08-02-5 | 2026-08-02 | typecheck+interp+codegen | medium | Tuple-element assignment targets are accepted by every checking phase but unimplemented on both backends: `t.0 = v` and `o.t.0 = v` ICE the interpreter (unreachable panic + backtrace) while karac build silently drops the store; `t.0.f = v` and `o.t.0.f = v` are silently dropped on BOTH backends (parity in wrongness, stale reads). design.md §7956 classifies tuple indices as first-class mutable places (the call-site mutation-marker rules forward through them), so the class is a missing implementation, not a rejection gap. | src/interpreter/eval_stmt.rs assign_to_place (no TupleIndex arm — a direct TupleIndex target hits the `unreachable!` at the Assign arm's tail: 'unsupported assignment target ... should be caught by parser/typechecker', an ICE with a Rust backtrace on an accepted program); src/codegen/stmts.rs Assign-arm dispatch (no TupleIndex target arm — falls through, the store is silently dropped) and expr_ops.rs nested_store_place_ptr (no TupleIndex link arm — FieldAccess-over-TupleIndex chains silently no-op on BOTH backends) |
+| B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name written in block form — `spawn { … }`, `println { … }`, `assert { … }` — passes `karac check` cleanly and then panics the interpreter with an internal `unreachable!` and a Rust backtrace. The panic's own message says "should be caught by resolver". A user-defined unknown name (`notafunction { … }`) is correctly rejected. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 
 ### Fixed (840)
 
