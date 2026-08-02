@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 202 | 0 |
 | leak | 117 | 0 |
+| double-free | 89 | 1 |
 | codegen-gap | 88 | 0 |
-| double-free | 88 | 0 |
 | missing-feature | 74 | 2 |
 | run-vs-build | 66 | 0 |
 | false-positive | 54 | 0 |
@@ -110,23 +110,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 614 | 2 |
+| codegen | 615 | 3 |
 | typecheck | 111 | 2 |
 | interp | 105 | 3 |
 | ownership | 37 | 1 |
 | autopar | 30 | 0 |
 | other | 23 | 1 |
 | cli | 23 | 0 |
-| runtime | 18 | 0 |
+| runtime | 19 | 1 |
 | resolver | 18 | 2 |
 | parser | 10 | 1 |
 | lexer | 3 | 0 |
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **857 surfaced · 8 open · 841 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **858 surfaced · 9 open · 841 fixed** (2026-05-20 → 2026-08-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **857 surfaced 
 | B-2026-08-02-3 | 2026-08-02 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnostic — right message, wrong delivery | src/interpreter/method_call_seq.rs:767 (CString.as_ptr panic!) |
 | B-2026-08-02-5 | 2026-08-02 | typecheck+interp+codegen | medium | Tuple-element assignment targets are accepted by every checking phase but unimplemented on both backends: `t.0 = v` and `o.t.0 = v` ICE the interpreter (unreachable panic + backtrace) while karac build silently drops the store; `t.0.f = v` and `o.t.0.f = v` are silently dropped on BOTH backends (parity in wrongness, stale reads). design.md §7956 classifies tuple indices as first-class mutable places (the call-site mutation-marker rules forward through them), so the class is a missing implementation, not a rejection gap. | src/interpreter/eval_stmt.rs assign_to_place (no TupleIndex arm — a direct TupleIndex target hits the `unreachable!` at the Assign arm's tail: 'unsupported assignment target ... should be caught by parser/typechecker', an ICE with a Rust backtrace on an accepted program); src/codegen/stmts.rs Assign-arm dispatch (no TupleIndex target arm — falls through, the store is silently dropped) and expr_ops.rs nested_store_place_ptr (no TupleIndex link arm — FieldAccess-over-TupleIndex chains silently no-op on BOTH backends) |
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name written in block form — `spawn { … }`, `println { … }`, `assert { … }` — passes `karac check` cleanly and then panics the interpreter with an internal `unreachable!` and a Rust backtrace. The panic's own message says "should be caught by resolver". A user-defined unknown name (`notafunction { … }`) is correctly rejected. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
+| B-2026-08-02-7 | 2026-08-02 | codegen+runtime | high | An IN-PROCESS Kāra client → Kāra server exchange double-frees the response body: the handler's body buffer is freed by the runtime client path AND again by generated code. Proven by size — the double-freed block is byte-for-byte the handler's body length (1-char body → 1-byte block; 36-char body → 36-byte block). Aborts 3/3 runs. | karac_runtime_http_client_get (runtime/src — the client path that frees the response body) and the codegen-side drop emitted for the `Result[Response, …]` a `Client.get` match consumes; Server.serve's handler-response ownership on the same-process path |
 
 ### Fixed (841)
 
