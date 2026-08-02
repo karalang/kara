@@ -24258,18 +24258,40 @@ fn ref_to_mut_ptr_cast_rejected() {
 }
 
 #[test]
-fn const_ptr_to_mut_ptr_cast_accepted() {
-    // `*const T as *mut T` is a raw-pointer-to-raw-pointer cast —
-    // both sides carry pointer provenance, so the strict-provenance
-    // contract is unaffected. Accepted.
-    typecheck_ok(
+fn const_ptr_to_mut_ptr_cast_requires_unsafe() {
+    // B-2026-08-02-9: `*const T as *mut T` STRENGTHENS — it mints write
+    // capability the source pointer does not carry — so it requires an
+    // `unsafe { }` block (design.md § Raw Pointer Construction lists it
+    // among the unsafe-block raw-to-raw casts). Bare form: rejected.
+    let errors = typecheck_errors(
         "fn promote(p: *const i32) -> *mut i32 { p as *mut i32 }\n\
+         fn main() {\n    let x: i32 = 7;\n    let q = promote(ptr.const(x));\n}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PTR_CAST_REQUIRES_UNSAFE")
+                && e.message.contains("write capability")),
+        "const->mut strengthening outside unsafe must be rejected, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn const_ptr_to_mut_ptr_cast_accepted_in_unsafe() {
+    // Same strengthening cast inside `unsafe { }`: accepted.
+    typecheck_ok(
+        "fn promote(p: *const i32) -> *mut i32 { unsafe { p as *mut i32 } }\n\
          fn main() {\n    let x: i32 = 7;\n    let q = promote(ptr.const(x));\n}",
     );
 }
 
 #[test]
 fn mut_ptr_to_const_ptr_cast_accepted() {
+    // Same-pointee WEAKENING (`*mut T as *const T`) drops write capability
+    // on the same allocation — it asserts nothing, so it stays SAFE (no
+    // unsafe block). This is the direction every consume-side FFI binding
+    // hits (B-2026-08-02-2, examples/interop-zlib).
     typecheck_ok(
         "fn demote(p: *mut i32) -> *const i32 { p as *const i32 }\n\
          fn main() {\n    let mut x: i32 = 7;\n    let q = demote(ptr.mut(x));\n}",
@@ -24277,11 +24299,76 @@ fn mut_ptr_to_const_ptr_cast_accepted() {
 }
 
 #[test]
-fn const_ptr_to_const_ptr_pointee_change_accepted() {
-    // Pointee-type change `*const i32 as *const u8` is a bitcast.
-    // Accepted — both sides are raw pointers.
-    typecheck_ok(
+fn const_ptr_to_const_ptr_pointee_change_requires_unsafe() {
+    // B-2026-08-02-9: a pointee-type change (`*const i32 as *const u8`)
+    // reinterprets the pointee — design.md § Unsafe Escape Hatch mandates
+    // `unsafe { }` for pointee-changing casts. Bare form: rejected.
+    let errors = typecheck_errors(
         "fn reinterpret(p: *const i32) -> *const u8 { p as *const u8 }\n\
+         fn main() {\n    let x: i32 = 7;\n    let q = reinterpret(ptr.const(x));\n}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PTR_CAST_REQUIRES_UNSAFE")
+                && e.message.contains("reinterprets the pointee")),
+        "pointee-changing cast outside unsafe must be rejected, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn mut_ptr_to_const_ptr_mismatch_carries_insertion_fix_it() {
+    // B-2026-08-02-2 residual: `expected '*const T', found '*mut T'` (same
+    // pointee) carries a machine-applicable fix-it inserting ` as *const T`
+    // at the end of the offending expression — the always-sound weakening,
+    // so `karac fix` can close the consume-direction FFI shape mechanically.
+    let errors = typecheck_errors(
+        "fn read_only(p: *const u8) {}\n\
+         fn main() {\n    let mut x: u8 = 7;\n    let m: *mut u8 = ptr.mut(x);\n    read_only(m);\n}",
+    );
+    let e = errors
+        .iter()
+        .find(|e| e.message.contains("expected '*const u8', found '*mut u8'"))
+        .unwrap_or_else(|| panic!("no mut/const mismatch error, got: {:?}", errors));
+    let fix = e
+        .fix_it
+        .as_ref()
+        .unwrap_or_else(|| panic!("mismatch must carry a fix-it, got: {:?}", e));
+    assert_eq!(fix.replacement, " as *const u8");
+    assert_eq!(fix.span.length, 0, "fix-it must be an insertion");
+    assert!(
+        e.message.contains("help: insert"),
+        "message must carry the help text, got: {}",
+        e.message
+    );
+}
+
+#[test]
+fn mut_ptr_to_const_ptr_mismatch_different_pointee_no_fix_it() {
+    // A mut/const mismatch with DIFFERENT pointees is not the weakening
+    // shape — inserting a cast would smuggle a pointee change past the
+    // E_PTR_CAST_REQUIRES_UNSAFE gate, so no fix-it is attached.
+    let errors = typecheck_errors(
+        "fn read_only(p: *const u64) {}\n\
+         fn main() {\n    let mut x: u8 = 7;\n    let m: *mut u8 = ptr.mut(x);\n    read_only(m);\n}",
+    );
+    assert!(
+        errors
+            .iter()
+            .filter(|e| e.message.contains("expected '*const u64'"))
+            .all(|e| e.fix_it.is_none()),
+        "cross-pointee mismatch must NOT carry the insertion fix-it, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn const_ptr_to_const_ptr_pointee_change_accepted_in_unsafe() {
+    // Same pointee-changing cast inside `unsafe { }`: accepted (a bitcast;
+    // provenance unchanged).
+    typecheck_ok(
+        "fn reinterpret(p: *const i32) -> *const u8 { unsafe { p as *const u8 } }\n\
          fn main() {\n    let x: i32 = 7;\n    let q = reinterpret(ptr.const(x));\n}",
     );
 }

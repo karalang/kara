@@ -3240,12 +3240,58 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        // Raw pointer → raw pointer: accepted. Mutability changes
-        // (`*const T as *mut T`) and pointee changes (`*const T as
-        // *const U`) are both bitcasts at the IR level; the strict-
-        // provenance contract is unchanged because both sides carry
-        // pointer provenance.
-        if matches!(from_ty, Type::Pointer { .. }) && matches!(to_ty, Type::Pointer { .. }) {
+        // Raw pointer → raw pointer: three shapes (design.md § Unsafe
+        // Escape Hatch / § Raw Pointer Construction; B-2026-08-02-9). All
+        // are bitcasts at the IR level and provenance is unchanged — the
+        // gate below is a visible-trust-boundary rule, not a
+        // representation concern.
+        //
+        //   - Same-pointee WEAKENING (`*mut T as *const T`) and identity:
+        //     SAFE. Dropping write capability on the same allocation
+        //     asserts nothing the type system doesn't already know.
+        //   - Pointee-CHANGING (`*T as *U`, `T != U`): requires
+        //     `unsafe { }` — the cast site is where the author asserts
+        //     the reinterpretation is valid.
+        //   - Same-pointee STRENGTHENING (`*const T as *mut T`): requires
+        //     `unsafe { }` — it mints write capability the source pointer
+        //     does not carry.
+        if let (
+            Type::Pointer {
+                is_mut: from_mut,
+                inner: from_inner,
+            },
+            Type::Pointer {
+                is_mut: to_mut,
+                inner: to_inner,
+            },
+        ) = (from_ty, to_ty)
+        {
+            let same_pointee = from_inner == to_inner;
+            if same_pointee && (*from_mut || !*to_mut) {
+                // Identity, or `*mut T as *const T` weakening.
+                return;
+            }
+            if self.unsafe_depth == 0 {
+                let shape = if same_pointee {
+                    "adds write capability the source pointer does not carry"
+                } else {
+                    "reinterprets the pointee type"
+                };
+                self.type_error(
+                    format!(
+                        "error[E_PTR_CAST_REQUIRES_UNSAFE]: casting `{}` to `{}` \
+                         {shape} and must be wrapped in an `unsafe {{ ... }}` \
+                         block — the cast site is where the author asserts the \
+                         reinterpretation is valid. (The capability-DROPPING \
+                         cast `*mut T as *const T` is safe and needs no \
+                         `unsafe`.)",
+                        type_display(from_ty),
+                        type_display(to_ty),
+                    ),
+                    span.clone(),
+                    TypeErrorKind::InvalidCast,
+                );
+            }
             return;
         }
 
@@ -3810,6 +3856,55 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                 }
+            }
+        }
+        // Same-pointee `*mut T` → `*const T` mismatch: the weakening cast
+        // is safe and always sound (it only drops write capability), so
+        // this mismatch carries a machine-applicable fix-it inserting
+        // ` as *const T` at the end of the offending expression — the
+        // shape every consume-direction FFI binding hits when passing a
+        // filled `*mut` buffer to a `*const` foreign param
+        // (B-2026-08-02-2, examples/interop-zlib).
+        if let (
+            Type::Pointer {
+                is_mut: false,
+                inner: expected_inner,
+            },
+            Type::Pointer {
+                is_mut: true,
+                inner: found_inner,
+            },
+        ) = (expected, found)
+        {
+            if expected_inner == found_inner {
+                let insertion = format!(" as {}", type_display(expected));
+                let insert_at = Span {
+                    line: span.line,
+                    column: span.column,
+                    offset: span.offset + span.length,
+                    length: 0,
+                };
+                self.errors.push(TypeError {
+                    message: format!(
+                        "expected '{}', found '{}'; help: insert `{}` — the \
+                         mut-to-const weakening cast is safe (it only drops \
+                         write capability)",
+                        type_display(expected),
+                        type_display(found),
+                        insertion.trim_start(),
+                    ),
+                    span,
+                    kind: TypeErrorKind::TypeMismatch,
+                    lint_name: None,
+                    fix_it: Some(FixIt {
+                        span: insert_at,
+                        replacement: insertion,
+                    }),
+                    class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                    expected: Some(type_display(expected)),
+                    got: Some(type_display(found)),
+                });
+                return false;
             }
         }
         // Canonical assignment-mismatch site. Use the typed-fields
