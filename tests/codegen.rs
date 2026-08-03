@@ -78696,6 +78696,66 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_discarded_vec_removal_fires_and_frees() {
+        // B-2026-08-03-2 (class 2) — a DISCARDED `v.remove(i);` /
+        // `v.swap_remove(i);` hands the element back BY VALUE with nothing to
+        // receive it: the body never ran and the element's heap LEAKED, on both
+        // backends and on the shipping path. Builtins have no
+        // `fn_return_type_names` entry, so the discard battery could not resolve
+        // what it was holding; it now falls back to the receiver's recorded
+        // element TypeExpr. `bound` is the control that was always correct, and
+        // `survivor` checks only the REMOVED element fires early while the one
+        // left behind still fires at scope exit.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("remove:");
+    {
+        let mut v: Vec[Res] = Vec.new();
+        v.push(Res { id: 1, name: f"a{1}" });
+        v.remove(0);
+        println(v.len());
+    }
+    println("swapremove:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 2, name: f"b{2}" });
+        w.swap_remove(0);
+        println(w.len());
+    }
+    println("bound:");
+    {
+        let mut u: Vec[Res] = Vec.new();
+        u.push(Res { id: 3, name: f"c{3}" });
+        let r = u.remove(0);
+        println(u.len());
+    }
+    println("survivor:");
+    {
+        let mut t: Vec[Res] = Vec.new();
+        t.push(Res { id: 4, name: f"d{4}" });
+        t.push(Res { id: 5, name: f"e{5}" });
+        t.remove(0);
+        println(t.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "remove:\ndrop 1 a1\n0\nswapremove:\ndrop 2 b2\n0\nbound:\ndrop 3 c3\n0\n\
+                 survivor:\ndrop 4 d4\n1\ndrop 5 e5\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_container_clear_runs_element_drop_bodies() {
         // B-2026-08-03-2 (class 1) — `v.clear()` / `m.clear()` destroy every
         // element but ran no destructor. Both arms did all the MEMORY work and

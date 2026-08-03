@@ -27822,6 +27822,54 @@ fn test_bare_statement_container_removal_discard_fires() {
 }
 
 #[test]
+fn test_discarded_vec_removal_fires_and_frees() {
+    // B-2026-08-03-2 (class 2) — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_discarded_vec_removal_fires_and_frees`, same source and expected
+    // string. Landed AFTER the codegen half deliberately: while codegen could
+    // not own a builtin removal's element, admitting these here would have
+    // converted a shared gap into a divergence.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"remove:\");\n\
+                 {\n\
+                     let mut v: Vec[Res] = Vec.new();\n\
+                     v.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     v.remove(0);\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"swapremove:\");\n\
+                 {\n\
+                     let mut w: Vec[Res] = Vec.new();\n\
+                     w.push(Res { id: 2, name: f\"b{2}\" });\n\
+                     w.swap_remove(0);\n\
+                     println(w.len());\n\
+                 }\n\
+                 println(\"bound:\");\n\
+                 {\n\
+                     let mut u: Vec[Res] = Vec.new();\n\
+                     u.push(Res { id: 3, name: f\"c{3}\" });\n\
+                     let r = u.remove(0);\n\
+                     println(u.len());\n\
+                 }\n\
+                 println(\"survivor:\");\n\
+                 {\n\
+                     let mut t: Vec[Res] = Vec.new();\n\
+                     t.push(Res { id: 4, name: f\"d{4}\" });\n\
+                     t.push(Res { id: 5, name: f\"e{5}\" });\n\
+                     t.remove(0);\n\
+                     println(t.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "remove:\ndrop 1 a1\n0\nswapremove:\ndrop 2 b2\n0\nbound:\ndrop 3 c3\n0\nsurvivor:\ndrop 4 d4\n1\ndrop 5 e5\nend\n"
+    );
+}
+
+#[test]
 fn test_container_clear_runs_element_drop_bodies() {
     // B-2026-08-03-2 (class 1) — interpreter twin of `tests/codegen.rs`'s
     // `e2e_container_clear_runs_element_drop_bodies`, same source and expected

@@ -2058,6 +2058,38 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get(&format!("{t}.{method}"))
                             .cloned()
                     })
+                    // B-2026-08-03-2 (class 2) — a BUILTIN container removal
+                    // that hands back the element BY VALUE (`v.remove(i);`,
+                    // `v.swap_remove(i);`). No `Vec.remove` entry exists in
+                    // `fn_return_type_names` (builtins are not declared impl
+                    // methods), so the lookup above missed and the discarded
+                    // element got no registration at all: its Drop body never
+                    // ran AND its heap leaked, on the shipping path. Resolve
+                    // the element type from the receiver's recorded element
+                    // TypeExpr instead — the same side-table the container's
+                    // own drop machinery keys on. `pop` is NOT here: it
+                    // returns `Option[T]`, which the optres arm of this same
+                    // battery already covers.
+                    .or_else(|| {
+                        if !matches!(method.as_str(), "remove" | "swap_remove") {
+                            return None;
+                        }
+                        let ExprKind::Identifier(recv) = &object.kind else {
+                            return None;
+                        };
+                        // Vec/VecDeque receivers only — a Map's `remove`
+                        // returns an Option and is already handled.
+                        if !matches!(
+                            self.var_type_names.get(recv.as_str()).map(|s| s.as_str()),
+                            Some("Vec") | Some("VecDeque")
+                        ) {
+                            return None;
+                        }
+                        match &self.var_elem_type_exprs.get(recv.as_str())?.kind {
+                            TypeKind::Path(p) => p.segments.first().cloned(),
+                            _ => None,
+                        }
+                    })
                     .filter(|ret| {
                         self.struct_types.contains_key(ret.as_str())
                             || self.enum_layouts.contains_key(ret.as_str())

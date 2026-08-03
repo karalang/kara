@@ -1786,7 +1786,13 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::MethodCall { method, .. } => {
                 matches!(
                     method.as_str(),
-                    "insert" | "remove" | "pop" | "pop_back" | "pop_front" | "take"
+                    "insert"
+                        | "remove"
+                        | "swap_remove"
+                        | "pop"
+                        | "pop_back"
+                        | "pop_front"
+                        | "take"
                 )
                 // B-2026-07-30-11 (user-method discard): `f.make();` — a USER
                 // impl method returning an owned struct or value enum
@@ -3127,14 +3133,35 @@ impl<'a> super::Interpreter<'a> {
                         // than the shared gap, since AOT additionally leaks
                         // them. Those stay class 2 on the row until the codegen
                         // side lands; this arm only removes a divergence.
-                        if matches!(
-                            method.as_str(),
-                            "insert" | "remove" | "pop" | "pop_back" | "pop_front" | "take"
-                        ) && matches!(
+                        let optres_result = matches!(
                             &discarded,
                             Value::EnumVariant { enum_name, .. }
                                 if enum_name == "Option" || enum_name == "Result"
-                        ) {
+                        );
+                        // B-2026-08-03-2 (class 2) — `v.remove(i);` /
+                        // `v.swap_remove(i);` hand back the element BY VALUE.
+                        // Held back on the first pass because codegen could not
+                        // resolve a builtin removal's element type and so
+                        // neither fired nor freed it; admitting them then would
+                        // have turned a shared gap into a divergence. Codegen
+                        // now resolves the element type from the receiver's
+                        // recorded element TypeExpr, so both sides can own it.
+                        let bare_removal = matches!(method.as_str(), "remove" | "swap_remove")
+                            && matches!(
+                                &discarded,
+                                Value::Struct { .. } | Value::EnumVariant { .. }
+                            );
+                        if matches!(
+                            method.as_str(),
+                            "insert"
+                                | "remove"
+                                | "swap_remove"
+                                | "pop"
+                                | "pop_back"
+                                | "pop_front"
+                                | "take"
+                        ) && (optres_result || bare_removal)
+                        {
                             self.run_discarded_value_user_drops(discarded);
                             return Ok(Value::Unit);
                         }

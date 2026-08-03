@@ -17215,6 +17215,50 @@ fn main() {
     /// first diagnosis) and the NAMED source, whose own-body action used to
     /// stay armed and fire over the moved-from slot.
     #[test]
+    fn asan_discarded_vec_removal_no_leak() {
+        // B-2026-08-03-2 (class 2) — the LEAK half. A discarded `v.remove(i);`
+        // orphaned the element's heap entirely (32 direct + 3 indirect in the
+        // minimal repro) because nothing owned the by-value element the builtin
+        // handed back. Fires the body AND frees now; the bound form is the
+        // control that always did.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("remove:");
+    {
+        let mut v: Vec[Res] = Vec.new();
+        v.push(Res { id: 1, name: f"rr{1}" });
+        v.remove(0);
+        println(v.len());
+    }
+    println("swapremove:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 2, name: f"ss{2}" });
+        w.swap_remove(0);
+        println(w.len());
+    }
+    println("end");
+}
+"#,
+            &[
+                "remove:",
+                "drop 1 rr1",
+                "0",
+                "swapremove:",
+                "drop 2 ss2",
+                "0",
+                "end",
+            ],
+            "discarded_vec_removal_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_optres_payload_nested_positions_clean() {
         // B-2026-08-03-1 — the three nested Option positions whose payload
         // MEMORY was already correct, now that their bodies fire too: the
