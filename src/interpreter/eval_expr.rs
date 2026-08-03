@@ -167,9 +167,26 @@ impl<'a> super::Interpreter<'a> {
                 if self.is_known_type_name(name) {
                     return Value::TypeVal(name.clone());
                 }
-                unreachable!(
-                    "variable '{}' not found at {}:{}; should be caught by resolver",
-                    name, expr.span.line, expr.span.column
+                // B-2026-08-02-6 — was `unreachable!`, which panicked the
+                // interpreter with a Rust backtrace whose own message blamed
+                // the resolver. That message was correct (a builtin function
+                // name outside call position resolved fine and arrived here
+                // unbound; the resolver now rejects those), but the OUTCOME
+                // violated the never-panic rule, and this arm stays reachable
+                // from any future resolver hole of the same kind. Degrade to a
+                // structured runtime error: the user gets a span and a
+                // diagnostic, `--output=json` consumers can see it, and the
+                // "please report" framing says plainly that reaching here is a
+                // compiler bug rather than the program's fault.
+                let span = expr.span.clone();
+                let name = name.clone();
+                self.record_runtime_error(
+                    format!(
+                        "internal: name '{name}' resolved but has no binding at run time. \
+                         This is a compiler bug (the resolver should have rejected or bound \
+                         it) — please report it with the source."
+                    ),
+                    &span,
                 )
             }),
 

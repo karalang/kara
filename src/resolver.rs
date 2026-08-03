@@ -152,6 +152,12 @@ pub enum ScopeKind {
 // ── Symbol Table ────────────────────────────────────────────────
 
 pub struct SymbolTable {
+    /// Symbol ids of the scope-0 prelude FUNCTIONS (`println`, `spawn`, …).
+    /// Builtins are not first-class values, so a reference to one outside call
+    /// position is an error — but the check keys on the resolved SYMBOL, not
+    /// the name, so a local that shadows a builtin (`let println = 5;
+    /// println;`) stays legal. B-2026-08-02-6.
+    pub prelude_fn_ids: std::collections::HashSet<SymbolId>,
     symbols: Vec<Symbol>,
     scopes: Vec<Scope>,
     current_scope: ScopeId,
@@ -195,6 +201,7 @@ impl SymbolTable {
             names: HashMap::new(),
         };
         let mut table = SymbolTable {
+            prelude_fn_ids: std::collections::HashSet::new(),
             symbols: Vec::new(),
             scopes: vec![global_scope],
             current_scope: ScopeId(0),
@@ -246,6 +253,11 @@ impl SymbolTable {
                     param_names: Vec::new(),
                 },
             );
+            // B-2026-08-02-6 — remember the id so a non-call reference can be
+            // rejected without also rejecting a user binding of the same name.
+            if let Some(sym) = self.scopes[0].names.get(*name).copied() {
+                self.prelude_fn_ids.insert(sym);
+            }
         }
         for name in crate::prelude::PRELUDE_TYPES {
             push(self, name, SymbolKind::Primitive);
@@ -1051,6 +1063,15 @@ pub struct Resolver<'a> {
     /// plain diagnostic is emitted. The CLI sets this via
     /// `Resolver::with_test_file(module.is_test_file)`.
     pub(crate) is_test_file: bool,
+    /// `(offset, length)` of the identifier currently in CALL position — the
+    /// one place a builtin function name is legal. Keyed on the exact span
+    /// rather than a bool because a callee can be an `Index` wrapper carrying
+    /// generic args (`with_provider[Clock](…)` parses as
+    /// `Call{callee: Index{object: Identifier, index: …}}`): a bool would
+    /// exempt the whole callee subtree, so `f[println](…)` would wrongly admit
+    /// `println` as the index. Only the root identifier is exempt.
+    /// B-2026-08-02-6.
+    pub(crate) call_callee_span: Option<(usize, usize)>,
     /// Phase-10 `#[target(...)]` tombstones: item name → rendered target
     /// spec, for every item `target::filter_inactive_items` removed before
     /// this resolve session. Consulted by `error_undefined_name` so a
@@ -1137,6 +1158,7 @@ impl<'a> Resolver<'a> {
             par_sibling_bindings: HashMap::new(),
             is_stdlib_source: false,
             is_test_file: false,
+            call_callee_span: None,
             target_tombstones: HashMap::new(),
             error_fix_diffs: HashMap::new(),
             pending_binding_renames: Vec::new(),
@@ -1313,6 +1335,34 @@ impl<'a> Resolver<'a> {
             self.error_fix_diffs
                 .insert(SpanKey::from_span(&p.diag_span), edits);
         }
+    }
+
+    /// B-2026-08-02-6 — a builtin function referenced outside call position.
+    ///
+    /// The message names the correct call form rather than saying only what is
+    /// wrong, because the mistake has a specific likely cause: Kāra has real
+    /// block-form constructs (`par { }`, `seq { }`, `unsafe { }`), so someone
+    /// who has just written `par { }` and wants one background task writes
+    /// `spawn { }` by analogy. `spawn` gets its closure form spelled out; the
+    /// rest get the generic call form.
+    fn error_builtin_not_a_value(&mut self, name: &str, span: Span) {
+        let how = if name == "spawn" {
+            " — `spawn` takes a closure: `spawn(|| …)`".to_string()
+        } else {
+            format!(" — call it: `{name}(…)`")
+        };
+        self.errors.push(ResolveError {
+            message: format!(
+                "`{name}` is a built-in function and cannot be used as a value{how}. \
+                 Built-in functions may only appear in call position; user-defined \
+                 functions can be used as values."
+            ),
+            span,
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
     }
 
     fn error_undefined_name(&mut self, name: &str, span: Span) {

@@ -332,6 +332,21 @@ impl<'a> super::Resolver<'a> {
             ExprKind::Identifier(name) => {
                 if let Some(sym) = self.table.lookup(name) {
                     let id = sym.id;
+                    // B-2026-08-02-6 — a BUILTIN function name outside call
+                    // position. The name resolves (it is a real scope-0
+                    // symbol), so resolve and typecheck both passed and the
+                    // interpreter then hit an `unreachable!` whose own message
+                    // blamed the resolver — `karac check` greenlit a program
+                    // that cannot run on either backend. Builtins are not
+                    // first-class values today, so every non-call reference is
+                    // an error; keyed on the resolved SYMBOL so a local that
+                    // shadows one (`let println = 5; println;`) stays legal.
+                    if self.call_callee_span != Some((expr.span.offset, expr.span.length))
+                        && self.table.prelude_fn_ids.contains(&id)
+                    {
+                        self.error_builtin_not_a_value(name, expr.span.clone());
+                        return;
+                    }
                     self.record_resolution(&expr.span, id);
                     // `expr.span` can run past the identifier — a method
                     // call records its receiver under the whole call — but
@@ -441,7 +456,23 @@ impl<'a> super::Resolver<'a> {
                     }
                 }
                 if !deferred && !handled {
+                    // B-2026-08-02-6 — call position is the ONE place a
+                    // builtin function name is legal. Mark the exact root
+                    // identifier: a callee may be an `Index` wrapper carrying
+                    // generic args (`with_provider[Clock](…)`), and exempting
+                    // the whole subtree would also admit a builtin used as the
+                    // INDEX (`f[println](…)`).
+                    fn callee_root_ident(e: &Expr) -> Option<(usize, usize)> {
+                        match &e.kind {
+                            ExprKind::Identifier(_) => Some((e.span.offset, e.span.length)),
+                            ExprKind::Index { object, .. } => callee_root_ident(object),
+                            _ => None,
+                        }
+                    }
+                    let saved =
+                        std::mem::replace(&mut self.call_callee_span, callee_root_ident(callee));
                     self.resolve_expr(callee);
+                    self.call_callee_span = saved;
                 }
                 for arg in args {
                     self.resolve_expr(&arg.value);

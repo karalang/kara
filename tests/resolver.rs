@@ -5549,3 +5549,78 @@ fn module_binding_rename_ignores_shadowing_locals() {
         "only the module binding and its own references may be rewritten"
     );
 }
+
+// ── B-2026-08-02-6: a builtin function name outside call position ──────────
+//
+// The name is a real scope-0 symbol, so it resolved, typechecked, and then
+// panicked the interpreter with an `unreachable!` whose own message blamed the
+// resolver — `karac check` greenlit a program that could not run on either
+// backend. Builtins are not first-class values, so every non-call reference is
+// rejected here instead.
+
+#[test]
+fn builtin_fn_as_bare_statement_is_rejected() {
+    let errs = resolve_errors("fn main() { spawn; }");
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("built-in function and cannot be used as a value")),
+        "expected the builtin-not-a-value diagnostic, got: {errs:?}"
+    );
+}
+
+#[test]
+fn builtin_fn_in_block_form_is_rejected() {
+    // The shape that found the bug: Kāra has real block-form constructs
+    // (`par { }`, `seq { }`), so `spawn { … }` is the natural wrong guess.
+    let errs = resolve_errors("fn main() { spawn { println(\"x\"); }; }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("`spawn(|| …)`")),
+        "the `spawn` diagnostic must name the closure form, got: {errs:?}"
+    );
+}
+
+#[test]
+fn builtin_fn_bound_to_a_let_is_rejected() {
+    let errs = resolve_errors("fn main() { let f = println; }");
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("built-in function and cannot be used as a value")),
+        "expected the builtin-not-a-value diagnostic, got: {errs:?}"
+    );
+}
+
+#[test]
+fn builtin_fn_in_call_position_is_fine() {
+    resolve_ok("fn main() { println(\"ok\"); }");
+}
+
+#[test]
+fn generic_instantiated_builtin_call_is_fine() {
+    // `with_provider[Clock](…)` parses as `Call{callee: Index{object:
+    // Identifier, index: …}}`, so the callee is NOT a bare identifier. A
+    // first cut of this check keyed on "callee is an Identifier" and rejected
+    // every such call — caught by tests/cli.rs's provider-escape cases, which
+    // is why the exemption is keyed on the callee's ROOT identifier span.
+    resolve_ok(
+        "trait Clock { fn now(self) -> i64; }\n\
+         struct FakeClock {}\n\
+         impl Clock for FakeClock { fn now(self) -> i64 { 0 } }\n\
+         fn main() { with_provider[Clock](FakeClock {}, || { return 1; }); }\n",
+    );
+}
+
+#[test]
+fn user_fn_as_a_value_stays_legal() {
+    // The asymmetry is deliberate and load-bearing: `Server.serve(addr,
+    // handle)` in examples/shortener passes a user fn as a value.
+    resolve_ok("fn helper() { println(\"h\"); }\nfn main() { helper; helper(); }");
+}
+
+#[test]
+fn local_shadowing_a_builtin_stays_legal() {
+    // The check keys on the resolved SYMBOL, not the name, so a local binding
+    // that shadows a builtin is still an ordinary value.
+    resolve_ok("fn main() { let println = 5; let x = println; }");
+}
