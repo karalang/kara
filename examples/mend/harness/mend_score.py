@@ -95,6 +95,76 @@ def _iter_dirs(run_dir: Path) -> list[Path]:
     )
 
 
+# Compiler phase order, earliest first. `karac` runs these in sequence and
+# STOPS at the first one that produces errors, so a diagnostic's phase tells
+# you which phases actually ran: everything after the earliest failing phase
+# never executed and therefore could not report anything. B-2026-08-02-1.
+_PHASE_ORDER = ["lex", "parse", "resolve", "typecheck", "effect", "ownership", "codegen"]
+
+
+def _phase_rank(phase: str | None) -> int:
+    """Rank a diagnostic's phase; unknown phases sort LAST (most conservative).
+
+    An unknown phase ranking last means a new diagnostic carrying it is treated
+    as newly-unmasked rather than as a regression, so a future phase name the
+    harness has not learned yet cannot silently inflate the regression count.
+    """
+    try:
+        return _PHASE_ORDER.index((phase or "").strip())
+    except ValueError:
+        return len(_PHASE_ORDER)
+
+
+def _blocking_rank(diags: list[dict]) -> int:
+    """The earliest phase present in a diagnostic set — where the build stopped."""
+    return min((_phase_rank(d.get("phase")) for d in diags), default=len(_PHASE_ORDER))
+
+
+def _fix_regressed(before: list[dict], after: list[dict]) -> bool:
+    """Did the fix BREAK something, as opposed to letting later phases run?
+
+    The old test was a set-difference on codes: any code present after and
+    absent before counted as the fix introducing an error. In a PHASED compiler
+    that is the normal, desirable outcome of any early-phase fix — repairing a
+    parse error is precisely what lets typecheck and ownership run and report
+    the problems they were never reached to find. That predicate conflated a
+    real regression with progress, and it misfired exactly on programs with
+    mistakes in more than one phase, i.e. the realistic ones.
+
+    A new code is charged as a regression only when it appears at or BEFORE the
+    phase that was blocking the build. A parse fix yielding typecheck errors is
+    progress; a parse fix yielding a DIFFERENT parse error is suspect, and still
+    caught.
+    """
+    blocking = _blocking_rank(before)
+    before_codes = {d.get("code") for d in before}
+    return any(
+        d.get("code") not in before_codes and _phase_rank(d.get("phase")) <= blocking
+        for d in after
+    )
+
+
+def _fixes_resolved(before: list[dict], after: list[dict]) -> int:
+    """How many pre-fix diagnostics the fix actually eliminated.
+
+    Was `max(0, len(before) - len(after))`, which carries the same
+    phase-blindness in a sharper form: a correct fix that unmasks two
+    later-phase errors scores ZERO resolved (1 before, 2 after), so the fix that
+    did its job is counted against `fix_precision_pct`. Compare per code instead
+    — newly-unmasked codes only ADD to the after set and so cannot reduce the
+    per-code difference for a code that really did go away.
+    """
+    before_counts: dict[str | None, int] = {}
+    after_counts: dict[str | None, int] = {}
+    for d in before:
+        before_counts[d.get("code")] = before_counts.get(d.get("code"), 0) + 1
+    for d in after:
+        after_counts[d.get("code")] = after_counts.get(d.get("code"), 0) + 1
+    return sum(
+        max(0, n - after_counts.get(code, 0)) for code, n in before_counts.items()
+    )
+
+
 def score_run(run_dir: Path) -> dict | None:
     """Reduce one runs/<timestamp>/ transcript to a flat record."""
     iters = _iter_dirs(run_dir)
@@ -137,10 +207,8 @@ def score_run(run_dir: Path) -> dict | None:
         if fix_log_path.exists():
             fixes_applied += _count_applied_fixes(fix_log_path.read_text())
         if after is not None:
-            before_codes = [d.get("code") for d in before]
-            after_codes = [d.get("code") for d in after]
-            fixes_resolved += max(0, len(before_codes) - len(after_codes))
-            if any(c not in before_codes for c in after_codes):
+            fixes_resolved += _fixes_resolved(before, after)
+            if _fix_regressed(before, after):
                 fix_introduced_new_error = True
 
         if outcome_path.exists() and converging_iter is None:

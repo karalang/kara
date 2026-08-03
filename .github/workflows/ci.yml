@@ -48,6 +48,14 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
+      # Pure-python, no build — runs before the Rust gates so a scorer-logic
+      # regression fails in seconds. The Mend scorer produces the AI-first
+      # wedge's headline numbers, and its failure mode is silent: B-2026-08-02-1
+      # understated fix precision for weeks because the bias only fires on
+      # multi-phase programs, which a single-mistake corpus never produces.
+      - name: Mend scorer self-test
+        run: python3 examples/mend/harness/test_mend_score.py
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
