@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 71 | 1 |
 | false-positive | 55 | 0 |
 | perf | 43 | 0 |
-| crash | 37 | 1 |
+| crash | 37 | 0 |
 | soundness | 35 | 0 |
 | diagnostics | 34 | 1 |
 | other | 12 | 1 |
@@ -111,35 +111,34 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 638 | 2 |
-| interp | 116 | 1 |
+| interp | 116 | 0 |
 | typecheck | 115 | 0 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
 | other | 23 | 1 |
 | cli | 23 | 0 |
 | runtime | 19 | 0 |
-| resolver | 18 | 2 |
+| resolver | 18 | 1 |
 | parser | 10 | 1 |
 | lexer | 3 | 0 |
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **884 surfaced · 6 open · 870 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **884 surfaced · 5 open · 871 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
-| B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
-| B-2026-08-02-25 | 2026-08-02 | codegen | high | Displacing an Option[Drop] (`o = None` / `o = Some(new)`) and consuming one via a match arm binding never run the user `impl Drop` body under `karac build` — the interpreter now runs all three correctly, so the shipping path is the wrong one | — |
+| B-2026-08-02-25 | 2026-08-02 | codegen | high | MATCH-ARM LEG ONLY (displacement leg fixed in 21a1fb6): consuming an Option[Drop] payload via a match/if-let arm binding on a NAMED binding with a boxed payload runs no user `impl Drop` body under `karac build` while the interpreter runs it — a run-vs-build divergence on the shipping path. Blocker identified: the body's only fire path for a boxed payload is the box drop, which the arm's memory suppressors disarm, so the fix must key on that disarm rather than on arm consumption | — |
 | B-2026-08-03-3 | 2026-08-03 | codegen | medium | a Result[Struct, E] struct field and a tuple-held Option[Struct] never free the payload's heap — latent until B-2026-08-03-1 made the Drop body read it | open |
 
-### Fixed (870)
+### Fixed (871)
 
-<details><summary>870 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>871 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -988,6 +987,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **884 surfaced 
 | B-2026-08-02-2 | typecheck | low | No implicit `*mut T` -> `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*… | a31d7be |
 | B-2026-08-02-3 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnosti… | 03c8d6a |
 | B-2026-08-02-5 | typecheck+interp+codegen | medium | Tuple-element assignment targets are accepted by every checking phase but unimplemented on both backends: `t.0 = v` and `o.t.0 = v` ICE the interpret… | 762a7f8 |
+| B-2026-08-02-6 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter… | FIXED e6bf8b5. Resolve rejects every non-call reference to a builtin function (`error_builtin_not_a_value`, src/resolver.rs), naming the correct form — `spawn` gets its closure form spelled out, the rest get `name(…)`. Two details the implementation turns on: (1) keyed on the resolved SYMBOL id (SymbolTable::prelude_fn_ids), not the name, so a local shadowing a builtin stays legal; (2) keyed on the callee's ROOT IDENTIFIER SPAN, not "callee is an Identifier" — a generic-instantiated call parses as Call{callee: Index{object: Identifier, index: ..}}, so the first cut rejected every `with_provider[Clock](..)` (caught by tests/cli.rs's provider-escape cases), while a blanket subtree exemption would have wrongly admitted a builtin as the INDEX (`f[println](..)`). The suggested-fix shape in the filing was right; these two are what it took to make it correct.
+
+Also converted the `unreachable!` at eval_expr.rs:170 into a structured runtime error, as the filing asked: the hole that reached it is closed, but the arm stays reachable from any future resolver hole of the same kind and a panic there violates the never-panic rule regardless.
+
+USER functions remain first-class values (examples/shortener's `Server.serve(addr, handle)` depends on it) — the asymmetry is deliberate, since making builtins first-class would be a feature with a codegen half, not a bug fix.
+
+Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn { .. }`, `let f = println;`), the `spawn` message naming the closure form, and three negatives (call position, generic-callee call, user fn as a value, builtin shadowed by a local). |
 | B-2026-08-02-7 | codegen+runtime | high | Declaring a user struct named `Response` WITH A HEAP FIELD makes every `Client.get` double-free the response body: codegen applies the USER type's dr… | e245ace |
 | B-2026-08-02-8 | codegen | medium | Tuple-element COMPOUND assignment (`t.0 += 5`) is silently dropped under karac build — prints the stale value with no diagnostic — while the interpre… | a92ecae |
 | B-2026-08-02-9 | typecheck | medium | Pointee-changing and const->mut raw pointer casts compile OUTSIDE unsafe blocks — the spec-mandated unsafe gate on `*T as *U` is not enforced (`let w… | a31d7be |
