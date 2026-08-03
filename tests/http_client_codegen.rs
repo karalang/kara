@@ -512,6 +512,63 @@ fn main() with sends(Network) receives(Network) {
         );
     }
 
+    /// The same hazard on the REGEX path. Before B-2026-08-02-13's second
+    /// slice this did not merely miscompile — it panicked out of codegen with
+    /// a Rust backtrace, because the shadowed layout made the receiver an i64
+    /// and the coercion to a struct value asserted.
+    ///
+    /// Detection here cannot key on `struct_types` already holding the name
+    /// (only `Client`/`Response`/`HttpError` are seeded that early) and cannot
+    /// key on the name alone (the stdlib's OWN `Regex`/`Match` reach the same
+    /// pass, so a name test refuses every legitimate regex program). It keys on
+    /// stdlib-origin, which the two splice paths now both establish.
+    #[test]
+    fn user_match_struct_is_refused_on_the_regex_path() {
+        let src = r#"
+struct Match { text: String }
+fn main() {
+    match Regex.compile("a+") {
+        Ok(re) => { if re.is_match("aaa") { println("m"); } }
+        Err(e) => { println("e"); }
+    }
+}
+"#;
+        let err = codegen_result(src).expect_err(
+            "a user `struct Match` must be REFUSED on the regex path, not \
+             crash codegen with a panic",
+        );
+        assert!(
+            err.contains("shadows the built-in stdlib type"),
+            "expected the shadowing diagnostic; got: {err}"
+        );
+        assert!(
+            err.contains("Match"),
+            "the diagnostic must name the offending type; got: {err}"
+        );
+    }
+
+    /// The counterpart the two rejected detection strategies both failed: a
+    /// program that shadows NOTHING must still compile. The stdlib's own
+    /// `Regex`/`Match`/`RegexError` declarations flow through the very same
+    /// `declare_structs` pass as a user's, so an over-broad guard flags the
+    /// stdlib against itself — that regression refused 6 codegen tests.
+    #[test]
+    fn legitimate_regex_program_is_not_refused_as_shadowing() {
+        let src = r#"
+fn main() {
+    let r = Regex.compile("^[0-9]+$").unwrap();
+    let m = r.is_match("123");
+    println(f"{m}");
+}
+"#;
+        let ir = codegen_result(src)
+            .expect("a regex program that shadows nothing must compile, not be refused");
+        assert!(
+            !ir.contains("shadows the built-in stdlib type"),
+            "the shadowing guard must not fire on the stdlib's own declarations"
+        );
+    }
+
     /// The guard must be scoped to the CLIENT path only. `Server.serve`'s
     /// handler returns a user-declared `Response` by design — every serving
     /// program has one, `examples/shortener` included — so declaring the

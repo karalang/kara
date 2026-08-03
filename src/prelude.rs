@@ -1455,6 +1455,24 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
         Item::EffectResource(r) => seen_resources.insert(r.name.clone()),
         _ => true,
     });
+    // Flag every spliced item as stdlib-origin, exactly as
+    // `synthetic_gated_modules` does for the same items reached by the other
+    // path. Without this the splice lands genuinely-stdlib declarations in the
+    // user program tree carrying `stdlib_origin = false`, so no downstream
+    // pass can tell a stdlib `struct Match` from a user-written one — which is
+    // what left codegen's prelude-shadowing guard unable to cover the regex
+    // types (B-2026-08-02-13). The flag is the truth about where the item came
+    // from, so setting it here is a correctness fix in its own right.
+    for item in &mut appended {
+        match item {
+            Item::Function(f) => f.stdlib_origin = true,
+            Item::StructDef(s) => s.stdlib_origin = true,
+            Item::EnumDef(e) => e.stdlib_origin = true,
+            Item::TraitDef(t) => t.stdlib_origin = true,
+            Item::ImplBlock(b) => mark_impl_methods_stdlib(b),
+            _ => {}
+        }
+    }
     program.items.extend(appended);
 }
 

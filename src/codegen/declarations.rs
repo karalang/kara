@@ -628,25 +628,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // place that sees the override happen — and let the builtin
                 // paths refuse. The declarations stay legal, since `Response` is
                 // the documented `Server.serve` handler-return type.
-                // Gate on `struct_types` ALREADY holding an entry for the
-                // name — i.e. something registered this prelude type before
-                // the user's declaration reached this pass. That is exact for
-                // the three types seeded by `seed_builtin_struct_types`
-                // (`Client` / `Response` / `HttpError`), which is the set
-                // whose shadowing corrupts memory.
-                //
-                // It does NOT reach stdlib types spliced from a `.kara`
-                // prelude source (`Match`, `Regex`, `RegexError`), whose
-                // shadowing crashes codegen instead. `stdlib_origin` looks
-                // like the right discriminator but is flipped only for GATED
-                // modules (`std.web`), not prelude splices, so a name-only
-                // test flags the stdlib against itself and refuses every
-                // legitimate regex program — measured, 6 codegen tests. The
-                // regex leg therefore needs either a real origin marker on
-                // prelude splices or the graceful-degradation fix for the
-                // panicking coercion; both are tracked on B-2026-08-02-13.
-                if crate::prelude::PRELUDE_TYPES.contains(&s.name.as_str())
-                    && self.struct_types.contains_key(s.name.as_str())
+                // Gate on `stdlib_origin`, NOT on `struct_types` already
+                // holding an entry. Only `Client` / `Response` / `HttpError`
+                // are seeded before this pass, so a `contains_key` test misses
+                // every stdlib type spliced into the program tree from a baked
+                // source (`Match`, `Regex`, `RegexError`, …) — exactly the set
+                // whose shadowing CRASHES codegen rather than corrupting
+                // memory. Those spliced declarations flow through this pass
+                // too, so a name-only test would flag the stdlib against
+                // itself and refuse every legitimate regex program;
+                // `stdlib_origin` separates them, and
+                // `expand_gated_stdlib_imports` now sets it at the splice.
+                if !self.declaring_stdlib_program
+                    && !s.stdlib_origin
+                    && crate::prelude::PRELUDE_TYPES.contains(&s.name.as_str())
                 {
                     self.user_shadowed_prelude_types.insert(s.name.clone());
                 }

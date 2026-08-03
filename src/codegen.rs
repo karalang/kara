@@ -3632,6 +3632,14 @@ pub(super) struct Codegen<'ctx> {
     /// distinct type); until then this converts silent corruption into an
     /// actionable message. Tracked as B-2026-08-02-13.
     pub(crate) user_shadowed_prelude_types: std::collections::HashSet<String>,
+    /// True while `declare_stdlib_program` is walking a baked `STDLIB_PROGRAMS`
+    /// tree rather than the user's. Those `StructDef`s are parsed straight from
+    /// stdlib source and never had `stdlib_origin` flipped (only the
+    /// `synthetic_*` clone paths do that), so without this flag the
+    /// prelude-shadowing detector sees the stdlib's own `Regex` / `Match` and
+    /// flags the stdlib against itself — refusing every legitimate regex
+    /// program. See B-2026-08-02-13.
+    pub(crate) declaring_stdlib_program: bool,
     /// Per-variable Map key LLVM type (variable name → K LLVM type).
     pub(crate) map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Per-variable Map value LLVM type (variable name → V LLVM type).
@@ -7817,6 +7825,7 @@ impl<'ctx> Codegen<'ctx> {
             gpu_buffer_elem_structs: HashMap::new(),
             gpu_buffer_vars: HashSet::new(),
             user_shadowed_prelude_types: std::collections::HashSet::new(),
+            declaring_stdlib_program: false,
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
@@ -10143,6 +10152,14 @@ impl<'ctx> Codegen<'ctx> {
     /// declaration loop in `compile_program`, kept identical so the two
     /// stay in lockstep.
     fn declare_stdlib_program(&mut self, tp: &Program) -> Result<(), String> {
+        let prev_declaring_stdlib = self.declaring_stdlib_program;
+        self.declaring_stdlib_program = true;
+        let r = self.declare_stdlib_program_inner(tp);
+        self.declaring_stdlib_program = prev_declaring_stdlib;
+        r
+    }
+
+    fn declare_stdlib_program_inner(&mut self, tp: &Program) -> Result<(), String> {
         // Layouts + field/variant side tables (struct_types / struct_field_* /
         // enum layouts), no IR — so literals, field access, `match` on a
         // stdlib enum, and aggregate fields all lower at the right shape.
