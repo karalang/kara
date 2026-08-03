@@ -78634,6 +78634,64 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_optres_payload_bodies_in_nested_positions() {
+        // B-2026-08-03-1 — an `Option[P]` payload ran its Drop body only when
+        // bound DIRECTLY; in every NESTED position it was silent on BOTH
+        // backends, so parity diffing saw nothing and (memory being clean) no
+        // sanitizer did either. Option/Result were simply missing from the
+        // one-container-level widening Vec/Map/Set/tuple already had, in all
+        // three layers: the reachability gates, the field-index selector, and
+        // the per-position dispatchers. Four positions plus a `None` control
+        // that must stay silent.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct H { o: Option[Res], t: i64 }
+fn main() {
+    println("field:");
+    {
+        let h = H { o: Option.Some(Res { id: 1, name: f"a{1}" }), t: 2 };
+        println(h.t);
+    }
+    println("vecelem:");
+    {
+        let mut v: Vec[Option[Res]] = Vec.new();
+        v.push(Option.Some(Res { id: 2, name: f"b{2}" }));
+        println(v.len());
+    }
+    println("mapval:");
+    {
+        let mut m: Map[i64, Option[Res]] = Map.new();
+        m.insert(5, Option.Some(Res { id: 3, name: f"c{3}" }));
+        println(m.len());
+    }
+    println("tupelem:");
+    {
+        let t = (Option.Some(Res { id: 4, name: f"d{4}" }), 7);
+        println(t.1);
+    }
+    println("none:");
+    {
+        let h2 = H { o: Option.None, t: 9 };
+        println(h2.t);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "field:\n2\ndrop 1 a1\nvecelem:\n1\ndrop 2 b2\nmapval:\n1\n\
+                 drop 3 c3\ntupelem:\n7\ndrop 4 d4\nnone:\n9\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_nested_call_temp_owned_arg_drop() {
         // B-2026-08-02-28 — a call RESULT consumed directly as another call's
         // owned argument (`use_it(mk(xs))`). The fn-call arm of the owned-arg

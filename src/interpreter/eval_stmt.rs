@@ -696,6 +696,17 @@ impl<'a> super::Interpreter<'a> {
                 }
                 continue;
             }
+            // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` ELEMENT
+            // (`Vec[Option[Res]]`): run the live payload's bodies through the
+            // value-driven recursion the discard path uses for these
+            // built-ins. Codegen twin: the Option/Result arm of
+            // `emit_nested_vec_elem_bodies_fn`.
+            if let Value::EnumVariant { enum_name, .. } = &e {
+                if enum_name == "Option" || enum_name == "Result" {
+                    self.run_discarded_value_user_drops(e);
+                    continue;
+                }
+            }
             if let Value::Struct { name: tn, .. } = &e {
                 if self.program.drop_method_keys.contains_key(tn) {
                     let tn = tn.clone();
@@ -1186,6 +1197,17 @@ impl<'a> super::Interpreter<'a> {
             Value::SortedMap(entries) => entries.values().any(|val| self.value_runs_user_drop(val)),
             Value::Set(items) => items.iter().any(|e| self.value_runs_user_drop(e)),
             Value::SortedSet(items) => items.keys().any(|k| self.value_runs_user_drop(&k.0)),
+            // B-2026-08-03-1 — an Option/Result PAYLOAD is Drop-relevant
+            // content like any other one-level container's. Built-in enums
+            // only: a user enum's payload bodies ride their own declared-type
+            // walk, and admitting them here would double-fire.
+            Value::EnumVariant {
+                enum_name, data, ..
+            } if enum_name == "Option" || enum_name == "Result" => match data {
+                EnumData::Unit => false,
+                EnumData::Tuple(vs) => vs.iter().any(|v| self.value_runs_user_drop(v)),
+                EnumData::Struct(m) => m.values().any(|v| self.value_runs_user_drop(v)),
+            },
             _ => false,
         }
     }
@@ -1244,6 +1266,20 @@ impl<'a> super::Interpreter<'a> {
             let Some(field_value) = fields.get(&field).cloned() else {
                 continue;
             };
+            // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` FIELD: run the
+            // live payload's bodies. `Option`/`Result` are built-ins with no
+            // source `EnumDef`, so the declared-type walk below can never
+            // reach them (the same reason the direct-binding path needs its
+            // own instantiation-driven gate); the value-driven recursion is
+            // what the discard path already uses for them. Codegen twin: the
+            // `is_optres_field` arm of `emit_user_drop_field_bodies_fn`,
+            // which hands the field slot to the tag-guarded payload walker.
+            if let Value::EnumVariant { enum_name, .. } = &field_value {
+                if enum_name == "Option" || enum_name == "Result" {
+                    self.run_discarded_value_user_drops(field_value.clone());
+                    continue;
+                }
+            }
             // B-2026-08-01-22 leg b — a Vec/VecDeque field of Drop-running
             // elements: fire each live element's bodies, forward order
             // (codegen's dropbodies vec loop iterates 0..len identically).
@@ -1399,6 +1435,15 @@ impl<'a> super::Interpreter<'a> {
                     self.run_nested_array_struct_elem_bodies(&v);
                 }
                 continue;
+            }
+            // B-2026-08-03-1 — an Option/Result-valued Map (Set element):
+            // value-driven payload recursion, matching the Option/Result arm
+            // of codegen's `emit_map_val_user_drop_bodies_fn`.
+            if let Value::EnumVariant { enum_name, .. } = &v {
+                if enum_name == "Option" || enum_name == "Result" {
+                    self.run_discarded_value_user_drops(v);
+                    continue;
+                }
             }
             let Value::Struct { name: tn, .. } = &v else {
                 continue;
@@ -2301,6 +2346,11 @@ impl<'a> super::Interpreter<'a> {
                 p.generic_args.as_ref().and_then(|a| a.get(elem_idx)),
                 Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
                     || self.te_vec_elem_runs_user_drop(v)
+                    // B-2026-08-03-1 — an Option/Result-valued V. This is the
+                    // REGISTRATION gate, not the walk: without it the walk
+                    // (which now has its Option arm) never armed, the same
+                    // gate-before-walk shape as B-2026-08-02-24.
+                    || self.field_te_runs_user_drop(v, &mut Vec::new())
             )
         });
         if qualifies {
@@ -2409,6 +2459,17 @@ impl<'a> super::Interpreter<'a> {
                     self.run_nested_array_struct_elem_bodies(&v);
                 }
                 continue;
+            }
+            // B-2026-08-03-1 — an Option/Result-valued V at the BINDING
+            // level. This is a separate walk from the struct-FIELD map arm
+            // (`run_field_map_val_user_drops`), so it needed the arm
+            // independently; codegen reaches both through the one
+            // `emit_map_val_user_drop_bodies_fn`.
+            if let Value::EnumVariant { enum_name, .. } = &v {
+                if enum_name == "Option" || enum_name == "Result" {
+                    self.run_discarded_value_user_drops(v);
+                    continue;
+                }
             }
             let Value::Struct { name: tn, .. } = &v else {
                 continue;

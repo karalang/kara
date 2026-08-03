@@ -8720,10 +8720,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 })
             }
             // A free-function CALL: the callee's declared return type is
-            // already a full TypeExpr.
-            ExprKind::Call { callee, .. } => match &callee.kind {
+            // already a full TypeExpr. B-2026-08-03-1 — an `Option.Some(x)` /
+            // `Result.Ok(x)` ctor call parses the same way but names no
+            // function, so it fell through to the head-name inference and the
+            // element read as bare `Option`, leaving the payload's Drop body
+            // silent in the tuple position. Rebuild `Option[P]` / `Result[P]`
+            // from the ctor's own argument (the same head-name inference,
+            // applied one level down).
+            ExprKind::Call { callee, args } => match &callee.kind {
                 ExprKind::Identifier(f) => self.fn_return_type_exprs.get(f.as_str()).cloned(),
-                _ => None,
+                _ => {
+                    let ctor = self.enum_name_of_expr(e)?;
+                    if ctor != "Option" && ctor != "Result" {
+                        return None;
+                    }
+                    let payload = args.first()?;
+                    let payload_te = self
+                        .refined_tuple_literal_elem_te(&payload.value)
+                        .unwrap_or_else(|| self.infer_arg_elem_te(&payload.value));
+                    Some(TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec![ctor],
+                            generic_args: Some(vec![crate::ast::GenericArg::Type(payload_te)]),
+                            span: e.span.clone(),
+                        }),
+                        span: e.span.clone(),
+                    })
+                }
             },
             _ => None,
         }

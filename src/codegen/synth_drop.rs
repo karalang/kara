@@ -2394,6 +2394,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             break 'tes;
                         }
                     }
+                    // B-2026-08-03-1 — the Option/Result payload level, the
+                    // fourth container this widening needed and the one it
+                    // omitted: `H { o: Option[Res] }` read as head "Option"
+                    // and classified the parent drop-free.
+                    for ph in Self::optres_payload_heads(te) {
+                        if self.type_runs_user_drop(&ph, seen) {
+                            found = true;
+                            break 'tes;
+                        }
+                    }
                 }
             }
         }
@@ -2441,6 +2451,42 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             _ => None,
         }
+    }
+
+    /// Payload head names of an `Option[P]` / `Result[O, E]` TypeExpr — the
+    /// Drop-relevant arms only, so `Option` yields its one payload and
+    /// `Result` yields both `O` and `E` (either arm can be live and either
+    /// can carry a `Drop`). Empty for any other shape.
+    ///
+    /// B-2026-08-03-1 — Option/Result are the container level the widening
+    /// forgot. `Vec`, `Map`/`Set` and tuples each got a head extractor here
+    /// (B-2026-08-01-22 leg b, B-2026-08-02-18); Option/Result never did, so
+    /// every gate keyed on those extractors read `Option[Res]` as the
+    /// drop-free head "Option" and the payload's body stayed silent in every
+    /// NESTED position on both backends, while a direct binding worked.
+    /// Interpreter twin: the Option/Result leg of `field_te_runs_user_drop`.
+    pub(super) fn optres_payload_heads(te: &TypeExpr) -> Vec<String> {
+        let TypeKind::Path(p) = &te.kind else {
+            return Vec::new();
+        };
+        let n = match p.segments.first().map(|s| s.as_str()) {
+            Some("Option") => 1usize,
+            Some("Result") => 2usize,
+            _ => return Vec::new(),
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return Vec::new();
+        };
+        args.iter()
+            .take(n)
+            .filter_map(|a| match a {
+                GenericArg::Type(t) => match &t.kind {
+                    TypeKind::Path(tp) => tp.segments.first().cloned(),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
     }
 
     /// Element head names of a tuple TypeExpr's plain-named elements —
@@ -2527,7 +2573,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.type_runs_user_drop(&resolved, &mut Vec::new())
                     })
                 });
-                (direct || vec_elem || map_val || tuple_elem).then_some(idx)
+                // B-2026-08-03-1 — an Option/Result PAYLOAD is droppable
+                // field content on the same footing; without this leg the
+                // field never entered the walk set, so widening the gate
+                // alone left `H { o: Option[Res] }` silent.
+                let optres_payload = field_te.is_some_and(|te| {
+                    Self::optres_payload_heads(te).iter().any(|h| {
+                        let resolved = self.resolve_field_head_mono(h, subst);
+                        self.type_runs_user_drop(&resolved, &mut Vec::new())
+                    })
+                });
+                (direct || vec_elem || map_val || tuple_elem || optres_payload).then_some(idx)
             })
             .collect()
     }
@@ -2747,6 +2803,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 if is_table_field {
                     let fte = fte.clone();
                     if let Some(w) = self.emit_map_val_user_drop_bodies_fn(&fte) {
+                        self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                    }
+                    continue;
+                }
+                // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` FIELD:
+                // reuse the tag-guarded payload walker the direct-binding
+                // position already uses. `field_ptr` is the Option/Result
+                // slot the walker reads its tag from, and the walker frees
+                // nothing, so this cannot double-free the payload memory the
+                // parent's own drop still owns.
+                let is_optres_field = matches!(&fte.kind, TypeKind::Path(p) if matches!(
+                    p.segments.first().map(|s| s.as_str()),
+                    Some("Option") | Some("Result")
+                ));
+                if is_optres_field {
+                    let fte = fte.clone();
+                    if let Some(w) = self.emit_optres_payload_user_drop_bodies_fn(&fte) {
                         self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
                     }
                     continue;
@@ -5894,6 +5967,23 @@ impl<'ctx> super::Codegen<'ctx> {
             let ty = self.llvm_type_for_type_expr(elem_te);
             return self.emit_vec_elem_user_drop_bodies_fn(&head, ty);
         }
+        // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` ELEMENT
+        // (`Vec[Option[Res]]`): stride by the Option/Result LLVM type and run
+        // the tag-guarded payload walker on each slot. Without this arm the
+        // whole fn declined on the unrecognized head and the payload's body
+        // was silent on both backends. Bodies only, like every sibling here.
+        if head == "Option" || head == "Result" {
+            let per_elem = self.emit_optres_payload_user_drop_bodies_fn(elem_te)?;
+            let elem_llvm = self.llvm_type_for_type_expr(elem_te);
+            return self.emit_vec_elem_walker_loop(
+                &format!(
+                    "__karac_dropelems_vecofoptres_{}",
+                    Self::display_mangle_te(elem_te)
+                ),
+                elem_llvm,
+                per_elem,
+            );
+        }
         if head != "Vec" && head != "VecDeque" {
             return None;
         }
@@ -6130,9 +6220,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 return true;
             }
         }
-        Self::tuple_field_elem_heads(te)
+        if Self::tuple_field_elem_heads(te)
             .iter()
             .any(|eh| self.type_runs_user_drop(eh, &mut Vec::new()))
+        {
+            return true;
+        }
+        // B-2026-08-03-1 — Option/Result payload level.
+        Self::optres_payload_heads(te)
+            .iter()
+            .any(|ph| self.type_runs_user_drop(ph, &mut Vec::new()))
     }
 
     /// Run the Drop BODIES reachable from one tuple-element slot `ep` of type
@@ -6173,6 +6270,14 @@ impl<'ctx> super::Codegen<'ctx> {
             "Map" | "SortedMap" | "Set" | "SortedSet" => {
                 let te = te.clone();
                 if let Some(w) = self.emit_map_val_user_drop_bodies_fn(&te) {
+                    self.builder.build_call(w, &[ep.into()], "").unwrap();
+                }
+            }
+            // B-2026-08-03-1 — the element GEP is the Option/Result slot the
+            // tag-guarded payload walker reads from.
+            "Option" | "Result" => {
+                let te = te.clone();
+                if let Some(w) = self.emit_optres_payload_user_drop_bodies_fn(&te) {
                     self.builder.build_call(w, &[ep.into()], "").unwrap();
                 }
             }
@@ -6597,6 +6702,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return None,
             };
             Some(self.emit_nested_vec_elem_bodies_fn(&inner_te)?)
+        } else if vname == "Option" || vname == "Result" {
+            // B-2026-08-03-1 — an Option/Result-valued V: the per-value blob
+            // IS the Option/Result slot, so the tag-guarded payload walker
+            // reads it directly, exactly as the Vec arm above hands the blob
+            // to the vec-element walker.
+            let val_te = val_te.clone();
+            Some(self.emit_optres_payload_user_drop_bodies_fn(&val_te)?)
         } else {
             if !self.struct_types.contains_key(&vname)
                 || !self.type_runs_user_drop(&vname, &mut Vec::new())

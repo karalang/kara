@@ -17215,6 +17215,60 @@ fn main() {
     /// first diagnosis) and the NAMED source, whose own-body action used to
     /// stay armed and fire over the moved-from slot.
     #[test]
+    fn asan_optres_payload_nested_positions_clean() {
+        // B-2026-08-03-1 — the three nested Option positions whose payload
+        // MEMORY was already correct, now that their bodies fire too: the
+        // added walks free nothing, so arming them must not disturb the
+        // existing frees. Deliberately EXCLUDES the tuple-element and
+        // Result-field positions: making their bodies fire unmasked a
+        // pre-existing missing free in each (the payload was previously
+        // never allocated at all, LLVM having elided it as dead — proven with
+        // `valgrind --trace-malloc`), tracked as B-2026-08-03-3.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct H { o: Option[Res], t: i64 }
+fn main() {
+    println("field:");
+    {
+        let h = H { o: Option.Some(Res { id: 1, name: f"aa{1}" }), t: 2 };
+        println(h.t);
+    }
+    println("vecelem:");
+    {
+        let mut v: Vec[Option[Res]] = Vec.new();
+        v.push(Option.Some(Res { id: 2, name: f"bb{2}" }));
+        println(v.len());
+    }
+    println("mapval:");
+    {
+        let mut m: Map[i64, Option[Res]] = Map.new();
+        m.insert(5, Option.Some(Res { id: 3, name: f"cc{3}" }));
+        println(m.len());
+    }
+    println("end");
+}
+"#,
+            &[
+                "field:",
+                "2",
+                "drop 1 aa1",
+                "vecelem:",
+                "1",
+                "drop 2 bb2",
+                "mapval:",
+                "1",
+                "drop 3 cc3",
+                "end",
+            ],
+            "optres_payload_nested_positions_clean",
+        );
+    }
+
+    #[test]
     fn asan_nested_call_temp_owned_arg_freed() {
         // B-2026-08-02-28 — the leak half. A call result consumed directly as
         // another call's owned argument had no memory owner at all: the fn-call

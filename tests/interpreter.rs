@@ -27776,6 +27776,56 @@ fn test_nested_literal_move_source_disarm() {
 }
 
 #[test]
+fn test_optres_payload_bodies_in_nested_positions() {
+    // B-2026-08-03-1 — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_optres_payload_bodies_in_nested_positions`, same source and
+    // expected string. Both backends were silent pre-fix and each needed its
+    // own wiring: the interpreter's `field_te_runs_user_drop` gate, its
+    // value-level `field_value_carries_user_drop`, and three separate walks
+    // (struct field, Vec element, and BOTH the field-level and binding-level
+    // map walks, which are distinct functions on this side).
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct H { o: Option[Res], t: i64 }\n\
+             fn main() {\n\
+                 println(\"field:\");\n\
+                 {\n\
+                     let h = H { o: Option.Some(Res { id: 1, name: f\"a{1}\" }), t: 2 };\n\
+                     println(h.t);\n\
+                 }\n\
+                 println(\"vecelem:\");\n\
+                 {\n\
+                     let mut v: Vec[Option[Res]] = Vec.new();\n\
+                     v.push(Option.Some(Res { id: 2, name: f\"b{2}\" }));\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"mapval:\");\n\
+                 {\n\
+                     let mut m: Map[i64, Option[Res]] = Map.new();\n\
+                     m.insert(5, Option.Some(Res { id: 3, name: f\"c{3}\" }));\n\
+                     println(m.len());\n\
+                 }\n\
+                 println(\"tupelem:\");\n\
+                 {\n\
+                     let t = (Option.Some(Res { id: 4, name: f\"d{4}\" }), 7);\n\
+                     println(t.1);\n\
+                 }\n\
+                 println(\"none:\");\n\
+                 {\n\
+                     let h2 = H { o: Option.None, t: 9 };\n\
+                     println(h2.t);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "field:\n2\ndrop 1 a1\nvecelem:\n1\ndrop 2 b2\nmapval:\n1\ndrop 3 c3\n\
+         tupelem:\n7\ndrop 4 d4\nnone:\n9\nend\n"
+    );
+}
+
+#[test]
 fn test_nested_call_temp_owned_arg_drop() {
     // B-2026-08-02-28 — interpreter twin of `tests/codegen.rs`'s
     // `e2e_nested_call_temp_owned_arg_drop`, same source and expected string.

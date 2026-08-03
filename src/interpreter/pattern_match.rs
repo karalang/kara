@@ -498,7 +498,7 @@ impl<'a> super::Interpreter<'a> {
     /// B-2026-08-02-18): ONE container level, covering Vec/VecDeque
     /// elements, Map/SortedMap values, Set/SortedSet elements, and tuple
     /// elements, so both backends' type-level gates classify identically.
-    fn field_te_runs_user_drop(&self, fty: &TypeExpr, seen: &mut Vec<String>) -> bool {
+    pub(crate) fn field_te_runs_user_drop(&self, fty: &TypeExpr, seen: &mut Vec<String>) -> bool {
         match &fty.kind {
             TypeKind::Path(p) => {
                 let Some(head) = p.segments.first() else {
@@ -507,12 +507,22 @@ impl<'a> super::Interpreter<'a> {
                 if self.type_name_runs_user_drop(head, seen) {
                     return true;
                 }
-                let inner_idx = match head.as_str() {
-                    "Vec" | "VecDeque" | "Set" | "SortedSet" => 0usize,
-                    "Map" | "SortedMap" => 1usize,
+                // B-2026-08-03-1 — Option/Result are a container level too:
+                // BOTH of Result's arms can be live and either can carry a
+                // Drop, so unlike the single-slot collections this checks a
+                // RANGE of generic args rather than one index. Codegen twin:
+                // `optres_payload_heads` feeding `elem_te_runs_user_drop`.
+                let idxs: &[usize] = match head.as_str() {
+                    "Vec" | "VecDeque" | "Set" | "SortedSet" => &[0],
+                    "Map" | "SortedMap" => &[1],
+                    "Option" => &[0],
+                    "Result" => &[0, 1],
                     _ => return false,
                 };
-                match p.generic_args.as_ref().and_then(|a| a.get(inner_idx)) {
+                let Some(args) = p.generic_args.as_ref() else {
+                    return false;
+                };
+                idxs.iter().any(|&i| match args.get(i) {
                     Some(crate::ast::GenericArg::Type(inner)) => match &inner.kind {
                         TypeKind::Path(ip) => ip
                             .segments
@@ -521,7 +531,7 @@ impl<'a> super::Interpreter<'a> {
                         _ => false,
                     },
                     _ => false,
-                }
+                })
             }
             TypeKind::Tuple(elems) => {
                 let elems = elems.clone();
