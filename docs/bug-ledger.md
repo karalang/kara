@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 209 | 0 |
-| leak | 125 | 1 |
+| leak | 126 | 2 |
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
-| run-vs-build | 71 | 1 |
+| run-vs-build | 72 | 2 |
 | false-positive | 55 | 0 |
 | perf | 43 | 0 |
 | crash | 37 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 638 | 2 |
-| interp | 116 | 0 |
+| codegen | 640 | 4 |
+| interp | 119 | 3 |
 | typecheck | 115 | 0 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
@@ -124,16 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **884 surfaced · 4 open · 872 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **886 surfaced · 6 open · 872 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | MATCH-ARM LEG ONLY (displacement leg fixed in 21a1fb6): consuming an Option[Drop] payload via a match/if-let arm binding on a NAMED binding with a boxed payload runs no user `impl Drop` body under `karac build` while the interpreter runs it — a run-vs-build divergence on the shipping path. Blocker identified: the body's only fire path for a boxed payload is the box drop, which the arm's memory suppressors disarm, so the fix must key on that disarm rather than on arm consumption | — |
-| B-2026-08-03-3 | 2026-08-03 | codegen | medium | a Result[Struct, E] struct field and a tuple-held Option[Struct] never free the payload's heap — latent until B-2026-08-03-1 made the Drop body read it | open |
+| B-2026-08-03-3 | 2026-08-03 | codegen+interp | high | a tuple-held Option[Struct] / Result[Struct, E] payload is never freed in ANY position, and a `let x = t.N` move-out fires the source element's Drop body twice -- tuple legs FIXED, the Result STRUCT FIELD leg still open | open |
+| B-2026-08-03-6 | 2026-08-03 | codegen+interp | medium | a consuming `Some(r)` match arm over an Option[Drop-struct] runs NO Drop body under AOT (the Result sibling is correct), and a tuple-element scrutinee defers the body to scope exit under karac run | open |
+| B-2026-08-03-7 | 2026-08-03 | codegen+interp | medium | three tuple positions still run NO Drop body on EITHER backend: a `let (a, b) = t` destructure, a struct field holding a tuple, and a Map value holding a tuple | open |
 
 ### Fixed (872)
 
