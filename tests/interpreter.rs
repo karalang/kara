@@ -27822,6 +27822,49 @@ fn test_bare_statement_container_removal_discard_fires() {
 }
 
 #[test]
+fn test_truncate_and_reassign_run_displaced_drop_bodies() {
+    // B-2026-08-03-2 (class 1, remainder) — interpreter twin of
+    // `tests/codegen.rs`'s `e2e_truncate_and_reassign_run_displaced_drop_bodies`,
+    // same source and expected string. The `truncate` case is the one that
+    // pins the RANGE: the removed tail fires at the truncate, the survivor
+    // still fires at binding death, and neither fires twice.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"truncate:\");\n\
+                 {\n\
+                     let mut v: Vec[Res] = Vec.new();\n\
+                     v.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     v.push(Res { id: 2, name: f\"b{2}\" });\n\
+                     v.truncate(1);\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"truncate0:\");\n\
+                 {\n\
+                     let mut u: Vec[Res] = Vec.new();\n\
+                     u.push(Res { id: 3, name: f\"c{3}\" });\n\
+                     u.truncate(0);\n\
+                     println(u.len());\n\
+                 }\n\
+                 println(\"reassign:\");\n\
+                 {\n\
+                     let mut w: Vec[Res] = Vec.new();\n\
+                     w.push(Res { id: 4, name: f\"d{4}\" });\n\
+                     let mut z: Vec[Res] = Vec.new();\n\
+                     z.push(Res { id: 5, name: f\"e{5}\" });\n\
+                     w = z;\n\
+                     println(w.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "truncate:\ndrop 2 b2\n1\ndrop 1 a1\ntruncate0:\ndrop 3 c3\n0\nreassign:\ndrop 4 d4\n1\ndrop 5 e5\nend\n"
+    );
+}
+
+#[test]
 fn test_discarded_vec_removal_fires_and_frees() {
     // B-2026-08-03-2 (class 2) — interpreter twin of `tests/codegen.rs`'s
     // `e2e_discarded_vec_removal_fires_and_frees`, same source and expected

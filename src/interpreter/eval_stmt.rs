@@ -2801,6 +2801,28 @@ impl<'a> super::Interpreter<'a> {
                                     }
                                     self.run_enum_payload_user_drops(&t, &old);
                                 }
+                                // B-2026-08-03-2 (class 1) — the CONTAINER
+                                // sibling of the two arms above: `v = w` over a
+                                // `Vec[Res]` displaced every old element and ran
+                                // none of their bodies, because this match only
+                                // ever saw a Struct or an EnumVariant. Codegen
+                                // had the mirror-image gap — its reassign path
+                                // released the old elements' memory and freed
+                                // the buffer with no body walk. Skipped when the
+                                // binding already moved its value out, matching
+                                // the guard the other arms use.
+                                Value::Array(ref rc) => {
+                                    if !self
+                                        .moved_out_container_bodies_bindings
+                                        .contains(t.as_str())
+                                    {
+                                        let elems: Vec<Value> =
+                                            rc.read().map(|g| g.clone()).unwrap_or_default();
+                                        for e in elems {
+                                            self.run_discarded_value_user_drops(e);
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }

@@ -6230,6 +6230,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .build_gep(elem_ty, data, &[i], "trunc.elem.ptr")
                                 .unwrap()
                         };
+                        // B-2026-08-03-2 (class 1) — the REMOVED tail element's
+                        // user Drop BODY. This loop already walked [n, len) to
+                        // free each element's memory and ran no body, so the
+                        // discarded tail lost its destructors while the
+                        // survivors (dropped later, at binding death) still
+                        // fired — a fire count that looks plausible and is
+                        // wrong. Unlike `clear`, a whole-container walker is
+                        // NOT usable here: it would re-fire the survivors. The
+                        // per-slot dispatcher runs on exactly the elements this
+                        // loop is already destroying, ahead of the free so the
+                        // body can still read them.
+                        self.emit_slot_drop_bodies_at(elem_ptr, &elem_te);
                         self.builder
                             .build_call(elem_drop, &[elem_ptr.into()], "")
                             .unwrap();

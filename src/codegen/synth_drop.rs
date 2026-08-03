@@ -6164,7 +6164,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .ok();
             let Some(ep) = ep else { continue };
             let te = elem_tes[idx as usize].clone();
-            self.emit_tuple_elem_bodies_at(ep, &te);
+            self.emit_slot_drop_bodies_at(ep, &te);
         }
 
         self.builder.build_return(None).unwrap();
@@ -6232,13 +6232,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .any(|ph| self.type_runs_user_drop(ph, &mut Vec::new()))
     }
 
-    /// Run the Drop BODIES reachable from one tuple-element slot `ep` of type
-    /// `te`. Dispatches the same four legs the struct-FIELD walker
+    /// Run the Drop BODIES reachable from ONE SLOT `ep` holding a value of
+    /// type `te`. Dispatches the same legs the struct-FIELD walker
     /// ([`Self::emit_user_drop_field_bodies_fn`]) uses — direct struct,
-    /// Vec/VecDeque element, Map/Set value, nested tuple — so a tuple element
-    /// and a struct field of the same type run the same bodies. BODIES ONLY:
-    /// every leg here delegates to a walker that frees nothing.
-    fn emit_tuple_elem_bodies_at(&mut self, ep: PointerValue<'ctx>, te: &TypeExpr) {
+    /// Vec/VecDeque element, Map/Set value, Option/Result payload, nested
+    /// tuple — so the same type runs the same bodies wherever it is stored.
+    /// BODIES ONLY: every leg here delegates to a walker that frees nothing,
+    /// so it is always safe to pair with a memory drop (run it FIRST, so the
+    /// bodies can read what the free invalidates).
+    ///
+    /// Written for tuple elements (B-2026-08-02-26) and named for them until
+    /// `Vec.truncate` needed exactly the same per-slot dispatch
+    /// (B-2026-08-03-2); the contract was never tuple-specific.
+    pub(super) fn emit_slot_drop_bodies_at(&mut self, ep: PointerValue<'ctx>, te: &TypeExpr) {
         if let TypeKind::Tuple(inner) = &te.kind {
             let inner = inner.clone();
             if let inkwell::types::BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(te)

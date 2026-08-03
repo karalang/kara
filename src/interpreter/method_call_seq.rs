@@ -1482,7 +1482,22 @@ impl<'a> super::Interpreter<'a> {
                             _ => "<value>".to_string(),
                         };
                         let clamped = if n < 0 { 0 } else { n as usize };
+                        // B-2026-08-03-2 (class 1) — the REMOVED [n, len) tail
+                        // must run each element's Drop body. Only the tail:
+                        // the survivors are still owned by the binding and fire
+                        // at its death, so a whole-container walk would double
+                        // them. Snapshot the tail, truncate, then fire — no
+                        // read guard is live while a body runs. Codegen twin:
+                        // the per-slot bodies dispatcher now called inside
+                        // `Vec.truncate`'s existing [n, len) free loop.
+                        let removed: Vec<Value> = rc
+                            .read()
+                            .map(|g| g.iter().skip(clamped).cloned().collect())
+                            .unwrap_or_default();
                         try_write_or_panic(rc, &label).truncate(clamped);
+                        for e in removed {
+                            self.run_discarded_value_user_drops(e);
+                        }
                         return Some(Value::Unit);
                     }
                 }

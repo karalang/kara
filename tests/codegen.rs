@@ -78733,6 +78733,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_truncate_and_reassign_run_displaced_drop_bodies() {
+        // B-2026-08-03-2 (class 1, remainder) — the last two positions where a
+        // container element is destroyed with no binding to receive it.
+        // `truncate(n)` needed a RANGED walk, not the whole-container walker
+        // `clear` uses: its SURVIVORS still fire at binding death, so a
+        // whole-container walk would double them. `v = w` displaces every old
+        // element, so there the whole-container walker is right. Both had the
+        // same memory-yes/bodies-no split as clear.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("truncate:");
+    {
+        let mut v: Vec[Res] = Vec.new();
+        v.push(Res { id: 1, name: f"a{1}" });
+        v.push(Res { id: 2, name: f"b{2}" });
+        v.truncate(1);
+        println(v.len());
+    }
+    println("truncate0:");
+    {
+        let mut u: Vec[Res] = Vec.new();
+        u.push(Res { id: 3, name: f"c{3}" });
+        u.truncate(0);
+        println(u.len());
+    }
+    println("reassign:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 4, name: f"d{4}" });
+        let mut z: Vec[Res] = Vec.new();
+        z.push(Res { id: 5, name: f"e{5}" });
+        w = z;
+        println(w.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "truncate:\ndrop 2 b2\n1\ndrop 1 a1\ntruncate0:\ndrop 3 c3\n0\n\
+                 reassign:\ndrop 4 d4\n1\ndrop 5 e5\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_discarded_vec_removal_fires_and_frees() {
         // B-2026-08-03-2 (class 2) — a DISCARDED `v.remove(i);` /
         // `v.swap_remove(i);` hands the element back BY VALUE with nothing to

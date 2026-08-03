@@ -6842,6 +6842,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             || rhs_is_heap_vec_index);
                     if trigger_eager_free {
                         if let Some(slot) = self.variables.get(name).copied() {
+                            // B-2026-08-03-2 (class 1) — the DISPLACED old
+                            // container's element Drop BODIES. Everything below
+                            // is memory: the per-element release, then the
+                            // buffer free. So `v = w` reclaimed the old
+                            // elements' heap and silently skipped their
+                            // destructors, the same memory-yes/bodies-no split
+                            // `clear` and `truncate` had. The whole-container
+                            // walker is correct here (every old element is
+                            // being displaced, unlike truncate's tail), and it
+                            // runs FIRST so the bodies read what the frees
+                            // below invalidate.
+                            if let Some(bodies) = self
+                                .var_elem_type_exprs
+                                .get(name)
+                                .cloned()
+                                .and_then(|te| self.emit_nested_vec_elem_bodies_fn(&te))
+                            {
+                                self.builder
+                                    .build_call(bodies, &[slot.ptr.into()], "")
+                                    .unwrap();
+                            }
                             // B-2026-07-12-30: for a `Vec[shared]` /
                             // `Vec[Option[shared]]` (any Vec whose element carries
                             // a per-element drop), release the OLD value's ELEMENTS
