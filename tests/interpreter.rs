@@ -29335,3 +29335,36 @@ fn test_struct_field_and_map_value_tuple_run_element_drop() {
         "struct-field-tuple:\n10\ndrop 1 a1\nmap-value-tuple:\n1\ndrop 2 bb2\nend\n"
     );
 }
+
+#[test]
+fn test_tuple_elem_match_scrutinee_body_fires_at_arm_end() {
+    // B-2026-08-03-6 — `match t.0 { Ok(r) => .. }` on a tuple-element scrutinee.
+    // The interpreter did not treat the match as consuming the element (it
+    // matches a copied value), so the tuple's own element walk still owned the
+    // body and ran it at the BINDING's death — after `println(t.1)` — while
+    // codegen retracts that walk at the arm and fires there. The retraction is
+    // load-bearing on codegen's side (without it the arm and the tuple's element
+    // drop both FREE the payload), so the interpreter had to follow: the element
+    // move is now recorded per `(binding, index)` and the arm binding takes the
+    // body over, which is why `drop` prints BEFORE `4`.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let t: (Result[Res, i64], i64) =\n\
+                         (Result.Ok(Res { id: 3, name: f\"cccc{1}\" }), 4);\n\
+                     match t.0 {\n\
+                         Result.Ok(r) => { println(r.id) }\n\
+                         Result.Err(e) => { println(e) }\n\
+                     }\n\
+                     println(t.1);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n3\ndrop 3 cccc1\n4\nend\n"
+    );
+}

@@ -191,6 +191,32 @@ impl<'a> super::Interpreter<'a> {
         let Some(place) = scrutinee_place else {
             return;
         };
+        // B-2026-08-03-6 — a TUPLE-ELEMENT scrutinee (`match t.0 { Ok(r) => .. }`).
+        // The element has no binding of its own, so the name-keyed record below
+        // cannot express it; the per-`(binding, index)` set does. Without it the
+        // tuple's own element walk still owned the body and ran it at the
+        // BINDING's death, while codegen retracts it at the arm — a timing
+        // divergence. Codegen's twin is
+        // `suppress_tuple_elem_optres_payload_cleanup`, whose memory half is
+        // load-bearing there (the arm and the tuple's element drop would
+        // otherwise both free the payload).
+        if let ExprKind::TupleIndex { object, index } = &place.kind {
+            if let ExprKind::Identifier(src) = &object.kind {
+                let Value::EnumVariant { enum_name, .. } = scrutinee else {
+                    return;
+                };
+                let enum_name = enum_name.clone();
+                let src = src.clone();
+                let index = *index as usize;
+                if arms
+                    .iter()
+                    .any(|arm| self.pattern_consumes_user_drop_payload(&enum_name, &arm.pattern))
+                {
+                    self.moved_out_tuple_elem_bodies.insert((src, index));
+                }
+            }
+            return;
+        }
         let name = match &place.kind {
             ExprKind::Identifier(n) => n.clone(),
             ExprKind::SelfValue => "self".to_string(),
@@ -281,6 +307,21 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::MethodCall { method, .. } => {
                 !matches!(method.as_str(), "get" | "first" | "last")
             }
+            // B-2026-08-03-6 — a TUPLE-ELEMENT place (`match t.0 { Ok(r) => .. }`),
+            // the one projection that IS consuming. Its element walk is
+            // retracted by `disarm_moved_out_enum_payload`'s TupleIndex arm, so
+            // without the arm stash the body would be lost entirely rather than
+            // merely mistimed. Restricted to an identifier root (a deeper
+            // projection has no such disarm, so it stays non-consuming and the
+            // owner's walk keeps firing) and to a non-owned-param root, matching
+            // the Identifier arm's caller-retains carve-out.
+            ExprKind::TupleIndex { object, .. } => match &object.kind {
+                ExprKind::Identifier(n) => !self
+                    .owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(n.as_str())),
+                _ => false,
+            },
             _ => false,
         }
     }
