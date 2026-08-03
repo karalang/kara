@@ -512,6 +512,34 @@ fn main() with sends(Network) receives(Network) {
         );
     }
 
+    /// `Server.serve` deliberately ACCEPTS a user-declared `Response` — that
+    /// is the documented pattern and the shortener example depends on it — so
+    /// no shadowing guard covers this path. A struct with no body field
+    /// therefore reached the shim's `build_extract_value(.., 1, ..).unwrap()`
+    /// and panicked out of codegen with a raw Rust backtrace.
+    #[test]
+    fn misshaped_handler_response_is_a_diagnostic_not_a_panic() {
+        let src = r#"
+struct Response { status: i64 }
+fn handle(req: Request) -> Response { Response { status: 200 } }
+fn main() with sends(Network) receives(Network) {
+    Server.serve("127.0.0.1:0", handle);
+}
+"#;
+        let err = codegen_result(src).expect_err(
+            "a handler `Response` with no body field must be REFUSED with a \
+             diagnostic, not crash codegen",
+        );
+        assert!(
+            err.contains("must return a `Response`"),
+            "expected the handler-shape diagnostic; got: {err}"
+        );
+        assert!(
+            !err.contains("panicked"),
+            "the shape mismatch must not surface as a panic; got: {err}"
+        );
+    }
+
     /// The same hazard on the REGEX path. Before B-2026-08-02-13's second
     /// slice this did not merely miscompile — it panicked out of codegen with
     /// a Rust backtrace, because the shadowed layout made the receiver an i64

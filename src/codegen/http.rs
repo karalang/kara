@@ -1460,6 +1460,85 @@ impl<'ctx> super::Codegen<'ctx> {
         ))
     }
 
+    /// Coerce a compiled value to a `StructValue`, returning a diagnostic
+    /// instead of panicking when it is some other LLVM variant.
+    ///
+    /// `into_struct_value()` panics ("expected the StructValue variant") on a
+    /// mismatch, and a panic out of codegen is the one outcome the coding
+    /// standard rules out — every phase must emit a structured diagnostic. The
+    /// known way to reach a mismatch is a user struct shadowing a built-in type
+    /// so the receiver arrives as the i64 default rather than the seeded layout
+    /// (B-2026-08-02-13); `reject_shadowed_prelude_types` now refuses those
+    /// before lowering, so this is defense in depth for any path that guard
+    /// does not cover — a new prelude type added to a builtin lowering without
+    /// a matching guard entry, say. Cheap: one `is_struct_value()` test.
+    pub(super) fn require_struct_value(
+        &self,
+        v: BasicValueEnum<'ctx>,
+        what: &str,
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        if v.is_struct_value() {
+            return Ok(v.into_struct_value());
+        }
+        Err(format!(
+            "internal: `{what}` expected an aggregate value here but the operand \
+             lowered to a different shape ({v:?}). This usually means a \
+             user-declared type shadows the built-in stdlib type of the same \
+             name, so the built-in path read the wrong layout — rename the \
+             user-defined struct. Please report this with the source if no such \
+             shadowing declaration exists; see B-2026-08-02-13."
+        ))
+    }
+
+    /// Verify an HTTP handler returns something shaped like the built-in
+    /// `Response` before the shim tries to take it apart.
+    ///
+    /// The shim extracts field 0 as the status int and field 1 as the body
+    /// `String` aggregate. `Server.serve` deliberately ACCEPTS a user-declared
+    /// `Response` (that is the documented pattern, and rejecting it would break
+    /// every serving program), so unlike the client path there is no shadowing
+    /// guard here to stop a differently-shaped struct — a
+    /// `struct Response { status: i64 }` with no body reached
+    /// `build_extract_value(.., 1, ..).unwrap()` and panicked out of codegen
+    /// with a raw Rust backtrace. Check the shape up front and say what is
+    /// required instead. B-2026-08-02-13 follow-up.
+    pub(super) fn require_http_handler_response_shape(
+        &self,
+        handler_fn: inkwell::values::FunctionValue<'ctx>,
+    ) -> Result<(), String> {
+        let name = handler_fn
+            .get_name()
+            .to_str()
+            .unwrap_or("handler")
+            .to_string();
+        let complaint = |detail: &str| {
+            format!(
+                "the HTTP handler `{name}` must return a `Response` shaped like the \
+                 built-in one — a status field followed by a body `String` — but {detail}. \
+                 If this program declares its own `struct Response`, give it both fields \
+                 (e.g. `struct Response {{ status: i64, body: String }}`) or rename it and \
+                 use the built-in type."
+            )
+        };
+        let Some(ret) = handler_fn.get_type().get_return_type() else {
+            return Err(complaint("it returns nothing"));
+        };
+        if !ret.is_struct_type() {
+            return Err(complaint("it does not return a struct"));
+        }
+        let st = ret.into_struct_type();
+        if st.count_fields() < 2 {
+            return Err(complaint(&format!(
+                "the returned struct has {} field(s), so it has no body field",
+                st.count_fields()
+            )));
+        }
+        match st.get_field_type_at_index(1) {
+            Some(f1) if f1.is_struct_type() => Ok(()),
+            _ => Err(complaint("its second field is not a `String`")),
+        }
+    }
+
     pub(super) fn compile_client_http_method(
         &mut self,
         method: &str,

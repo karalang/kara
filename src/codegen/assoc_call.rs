@@ -1960,6 +1960,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // FFI extern's handler slot expects
             // `extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse)`.
             // The shim adapts between the two ABIs (cached per-handler).
+            self.require_http_handler_response_shape(handler_fn)?;
             let shim_fn = self.emit_http_handler_shim(handler_fn);
             let handler_ptr = shim_fn.as_global_value().as_pointer_value();
 
@@ -2143,6 +2144,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_store(term_ptr, zero_byte).unwrap();
 
             let handler_fn = self.resolve_free_fn_for_handler_arg(&_args[1].value)?;
+            self.require_http_handler_response_shape(handler_fn)?;
             let http_shim = self.emit_http_handler_shim(handler_fn);
             let ws_handler_fn = self.resolve_free_fn_for_handler_arg(&_args[2].value)?;
             let ws_shim = self.emit_ws_handler_shim(ws_handler_fn);
@@ -2340,6 +2342,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
 
             let handler_fn = self.resolve_free_fn_for_handler_arg(&_args[3].value)?;
+            self.require_http_handler_response_shape(handler_fn)?;
             let http_shim = self.emit_http_handler_shim(handler_fn);
             let ws_handler_fn = self.resolve_free_fn_for_handler_arg(&_args[4].value)?;
             let ws_shim = self.emit_ws_handler_shim(ws_handler_fn);
@@ -2561,6 +2564,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // ── Handler (free-fn → shim, same as `serve`) ──
             let handler_arg = &_args[3];
             let handler_fn = self.resolve_free_fn_for_handler_arg(&handler_arg.value)?;
+            self.require_http_handler_response_shape(handler_fn)?;
             let shim_fn = self.emit_http_handler_shim(handler_fn);
             let handler_ptr = shim_fn.as_global_value().as_pointer_value();
 

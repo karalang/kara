@@ -1178,9 +1178,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 &["Regex", "RegexError", "Match"],
             )?;
             let recv = self.compile_expr(object)?;
-            let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
+            let recv_sv = self.require_struct_value(recv, &format!("Regex.{method}"))?;
+            let (pat_data, pat_len) = self.regex_pattern_data_len(recv_sv);
             let s_val = self.compile_expr(&args[0].value)?;
-            let (s_data, s_len) = self.str_data_len(s_val.into_struct_value());
+            let s_sv = self.require_struct_value(s_val, &format!("Regex.{method} subject"))?;
+            let (s_data, s_len) = self.str_data_len(s_sv);
 
             let is_match_fn = self
                 .module
@@ -1234,9 +1236,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 &["Regex", "RegexError", "Match"],
             )?;
             let recv = self.compile_expr(object)?;
-            let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
+            let recv_sv = self.require_struct_value(recv, &format!("Regex.{method}"))?;
+            let (pat_data, pat_len) = self.regex_pattern_data_len(recv_sv);
             let s_val = self.compile_expr(&args[0].value)?;
-            let (s_data, s_len) = self.str_data_len(s_val.into_struct_value());
+            let s_sv = self.require_struct_value(s_val, &format!("Regex.{method} subject"))?;
+            let (s_data, s_len) = self.str_data_len(s_sv);
             let i64_t = self.context.i64_type();
             let fn_val = self.current_fn.unwrap();
 
@@ -1459,11 +1463,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 &["Regex", "RegexError", "Match"],
             )?;
             let recv = self.compile_expr(object)?;
-            let (pat_data, pat_len) = self.regex_pattern_data_len(recv.into_struct_value());
+            let recv_sv = self.require_struct_value(recv, &format!("Regex.{method}"))?;
+            let (pat_data, pat_len) = self.regex_pattern_data_len(recv_sv);
             let s_val = self.compile_expr(&args[0].value)?;
-            let (s_data, s_len) = self.str_data_len(s_val.into_struct_value());
+            let s_sv = self.require_struct_value(s_val, &format!("Regex.{method} subject"))?;
+            let (s_data, s_len) = self.str_data_len(s_sv);
             let r_val = self.compile_expr(&args[1].value)?;
-            let (r_data, r_len) = self.str_data_len(r_val.into_struct_value());
+            let r_sv = self.require_struct_value(r_val, &format!("Regex.{method} replacement"))?;
+            let (r_data, r_len) = self.str_data_len(r_sv);
             let i64_t = self.context.i64_type();
             let fn_val = self.current_fn.unwrap();
 
