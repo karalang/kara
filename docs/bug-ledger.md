@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 75 | 1 |
 | run-vs-build | 72 | 1 |
 | false-positive | 55 | 0 |
-| perf | 43 | 0 |
+| perf | 44 | 1 |
 | crash | 37 | 0 |
 | soundness | 35 | 0 |
 | diagnostics | 34 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 115 | 0 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
-| other | 23 | 0 |
+| other | 24 | 1 |
 | cli | 23 | 0 |
 | runtime | 19 | 0 |
 | resolver | 18 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **887 surfaced · 4 open · 875 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **888 surfaced · 5 open · 875 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **887 surfaced 
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | MATCH-ARM LEG ONLY (displacement leg fixed in 21a1fb6): consuming an Option[Drop] payload via a match/if-let arm binding on a NAMED binding with a boxed payload runs no user `impl Drop` body under `karac build` while the interpreter runs it — a run-vs-build divergence on the shipping path. Blocker identified: the body's only fire path for a boxed payload is the box drop, which the arm's memory suppressors disarm, so the fix must key on that disarm rather than on arm consumption | — |
 | B-2026-08-03-3 | 2026-08-03 | codegen+interp | high | a tuple-held Option[Struct] / Result[Struct, E] payload is never freed in ANY position, and a `let x = t.N` move-out fires the source element's Drop body twice -- tuple legs FIXED, the Result STRUCT FIELD leg still open | open |
 | B-2026-08-03-8 | 2026-08-03 | codegen+interp | high | `let x = h.f` moving an Option / Result / Vec FIELD out of a struct never disarms the field's Drop machinery — SEGV for an Option[Struct] field, a double-fired body for the other two; the plain-struct-field sibling is correct | open |
+| B-2026-08-03-9 | 2026-08-03 | other | high | No IN-PLACE map-value mutation, so the canonical `Map[K, Vec[V]]` grouping idiom is QUADRATIC. Extending a key's list is a read-clone-modify-reinsert, so a word occurring k times costs O(k^2) element copies where C/Rust/Go/Python are O(k). Measured 1000x slower than CPython on identical work at n=128k | the stdlib Map API surface (src/interpreter + codegen Map lowering, wherever `get`/`insert` are defined) — needs an in-place map-value mutation path: a `get_mut`-shaped borrow, an entry API, or a `Map.append`-style helper for the container-valued case |
 
 ### Fixed (875)
 
