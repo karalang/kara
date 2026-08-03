@@ -533,15 +533,16 @@ impl<'a> super::Interpreter<'a> {
                     _ => false,
                 })
             }
+            // B-2026-08-03-7 — one further container level INSIDE each element,
+            // by recursing through this same predicate rather than reading only
+            // the element's head name: `(Option[Res], i64)` classified as
+            // body-free, so a struct field or Map value holding such a tuple
+            // registered no walk. Codegen twin: `tuple_field_elem_heads`, which
+            // gained the same extractors one level down. Nested tuples fall out
+            // of the recursion.
             TypeKind::Tuple(elems) => {
                 let elems = elems.clone();
-                elems.iter().any(|e| match &e.kind {
-                    TypeKind::Path(ep) => ep
-                        .segments
-                        .first()
-                        .is_some_and(|h| self.type_name_runs_user_drop(h, seen)),
-                    _ => false,
-                })
+                elems.iter().any(|e| self.field_te_runs_user_drop(e, seen))
             }
             _ => false,
         }

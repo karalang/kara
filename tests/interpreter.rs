@@ -29306,3 +29306,32 @@ fn test_tuple_elem_move_out_single_body_fire() {
         "struct-elem:\ndrop 1 a1\n2\ndrop 2 bb2\noption-elem:\ndrop 3 ccc3\n30\nend\n"
     );
 }
+
+#[test]
+fn test_struct_field_and_map_value_tuple_run_element_drop() {
+    // B-2026-08-03-7 interp twin. Both positions were silent here too: the
+    // struct-field tuple walk handled only a DIRECT struct item, and the
+    // map-value walk gates on a declared HEAD name, which a tuple TE does not
+    // have. Both now route their items through the shared
+    // `run_tuple_item_user_drops`, the single walk behind every
+    // tuple-as-content position.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct W { p: (Option[Res], i64) }\n\
+             fn main() {\n\
+                 println(\"struct-field-tuple:\");\n\
+                 { let w = W { p: (Option.Some(Res { id: 1, name: f\"a{1}\" }), 10) }; println(w.p.1); }\n\
+                 println(\"map-value-tuple:\");\n\
+                 {\n\
+                     let mut m: Map[i64, (Option[Res], i64)] = Map.new();\n\
+                     m.insert(5, (Option.Some(Res { id: 2, name: f\"bb{2}\" }), 20));\n\
+                     println(m.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "struct-field-tuple:\n10\ndrop 1 a1\nmap-value-tuple:\n1\ndrop 2 bb2\nend\n"
+    );
+}

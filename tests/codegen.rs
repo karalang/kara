@@ -82812,6 +82812,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_field_and_map_value_tuple_run_element_drop() {
+        // B-2026-08-03-7 — the two tuple positions B-2026-08-03-3 did not reach,
+        // both silent on BOTH backends. A struct field holding a tuple and a Map
+        // value holding a tuple each classified as body-free because their
+        // selectors read only the tuple's element HEAD NAMES, so an inner
+        // `Option[Res]` read as the body-free "Option" — even though the
+        // emitters, once selected, already know how to descend. The struct-field
+        // leg ALSO leaked the payload's heap: the `NestedTuple` field classifier
+        // shares `type_expr_has_drop_heap`'s deliberate Option/Result blind spot,
+        // so the field registered no memory drop either.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct W { p: (Option[Res], i64) }
+fn main() {
+    println("struct-field-tuple:");
+    { let w = W { p: (Option.Some(Res { id: 1, name: f"a{1}" }), 10) }; println(w.p.1); }
+    println("map-value-tuple:");
+    {
+        let mut m: Map[i64, (Option[Res], i64)] = Map.new();
+        m.insert(5, (Option.Some(Res { id: 2, name: f"bb{2}" }), 20));
+        println(m.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "struct-field-tuple:\n10\ndrop 1 a1\n\
+                 map-value-tuple:\n1\ndrop 2 bb2\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tuple_held_optres_payload_freed_and_dropped() {
         // B-2026-08-03-3 — an `Option[P]` / `Result[O, E]` held INSIDE A TUPLE
         // never freed its payload's heap: `emit_tuple_elem_drops` had a hard

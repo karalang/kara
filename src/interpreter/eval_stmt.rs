@@ -698,28 +698,7 @@ impl<'a> super::Interpreter<'a> {
             // divergence in the silent direction on this side.
             if let Value::Tuple(items) = &e {
                 let items = items.clone();
-                for it in items {
-                    if let Value::Struct { name: tn, .. } = &it {
-                        if self.program.drop_method_keys.contains_key(tn) {
-                            let tn = tn.clone();
-                            self.run_user_drop_body_only(&tn, it.clone());
-                        }
-                        self.drop_user_drop_fields_of_value(&it);
-                        continue;
-                    }
-                    // B-2026-08-03-3 — an `Option`/`Result` ITEM inside that
-                    // tuple (`Vec[(Option[Res], i64)]`). Only a direct struct
-                    // item was walked, so the payload's body was silent while
-                    // codegen's per-element tuple drop fired it — the same
-                    // run-vs-build divergence -22 closed one level up. Routed
-                    // through the shared value recursion, exactly as the
-                    // DIRECT Option element arm below does.
-                    if let Value::EnumVariant { enum_name, .. } = &it {
-                        if enum_name == "Option" || enum_name == "Result" {
-                            self.run_discarded_value_user_drops(it);
-                        }
-                    }
-                }
+                self.run_tuple_item_user_drops(items);
                 continue;
             }
             // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` ELEMENT
@@ -1353,6 +1332,22 @@ impl<'a> super::Interpreter<'a> {
                         .zip(elem_tes.iter().cloned())
                         .collect();
                     for (e, ete) in pairs {
+                        // B-2026-08-03-7 — an `Option`/`Result` ITEM inside the
+                        // tuple field (`W { p: (Option[Res], i64) }`). Only a
+                        // DIRECT struct item was walked, so the payload's body
+                        // was silent on both backends; codegen's twin reaches it
+                        // because its tuple-field arm hands the slot to the
+                        // element walker, which gained the Option/Result leg in
+                        // B-2026-08-03-1. Built-ins have no source `EnumDef`, so
+                        // the declared-head match below can never admit them —
+                        // route through the shared value recursion instead,
+                        // exactly as the direct Option/Result FIELD arm does.
+                        if let Value::EnumVariant { enum_name, .. } = &e {
+                            if enum_name == "Option" || enum_name == "Result" {
+                                self.run_discarded_value_user_drops(e.clone());
+                                continue;
+                            }
+                        }
                         let Value::Struct { name: tn, .. } = &e else {
                             continue;
                         };
@@ -1425,6 +1420,40 @@ impl<'a> super::Interpreter<'a> {
     /// binding-name table, and a bare-generic-param V fires value-driven
     /// (the B-2026-08-02-14 erasure exception — codegen's walker sees the
     /// subst-resolved TE, so both backends fire).
+    /// B-2026-08-03-7 — run the Drop bodies of a TUPLE's items, one container
+    /// level into each. The single walk behind every position that holds a
+    /// tuple as CONTENT — a `Vec` element, a `Map`/`Set` value at the binding
+    /// level, and a `Map`/`Set` value reached through a struct field — all of
+    /// which previously handled only a DIRECT struct item and so went silent on
+    /// `(Option[Res], i64)`. Forward order, matching codegen's struct-GEP order
+    /// in `__karac_dropelems_tuple_*`. Bodies only: the tuple's heap is freed by
+    /// whichever memory drop owns the container.
+    pub(crate) fn run_tuple_item_user_drops(&mut self, items: Vec<Value>) {
+        for it in items {
+            if let Value::Struct { name: tn, .. } = &it {
+                if self.program.drop_method_keys.contains_key(tn) {
+                    let tn = tn.clone();
+                    self.run_user_drop_body_only(&tn, it.clone());
+                }
+                self.drop_user_drop_fields_of_value(&it);
+                continue;
+            }
+            // Built-ins have no source `EnumDef`, so no declared-head walk can
+            // admit them — route through the shared value recursion the discard
+            // path uses, exactly as the DIRECT Option/Result arms do.
+            if let Value::EnumVariant { enum_name, .. } = &it {
+                if enum_name == "Option" || enum_name == "Result" {
+                    self.run_discarded_value_user_drops(it);
+                    continue;
+                }
+            }
+            if let Value::Tuple(inner) = &it {
+                let inner = inner.clone();
+                self.run_tuple_item_user_drops(inner);
+            }
+        }
+    }
+
     fn run_field_map_val_user_drops(
         &mut self,
         field_value: &Value,
@@ -1470,6 +1499,13 @@ impl<'a> super::Interpreter<'a> {
                     self.run_discarded_value_user_drops(v);
                     continue;
                 }
+            }
+            // B-2026-08-03-7 — the TUPLE-valued sibling, silent here for the
+            // same reason: a tuple TE has no declared head for the gate below.
+            if let Value::Tuple(items) = &v {
+                let items = items.clone();
+                self.run_tuple_item_user_drops(items);
+                continue;
             }
             let Value::Struct { name: tn, .. } = &v else {
                 continue;
@@ -2503,6 +2539,16 @@ impl<'a> super::Interpreter<'a> {
                     self.run_discarded_value_user_drops(v);
                     continue;
                 }
+            }
+            // B-2026-08-03-7 — a TUPLE-valued V (`Map[i64, (Option[Res], i64)]`).
+            // A tuple TE has no declared HEAD, so the name gate below can never
+            // admit it; codegen's twin is the tuple arm of
+            // `emit_map_val_user_drop_bodies_fn`, which hands the per-value blob
+            // to the same element walker.
+            if let Value::Tuple(items) = &v {
+                let items = items.clone();
+                self.run_tuple_item_user_drops(items);
+                continue;
             }
             let Value::Struct { name: tn, .. } = &v else {
                 continue;

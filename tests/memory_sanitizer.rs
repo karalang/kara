@@ -36032,6 +36032,37 @@ fn main() {
             "module_binding_container_for_loop_no_leak",
         );
     }
+
+    #[test]
+    fn asan_struct_field_tuple_optres_payload_freed() {
+        // B-2026-08-03-7 (memory half) — a struct field holding a tuple with an
+        // Option payload registered NO memory drop: the `NestedTuple` field
+        // classifier shares `type_expr_has_drop_heap`'s deliberate Option/Result
+        // blind spot, so the payload's buffer was orphaned. Latent until the
+        // bodies fix here made the Drop body read `self.name` — the same
+        // elided-allocation discriminator B-2026-08-03-3 documents.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct W { p: (Option[Res], i64) }
+fn main() {
+    { let w = W { p: (Option.Some(Res { id: 1, name: f"a{1}" }), 10) }; println(w.p.1); }
+    {
+        let mut m: Map[i64, (Option[Res], i64)] = Map.new();
+        m.insert(5, (Option.Some(Res { id: 2, name: f"bb{2}" }), 20));
+        println(m.len());
+    }
+    println("end");
+}
+"#,
+            &["10", "drop 1 a1", "1", "drop 2 bb2", "end"],
+            "struct_field_tuple_optres_payload_freed",
+        );
+    }
+
     #[test]
     fn asan_tuple_held_optres_payload_freed() {
         // B-2026-08-03-3 — the leak this row was filed for. An `Option[P]` /

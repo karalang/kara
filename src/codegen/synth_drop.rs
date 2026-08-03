@@ -1418,9 +1418,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             None => te.clone(),
                         };
                         match &rte.kind {
-                            TypeKind::Tuple(elems) => {
-                                Some(elems.iter().any(|e| self.type_expr_has_drop_heap(e)))
-                            }
+                            // B-2026-08-03-7 — the same Option/Result admit the
+                            // tuple let-site and `synthesize_tuple_drop_fn_te`
+                            // got in B-2026-08-03-3: `type_expr_has_drop_heap`
+                            // reads those two heads as heapless, so a field
+                            // `p: (Option[Res], i64)` classified as needing no
+                            // drop and the payload's buffer leaked.
+                            TypeKind::Tuple(elems) => Some(elems.iter().any(|e| {
+                                self.type_expr_has_drop_heap(e)
+                                    || self.tuple_elem_needs_deep_drop(e)
+                            })),
                             _ => None,
                         }
                     }
@@ -2496,13 +2503,32 @@ impl<'ctx> super::Codegen<'ctx> {
         let TypeKind::Tuple(elems) = &te.kind else {
             return Vec::new();
         };
-        elems
-            .iter()
-            .filter_map(|e| match &e.kind {
-                TypeKind::Path(p) => p.segments.first().cloned(),
-                _ => None,
-            })
-            .collect()
+        let mut heads = Vec::new();
+        for e in elems {
+            match &e.kind {
+                TypeKind::Path(p) => {
+                    if let Some(h) = p.segments.first() {
+                        heads.push(h.clone());
+                    }
+                    // B-2026-08-03-7 — one further container level INSIDE the
+                    // element. Reading only the element's own head made
+                    // `W { p: (Option[Res], i64) }` classify as "Option", i.e.
+                    // body-free, so the parent registered no field-bodies walk
+                    // at all — even though `emit_user_drop_field_bodies_fn`'s
+                    // tuple arm knows how to descend once selected. Same
+                    // extractors the struct-FIELD widening uses, applied one
+                    // level down; the emitter is already recursive, so this
+                    // closes the gate/walk mismatch rather than adding a walk.
+                    heads.extend(Self::vec_field_elem_head(e));
+                    heads.extend(Self::map_or_set_field_val_head(e));
+                    heads.extend(Self::optres_payload_heads(e));
+                }
+                // A NESTED tuple element recurses through the same rule.
+                TypeKind::Tuple(_) => heads.extend(Self::tuple_field_elem_heads(e)),
+                _ => {}
+            }
+        }
+        heads
     }
 
     /// Resolve a declared field type NAME through a generic-mono subst: a
@@ -6816,17 +6842,41 @@ impl<'ctx> super::Codegen<'ctx> {
         let crate::ast::GenericArg::Type(val_te) = args.get(elem_idx)? else {
             return None;
         };
-        let TypeKind::Path(vp) = &val_te.kind else {
-            return None;
+        let val_te = val_te.clone();
+        // B-2026-08-03-7 — a TUPLE-valued V (`Map[i64, (Option[Res], i64)]`).
+        // The per-value blob IS the tuple, so the binding-death tuple element
+        // walker reads it directly — exactly as the Vec and Option/Result arms
+        // below hand the blob to their walkers. Handled ahead of the `Path`
+        // destructure, which a tuple TE fails outright (no head name), so the
+        // whole walk declined and the elements were silent on both backends.
+        let tuple_val_walker = if let TypeKind::Tuple(elem_tes) = &val_te.kind {
+            let elem_tes = elem_tes.clone();
+            let inkwell::types::BasicTypeEnum::StructType(agg) =
+                self.llvm_type_for_type_expr(&val_te)
+            else {
+                return None;
+            };
+            Some(self.emit_tuple_elem_user_drop_bodies_fn(agg, &elem_tes)?)
+        } else {
+            None
         };
-        let vname = vp.segments.first()?.clone();
+        // A tuple value has no head name, so the `vname`-keyed branches below
+        // are all bypassed for it — its walker is already resolved above, and
+        // the emission loop reads `vname` only on the no-nested-walker path.
+        let vname = match &val_te.kind {
+            TypeKind::Path(vp) => vp.segments.first()?.clone(),
+            _ if tuple_val_walker.is_some() => String::new(),
+            _ => return None,
+        };
         if self.shared_types.contains_key(&vname) {
             return None;
         }
         // B-2026-08-01-23 — a Vec/VecDeque-valued V: the per-value blob is a
         // vec header; run the te-driven recursive element walker on it
         // instead of the struct body/field calls.
-        let nested_val_walker = if vname == "Vec" || vname == "VecDeque" {
+        let nested_val_walker = if let Some(w) = tuple_val_walker {
+            Some(w)
+        } else if vname == "Vec" || vname == "VecDeque" {
             let inner_te = match &val_te.kind {
                 TypeKind::Path(ip) => match ip.generic_args.as_ref().and_then(|ga| ga.first()) {
                     Some(crate::ast::GenericArg::Type(t)) => t.clone(),
