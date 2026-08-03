@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
-| run-vs-build | 73 | 2 |
+| run-vs-build | 73 | 1 |
 | false-positive | 55 | 0 |
 | perf | 44 | 1 |
 | crash | 37 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 641 | 3 |
+| codegen | 641 | 2 |
 | interp | 120 | 1 |
 | typecheck | 115 | 0 |
 | ownership | 37 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **889 surfaced · 5 open · 876 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **889 surfaced · 4 open · 877 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,11 +134,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **889 surfaced 
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | MATCH-ARM LEG ONLY (displacement leg fixed in 21a1fb6): consuming an Option[Drop] payload via a match/if-let arm binding on a NAMED binding with a boxed payload runs no user `impl Drop` body under `karac build` while the interpreter runs it — a run-vs-build divergence on the shipping path. Blocker identified: the body's only fire path for a boxed payload is the box drop, which the arm's memory suppressors disarm, so the fix must key on that disarm rather than on arm consumption | — |
 | B-2026-08-03-3 | 2026-08-03 | codegen+interp | high | a tuple-held Option[Struct] / Result[Struct, E] payload is never freed in ANY position, and a `let x = t.N` move-out fires the source element's Drop body twice -- tuple legs FIXED, the Result STRUCT FIELD leg still open | open |
 | B-2026-08-03-9 | 2026-08-03 | other | high | No IN-PLACE map-value mutation, so the canonical `Map[K, Vec[V]]` grouping idiom is QUADRATIC. Extending a key's list is a read-clone-modify-reinsert, so a word occurring k times costs O(k^2) element copies where C/Rust/Go/Python are O(k). Measured 1000x slower than CPython on identical work at n=128k | the stdlib Map API surface (src/interpreter + codegen Map lowering, wherever `get`/`insert` are defined) — needs an in-place map-value mutation path: a `get_mut`-shaped borrow, an entry API, or a `Map.append`-style helper for the container-valued case |
-| B-2026-08-03-10 | 2026-08-03 | codegen | medium | an Option field whose payload is INLINE (a struct narrow enough to fit the 3-word payload area) fires its Drop body THREE times under AOT when the owning struct is passed by value — the BOXED-payload sibling is correct | open |
 
-### Fixed (876)
+### Fixed (877)
 
-<details><summary>876 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>877 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1040,6 +1039,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-03-6 | interp | medium | `match t.N { Ok(v) => . | src/interpreter/pattern_match.rs (the TupleIndex arms of `disarm_moved_out_enum_payload` and `scrutinee_expr_is_consuming`); pin interpreter.rs::test_tuple_elem_match_scrutinee_body_fires_at_arm_end, stash-proven RED. Suite 12891/0; 22-shape probe matrix unchanged elsewhere. |
 | B-2026-08-03-7 | codegen+interp | medium | a struct field holding a tuple, and a Map value holding a tuple, run NO Drop body for the tuple's elements on EITHER backend | 4aab1ba (src/codegen/synth_drop.rs, src/interpreter/pattern_match.rs, src/interpreter/eval_stmt.rs; pins test_e2e_struct_field_and_map_value_tuple_run_element_drop, test_struct_field_and_map_value_tuple_run_element_drop, asan_struct_field_tuple_optres_payload_freed -- all three stash-proven RED). 22-shape probe matrix all SAME across backends and vg=0 except the rows this does not claim; suite 12891/0. |
 | B-2026-08-03-8 | codegen+interp | medium | `let x = h.f` moving an Option / Result / Vec FIELD out of a struct never disarms the field's Drop machinery — SEGV for an Option[Struct] field, a do… | Memory half: src/codegen/param_own.rs (`suppress_struct_field_move_into_literal`'s Option/Result arm), pin asan_option_struct_field_move_out_no_double_free. Bodies half: 8407085 (src/codegen/runtime.rs, src/codegen/synth_drop.rs, src/codegen/control_flow_match.rs, src/codegen/stmts.rs, src/codegen.rs, src/codegen/functions.rs, src/interpreter.rs, src/interpreter/eval_stmt.rs; pins test_e2e_struct_field_move_out_single_body_fire, test_struct_field_move_out_single_body_fire). All three pins stash-proven RED; suite 12896/0. |
+| B-2026-08-03-10 | codegen | medium | an Option field whose payload is INLINE (a struct narrow enough to fit the 3-word payload area) fires its Drop body THREE times under AOT when the ow… | 257d666 (src/codegen/clone_drop.rs; pin test_e2e_inline_option_payload_field_body_fires_once, stash-proven RED -- pre-fix AOT prints `drop 1` twice and `drop 2` three times where the interpreter prints each once) |
 
 </details>
 
