@@ -330,6 +330,71 @@ impl Parser {
                 }
             }
         }
+        // B-2026-08-01-36 — a top-level `let` with a plain lowercase name in a
+        // file that ALSO defines `fn main()`. The recognizer in `items.rs` keys
+        // module-binding-ness on the name's CASE, so `let mut count: i64 = 0;`
+        // fell through to a script statement and then collided with the
+        // explicit main, producing an error about a completely different
+        // subject — one whose two suggestions ("move the statements into
+        // `main`", "remove the explicit `main`") are both destructive, and
+        // neither of which mentions capitalisation.
+        //
+        // design.md § Script mode makes script mode and an explicit `main`
+        // MUTUALLY EXCLUSIVE, so in a file with explicit main a top-level `let`
+        // cannot be a script statement — it can only be an (incorrectly named)
+        // module binding. Reclassify those so the resolver's
+        // E_MODULE_BINDING_NAMING fires instead: it names the rule and carries
+        // a machine-applicable rename that rewrites use sites too, turning a
+        // misdirecting parse error into a `karac fix` case. Statements that are
+        // NOT module-binding shaped (expression statements, assignments, tuple
+        // destructures) stay behind and keep the ambiguity error, which is the
+        // right diagnostic for them.
+        if self.allow_script_mode
+            && !script_stmts.is_empty()
+            && items
+                .iter()
+                .any(|it| matches!(it, Item::Function(f) if f.name == "main"))
+        {
+            let mut kept: Vec<Stmt> = Vec::new();
+            for st in std::mem::take(&mut script_stmts) {
+                let reclassified = match (&st.kind, &st.span) {
+                    (
+                        StmtKind::Let {
+                            is_mut,
+                            pattern:
+                                Pattern {
+                                    kind: PatternKind::Binding(name),
+                                    span: name_span,
+                                    ..
+                                },
+                            ty,
+                            value,
+                        },
+                        stmt_span,
+                    ) => Some(ModuleBinding {
+                        span: stmt_span.clone(),
+                        attributes: Vec::new(),
+                        doc_comment: None,
+                        is_pub: false,
+                        is_private: false,
+                        is_mut: *is_mut,
+                        name: name.clone(),
+                        name_span: name_span.clone(),
+                        ty: ty.clone(),
+                        value: value.clone(),
+                        deprecation: None,
+                        unstable: None,
+                        lint_overrides: Vec::new(),
+                    }),
+                    _ => None,
+                };
+                match reclassified {
+                    Some(mb) => items.push(Item::ModuleBinding(mb)),
+                    None => kept.push(st),
+                }
+            }
+            script_stmts = kept;
+        }
         if !script_stmts.is_empty() && !self.allow_script_mode {
             // Item-only context (`ast.item` quote, module file): top-level
             // statements are an error here, never a synthesized main.

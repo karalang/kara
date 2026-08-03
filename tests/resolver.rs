@@ -5624,3 +5624,31 @@ fn local_shadowing_a_builtin_stays_legal() {
     // that shadows a builtin is still an ordinary value.
     resolve_ok("fn main() { let println = 5; let x = println; }");
 }
+
+/// B-2026-08-01-36 — the payoff of the parser-side reclassification: a
+/// lowercase module-level binding now reaches `E_MODULE_BINDING_NAMING`, which
+/// names the rule and suggests the SCREAMING_SNAKE_CASE rename, instead of
+/// producing an ambiguity error about a different subject entirely.
+#[test]
+fn lowercase_module_binding_gets_the_naming_diagnostic() {
+    let errs = resolve_errors(
+        "let mut my_count: i64 = 0;\n\
+         fn bump() { my_count = my_count + 1; }\n\
+         fn main() { bump(); }\n",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_MODULE_BINDING_NAMING")),
+        "expected the module-binding naming diagnostic, got: {errs:?}"
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("MY_COUNT")),
+        "the diagnostic must suggest the SCREAMING_SNAKE_CASE rename, got: {errs:?}"
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.message.contains("both top-level statements")),
+        "the misdirecting ambiguity error must be gone, got: {errs:?}"
+    );
+}

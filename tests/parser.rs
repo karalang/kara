@@ -12448,3 +12448,102 @@ fn const_multi_letter_name_still_suggests_rename() {
         err.message
     );
 }
+
+// ── B-2026-08-01-36: a lowercase top-level `let` beside an explicit `main` ──
+//
+// The module-binding recognizer keys on the name's CASE, so a lowercase name
+// fell through to a script statement, collided with the explicit `fn main()`,
+// and produced "file contains both top-level statements and an explicit
+// `fn main()`" — an error about a different subject whose two suggestions
+// ("move the statements into `main`", "remove the explicit `main`") are both
+// destructive and neither of which mentions capitalisation. design.md § Script
+// mode makes script mode and an explicit `main` mutually exclusive, so such a
+// `let` can only be an incorrectly-named module binding; it is reclassified so
+// the resolver's E_MODULE_BINDING_NAMING (which carries a machine-applicable
+// rename) fires instead.
+
+#[test]
+fn lowercase_top_level_let_with_explicit_main_is_a_module_binding() {
+    let program = parse_ok(
+        "let mut my_count: i64 = 0;\n\
+         fn bump() { my_count = my_count + 1; }\n\
+         fn main() { bump(); }\n",
+    );
+    let bindings: Vec<&ModuleBinding> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::ModuleBinding(b) => Some(b),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bindings.len(),
+        1,
+        "the lowercase top-level `let` must be recognized as a module binding"
+    );
+    assert_eq!(bindings[0].name, "my_count");
+    assert!(bindings[0].is_mut);
+}
+
+#[test]
+fn single_letter_lowercase_top_level_let_is_a_module_binding() {
+    // `c` — the shortest lowercase name, on the far side of the old boundary
+    // (`C` was already recognized).
+    let program = parse_ok("let c: i64 = 0;\nfn main() { println(c.to_string()); }\n");
+    assert!(program
+        .items
+        .iter()
+        .any(|it| matches!(it, Item::ModuleBinding(b) if b.name == "c")));
+}
+
+#[test]
+fn script_mode_without_explicit_main_is_untouched() {
+    // No explicit `main` → the file is script mode and a top-level `let` is a
+    // genuine script statement. The reclassification must not reach here, or
+    // every script would gain a bogus naming error.
+    let result = parse("let x = 1;\nprintln(\"script\");\n");
+    assert!(
+        result.errors.is_empty(),
+        "script mode must still parse cleanly: {:?}",
+        result.errors
+    );
+    assert!(
+        !result
+            .program
+            .items
+            .iter()
+            .any(|it| matches!(it, Item::ModuleBinding(_))),
+        "a script-mode top-level `let` must NOT become a module binding"
+    );
+}
+
+#[test]
+fn genuine_ambiguity_still_reports_the_ambiguity_error() {
+    // An expression statement is not module-binding shaped, so it stays a
+    // script statement and the design.md ambiguity rule still applies.
+    let result = parse("println(\"top\");\nfn main() { println(\"m\"); }\n");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.to_string().contains("both top-level statements")),
+        "expected the ambiguity error, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn tuple_destructure_top_level_stays_a_script_statement() {
+    // Not a plain-name `let`, so it is not module-binding shaped and keeps the
+    // ambiguity error rather than being silently reclassified.
+    let result = parse("let (a, b) = (1, 2);\nfn main() { println(\"m\"); }\n");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.to_string().contains("both top-level statements")),
+        "expected the ambiguity error, got: {:?}",
+        result.errors
+    );
+}
