@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 206 | 0 |
+| miscompile | 208 | 2 |
 | leak | 124 | 0 |
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 633 | 2 |
+| codegen | 635 | 4 |
+| interp | 116 | 3 |
 | typecheck | 115 | 1 |
-| interp | 114 | 1 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
 | other | 23 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **879 surfaced · 6 open · 865 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **881 surfaced · 8 open · 865 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **879 surfaced 
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-13 | 2026-08-02 | typecheck+codegen | high | STDLIB AND USER TYPES SHARE ONE FLAT NAMESPACE, so any user struct that shadows a prelude type name silently takes over that type's codegen identity. `Response` (fixed as B-2026-08-02-7) was one instance of a class: a user `HttpError` double-frees identically, and a user `Match` crashes codegen outright. | src/prelude.rs (the flat prelude name list — `Response`, `HttpError`, `Match`, `Client`, `RequestBuilder`, `Stats`, `Regex`, …), runtime/stdlib/*.kara (where those types are declared), and every name-keyed dispatch site in src/typechecker, src/codegen and src/interpreter (~49 across 14 files) |
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | Displacing an Option[Drop] (`o = None` / `o = Some(new)`) and consuming one via a match arm binding never run the user `impl Drop` body under `karac build` — the interpreter now runs all three correctly, so the shipping path is the wrong one | — |
+| B-2026-08-03-1 | 2026-08-03 | codegen+interp | high | an Option/Result payload never runs its user Drop body in ANY nested position — struct field, Vec element, Map value, tuple element — on BOTH backends; only a direct binding works | open |
+| B-2026-08-03-2 | 2026-08-03 | codegen+interp | medium | `v.clear()` / `m.clear()` / `v.truncate(0)` destroy Drop-bearing elements without running their Drop bodies, on both backends | open |
 
 ### Fixed (865)
 
