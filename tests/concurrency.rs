@@ -2558,6 +2558,120 @@ fn test_reduction_kept_for_int_body_under_typed_analysis() {
     assert_eq!(scalar[0].accumulator, "total");
 }
 
+// ── B-2026-08-01-33: where the cross-task gate cuts on the DISJOINT-WRITE
+//    shape (the reduction pair above covers the other lowering) ───────────
+//
+// The gate is a span sweep over `expr_types`, so it fires exactly when a
+// body expression is ITSELF typed as a cross-task-unsafe type — i.e. when
+// the body MATERIALIZES a handle. A bare field read *through* a handle has
+// type `i64` and is admitted.
+//
+// That admission is sound only because codegen emits no refcount traffic
+// for a projection. Measured on the accepted program below: its fanned-out
+// `__karac_disjoint_worker_0` differs from the byte-identical program over
+// a PLAIN struct by exactly one instruction — the extra indirection to
+// reach the payload past the header — with no retain, no release, and no
+// touch of the refcount word. Nothing races, so admitting it is correct.
+//
+// Those two halves are coupled with nothing else pinning them: if codegen
+// ever starts retaining across a projection, this gate silently stops
+// covering the shape. These tests pin the analysis half of that pair, both
+// directions. Keep them together — the decline test alone would pass
+// against a gate that declined everything, and the accept test alone would
+// pass against a gate that had been deleted.
+
+#[test]
+fn test_disjoint_write_declined_when_body_materializes_shared_handle() {
+    // `let q = ps[j]` gives `q` type `P` (shared) — a cross-task-unsafe
+    // typed expression inside the body, so the fan-out must decline.
+    let analysis = analyze_typed(
+        r#"
+        shared struct P {
+            v: i64,
+        }
+
+        fn main() {
+            let n = 64;
+            let mut ps: Vec[P] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                ps.push(P { v: i });
+                i = i + 1;
+            }
+            let mut out: Vec[i64] = Vec.filled(n, 0);
+            for j in 0..n {
+                let q = ps[j];
+                out[j] = q.v * 2;
+            }
+            println(out[0]);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let d = main_fc
+        .disjoint_write_loops
+        .iter()
+        .find(|d| d.loop_var == "j")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a disjoint-write candidate for loop `j`, got {:?}",
+                main_fc.disjoint_write_loops
+            )
+        });
+    assert_eq!(
+        d.decline,
+        Some(karac::index_disjoint::DisjointDecline::NotCrossTaskSafe),
+        "binding a Vec[shared] element in the body must decline the fan-out"
+    );
+}
+
+#[test]
+fn test_disjoint_write_kept_for_scalar_projection_through_shared_handle() {
+    // Companion: identical program except the element is projected rather
+    // than bound. `ps[j].v` has type `i64`, emits no refcount traffic, and
+    // must stay recognized — the gate must not over-decline on the mere
+    // presence of a shared type in the program.
+    let analysis = analyze_typed(
+        r#"
+        shared struct P {
+            v: i64,
+        }
+
+        fn main() {
+            let n = 64;
+            let mut ps: Vec[P] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                ps.push(P { v: i });
+                i = i + 1;
+            }
+            let mut out: Vec[i64] = Vec.filled(n, 0);
+            for j in 0..n {
+                out[j] = ps[j].v * 2;
+            }
+            println(out[0]);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let d = main_fc
+        .disjoint_write_loops
+        .iter()
+        .find(|d| d.loop_var == "j")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a disjoint-write candidate for loop `j`, got {:?}",
+                main_fc.disjoint_write_loops
+            )
+        });
+    assert_eq!(
+        d.decline, None,
+        "a scalar projection through a shared handle emits no rc traffic and \
+         must stay recognized, got {:?}",
+        d.decline
+    );
+}
+
 // ── B-2026-07-30-1: iteration-local `shared` precision pass ─────────────
 //
 // The four tests below pin the boundary of `src/iter_local.rs`. The first
