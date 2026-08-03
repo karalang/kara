@@ -109,3 +109,87 @@ fn test_build_without_concurrency_report_flag_prints_nothing() {
          stdout was:\n{stdout}"
     );
 }
+
+/// B-2026-08-01-33 (reporting half) — a loop CONSIDERED for disjoint-write
+/// fan-out and declined must be visible in the human report.
+///
+/// The A/B is the one from the ledger entry: two programs differing ONLY in the
+/// `shared` keyword on the struct declaration, bodies byte-identical. The
+/// control proves `disjoint_writes`; the subject is declined by the
+/// cross-task-safety gate (a `shared struct`'s refcount is not atomic). Before
+/// this, the subject's report was byte-identical to a program that had no
+/// candidate loop at all — the decline was invisible in the one tool a user
+/// would reach for to ask exactly this question, and nothing hinted that
+/// `karac query concurrency` held the answer.
+///
+/// The reason itself deliberately stays in `query concurrency`: one aggregate
+/// line here keeps the opportunities the report exists to show from being
+/// buried under per-loop decline records.
+#[test]
+fn test_declined_disjoint_write_loop_is_visible_in_the_report() {
+    const BODY: &str = "\n\
+fn main() {\n\
+    let n = 400;\n\
+    let mut ps: Vec[P] = Vec.new();\n\
+    for i in 0..n { ps.push(P { v: i }); }\n\
+    let mut out: Vec[i64] = Vec.new();\n\
+    for i in 0..n { out.push(0); }\n\
+    for j in 0..n {\n\
+        let q = ps[j];\n\
+        let mut acc = 0;\n\
+        for k in 0..500 { acc = acc + q.v * 2; }\n\
+        out[j] = acc;\n\
+    }\n\
+    println(f\"{out[3]}\");\n\
+}\n";
+
+    let dir = std::env::temp_dir().join("karac_declined_report_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let ctl = dir.join("ctl.kara");
+    let sub = dir.join("sub.kara");
+    std::fs::write(&ctl, format!("struct P {{ v: i64 }}{BODY}")).unwrap();
+    std::fs::write(&sub, format!("shared struct P {{ v: i64 }}{BODY}")).unwrap();
+
+    let run = |path: &std::path::Path| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args(["check", path.to_str().unwrap(), "--concurrency-report"])
+            .output()
+            .expect("karac check");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    let ctl_out = run(&ctl);
+    let sub_out = run(&sub);
+
+    // Control: the loop is proven, so it is listed and NO decline footer fires.
+    assert!(
+        ctl_out.contains("disjoint_writes {"),
+        "control must prove the disjoint-write loop; got:\n{ctl_out}"
+    );
+    assert!(
+        !ctl_out.contains("declined"),
+        "the footer must NOT fire when every candidate was proven; got:\n{ctl_out}"
+    );
+
+    // Subject: declined, and the report says so and points at the tool that
+    // carries the reason.
+    assert!(
+        !sub_out.contains("disjoint_writes {"),
+        "the shared subject must not prove the loop; got:\n{sub_out}"
+    );
+    assert!(
+        sub_out.contains("considered for disjoint-write fan-out and declined"),
+        "the decline must be visible in the report; got:\n{sub_out}"
+    );
+    assert!(
+        sub_out.contains("karac query concurrency"),
+        "the footer must point at the tool carrying the reason; got:\n{sub_out}"
+    );
+
+    // The whole point: the two reports must now DIFFER.
+    assert_ne!(
+        ctl_out, sub_out,
+        "reports for a proven and a declined loop must not be identical"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -148,7 +148,17 @@ fn render_function(
         .iter()
         .filter(|d| d.proven())
         .collect();
-    if groups.is_empty() && reductions.is_empty() && disjoint.is_empty() {
+    // B-2026-08-01-33 (reporting half) — loops that were CONSIDERED for
+    // disjoint-write fan-out and declined. Their reasons stay out of the
+    // per-loop listing above for the stated reason, but their EXISTENCE has to
+    // be visible: without this the report for a declined loop is byte-identical
+    // to the report for a loop that was never a candidate, so a user comparing
+    // two programs that differ only in `shared` sees no difference at all and
+    // has no reason to suspect a second tool holds the answer. One aggregate
+    // line, not one per loop, so the opportunities the report exists to show
+    // are still what stands out.
+    let declined = decision.disjoint_write_loops.len() - disjoint.len();
+    if groups.is_empty() && reductions.is_empty() && disjoint.is_empty() && declined == 0 {
         return false;
     }
 
@@ -227,6 +237,27 @@ fn render_function(
             d.loop_var,
             targets.join(", "),
             d.loop_line,
+        ));
+    }
+
+    // The declined-candidate footer described above. Lines are listed so the
+    // user knows WHERE to look; the reason itself is one `karac query
+    // concurrency` away, which is the tool that carries the full gate record.
+    if declined > 0 {
+        let mut lines: Vec<String> = decision
+            .disjoint_write_loops
+            .iter()
+            .filter(|d| !d.proven())
+            .map(|d| d.loop_line.to_string())
+            .collect();
+        lines.sort();
+        lines.dedup();
+        out.push_str(&format!(
+            "  {} loop(s) considered for disjoint-write fan-out and declined (line{} {}) \
+             — `karac query concurrency` reports the gate and reason for each\n",
+            declined,
+            if lines.len() == 1 { "" } else { "s" },
+            lines.join(", "),
         ));
     }
 
