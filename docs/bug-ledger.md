@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 37 | 0 |
 | soundness | 35 | 0 |
 | diagnostics | 34 | 0 |
-| other | 12 | 1 |
+| other | 12 | 0 |
 | use-after-free | 11 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 115 | 0 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
-| other | 23 | 1 |
+| other | 23 | 0 |
 | cli | 23 | 0 |
 | runtime | 19 | 0 |
 | resolver | 18 | 0 |
@@ -124,22 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **886 surfaced · 6 open · 872 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **886 surfaced · 5 open · 873 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
-| B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | MATCH-ARM LEG ONLY (displacement leg fixed in 21a1fb6): consuming an Option[Drop] payload via a match/if-let arm binding on a NAMED binding with a boxed payload runs no user `impl Drop` body under `karac build` while the interpreter runs it — a run-vs-build divergence on the shipping path. Blocker identified: the body's only fire path for a boxed payload is the box drop, which the arm's memory suppressors disarm, so the fix must key on that disarm rather than on arm consumption | — |
 | B-2026-08-03-3 | 2026-08-03 | codegen+interp | high | a tuple-held Option[Struct] / Result[Struct, E] payload is never freed in ANY position, and a `let x = t.N` move-out fires the source element's Drop body twice -- tuple legs FIXED, the Result STRUCT FIELD leg still open | open |
 | B-2026-08-03-6 | 2026-08-03 | codegen+interp | medium | `match t.N { Ok(v) => .. }` on a tuple-element scrutinee defers the payload's Drop body to SCOPE EXIT under karac run while AOT fires it at the arm's end | open |
 | B-2026-08-03-7 | 2026-08-03 | codegen+interp | medium | a struct field holding a tuple, and a Map value holding a tuple, run NO Drop body for the tuple's elements on EITHER backend | open |
 
-### Fixed (872)
+### Fixed (873)
 
-<details><summary>872 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>873 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -991,6 +990,17 @@ END-TO-END RESULT (verified, not inferred): `let mut my_count: i64 = 0;` + two u
 SCOPED DELIBERATELY: only plain-name `let` statements reclassify, and only in a root source file that has an explicit `main`. Expression statements, assignments and tuple destructures are not module-binding shaped, so they stay script statements and keep the ambiguity error — which is the correct diagnostic for them, and is regression-tested in both directions. A file with no explicit `main` is untouched, so script mode still parses `let x = 1;` as a genuine script statement.
 
 Tests: 5 in tests/parser.rs (recognition of a lowercase binding, single-letter `c` on the far side of the old boundary, script mode untouched, expression-statement and tuple-destructure shapes still reporting ambiguity) + 1 in tests/resolver.rs asserting the naming diagnostic fires with the rename and the misdirecting error is absent. |
+| B-2026-08-02-1 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding | FIXED dd65d4f. Took the filing's suggested shape (phase-aware rather than code-set) and found TWO phase-blind predicates, not one — the filing flagged `fix_introduced_new_error` and suspected `fixes_resolved`; the suspicion was right and the second is worse. `fixes_resolved` was `max(0, len(before) - len(after))`, so the reported case scored ZERO resolved (1 diagnostic before, 2 after): the correct fix was counted AGAINST fix_precision_pct, not merely omitted from it.
+
+New rules: a code is charged as a regression only when it appears at or BEFORE the phase that was blocking the build (so a parse fix yielding typecheck errors is progress, while a parse fix yielding a DIFFERENT parse error is still caught); resolved is a per-code multiset difference, since newly-unmasked codes only ADD to the after set and cannot mask a code that really went away. Unknown phase names sort LAST, so a phase the harness has not learned yet reads as newly-unmasked rather than as a regression — the conservative direction for a metric whose failure mode is over-reporting.
+
+MEASURED, old -> new:
+  batch_20260801T235833 (layered): 6 resolved / 75.0% / 1 'broke the build'
+                                -> 7 resolved / 87.5% / 0
+  batch_20260731T212520 (single-mistake): 5 / 100.0% / 0 — BYTE-IDENTICAL under both.
+That second line is the filing's claim restated as a measurement: the bias fires only on multi-phase programs, so the metric looked fine until the fixtures got good.
+
+Tests: examples/mend/harness/test_mend_score.py (new — the harness had none). Most of it guards the OPPOSITE direction from this bug, since the danger in relaxing a metric is making it always-pass: a different parse error at the same phase, a new earlier-phase error, and a same-phase newcomer alongside legitimately-unmasked ones are all still charged. Verified non-vacuous by stubbing the detector to always return 'no regression' — exactly those three fail. Wired into the CI lint job (pure python, no build). |
 | B-2026-08-02-4 | resolver+effect | low | FFI lint suggests `allocates(Heap)` but neither the lint nor E0100 mentions the required `effect resource Heap;` declaration — following the compiler… | 8930667 |
 | B-2026-08-02-2 | typecheck | low | No implicit `*mut T` -> `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*… | a31d7be |
 | B-2026-08-02-3 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnosti… | 03c8d6a |
