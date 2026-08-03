@@ -2094,6 +2094,51 @@ impl<'ctx> super::Codegen<'ctx> {
         any_heap_half
     }
 
+    /// B-2026-08-03-3 leg B — the `Result` sibling of
+    /// [`Self::option_payload_struct_or_enum_drop_ok`], and the DISJOINT
+    /// twin of [`Self::result_field_direct_vecstr_halves_ok`]: at least one
+    /// half owns heap, and EVERY heap-owning half is a non-shared user
+    /// struct/enum the recursive drop family fully frees. Disjointness is
+    /// structural — this gate rejects a direct `String`/`Vec` heap half and
+    /// the `..._direct_vecstr_halves_ok` gate rejects a struct/enum heap
+    /// half — so each class keeps exactly one entry-copy helper
+    /// (`deep_copy_result_struct_enum_payload_in_place` here,
+    /// `deep_copy_result_inline_heap_halves_in_place` there) and copy-depth
+    /// stays equal to the registered free's depth. Heapless halves (scalar /
+    /// unit) are fine on either side: their arm emits neither copy nor free.
+    pub(super) fn result_field_struct_enum_payload_ok(&self, field_te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &field_te.kind else {
+            return false;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return false;
+        }
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        let mut half_tes = Vec::with_capacity(2);
+        for a in args.iter().take(2) {
+            match a {
+                crate::ast::GenericArg::Type(t) => half_tes.push(t),
+                _ => return false,
+            }
+        }
+        if half_tes.len() != 2 {
+            return false;
+        }
+        let mut any_heap_half = false;
+        for half in &half_tes {
+            if !self.te_owns_heap_below_buffer(half) {
+                continue;
+            }
+            if !self.option_payload_struct_or_enum_drop_ok(half) {
+                return false;
+            }
+            any_heap_half = true;
+        }
+        any_heap_half
+    }
+
     /// B-2026-07-21-16 — shared shape resolver for the OWNED-place
     /// `Option`/`Result` field-move legs: `value` must be a FieldAccess
     /// place whose leaf field is an `Option` with an inline non-shared
@@ -2192,7 +2237,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 false
             }
             Some("Result") => {
-                if !self.result_field_direct_vecstr_halves_ok(&field_te) {
+                // B-2026-08-03-3 leg B — mirror the struct drop's Result
+                // admission exactly, same pairing rule as the Option arm
+                // above: the source zero must fire precisely when the struct
+                // drop would free the field. Now that the classifier also
+                // admits the disjoint struct/enum-payload class, a move-out of
+                // one leaked (source correctly silent, leaf never registered).
+                // `zero_result_payload_area` neutralizes both widths — the
+                // inline free is tag-guarded and the boxed `BoxedEnumDrop`
+                // guards on a non-null box word.
+                if !self.result_field_direct_vecstr_halves_ok(&field_te)
+                    && !self.result_field_struct_enum_payload_ok(&field_te)
+                {
                     return None;
                 }
                 true
@@ -2249,8 +2305,42 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let result_ty = layout.llvm_type;
             self.zero_result_payload_area(result_ty, src_ptr, "respl.place.move");
+            // B-2026-08-03-3 leg B — the memory zero above is not the full dual
+            // of the Option branch's `zero_option_field_tag_at`. Zeroing only
+            // the payload WORDS leaves the tag reading `Ok`/`Err`, which every
+            // memory consumer tolerates (their frees are cap-guarded, so a
+            // zeroed area frees nothing) but the BODIES walk does not: its
+            // tag switch still selects the live arm and runs the payload's
+            // `impl Drop` over the zeroed slot — a spurious `drop 0 ` after the
+            // binding's correct fire. The Option side never had this because
+            // its neutralizer IS the tag. Invalidate the tag so the switch
+            // falls through to its default, exactly like `None`.
+            self.invalidate_result_tag_at(result_ty, src_ptr, "respl.place.move");
         } else {
             self.zero_option_field_tag_at(src_ptr);
+        }
+    }
+
+    /// Store a tag no `Ok`/`Err` guard can match into a moved-from `Result`
+    /// slot, so BOTH the memory frees (`EQ ok_tag` / `EQ err_tag` compares) and
+    /// the `emit_optres_payload_user_drop_bodies_fn` tag SWITCH fall through.
+    /// The Option dual is `zero_option_field_tag_at` (tag → `None`); `Result`
+    /// has no neutral variant, so `-1` stands in — it cannot collide with a
+    /// real tag, which are small non-negative discriminants. Pair it with
+    /// [`Self::zero_result_payload_area`]: the words carry the ownership
+    /// transfer, this carries the arm selection.
+    pub(super) fn invalidate_result_tag_at(
+        &self,
+        result_ty: inkwell::types::StructType<'ctx>,
+        slot: PointerValue<'ctx>,
+        name: &str,
+    ) {
+        let i64_t = self.context.i64_type();
+        if let Ok(tag_ptr) =
+            self.builder
+                .build_struct_gep(result_ty, slot, 0, &format!("{name}.tag"))
+        {
+            let _ = self.builder.build_store(tag_ptr, i64_t.const_all_ones());
         }
     }
 

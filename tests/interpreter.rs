@@ -29370,6 +29370,55 @@ fn test_tuple_elem_match_scrutinee_body_fires_at_arm_end() {
 }
 
 #[test]
+fn test_result_struct_payload_field_freed_and_single_body() {
+    // B-2026-08-03-3 leg B — the ORACLE half. The interpreter was already
+    // correct on every one of these seven positions (it frees through Rust
+    // ownership, so the codegen leak has no analogue), which is exactly why it
+    // is worth pinning: the codegen fix is judged by matching this, and two of
+    // the three defects it had to close were AOT-only body-COUNT bugs that no
+    // sanitizer sees — `local-match` fired a spurious body over the zeroed
+    // source slot, and `param-match` fired the callee's on top of the caller's.
+    // Keep this expectation byte-identical to the codegen twin
+    // `test_e2e_result_struct_payload_field_freed_and_single_body`.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct H { r: Result[Res, i64], t: i64 }\n\
+             struct Hm { r: Result[Res, String], t: i64 }\n\
+             fn take(h: H) -> i64 { h.t }\n\
+             fn mk() -> H { H { r: Result.Ok(Res { id: 2, name: f\"bb{2}\" }), t: 20 } }\n\
+             fn consume(h: H) -> i64 { match h.r { Result.Ok(x) => x.id, Result.Err(e) => e } }\n\
+             fn main() {\n\
+             println(\"binding:\");\n\
+             { let h = H { r: Result.Ok(Res { id: 1, name: f\"a{1}\" }), t: 10 }; println(h.t); }\n\
+             println(\"returned:\");\n\
+             { let h = mk(); println(h.t); }\n\
+             println(\"byvalue:\");\n\
+             { let h = H { r: Result.Ok(Res { id: 3, name: f\"ccc{3}\" }), t: 30 }; println(take(h)); }\n\
+             println(\"moveout:\");\n\
+             { let h = H { r: Result.Ok(Res { id: 4, name: f\"dddd{4}\" }), t: 40 }; let x = h.r; println(h.t); }\n\
+             println(\"local-match:\");\n\
+             { let h = H { r: Result.Ok(Res { id: 5, name: f\"eeeee{5}\" }), t: 50 };\n\
+             let v = match h.r { Result.Ok(x) => x.id, Result.Err(e) => e }; println(v); }\n\
+             println(\"param-match:\");\n\
+             { let h = H { r: Result.Ok(Res { id: 6, name: f\"ffffff{6}\" }), t: 60 }; println(consume(h)); }\n\
+             println(\"mixed-halves:\");\n\
+             { let h = Hm { r: Result.Err(f\"ggggggg{7}\"), t: 70 }; println(h.t); }\n\
+             println(\"end\");\n\
+             }\n"),
+        "binding:\n10\ndrop 1 a1\n\
+         returned:\n20\ndrop 2 bb2\n\
+         byvalue:\n30\ndrop 3 ccc3\n\
+         moveout:\ndrop 4 dddd4\n40\n\
+         local-match:\ndrop 5 eeeee5\n5\n\
+         param-match:\n6\ndrop 6 ffffff6\n\
+         mixed-halves:\n70\nend\n"
+    );
+}
+
+#[test]
 fn test_struct_field_move_out_single_body_fire() {
     // B-2026-08-03-8 (bodies half) interp twin. `let x = h.f` left the source
     // struct's field walk running over every field, so the moved one's body

@@ -67,7 +67,7 @@ use inkwell::values::PointerValue;
 use inkwell::{AddressSpace, IntPredicate};
 use std::collections::HashMap;
 
-use crate::ast::{Expr, ExprKind, TypeExpr, TypeKind};
+use crate::ast::{Expr, ExprKind, GenericArg, TypeExpr, TypeKind};
 
 use super::state::{EnumDropKind, EnumLayout};
 
@@ -433,7 +433,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Option arm's rationale. Every other Result shape
                     // (shared / wrapper / nested halves) stays caller-retains.
                     "Result" if self.copy_support_for_loop_shared_mode => false,
-                    "Result" => self.result_field_direct_vecstr_halves_ok(fte),
+                    // B-2026-08-03-3 leg B — the disjoint struct/enum-payload
+                    // class is copyable too, via
+                    // `deep_copy_result_struct_enum_payload_in_place` (the
+                    // `Result` twin of the Option struct/enum copy, boxing at
+                    // the 5-word Result payload area rather than Option's 3).
+                    "Result" => {
+                        self.result_field_direct_vecstr_halves_ok(fte)
+                            || self.result_payload_struct_enum_copyable(fte, stack)
+                    }
                     _ if is_primitive_type_name(head) => true,
                     // B-2026-07-18-2: a DIRECT `shared` handle field is copyable
                     // in for-loop strict-shared mode — the "copy" is an rc-INC of
@@ -581,6 +589,57 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(head)
             .map(|l| !l.is_shared)
             .unwrap_or(false)
+    }
+
+    /// B-2026-08-03-3 leg B — the `Result` twin of
+    /// [`Self::option_payload_struct_or_enum_copyable`]: is every heap-owning
+    /// half of a `result_field_struct_enum_payload_ok` field deep-COPYABLE, so
+    /// `field_copy_supported`'s `Result` arm can admit it (making the owning
+    /// struct callee-owned and its `OptionInline` drop safe)? The shape gate
+    /// already restricted each heap half to a non-shared struct/enum; this adds
+    /// the copy-depth == drop-depth requirement — a struct half must be
+    /// recursively copy-supported (it recurses via
+    /// `deep_copy_struct_heap_fields_in_place`), an enum half rides the same
+    /// `deep_copy_enum_heap_payload_in_place` machinery a DIRECT non-shared enum
+    /// field already trusts.
+    fn result_payload_struct_enum_copyable(
+        &self,
+        field_te: &TypeExpr,
+        stack: &mut Vec<String>,
+    ) -> bool {
+        if !self.result_field_struct_enum_payload_ok(field_te) {
+            return false;
+        }
+        let TypeKind::Path(p) = &field_te.kind else {
+            return false;
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        for a in args.iter().take(2) {
+            let GenericArg::Type(half) = a else {
+                return false;
+            };
+            if !self.te_owns_heap_below_buffer(half) {
+                continue;
+            }
+            let TypeKind::Path(hp) = &half.kind else {
+                return false;
+            };
+            let head = hp.segments.first().map(String::as_str).unwrap_or("");
+            if self.shared_types.contains_key(head) {
+                return false;
+            }
+            let ok = if self.struct_types.contains_key(head) {
+                self.aggregate_param_copy_supported_struct(head, stack)
+            } else {
+                self.enum_layouts.get(head).map(|l| !l.is_shared) == Some(true)
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
     }
 
     /// Deep-copy every Vec/String heap field of the struct value at `base_ptr`,
@@ -991,7 +1050,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_struct_gep(agg_ty, base_ptr, idx, "p14.rf")
                 {
-                    self.deep_copy_result_inline_heap_halves_in_place(field_ptr, fte);
+                    // B-2026-08-03-3 leg B — the two admitted Result classes are
+                    // structurally disjoint (a direct String/Vec heap half vs a
+                    // struct/enum heap half), so exactly one helper applies.
+                    if self.result_field_struct_enum_payload_ok(fte) {
+                        self.deep_copy_result_struct_enum_payload_in_place(field_ptr, fte);
+                    } else {
+                        self.deep_copy_result_inline_heap_halves_in_place(field_ptr, fte);
+                    }
                 }
                 return;
             }
@@ -1833,6 +1899,187 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder.position_at_end(merge_bb);
+    }
+
+    /// B-2026-08-03-3 leg B — the `Result` twin of
+    /// [`Self::deep_copy_option_struct_enum_payload_in_place`]: deep-copy a
+    /// `Result[T, E]` FIELD's live half when that half is a non-shared user
+    /// struct/enum, so a callee-owned by-value aggregate param owns heap
+    /// independent of the caller's retained original. This is the copy peer of
+    /// [`Self::emit_result_drop_fn`]'s per-side boxed/inline branch, and it must
+    /// agree with that emitter on the BOXING THRESHOLD — which for `Result` is
+    /// **5 words**, not the Option family's 3. The `Result` payload area is
+    /// declared 5 words wide (`declarations.rs`'s `result_payload_words`) and
+    /// both `coerce_to_payload_words` (the pack site) and `emit_result_drop_fn`
+    /// (the free site) box only beyond it, so a 4-word payload — the canonical
+    /// `struct Res { id: i64, name: String }` — lives INLINE in a `Result` while
+    /// the same struct is BOXED in an `Option`. Copying it with the Option
+    /// helper's `> 3` test reads `id` as a box pointer; keep the `> 5` here in
+    /// lockstep with the emitter or every shape in this class corrupts.
+    fn deep_copy_result_struct_enum_payload_in_place(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        res_te: &TypeExpr,
+    ) {
+        let TypeKind::Path(p) = &res_te.kind else {
+            return;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return;
+        }
+        let Some(args) = p.generic_args.as_ref() else {
+            return;
+        };
+        let half_te = |i: usize| match args.get(i) {
+            Some(GenericArg::Type(t)) => Some(t.clone()),
+            _ => None,
+        };
+        let (Some(ok_te), Some(err_te)) = (half_te(0), half_te(1)) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Result").cloned() else {
+            return;
+        };
+        let result_ty = layout.llvm_type;
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
+        let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
+
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(result_ty, field_ptr, 0, "p14re.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "p14re.tag")
+            .unwrap()
+            .into_int_value();
+
+        for (half_tag, half, label) in [(ok_tag, ok_te, "ok"), (err_tag, err_te, "err")] {
+            // Only a non-shared struct/enum half gets an arm; a scalar or
+            // heapless half copies nothing (the caller's gate already rejected
+            // any other heap-owning shape, so nothing is silently skipped).
+            let payload_name = match &half.kind {
+                TypeKind::Path(hp) => hp.segments.first().cloned(),
+                _ => None,
+            };
+            let Some(payload_name) = payload_name else {
+                continue;
+            };
+            if self.shared_types.contains_key(&payload_name) {
+                continue;
+            }
+            let is_struct = self.struct_types.contains_key(&payload_name);
+            let enum_layout = self
+                .enum_layouts
+                .get(&payload_name)
+                .filter(|l| !l.is_shared)
+                .cloned();
+            if !is_struct && enum_layout.is_none() {
+                continue;
+            }
+            if !self.te_owns_heap_below_buffer(&half) {
+                continue;
+            }
+
+            let copy_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("p14re.{label}"));
+            let next_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("p14re.{label}.next"));
+            let is_half = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    tag,
+                    i64_t.const_int(half_tag, false),
+                    &format!("p14re.is_{label}"),
+                )
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_half, copy_bb, next_bb)
+                .unwrap();
+            self.builder.position_at_end(copy_bb);
+
+            let payload_llty = self.llvm_type_for_type_expr(&half);
+            let payload_words = Self::llvm_type_word_count(payload_llty);
+            let payload_base = self
+                .builder
+                .build_struct_gep(result_ty, field_ptr, 1, &format!("p14re.{label}.pl"))
+                .unwrap();
+            if payload_words > 5 {
+                // BOXED — word 1 holds the box pointer. Same dance as the
+                // Option twin's boxed branch, null-guarded for symmetry with
+                // `emit_result_drop_fn`'s box null-guard.
+                let old_w = self
+                    .builder
+                    .build_load(i64_t, payload_base, &format!("p14re.{label}.box.w0"))
+                    .unwrap()
+                    .into_int_value();
+                let old_box = self
+                    .builder
+                    .build_int_to_ptr(old_w, ptr_ty, &format!("p14re.{label}.oldbox"))
+                    .unwrap();
+                let old_null = self
+                    .builder
+                    .build_is_null(old_box, &format!("p14re.{label}.oldbox.null"))
+                    .unwrap();
+                let box_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("p14re.{label}.box.copy"));
+                self.builder
+                    .build_conditional_branch(old_null, next_bb, box_bb)
+                    .unwrap();
+                self.builder.position_at_end(box_bb);
+                let raw_size = payload_llty.size_of().unwrap();
+                let size = if raw_size.get_type().get_bit_width() == 64 {
+                    raw_size
+                } else {
+                    self.builder
+                        .build_int_z_extend(raw_size, i64_t, &format!("p14re.{label}.sz64"))
+                        .unwrap()
+                };
+                let new_box = self
+                    .builder
+                    .build_call(
+                        self.malloc_fn,
+                        &[size.into()],
+                        &format!("p14re.{label}.newbox"),
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let boxval = self
+                    .builder
+                    .build_load(payload_llty, old_box, &format!("p14re.{label}.boxval"))
+                    .unwrap();
+                self.builder.build_store(new_box, boxval).unwrap();
+                if let Some(el) = &enum_layout {
+                    self.deep_copy_enum_heap_payload_in_place(&payload_name, new_box, el);
+                } else {
+                    self.deep_copy_struct_heap_fields_in_place(new_box, &payload_name);
+                }
+                let new_w = self
+                    .builder
+                    .build_ptr_to_int(new_box, i64_t, &format!("p14re.{label}.newbox.w"))
+                    .unwrap();
+                self.builder.build_store(payload_base, new_w).unwrap();
+            } else {
+                // INLINE — the payload overlays words 1..5; deep-copy its heap
+                // fields directly (`payload_base` reinterprets as `payload_llty*`).
+                if let Some(el) = &enum_layout {
+                    self.deep_copy_enum_heap_payload_in_place(&payload_name, payload_base, el);
+                } else {
+                    self.deep_copy_struct_heap_fields_in_place(payload_base, &payload_name);
+                }
+            }
+            self.builder.build_unconditional_branch(next_bb).unwrap();
+            self.builder.position_at_end(next_bb);
+        }
     }
 
     /// B-2026-07-03-28 shared leg — rc-INC an `Option[shared]` FIELD's inline

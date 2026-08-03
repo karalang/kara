@@ -82869,6 +82869,75 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_result_struct_payload_field_freed_and_single_body() {
+        // B-2026-08-03-3 leg B — a `Result[<Drop struct>, E]` STRUCT FIELD was
+        // never freed in ANY position (local binding, by-value param, returned
+        // from a fn, `let x = h.r` move-out), because the `OptionInline`
+        // classifier's Result arm admitted only the DIRECT String/Vec-halves
+        // class. Arming the free needed its entry-copy peer, and attempt 1 —
+        // which factored the payload copy out of the Option twin — double-freed:
+        // the `Result` payload AREA is 5 words (`declarations.rs`'s
+        // `result_payload_words`, the threshold `coerce_to_payload_words` packs
+        // at and `emit_result_drop_fn` frees at) while `Option`'s is 3, so the
+        // canonical 4-word `Res` is INLINE in a `Result` and BOXED in an
+        // `Option`. Copying it at Option's `> 3` read `id` as a box pointer.
+        //
+        // Two neutralizers had to land with the free. `zero_result_payload_area`
+        // is not the dual of `zero_option_field_tag_at`: it leaves the tag
+        // selecting the live arm, which every cap-guarded memory free tolerates
+        // but the BODIES walk does not — a consuming `match h.r` printed a
+        // spurious `drop 0 ` over the zeroed slot. And a `match p.field` inside
+        // a by-value param binds out of the callee's entry copy exactly as a
+        // bare `match p` does, so its body belongs to the caller's fire; the
+        // owned-param test only looked at a bare Identifier.
+        //
+        // `err-struct-side` pins that the admit is per-half (both sides
+        // structs), and `mixed-halves` that a String half keeps the shape OUT of
+        // this class entirely — neither gate admits it, so it stays status quo.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+struct H { r: Result[Res, i64], t: i64 }
+struct Hm { r: Result[Res, String], t: i64 }
+fn take(h: H) -> i64 { h.t }
+fn mk() -> H { H { r: Result.Ok(Res { id: 2, name: f"bb{2}" }), t: 20 } }
+fn consume(h: H) -> i64 { match h.r { Result.Ok(x) => x.id, Result.Err(e) => e } }
+fn main() {
+    println("binding:");
+    { let h = H { r: Result.Ok(Res { id: 1, name: f"a{1}" }), t: 10 }; println(h.t); }
+    println("returned:");
+    { let h = mk(); println(h.t); }
+    println("byvalue:");
+    { let h = H { r: Result.Ok(Res { id: 3, name: f"ccc{3}" }), t: 30 }; println(take(h)); }
+    println("moveout:");
+    { let h = H { r: Result.Ok(Res { id: 4, name: f"dddd{4}" }), t: 40 }; let x = h.r; println(h.t); }
+    println("local-match:");
+    { let h = H { r: Result.Ok(Res { id: 5, name: f"eeeee{5}" }), t: 50 };
+      let v = match h.r { Result.Ok(x) => x.id, Result.Err(e) => e }; println(v); }
+    println("param-match:");
+    { let h = H { r: Result.Ok(Res { id: 6, name: f"ffffff{6}" }), t: 60 }; println(consume(h)); }
+    println("mixed-halves:");
+    { let h = Hm { r: Result.Err(f"ggggggg{7}"), t: 70 }; println(h.t); }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "binding:\n10\ndrop 1 a1\n\
+                 returned:\n20\ndrop 2 bb2\n\
+                 byvalue:\n30\ndrop 3 ccc3\n\
+                 moveout:\ndrop 4 dddd4\n40\n\
+                 local-match:\ndrop 5 eeeee5\n5\n\
+                 param-match:\n6\ndrop 6 ffffff6\n\
+                 mixed-halves:\n70\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_field_move_out_single_body_fire() {
         // B-2026-08-03-8 (bodies half) — `let x = h.f` moves ONE field out, but
         // the struct's `__karac_dropbodies_*` walk stayed fully armed and fired

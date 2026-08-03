@@ -8236,6 +8236,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // String/Vec halves): transfer the payload to the leaf
                         // and zero the source's payload area.
                         || self.result_field_direct_vecstr_halves_ok(&field_te)
+                        // B-2026-08-03-3 leg B — the disjoint struct/enum-payload
+                        // Result class, now that the source's struct drop frees
+                        // it: without the transfer the leaf owns nothing and the
+                        // (correctly) zeroed source frees nothing → leak.
+                        || self.result_field_struct_enum_payload_ok(&field_te)
                         || matches!(
                             &field_te.kind,
                             TypeKind::Path(p) if p.segments.last().is_some_and(|s|
@@ -8952,7 +8957,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding (`FreeInlineResultPayload` + `inline_result_payload_vars`
         // membership), so a later consuming match suppresses the free and an
         // unconsumed leaf frees the payload itself.
-        if self.result_field_direct_vecstr_halves_ok(te) {
+        // B-2026-08-03-3 leg B — and its disjoint struct/enum-payload twin.
+        // `track_inline_result_payload_var` already covers a struct-with-heap
+        // payload (`result_inline_payload_struct_drops`, B-2026-07-12-2 gap 3)
+        // and self-skips when the payload was heap-BOXED (`BoxedEnumDrop` owns
+        // that case), so one tracker serves both widths.
+        if self.result_field_direct_vecstr_halves_ok(te)
+            || self.result_field_struct_enum_payload_ok(te)
+        {
             self.track_inline_result_payload_var(var_name, alloca, te);
             return;
         }

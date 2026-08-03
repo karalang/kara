@@ -585,11 +585,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// under the caller-retains convention — their Drop bodies belong to
     /// the caller's fire, so the pattern-binding registration goes
     /// memory-only.
+    ///
+    /// B-2026-08-03-3 leg B — the root, not just a bare name: `match p.field {
+    /// Ok(x) => … }` inside `fn take(p: H)` binds out of the same entry copy a
+    /// bare `match p` would, so it carries the same caller-retains body
+    /// ownership. Restricting the test to a bare Identifier made the callee's
+    /// arm fire the payload's body on top of the caller's — visible only once
+    /// the field class in question got a body to fire at all (the Option twin
+    /// stayed silent because a 4-word payload is BOXED at Option's 3-word area
+    /// and so failed the inline-payload registration, while the same payload is
+    /// INLINE in `Result`'s 5-word area). Field / tuple-index chains are the
+    /// only widening: an index or call in the chain is not a plain view.
     pub(super) fn scrutinee_is_owned_param_binding(&self, e: &Expr) -> bool {
-        matches!(&e.kind, ExprKind::Identifier(n)
-            if (self.current_fn_param_names.contains(n.as_str())
-                && !self.ref_params.contains_key(n.as_str()))
-                || self.param_view_locals.contains(n.as_str()))
+        let mut cur = e;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } => cur = object,
+                ExprKind::TupleIndex { object, .. } => cur = object,
+                ExprKind::Identifier(n) => {
+                    return (self.current_fn_param_names.contains(n.as_str())
+                        && !self.ref_params.contains_key(n.as_str()))
+                        || self.param_view_locals.contains(n.as_str());
+                }
+                _ => return false,
+            }
+        }
     }
 
     /// Is this scrutinee expression a FRESH OWNING temp — a call, or a

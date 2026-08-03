@@ -1531,7 +1531,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     field_kinds.get(idx).and_then(|o| o.as_deref()),
                     Some("Result")
                 ) {
-                    if !self.result_field_direct_vecstr_halves_ok(&field_te) {
+                    // B-2026-08-03-3 leg B — plus the disjoint struct/enum-payload
+                    // class, whose entry-copy peer is
+                    // `deep_copy_result_struct_enum_payload_in_place`. Same
+                    // copy == drop reasoning as the direct-halves class above.
+                    if !self.result_field_direct_vecstr_halves_ok(&field_te)
+                        && !self.result_field_struct_enum_payload_ok(&field_te)
+                    {
                         continue;
                     }
                     if let Some(f) = self.vec_elem_agg_drop_for_type_expr(&field_te) {

@@ -36064,6 +36064,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_result_struct_payload_field_freed() {
+        // B-2026-08-03-3 leg B — the LEAK oracle for the `Result[<Drop struct>,
+        // E]` struct field, whose payload buffer was orphaned in every position.
+        // LSan (the Linux CI leg — a macOS `-fsanitize=address` run misses leaks
+        // entirely) is the only one of the three oracles that sees it: parity
+        // agreed with the interpreter for three of these four shapes, and the
+        // Drop body fired the right number of times, so nothing else was wrong
+        // except that the `name` buffer was never freed.
+        //
+        // ASAN is also the gate the first attempt failed: arming the free
+        // without a threshold-correct entry copy turned the by-value-param shape
+        // into a double free (the `Result` payload area is 5 words, the Option
+        // twin's is 3, so a 4-word payload is INLINE here and BOXED there — the
+        // copy read the struct's first field as a box pointer).
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct H { r: Result[Res, i64], t: i64 }
+fn take(h: H) -> i64 { h.t }
+fn mk() -> H { H { r: Result.Ok(Res { id: 2, name: f"bb{2}" }), t: 20 } }
+fn consume(h: H) -> i64 { match h.r { Result.Ok(x) => x.id, Result.Err(e) => e } }
+fn main() {
+    { let h = H { r: Result.Ok(Res { id: 1, name: f"a{1}" }), t: 10 }; println(h.t); }
+    { let h = mk(); println(h.t); }
+    { let h = H { r: Result.Ok(Res { id: 3, name: f"ccc{3}" }), t: 30 }; println(take(h)); }
+    { let h = H { r: Result.Ok(Res { id: 4, name: f"dddd{4}" }), t: 40 }; let x = h.r; println(h.t); }
+    { let h = H { r: Result.Ok(Res { id: 5, name: f"eeeee{5}" }), t: 50 }; println(consume(h)); }
+    println("end");
+}
+"#,
+            &[
+                "10",
+                "drop 1 a1",
+                "20",
+                "drop 2 bb2",
+                "30",
+                "drop 3 ccc3",
+                "drop 4 dddd4",
+                "40",
+                "5",
+                "drop 5 eeeee5",
+                "end",
+            ],
+            "result_struct_payload_field_freed",
+        );
+    }
+
+    #[test]
     fn asan_option_struct_field_move_out_no_double_free() {
         // B-2026-08-03-8 (memory half) — `let x = h.o` with `o: Option[Res]`
         // SEGV'd: `Res` is 4 words so the payload is BOXED, and both `x` and
