@@ -5285,7 +5285,40 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.register_owner_copy_container_heap_env_elem_drops(
                                         value, var_name,
                                     );
-                                    if self.aggregate_has_heap_field(agg_ty) {
+                                    // B-2026-08-02-26 — the LLVM-type path below
+                                    // frees a `Vec` element's BUFFER but not its
+                                    // element leaves, so `let t = (xs, 9)` with
+                                    // `xs: Vec[Res]` leaked every `Res`'s String
+                                    // (and, being enum-blind, it cannot see which
+                                    // element needs the deeper walk). When the
+                                    // element TEs are known and one is a container
+                                    // whose inner owns heap, take the TypeExpr path
+                                    // instead — `emit_tuple_elem_drops` now routes
+                                    // such an element to the recursive
+                                    // `karac_drop_Vec_<E>`, which drains the live
+                                    // elements before freeing the buffer.
+                                    let deep_elem_tes = self
+                                        .tuple_binding_elem_tes(ty.as_ref(), value)
+                                        .filter(|tes| {
+                                            tes.iter().any(|e| self.tuple_elem_needs_deep_drop(e))
+                                        });
+                                    if let Some(elem_tes) = deep_elem_tes {
+                                        if let Some(drop_fn) =
+                                            self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes)
+                                        {
+                                            if let Some(frame) =
+                                                self.scope_cleanup_actions.last_mut()
+                                            {
+                                                frame.push(
+                                                    super::state::CleanupAction::StructDrop {
+                                                        struct_alloca: slot.ptr,
+                                                        drop_fn,
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        self.suppress_source_vec_cleanup_for_arg(value);
+                                    } else if self.aggregate_has_heap_field(agg_ty) {
                                         // Proven LLVM-type path: a tuple whose heap
                                         // is a directly-visible Vec/String field
                                         // (or nested Vec aggregate). The aggregate
@@ -8656,6 +8689,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// value type → single-segment `Path`). Returns `None` when neither source
     /// is a tuple shape (e.g. a call-result RHS with no annotation — that tail
     /// stays with #24), so the caller falls through to the LLVM-type path.
+    /// Recover a tuple-literal ELEMENT's full `TypeExpr` — generic argument
+    /// included — for the two shapes whose type is knowable at the let-site.
+    ///
+    /// B-2026-08-02-26: the general `infer_arg_elem_te` builds a head-name-only
+    /// path (`generic_args: None`), so a `Vec[Res]` element read back as bare
+    /// `Vec`. Every downstream decision keyed on the element type — needs a
+    /// deep drop? runs a Drop body? — then saw a drop-free collection, and
+    /// `let t = (xs, 9)` both leaked the elements and ran no bodies. Another
+    /// facet of declared-name erasure, at the tuple-literal inference step.
+    /// `None` for any element whose type isn't recoverable here; the caller
+    /// falls back to the head-name inference, which is what it always used.
+    fn refined_tuple_literal_elem_te(&self, e: &Expr) -> Option<TypeExpr> {
+        match &e.kind {
+            // A collection BINDING: rebuild `<head>[<elem>]` from the two
+            // side-tables that together carry what the single TE lost.
+            ExprKind::Identifier(n) => {
+                let head = self.var_type_names.get(n.as_str())?;
+                if head != "Vec" && head != "VecDeque" {
+                    return None;
+                }
+                let elem = self.var_elem_type_exprs.get(n.as_str())?.clone();
+                Some(TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: vec![head.clone()],
+                        generic_args: Some(vec![crate::ast::GenericArg::Type(elem)]),
+                        span: e.span.clone(),
+                    }),
+                    span: e.span.clone(),
+                })
+            }
+            // A free-function CALL: the callee's declared return type is
+            // already a full TypeExpr.
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(f) => self.fn_return_type_exprs.get(f.as_str()).cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn tuple_binding_elem_tes(&self, ty: Option<&TypeExpr>, value: &Expr) -> Option<Vec<TypeExpr>> {
         if let Some(TypeExpr {
             kind: TypeKind::Tuple(elems),
@@ -8665,7 +8738,15 @@ impl<'ctx> super::Codegen<'ctx> {
             return Some(elems.clone());
         }
         if let ExprKind::Tuple(elems) = &value.kind {
-            return Some(elems.iter().map(|e| self.infer_arg_elem_te(e)).collect());
+            return Some(
+                elems
+                    .iter()
+                    .map(|e| {
+                        self.refined_tuple_literal_elem_te(e)
+                            .unwrap_or_else(|| self.infer_arg_elem_te(e))
+                    })
+                    .collect(),
+            );
         }
         // Bare rebind `let t2 = t;` — the destination inherits the source's
         // recorded element types, so its bodies walk re-registers after the

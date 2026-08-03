@@ -1802,6 +1802,39 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`borrow_skip` — the callee doesn't consume) and a return-passthrough
             // (`fn id(o) -> Option { o }` — the callee hands `o` back and the
             // caller's RESULT binding owns it, so the source must stay live).
+            // B-2026-08-02-23 leg 2 — the DROP-BODIES half of the same
+            // passthrough rule. The caller-drops-the-owned-arg convention makes
+            // the caller's binding fire its body at the call (correct when the
+            // value dies inside the callee), but when the callee hands that
+            // very value BACK the caller's RESULT binding becomes the owner and
+            // the arg-site fire is a duplicate: `fn passthru(v: Vec[Res]) ->
+            // Vec[Res] { v }` over `let ys = passthru(xs);` printed the element
+            // body twice on both backends. Only the memory/Option channels
+            // consulted `flows_into_return`; the `UserDrop` channel never did.
+            //
+            // Borrowed positions are excluded (no ownership transfer). The
+            // predicate is conservative-true on a mixed-path callee, so a
+            // non-passthrough path loses the body side effect — the same
+            // leak-of-side-effect, never-a-double-drop trade `fn_returns_param`
+            // already documents for the memory channel.
+            //
+            // CONTAINER-ELEMENT walkers only, never the binding's own
+            // `karac_drop_<T>` wrapper. That wrapper is body + fields + MEMORY
+            // (see `emit_drop_fn_for_type_expr`'s note on the shared name), and
+            // an own-`Drop` struct param is ENTRY-COPIED by the callee — so the
+            // caller still owns the original and retracting its wrapper orphans
+            // that copy's buffer (measured: `fn mk(r: Res) -> Bx { Bx { r: r } }`
+            // went vg-clean → 3-byte definite leak under the strong form).
+            // `arg_is_entry_copied_heap_struct` can't gate this: it matches only
+            // literal and call args, and the shape here is a bare identifier.
+            // Two entry-copied values genuinely exist, so the own-wrapper case
+            // keeping two bodies is consistent with its two frees.
+            if !borrow_skip && flows_into_return {
+                if let ExprKind::Identifier(var_name) = &a.value.kind {
+                    let var_name = var_name.clone();
+                    self.suppress_container_elem_bodies_for_var(&var_name);
+                }
+            }
             if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
                 self.suppress_inline_option_result_binding_move(&a.value);
                 // B-2026-07-28-16 — the same move, but from a FIELD rather than
@@ -3565,6 +3598,32 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller owns the extracted field; zero it in the staged
             // fresh-temp slot so the frame drain frees only the remainder.
             self.consume_freshtemp_field_move(expr);
+            // B-2026-08-02-23 leg 2 — an AGGREGATE-LITERAL tail
+            // (`fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }`):
+            // every binding named inside it is moved into the returned value,
+            // so its Drop-body action must retract exactly as it does at the
+            // let-RHS and consuming-arg positions. Only the bare-Identifier
+            // tail was handled below, so a source consumed by the literal kept
+            // its walk armed and fired at THIS frame's exit — then a second
+            // time when the caller's binding died. Same recursive source set
+            // and same strong disarm as the sibling positions, so the three
+            // move channels stay in agreement.
+            //
+            // Bodies only: memory for the returned aggregate is already
+            // transferred by `suppress_source_vec_cleanup_for_arg` above, and
+            // `suppress_user_drop_for_var` frees nothing. Static and
+            // flow-insensitive like every sibling — a conditional return
+            // disarms on all paths, which can only under-fire.
+            if matches!(
+                &expr.kind,
+                ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)
+            ) {
+                let mut sources = Vec::new();
+                Self::collect_aggregate_literal_sources(expr, &mut sources);
+                for n in sources {
+                    self.suppress_user_drop_for_var(&n);
+                }
+            }
             // Sub-slice (3) of move-suppression — when the tail
             // expression is an Identifier whose binding has a user
             // `impl Drop`, the source binding's value is moved out as

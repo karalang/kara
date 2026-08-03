@@ -17215,6 +17215,114 @@ fn main() {
     /// first diagnosis) and the NAMED source, whose own-body action used to
     /// stay armed and fire over the moved-from slot.
     #[test]
+    fn asan_tuple_binding_container_element_heap_freed() {
+        // B-2026-08-02-26 — a tuple binding whose element is a `Vec[Res]`.
+        // The LLVM-type aggregate drop freed the element Vec's BUFFER but not
+        // the live elements' String leaves, so this leaked 3 bytes per element
+        // under LSan while printing nothing (the bodies walker had declined on
+        // the same erased element type). Named-binding, fresh-call and
+        // annotated element sources all covered.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn mkv() -> Vec[Res] {
+    let mut v: Vec[Res] = Vec.new();
+    v.push(Res { id: 2, name: f"bb{2}" });
+    v
+}
+fn main() {
+    println("named:");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"aa{1}" });
+        let t = (xs, 9);
+        println(t.1);
+    }
+    println("call:");
+    {
+        let u = (mkv(), 8);
+        println(u.1);
+    }
+    println("annot:");
+    {
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 3, name: f"cc{3}" });
+        let w: (Vec[Res], i64) = (ys, 7);
+        println(w.1);
+    }
+    println("end");
+}
+"#,
+            &[
+                "named:",
+                "9",
+                "drop 1 aa1",
+                "call:",
+                "8",
+                "drop 2 bb2",
+                "annot:",
+                "7",
+                "drop 3 cc3",
+                "end",
+            ],
+            "tuple_binding_container_element_heap_freed",
+        );
+    }
+
+    #[test]
+    fn asan_passthrough_arg_returned_no_double_free() {
+        // B-2026-08-02-23 leg 2 — retracting the caller's arg-site walk when
+        // the callee returns that arg must not orphan the buffer: the result
+        // binding has to become the sole owner, not neither owner. This is the
+        // leak-side guard on the fix (the fire-count side is asserted in
+        // tests/codegen.rs). It is also why the retraction uses the
+        // CONTAINER-ONLY disarm — the strong form additionally dropped the
+        // binding's `karac_drop_<T>` wrapper, which frees memory, and leaked
+        // the entry-copied original.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn passthru(v: Vec[Res]) -> Vec[Res] { v }
+fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn main() {
+    println("bare:");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"pp{1}" });
+        let ys = passthru(xs);
+        println(ys.len());
+    }
+    println("literal:");
+    {
+        let mut zs: Vec[Res] = Vec.new();
+        zs.push(Res { id: 2, name: f"qq{2}" });
+        let h = mk(zs);
+        println(h.tag);
+    }
+    println("end");
+}
+"#,
+            &[
+                "bare:",
+                "1",
+                "drop 1 pp1",
+                "literal:",
+                "9",
+                "drop 2 qq2",
+                "end",
+            ],
+            "passthrough_arg_returned_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_of_tuple_element_heap_freed() {
         assert_clean_asan_run(
             r#"

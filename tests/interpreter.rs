@@ -27776,6 +27776,118 @@ fn test_nested_literal_move_source_disarm() {
 }
 
 #[test]
+fn test_tuple_binding_container_element_drop() {
+    // B-2026-08-02-26 — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_tuple_binding_container_element_drop`, same source and expected
+    // string. The interpreter was ALREADY correct here (its tuple walk is
+    // value-driven, so it never lost the element type the way codegen's
+    // head-name TypeExpr did); this pins the parity the fix restored, so a
+    // future change to either side has to keep both.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn mkv() -> Vec[Res] {\n\
+                 let mut v: Vec[Res] = Vec.new();\n\
+                 v.push(Res { id: 2, name: f\"b{2}\" });\n\
+                 v\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut xs: Vec[Res] = Vec.new();\n\
+                     xs.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     let t = (xs, 9);\n\
+                     println(t.1);\n\
+                 }\n\
+                 {\n\
+                     let u = (mkv(), 8);\n\
+                     println(u.1);\n\
+                 }\n\
+                 {\n\
+                     let mut ys: Vec[Res] = Vec.new();\n\
+                     ys.push(Res { id: 3, name: f\"c{3}\" });\n\
+                     let w: (Vec[Res], i64) = (ys, 7);\n\
+                     println(w.1);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n9\ndrop 1 a1\n8\ndrop 2 b2\n7\ndrop 3 c3\nend\n"
+    );
+}
+
+#[test]
+fn test_tuple_literal_own_drop_source_disarm() {
+    // B-2026-08-02-27 — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_tuple_literal_own_drop_source_disarm`. Both backends double-fired
+    // pre-fix, for the same reason on each side: the let-RHS aggregate move
+    // recorder never put an own-`Drop` source on the whole-value channel
+    // (interp) / used only the container-element disarm (codegen).
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let r = Res { id: 1, name: f\"a{1}\" };\n\
+                     let t = (r, 9);\n\
+                     println(t.1);\n\
+                 }\n\
+                 {\n\
+                     let u = (Res { id: 2, name: f\"b{2}\" }, 4);\n\
+                     println(u.1);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n9\ndrop 1 a1\n4\ndrop 2 b2\nend\n"
+    );
+}
+
+#[test]
+fn test_passthrough_arg_and_returned_literal_single_fire() {
+    // B-2026-08-02-23 leg 2 — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_passthrough_arg_and_returned_literal_single_fire`. Both backends
+    // fired the body twice for the two passthrough shapes; the third block
+    // (`consume`, which does NOT return its param) is the control that must
+    // keep firing exactly once at the call.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Holder { xs: Vec[Res], tag: i64 }\n\
+             fn passthru(v: Vec[Res]) -> Vec[Res] { v }\n\
+             fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }\n\
+             fn consume(v: Vec[Res]) -> i64 { v.len() }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut xs: Vec[Res] = Vec.new();\n\
+                     xs.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     let ys = passthru(xs);\n\
+                     println(ys.len());\n\
+                 }\n\
+                 {\n\
+                     let mut zs: Vec[Res] = Vec.new();\n\
+                     zs.push(Res { id: 2, name: f\"b{2}\" });\n\
+                     let h = mk(zs);\n\
+                     println(h.tag);\n\
+                 }\n\
+                 {\n\
+                     let mut ws: Vec[Res] = Vec.new();\n\
+                     ws.push(Res { id: 3, name: f\"c{3}\" });\n\
+                     println(consume(ws));\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\n1\ndrop 1 a1\n9\ndrop 2 b2\n1\ndrop 3 c3\nend\n"
+    );
+}
+
+#[test]
 fn test_map_value_struct_vec_field_element_bodies() {
     // B-2026-08-02-24 — a Map VALUE that is a struct carrying its Drop only
     // through a Vec FIELD's elements. The interpreter's type-level gate

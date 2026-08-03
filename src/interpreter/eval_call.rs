@@ -1982,6 +1982,11 @@ impl<'a> super::Interpreter<'a> {
                 // flows out to the result's consumer and must not also drop
                 // here.
                 self.run_fresh_temp_arg_drops(&fn_name, args, &arg_vals);
+                // B-2026-08-02-23 leg 2 — the IDENTIFIER-arg sibling of the
+                // guard above: `run_fresh_temp_arg_drops` skips named bindings
+                // on the "their own NLL drop covers it" rule, which duplicates
+                // the body when the callee returns that very arg.
+                self.record_passthrough_arg_moves(&fn_name, args);
 
                 match result {
                     Ok(v) => v,

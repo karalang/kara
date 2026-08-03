@@ -1988,7 +1988,21 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::SelfValue => self.record_container_move_source_name("self"),
             // Recursive through NESTED literals (B-2026-08-02-23 leg 1) —
             // the codegen twin is `collect_aggregate_literal_sources`.
-            ExprKind::StructLiteral { .. } | ExprKind::Tuple(_) => {
+            //
+            // B-2026-08-02-27 — the TUPLE arm routes through the consuming-ARG
+            // helper so a source carrying its OWN `impl Drop` also lands on the
+            // whole-value channel. `record_container_move_source_name` alone
+            // skips such a struct (deferring to `suppress_let_rebind_user_drop`,
+            // which only sees a BARE rebind), so `let r = Res{..}; let t = (r,
+            // 9);` fired r's body at its own death AND again through the
+            // tuple's element walk.
+            ExprKind::Tuple(_) => self.record_container_move_sources_in_aggregate_arg(value),
+            // STRUCT literals keep the container-only recording, mirroring
+            // codegen's split: the whole-value channel is wrong for the
+            // WILDCARD position (`let _ = W { r: r0 }`), where no struct-literal
+            // discard walk takes over the retracted body. Both backends must
+            // draw this line in the same place or the discard position diverges.
+            ExprKind::StructLiteral { .. } => {
                 let mut names = Vec::new();
                 Self::collect_aggregate_literal_sources(value, &mut names);
                 for n in names {
@@ -2056,6 +2070,47 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// B-2026-08-02-23 leg 2 (interp twin of the `flows_into_return` bodies
+    /// leg in `call_dispatch`) — a bare-identifier arg in a position the callee
+    /// RETURNS (`fn passthru(v) -> Vec[Res] { v }`, or a param moved into a
+    /// returned aggregate literal) does not die at this call: the caller's
+    /// consumer of the RESULT owns it. `run_fresh_temp_arg_drops` deliberately
+    /// skips identifier args ("the caller binding's own NLL drop covers those")
+    /// — correct when the value dies inside the callee, a duplicate body when
+    /// it comes straight back out.
+    ///
+    /// Routed through `record_container_move_source_name`, which records only
+    /// container/field walks and leaves an own-`Drop` struct binding armed —
+    /// deliberately matching codegen's use of the CONTAINER-ONLY disarm there
+    /// (an own-`Drop` struct param is entry-copied, so caller and callee hold
+    /// genuinely distinct values).
+    pub(crate) fn record_passthrough_arg_moves(
+        &mut self,
+        fn_name: &str,
+        args: &[crate::ast::CallArg],
+    ) {
+        let passthrough: Vec<String> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(i, arg)| {
+                let ExprKind::Identifier(n) = &arg.value.kind else {
+                    return None;
+                };
+                self.program
+                    .items
+                    .iter()
+                    .any(|item| {
+                        matches!(item, crate::ast::Item::Function(f)
+                            if f.name == fn_name && crate::ast::fn_returns_param(f, i))
+                    })
+                    .then(|| n.clone())
+            })
+            .collect();
+        for n in passthrough {
+            self.record_container_move_source_name(&n);
         }
     }
 

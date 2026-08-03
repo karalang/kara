@@ -1241,8 +1241,23 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     let PatternKind::Binding(param_name) = &param.pattern.kind else {
         return false;
     };
+    /// A return site "yields" the param when it IS the bare identifier, or
+    /// (B-2026-08-02-23 leg 2) when it is an AGGREGATE LITERAL that moves the
+    /// param into itself — `Holder { xs: v, tag: 9 }`, `(v, 9)`, or either
+    /// nested. The value crosses the frame boundary inside the returned
+    /// aggregate exactly as it does when returned bare, so the caller's
+    /// consumer of the RESULT is the owner either way; recognizing only the
+    /// bare form left the caller dropping an arg it had just been handed back
+    /// inside a struct, firing the Drop body twice.
     fn expr_is_ident(e: &Expr, name: &str) -> bool {
-        matches!(&e.kind, ExprKind::Identifier(n) if n == name)
+        match &e.kind {
+            ExprKind::Identifier(n) => n == name,
+            ExprKind::StructLiteral { fields, .. } => {
+                fields.iter().any(|f| expr_is_ident(&f.value, name))
+            }
+            ExprKind::Tuple(elems) => elems.iter().any(|el| expr_is_ident(el, name)),
+            _ => false,
+        }
     }
     fn walk_expr(e: &Expr, name: &str) -> bool {
         match &e.kind {

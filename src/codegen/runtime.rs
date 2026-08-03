@@ -5448,7 +5448,36 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
             // Recursive through NESTED literals (B-2026-08-02-23 leg 1) —
             // see `collect_aggregate_literal_sources`.
-            ExprKind::StructLiteral { .. } | ExprKind::Tuple(_) => {
+            //
+            // B-2026-08-02-27 — the TUPLE arm takes the STRONG disarm,
+            // matching what the consuming-ARG sibling was promoted to in
+            // B-2026-08-02-22. A source with its OWN body moved into a tuple
+            // literal (`let r = Res{..}; let t = (r, 9);`) kept that body
+            // armed under the container-only form and fired it at `r`'s NLL
+            // end over the moved-from slot — printing an empty name under AOT,
+            // and a second time under both backends. Safe because the
+            // destination tuple's element-bodies walk is the owner: the
+            // inline-element control `let t = (Res{..}, 9)` already fires
+            // exactly once through it, and the wildcard discard
+            // `let _ = (r, 1)` keeps its fire through
+            // `track_discarded_tuple_elem_bodies`.
+            ExprKind::Tuple(_) => {
+                let mut sources = Vec::new();
+                Self::collect_aggregate_literal_sources(value, &mut sources);
+                for n in sources {
+                    self.suppress_user_drop_for_var(&n);
+                }
+            }
+            // The STRUCT-literal arm deliberately stays on the container-only
+            // form. On the BINDING path the strong disarm would be redundant
+            // (`struct_lit_sources` at the Let registration already retracts
+            // the same names), and on the WILDCARD path it is actively wrong:
+            // `let _ = W { r: r0 }` has no struct-literal discard walker to
+            // take over, so retracting r0's own body silenced it outright
+            // (caught by `e2e_wildcard_let_discard_place_shapes_single_fire`,
+            // which is exactly the pin for that position). The tuple arm above
+            // is safe only because its wildcard position DOES have an owner.
+            ExprKind::StructLiteral { .. } => {
                 let mut sources = Vec::new();
                 Self::collect_aggregate_literal_sources(value, &mut sources);
                 for n in sources {

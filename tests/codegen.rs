@@ -78634,6 +78634,152 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tuple_binding_container_element_drop() {
+        // B-2026-08-02-26 — a TUPLE binding whose element is a CONTAINER of
+        // Drop-running values (`let t = (xs, 9)` with `xs: Vec[Res]`). Two
+        // independent gaps, both AOT-only, so `karac run` was right and
+        // `karac build` was wrong in two ways at once:
+        //   * bodies — `emit_tuple_elem_user_drop_bodies_fn` accepted only an
+        //     element that was a Path naming a user struct, so `Vec[Res]` read
+        //     as the drop-free head "Vec" and the whole walker declined;
+        //   * memory — the LLVM-type aggregate drop freed the element Vec's
+        //     BUFFER shallowly, leaking every live `Res`'s String.
+        // Underneath both sat `infer_arg_elem_te` erasing the generic argument,
+        // so the element type was bare `Vec` at every decision point. All three
+        // element sources exercised: a named binding, a fresh call, and an
+        // annotated binding.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn mkv() -> Vec[Res] {
+    let mut v: Vec[Res] = Vec.new();
+    v.push(Res { id: 2, name: f"b{2}" });
+    v
+}
+fn main() {
+    println("a");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"a{1}" });
+        let t = (xs, 9);
+        println(t.1);
+    }
+    {
+        let u = (mkv(), 8);
+        println(u.1);
+    }
+    {
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 3, name: f"c{3}" });
+        let w: (Vec[Res], i64) = (ys, 7);
+        println(w.1);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "a\n9\ndrop 1 a1\n8\ndrop 2 b2\n7\ndrop 3 c3\nend"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tuple_literal_own_drop_source_disarm() {
+        // B-2026-08-02-27 — `let r = Res { .. }; let t = (r, 9);`. The
+        // consuming-ARG aggregate arms were promoted to the strong
+        // `suppress_user_drop_for_var` in B-2026-08-02-22, but the let-RHS
+        // sibling `disarm_container_bodies_move_sources` kept the weak
+        // container-only form, so `r`'s OWN body stayed armed and fired at
+        // r's NLL end over the moved-from slot — printing an EMPTY name —
+        // then again through the tuple's element walk. The inline control
+        // below (`(Res { .. }, 4)`, no move at all) already fired exactly
+        // once, which is what proves the tuple binding owns the body and the
+        // strong disarm is safe.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("a");
+    {
+        let r = Res { id: 1, name: f"a{1}" };
+        let t = (r, 9);
+        println(t.1);
+    }
+    {
+        let u = (Res { id: 2, name: f"b{2}" }, 4);
+        println(u.1);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "a\n9\ndrop 1 a1\n4\ndrop 2 b2\nend");
+        }
+    }
+
+    #[test]
+    fn test_e2e_passthrough_arg_and_returned_literal_single_fire() {
+        // B-2026-08-02-23 leg 2 — a param that flows back OUT to the caller.
+        // The caller-drops-the-owned-arg convention fires the arg binding's
+        // body at the call, which is right when the value dies inside the
+        // callee (`consume` below) and a duplicate when the callee hands it
+        // back. Two return shapes, both previously double-firing on BOTH
+        // backends: a bare-identifier passthrough, and the param moved into a
+        // returned struct literal (which `fn_returns_param` did not even
+        // recognize as a return site until it learned to look inside
+        // aggregate literals).
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn passthru(v: Vec[Res]) -> Vec[Res] { v }
+fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn consume(v: Vec[Res]) -> i64 { v.len() }
+fn main() {
+    println("a");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"a{1}" });
+        let ys = passthru(xs);
+        println(ys.len());
+    }
+    {
+        let mut zs: Vec[Res] = Vec.new();
+        zs.push(Res { id: 2, name: f"b{2}" });
+        let h = mk(zs);
+        println(h.tag);
+    }
+    {
+        let mut ws: Vec[Res] = Vec.new();
+        ws.push(Res { id: 3, name: f"c{3}" });
+        println(consume(ws));
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "a\n1\ndrop 1 a1\n9\ndrop 2 b2\n1\ndrop 3 c3\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_nested_literal_move_source_disarm() {
         // B-2026-08-02-23 leg 1 — the aggregate-literal source disarm was
         // depth-1: `v.push(Outer { inner: Inner { xs: xs } })` inspected only

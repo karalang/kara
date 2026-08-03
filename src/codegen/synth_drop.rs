@@ -3091,6 +3091,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `zero_tuple_elem_cap_at` the move-suppression dual
                         // — both must agree or a moved tuple double-frees).
                         "Vec" | "VecDeque" | "String" | "str" => {
+                            // B-2026-08-02-26 — a `Vec[E]` element whose E owns
+                            // heap needs a DEEP drop: the buffer-free below is
+                            // shallow, so `(Vec[Res], i64)` freed the element
+                            // array but leaked every `Res`'s String. Divert to
+                            // the recursive `karac_drop_Vec_<E>` (drain each
+                            // live element, then free the buffer) — it does the
+                            // buffer free itself, hence the `continue`. String /
+                            // `Vec[primitive]` keep the shallow path, where the
+                            // buffer free alone is exact.
+                            if crate::codegen::helpers::vec_inner_type_expr(te)
+                                .is_some_and(|inner| self.type_expr_has_drop_heap(&inner))
+                            {
+                                let deep = self.emit_drop_fn_for_type_expr(te);
+                                self.builder
+                                    .build_call(deep, &[field_ptr.into()], "")
+                                    .unwrap();
+                                continue;
+                            }
                             if matches!(llvm_field, inkwell::types::BasicTypeEnum::StructType(st) if st == vec_ty)
                             {
                                 let data_pp = self
@@ -6005,27 +6023,34 @@ impl<'ctx> super::Codegen<'ctx> {
         agg_ty: inkwell::types::StructType<'ctx>,
         elem_tes: &[TypeExpr],
     ) -> Option<FunctionValue<'ctx>> {
-        // (index, element type name) for every element that runs a body.
-        let mut targets: Vec<(u32, String)> = Vec::new();
-        for (i, te) in elem_tes.iter().enumerate() {
-            let TypeKind::Path(p) = &te.kind else {
-                continue;
-            };
-            let Some(name) = p.segments.first().cloned() else {
-                continue;
-            };
-            if self.shared_types.contains_key(&name) || !self.struct_types.contains_key(&name) {
-                continue;
-            }
-            if self.type_runs_user_drop(&name, &mut Vec::new()) {
-                targets.push((i as u32, name));
-            }
-        }
+        // Indices of every element that runs a body — a DIRECT Drop-running
+        // struct, or (B-2026-08-02-26) ONE CONTAINER LEVEL around one. The
+        // old walk accepted only a `Path` naming a user struct, so a
+        // `Vec[Res]` element read as head "Vec", missed `struct_types`, and
+        // the whole fn declined: `let t = (xs, 9)` with `xs: Vec[Res]` ran
+        // NOTHING under AOT while the interpreter fired the element's body
+        // (a run-vs-build divergence, and the memory half leaked too). This
+        // is the tuple-element peer of the same one-container-level widening
+        // the struct-FIELD walker got in B-2026-08-02-18 / -22.
+        let targets: Vec<u32> = elem_tes
+            .iter()
+            .enumerate()
+            .filter(|(_, te)| self.elem_te_runs_user_drop(te))
+            .map(|(i, _)| i as u32)
+            .collect();
         if targets.is_empty() {
             return None;
         }
 
-        let key: Vec<String> = targets.iter().map(|(i, n)| format!("{i}_{n}")).collect();
+        // Keyed by the element's full mangled TypeExpr, not its head name:
+        // `(Vec[Res], i64)` and `(Res, i64)` would otherwise collide on
+        // `0_Res` and the second shape would reuse the first's walker. A
+        // direct struct element still mangles to its bare name, so existing
+        // symbol names are unchanged.
+        let key: Vec<String> = targets
+            .iter()
+            .map(|i| format!("{i}_{}", Self::display_mangle_te(&elem_tes[*i as usize])))
+            .collect();
         let fn_name = format!("__karac_dropelems_tuple_{}", key.join("_"));
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
@@ -6042,26 +6067,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(entry);
         let base = walker.get_nth_param(0).unwrap().into_pointer_value();
 
-        for (idx, name) in targets {
+        for idx in targets {
             let ep = self
                 .builder
                 .build_struct_gep(agg_ty, base, idx, &format!("dt.e{idx}"))
                 .ok();
             let Some(ep) = ep else { continue };
-            let owns_body = self
-                .program_snapshot
-                .as_deref()
-                .is_some_and(|p| p.drop_method_keys.contains_key(&name));
-            if owns_body {
-                if let Some(f) = self.module.get_function(&format!("{name}.drop")) {
-                    self.builder.build_call(f, &[ep.into()], "").unwrap();
-                }
-            }
-            if let Some(f) =
-                self.emit_user_drop_field_bodies_fn(&name, &std::collections::HashMap::new())
-            {
-                self.builder.build_call(f, &[ep.into()], "").unwrap();
-            }
+            let te = elem_tes[idx as usize].clone();
+            self.emit_tuple_elem_bodies_at(ep, &te);
         }
 
         self.builder.build_return(None).unwrap();
@@ -6069,6 +6082,120 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         Some(walker)
+    }
+
+    /// True when tuple element `te` owns heap the LLVM-type-driven aggregate
+    /// drop ([`Self::synthesize_aggregate_drop_fn`]) would free only
+    /// SHALLOWLY — today a `Vec[E]` / `VecDeque[E]` whose `E` itself owns heap,
+    /// whose buffer that walk frees while leaking every live element's leaves.
+    /// Recurses through nested tuples, which the TypeExpr-driven walk also
+    /// descends. Selects the deeper path at the tuple let-site
+    /// (B-2026-08-02-26).
+    pub(super) fn tuple_elem_needs_deep_drop(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(inner) => inner.iter().any(|e| self.tuple_elem_needs_deep_drop(e)),
+            TypeKind::Path(_) => crate::codegen::helpers::vec_inner_type_expr(te)
+                .is_some_and(|inner| self.type_expr_has_drop_heap(&inner)),
+            _ => false,
+        }
+    }
+
+    /// True when `te` — a tuple ELEMENT or any other single-slot position —
+    /// reaches a user `impl Drop` body, seeing ONE container level. The
+    /// TypeExpr-keyed peer of [`Self::type_runs_user_drop`] (which is keyed by
+    /// head NAME and so reads `Vec[Res]` as the drop-free "Vec"), assembled
+    /// from the same three head extractors that widened it for struct fields.
+    /// Interpreter twin: `field_te_runs_user_drop`.
+    pub(super) fn elem_te_runs_user_drop(&self, te: &TypeExpr) -> bool {
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(head) = p.segments.first() {
+                // Direct element: a non-shared user STRUCT that runs a body.
+                // Enums are excluded here exactly as the pre-widening walk
+                // excluded them — their bodies ride the enum-payload walker.
+                if !self.shared_types.contains_key(head)
+                    && self.struct_types.contains_key(head)
+                    && self.type_runs_user_drop(head, &mut Vec::new())
+                {
+                    return true;
+                }
+            }
+        }
+        if let Some(e) = Self::vec_field_elem_head(te) {
+            if self.type_runs_user_drop(&e, &mut Vec::new()) {
+                return true;
+            }
+        }
+        if let Some(v) = Self::map_or_set_field_val_head(te) {
+            if self.type_runs_user_drop(&v, &mut Vec::new()) {
+                return true;
+            }
+        }
+        Self::tuple_field_elem_heads(te)
+            .iter()
+            .any(|eh| self.type_runs_user_drop(eh, &mut Vec::new()))
+    }
+
+    /// Run the Drop BODIES reachable from one tuple-element slot `ep` of type
+    /// `te`. Dispatches the same four legs the struct-FIELD walker
+    /// ([`Self::emit_user_drop_field_bodies_fn`]) uses — direct struct,
+    /// Vec/VecDeque element, Map/Set value, nested tuple — so a tuple element
+    /// and a struct field of the same type run the same bodies. BODIES ONLY:
+    /// every leg here delegates to a walker that frees nothing.
+    fn emit_tuple_elem_bodies_at(&mut self, ep: PointerValue<'ctx>, te: &TypeExpr) {
+        if let TypeKind::Tuple(inner) = &te.kind {
+            let inner = inner.clone();
+            if let inkwell::types::BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(te)
+            {
+                if let Some(w) = self.emit_tuple_elem_user_drop_bodies_fn(agg, &inner) {
+                    self.builder.build_call(w, &[ep.into()], "").unwrap();
+                }
+            }
+            return;
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(head) = p.segments.first().cloned() else {
+            return;
+        };
+        match head.as_str() {
+            // The element GEP IS the Vec slot the walker loads {ptr,len} from;
+            // a moved-out element has len zeroed, so the loop no-ops.
+            "Vec" | "VecDeque" => {
+                if let Some(inner) = crate::codegen::helpers::vec_inner_type_expr(te) {
+                    if let Some(w) = self.emit_nested_vec_elem_bodies_fn(&inner) {
+                        self.builder.build_call(w, &[ep.into()], "").unwrap();
+                    }
+                }
+            }
+            // Likewise the element GEP is the handle slot; the walker's null
+            // check covers a moved-out element.
+            "Map" | "SortedMap" | "Set" | "SortedSet" => {
+                let te = te.clone();
+                if let Some(w) = self.emit_map_val_user_drop_bodies_fn(&te) {
+                    self.builder.build_call(w, &[ep.into()], "").unwrap();
+                }
+            }
+            _ => {
+                if self.shared_types.contains_key(&head) || !self.struct_types.contains_key(&head) {
+                    return;
+                }
+                let owns_body = self
+                    .program_snapshot
+                    .as_deref()
+                    .is_some_and(|p| p.drop_method_keys.contains_key(&head));
+                if owns_body {
+                    if let Some(f) = self.module.get_function(&format!("{head}.drop")) {
+                        self.builder.build_call(f, &[ep.into()], "").unwrap();
+                    }
+                }
+                if let Some(f) =
+                    self.emit_user_drop_field_bodies_fn(&head, &std::collections::HashMap::new())
+                {
+                    self.builder.build_call(f, &[ep.into()], "").unwrap();
+                }
+            }
+        }
     }
 
     /// B-2026-07-30-11 (enum leg) — emit `__karac_dropelems_enum_<E>(e: *mut E)`:
