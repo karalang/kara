@@ -68,7 +68,20 @@ rust-version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
+# The everyday dynamic-LLVM linking preference lives HERE, on the default
+# set, as WEAK dep refs (`?` — they apply only when the dep is otherwise
+# enabled). Rationale (release-pipeline step 2): llvm-sys permits exactly
+# ONE of its four linking-preference features across the whole build
+# graph and cargo features are additive, so a preference hardcoded on the
+# dep lines (as `prefer-dynamic` was) makes the static release build
+# impossible to express, while NO preference anywhere makes llvm-sys
+# default to prefer-STATIC (slow dev links; needs libpolly-18-dev on apt,
+# which llvm-18-dev does not ship). Weak-refs-on-default keeps every
+# existing `--features llvm` invocation dynamically linked exactly as
+# before, and the release pipeline escapes with
+# `--no-default-features --features llvm,llvm-static`.
+default = ["dyn-llvm-pref"]
+dyn-llvm-pref = ["llvm-sys?/prefer-dynamic", "inkwell?/llvm18-1-prefer-dynamic"]
 # `dep:llvm-sys` is pulled in alongside inkwell because the AOT codegen path
 # itself now needs raw llvm-sys FFI: the LLVM coroutine intrinsics
 # (`llvm.coro.id/begin/save/suspend/end/free`) are token-typed, and inkwell
@@ -99,6 +112,20 @@ default = []
 # `libkarac_runtime_regex.a`, but the JIT links the runtime dep at build time
 # with a fixed feature set, so regex has to be on here for run==build parity.
 llvm = ["inkwell", "dep:llvm-sys", "dep:karac-runtime", "dep:libc", "karac-runtime/regex"]
+# Release-distribution leg (release-pipeline step 2): statically link the
+# LLVM component libraries into the karac/karac_jit_runner binaries so a
+# downloaded artifact runs without libLLVM.so installed on the user's
+# machine. Dev builds deliberately stay on the shared default (fast
+# links); the release workflow builds `--features llvm,llvm-static`.
+# LLVM's own system deps (libz/libzstd/libtinfo) remain dynamic — they
+# are ubiquitous on the target platforms and documented in the bundle
+# README. Requires an LLVM install that ships the static archives
+# (apt's llvm-18-dev and brew's llvm@18 both do).
+# Build with `--no-default-features --features llvm,llvm-static` — the
+# default set carries the conflicting dynamic preference (see above).
+# Static linking on apt additionally needs `libpolly-18-dev` (Ubuntu
+# splits libPolly.a out of llvm-18-dev); brew's llvm@18 bundles it.
+llvm-static = ["llvm", "llvm-sys/force-static", "inkwell/llvm18-1-force-static"]
 # Throwaway prototype gate for phase-7 L558 sub-step (a): inkwell-MCJIT
 # round-trip of representative Kāra modules. Off by default; not shipped
 # in the normal karac binary. Removed when the orc2 wrap (L560) lands.
@@ -141,13 +168,25 @@ path = "examples/dump_ir.rs"
 required-features = ["llvm"]
 
 [dependencies]
-inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }
+# LINKING PREFERENCE IS DELIBERATELY ABSENT from these dep lines
+# (release-pipeline step 2): llvm-sys permits exactly ONE of its four
+# preference features across the whole build graph, and cargo features
+# are additive — a hardcoded `prefer-dynamic` here would make the
+# release `llvm-static` (force-static) build impossible to express.
+# Preference-free llvm-sys follows `llvm-config --shared-mode`, which
+# reports `shared` on both apt's llvm-18 and brew's llvm@18 (both build
+# with LLVM_LINK_LLVM_DYLIB=ON), so a bare `--features llvm` dev build
+# links libLLVM dynamically exactly as it did when `prefer-dynamic` was
+# pinned. If a future LLVM install defaults to static and slows dev
+# links, opt back with `--features llvm,llvm-dynamic`.
+inkwell = { version = "0.9", features = ["llvm18-1"], optional = true }
 # Phase-7 L560 (Always-JIT via LLJIT): inkwell 0.9 does not expose ORC v2 /
 # LLJIT, so the JIT subset calls `llvm-sys::orc2` directly. Same LLVM 18.1
-# pin inkwell uses; `prefer-dynamic` matches inkwell's link strategy so we
-# don't end up with two LLVM copies. Only activated by `lljit_prototype`
-# feature — the normal `karac build` / AOT path keeps using inkwell-only.
-llvm-sys = { version = "181", features = ["prefer-dynamic"], optional = true }
+# pin inkwell uses (and the same linking preference, whatever the build
+# selects — see the preference note above) so we don't end up with two
+# LLVM copies. Only activated by `lljit_prototype` feature — the normal
+# `karac build` / AOT path keeps using inkwell-only.
+llvm-sys = { version = "181", optional = true }
 # Phase-7 L560 W3.4 (subprocess-helper for panic isolation): when the
 # `lljit_prototype` feature is on, the `karac_jit_runner` bin target
 # (src/bin/karac_jit_runner.rs) links the runtime so JIT'd Kāra

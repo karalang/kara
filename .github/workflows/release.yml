@@ -1,0 +1,195 @@
+# Release pipeline (dev-preview downloadable artifacts).
+#
+# Two ways to run:
+#   - workflow_dispatch: dry-run the whole pipeline (build + clean-runner
+#     smoke) without publishing anything — the way to iterate on it.
+#   - tag push `v*`: same pipeline, then a DRAFT GitHub release with the
+#     tarballs + sha256s attached. Draft on purpose: nothing publishes
+#     without a human clicking the button (unannounced-dev-preview
+#     posture; the launch decides when releases go loud).
+#
+# Design notes:
+#   - `fetch-depth: 0` is load-bearing: the version stamp marks shallow
+#     clones (`dev.shallow`) and scripts/package-release.sh REFUSES to
+#     package them, so a depth-1 checkout fails loudly here instead of
+#     shipping a lying version string.
+#   - Build legs use `--features llvm,llvm-static` (static LLVM) via the
+#     package script; the SMOKE legs run on clean runners with NO LLVM
+#     install step — that absence is the actual test that a downloaded
+#     bundle works on a machine without LLVM.
+#   - Smoke exercises all three executor surfaces from the unpacked
+#     bundle only: `karac --version` (stamp sanity), `karac build` + run
+#     (AOT link against the bundled archives via the ../lib layout), and
+#     `karac run` (JIT via the bundled sibling runner).
+
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            label: aarch64-linux
+          - runner: macos-latest
+            label: aarch64-macos
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install LLVM 18 (apt)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # libpolly-18-dev: Ubuntu splits libPolly.a out of llvm-18-dev,
+          # and the static link needs it.
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev zlib1g-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+
+      - name: Install LLVM 18 (Homebrew)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@18
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.label }}
+
+      - name: Package release bundle
+        run: bash scripts/package-release.sh ${{ matrix.label }}
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: karac-${{ matrix.label }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  smoke:
+    name: Smoke (${{ matrix.label }}, clean runner)
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            label: aarch64-linux
+          - runner: macos-latest
+            label: aarch64-macos
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # Deliberately NO checkout and NO LLVM install: the smoke must see
+      # exactly what a user sees — the tarball, a C toolchain, nothing
+      # else from this repo or its toolchain setup.
+      - name: Download bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: karac-${{ matrix.label }}
+
+      - name: Unpack and smoke-test
+        run: |
+          set -euxo pipefail
+          shasum -a 256 -c *.sha256 || sha256sum -c *.sha256
+          tar xzf karac-*.tar.gz
+          BUNDLE_DIR="$(find . -maxdepth 1 -type d -name 'karac-*' | head -1)"
+          export PATH="$PWD/$BUNDLE_DIR/bin:$PATH"
+
+          # macOS: simulate the user's quarantine-clearing step is NOT
+          # needed here (artifacts downloaded by the runner carry no
+          # quarantine xattr), so this exercises the binaries directly.
+          VERSION="$(karac --version)"
+          echo "$VERSION"
+          case "$VERSION" in
+            *dev.shallow*|*dev.unknown*|*.dirty*)
+              echo "ERROR: release binary carries a non-release stamp: $VERSION" >&2
+              exit 1 ;;
+          esac
+
+          cat > hello.kara <<'KARA'
+          fn main() {
+              println("hello from a downloaded karac");
+          }
+          KARA
+
+          # JIT lane (bundled sibling runner, no cc involved).
+          karac run hello.kara | grep -q "hello from a downloaded karac"
+
+          # AOT lane (links the bundled runtime archives via ../lib).
+          karac build hello.kara
+          ./hello | grep -q "hello from a downloaded karac"
+
+          # A par block, so the linked runtime's scheduler actually spins.
+          cat > fanout.kara <<'KARA'
+          fn work(n: i64) -> i64 {
+              let mut acc = 0;
+              let mut i = 0;
+              while i < n {
+                  acc = acc + i;
+                  i = i + 1;
+              }
+              acc
+          }
+
+          fn main() {
+              par {
+                  let a = work(200000);
+                  let b = work(300000);
+              }
+              println(a + b);
+          }
+          KARA
+          karac build fanout.kara
+          ./fanout | grep -q "64999750000"
+
+  release:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: karac-*
+          merge-multiple: true
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: true
+          name: ${{ github.ref_name }} (dev preview)
+          body: |
+            Pre-v1 development preview of the Kāra compiler. Expect
+            breakage; report issues with the exact `karac --version`
+            string (its `+g<sha>` suffix identifies the build's commit).
+
+            See the bundled README.md in each tarball for install and
+            requirements. macOS users: clear Gatekeeper quarantine once
+            with `xattr -dr com.apple.quarantine <unpacked-dir>`.
+          files: |
+            *.tar.gz
+            *.sha256
