@@ -36064,6 +36064,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_option_struct_field_move_out_no_double_free() {
+        // B-2026-08-03-8 (memory half) — `let x = h.o` with `o: Option[Res]`
+        // SEGV'd: `Res` is 4 words so the payload is BOXED, and both `x` and
+        // `h`'s `OptionInline` field drop freed the same box — a use-after-free
+        // then an invalid free, exit 139, no output at all. The whole-STRUCT move
+        // has had this neutralizer since B-2026-07-03-28
+        // (`zero_struct_move_caps_mono`'s Option/Result arms); the single-FIELD
+        // move-out fell through to the generic enum arm, which is a no-op for
+        // Option/Result by construction. `t` is the control that must still be
+        // readable after the move.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct H4 { o: Option[Res], t: i64 }
+fn main() {
+    println("a");
+    {
+        let h = H4 { o: Option.Some(Res { id: 1, name: f"aa{1}" }), t: 2 };
+        let x = h.o;
+        println(h.t);
+    }
+    println("end");
+}
+"#,
+            &["a", "drop 1 aa1", "2", "end"],
+            "option_struct_field_move_out_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_tuple_held_optres_payload_freed() {
         // B-2026-08-03-3 — the leak this row was filed for. An `Option[P]` /
         // `Result[O, E]` held inside a tuple got NO memory drop in any position

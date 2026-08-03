@@ -2114,6 +2114,22 @@ impl<'ctx> super::Codegen<'ctx> {
                             .map(|inst| self.generic_struct_subst_from_inst(name, &inst))
                             .filter(|s| !s.is_empty());
                         self.zero_struct_move_caps_mono(field_ptr, name, nsub.as_ref());
+                    } else if name == "Option" || name == "Result" {
+                        // B-2026-08-03-8 — an `Option`/`Result` FIELD moved out
+                        // (`let x = h.o`). The enum arm below is a NO-OP for
+                        // these two by construction (they carry no static
+                        // `EnumDropKind`), so the source's `OptionInline` field
+                        // drop stayed armed and freed the payload the moved-out
+                        // binding now owns: a use-after-free then a double free,
+                        // SEGV, no output. These are the same two neutralizers
+                        // `zero_struct_move_caps_mono` applies on a WHOLE-struct
+                        // move — the single-field move-out just never got them.
+                        if name == "Option" {
+                            self.zero_option_field_tag_at(field_ptr);
+                        } else if let Some(layout) = self.enum_layouts.get("Result") {
+                            let result_ty = layout.llvm_type;
+                            self.zero_result_payload_area(result_ty, field_ptr, "p14.fldmv.res");
+                        }
                     } else if let Some(layout) = self.enum_layouts.get(name) {
                         // Enum field (#19) — cap-zero its `VecOrString` payload
                         // words so the owning struct's drop skips the buffer the
