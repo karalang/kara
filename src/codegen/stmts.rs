@@ -8814,6 +8814,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                 }
             },
+            // B-2026-08-03-3 — a NESTED tuple literal element
+            // (`((Option.Some(r), 6), 7)`). `infer_arg_elem_te` renders it as
+            // an opaque head, losing the inner element types, so the outer
+            // walker's selector could not see the inner Option's payload.
+            // Refine each sub-element the same way, one level down.
+            ExprKind::Tuple(elems) => Some(TypeExpr {
+                kind: TypeKind::Tuple(
+                    elems
+                        .iter()
+                        .map(|el| {
+                            self.refined_tuple_literal_elem_te(el)
+                                .unwrap_or_else(|| self.infer_arg_elem_te(el))
+                        })
+                        .collect(),
+                ),
+                span: e.span.clone(),
+            }),
             _ => None,
         }
     }

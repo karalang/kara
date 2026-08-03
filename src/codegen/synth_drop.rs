@@ -3230,7 +3230,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                 )
                                 .unwrap();
                         }
-                        "Option" | "Result" => {}
+                        // B-2026-08-03-3 — an `Option[P]` / `Result[O, E]`
+                        // element used to be a hard no-op here, so a tuple-held
+                        // payload's heap was never freed in ANY position (a
+                        // binding, a by-value param, a returned tuple, a struct
+                        // field's nested tuple). Route to the same tag-guarded
+                        // `karac_drop_Option_<p>` / `karac_drop_Result_<o>_<e>`
+                        // that a Vec ELEMENT of the same type already gets — the
+                        // `Vec[Option[Res]]` control was clean all along.
+                        // `tuple_elem_optres_drop_ok` is the admit gate; its
+                        // move-out dual is in `zero_tuple_elem_cap_at`.
+                        "Option" | "Result" => {
+                            if self.tuple_elem_optres_drop_ok(te) {
+                                if let Some(f) = self.vec_elem_agg_drop_for_type_expr(te) {
+                                    self.builder.build_call(f, &[field_ptr.into()], "").unwrap();
+                                }
+                            }
+                        }
                         _ => {
                             if self.shared_types.contains_key(&name) {
                                 // RC leaf — cleanup is the rc machinery's job.
@@ -3322,7 +3338,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     "Map" | "HashMap" | "Set" | "HashSet" => {
                         let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
                     }
-                    "Option" | "Result" => {}
+                    // B-2026-08-03-3 — the neutralizer dual of
+                    // `emit_tuple_elem_drops`' new Option/Result arm. Same
+                    // shapes, same gate: an Option goes to the `None` tag (the
+                    // tag-guarded drop then skips), a Result gets its payload
+                    // area zeroed (the live side's `{ptr,len,cap}` overlay is
+                    // freed under a `cap > 0` guard). Both mirror
+                    // `zero_struct_move_caps_mono`'s long-standing struct-field
+                    // arms. Must stay in lockstep with the drop arm or a moved
+                    // tuple double-frees its consumer's payload.
+                    "Option" | "Result" => {
+                        if self.tuple_elem_optres_drop_ok(te) {
+                            if name == "Option" {
+                                self.zero_option_field_tag_at(field_ptr);
+                            } else if let Some(layout) = self.enum_layouts.get("Result") {
+                                self.zero_result_payload_area(
+                                    layout.llvm_type,
+                                    field_ptr,
+                                    "ztup.res",
+                                );
+                            }
+                        }
+                    }
                     _ => {
                         if self.shared_types.contains_key(name) {
                             // RC leaf — not freed by the tuple drop walk.
@@ -6113,6 +6150,26 @@ impl<'ctx> super::Codegen<'ctx> {
         agg_ty: inkwell::types::StructType<'ctx>,
         elem_tes: &[TypeExpr],
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_tuple_elem_user_drop_bodies_fn_skipping(
+            agg_ty,
+            elem_tes,
+            &std::collections::HashSet::new(),
+        )
+    }
+
+    /// [`Self::emit_tuple_elem_user_drop_bodies_fn`] with a set of element
+    /// indices MASKED OUT — the walker for a tuple some of whose elements have
+    /// been moved out (`let x = t.0`), whose bodies the destination now owns
+    /// (B-2026-08-03-3). The memoization key is the surviving target list, so a
+    /// masked walker naturally gets its own symbol and never aliases the full
+    /// one. Returns `None` when nothing survives the mask, which the caller
+    /// reads as "leave the action retracted".
+    pub(super) fn emit_tuple_elem_user_drop_bodies_fn_skipping(
+        &mut self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+        skip: &std::collections::HashSet<u32>,
+    ) -> Option<FunctionValue<'ctx>> {
         // Indices of every element that runs a body — a DIRECT Drop-running
         // struct, or (B-2026-08-02-26) ONE CONTAINER LEVEL around one. The
         // old walk accepted only a `Path` naming a user struct, so a
@@ -6125,7 +6182,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let targets: Vec<u32> = elem_tes
             .iter()
             .enumerate()
-            .filter(|(_, te)| self.elem_te_runs_user_drop(te))
+            .filter(|(i, te)| !skip.contains(&(*i as u32)) && self.elem_te_runs_user_drop(te))
             .map(|(i, _)| i as u32)
             .collect();
         if targets.is_empty() {
@@ -6184,8 +6241,56 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn tuple_elem_needs_deep_drop(&self, te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(inner) => inner.iter().any(|e| self.tuple_elem_needs_deep_drop(e)),
-            TypeKind::Path(_) => crate::codegen::helpers::vec_inner_type_expr(te)
-                .is_some_and(|inner| self.type_expr_has_drop_heap(&inner)),
+            TypeKind::Path(_) => {
+                crate::codegen::helpers::vec_inner_type_expr(te)
+                    .is_some_and(|inner| self.type_expr_has_drop_heap(&inner))
+                    // B-2026-08-03-3 — an `Option[P]` / `Result[O, E]` element.
+                    // `type_expr_has_drop_heap` hardcodes `Option | Result =>
+                    // false` (load-bearing, must not change), so a tuple whose
+                    // ONLY heap hangs off an Option/Result payload looked
+                    // heapless at every gate and got no drop at all.
+                    || self.tuple_elem_optres_drop_ok(te)
+            }
+            _ => false,
+        }
+    }
+
+    /// True when a tuple ELEMENT of type `Option[P]` / `Result[O, E]` owns heap
+    /// that the tag-guarded `karac_drop_Option_<p>` / `karac_drop_Result_<o>_<e>`
+    /// family frees exactly — i.e. the element types `vec_elem_agg_drop_for_type_expr`
+    /// admits, restated as a pure `&self` gate so the drop-registration sites can
+    /// ask before committing to the TypeExpr path (B-2026-08-03-3).
+    ///
+    /// `Option[shared T]` is deliberately excluded: a shared leaf inside a tuple
+    /// is the rc machinery's job, matching [`Self::zero_tuple_elem_cap_at`]'s
+    /// "RC leaf — not freed by the tuple drop walk" arm. Every admitted shape has
+    /// a move-out neutralizer in that same dual (Option → tag to `None`, Result →
+    /// payload area zeroed), so admitting one here can never leave a moved-out
+    /// tuple double-freeing its consumer's payload.
+    pub(super) fn tuple_elem_optres_drop_ok(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let arg = |i: usize| -> Option<&TypeExpr> {
+            match p.generic_args.as_ref()?.get(i)? {
+                GenericArg::Type(t) => Some(t),
+                _ => None,
+            }
+        };
+        match p.segments.last().map(|s| s.as_str()) {
+            Some("Option") => arg(0).is_some_and(|pt| {
+                self.shared_heap_type_for_type_expr(pt).is_none()
+                    && (self.option_payload_inline_recursive_drop_ok(pt)
+                        || self.option_payload_struct_or_enum_drop_ok(pt))
+            }),
+            Some("Result") => match (arg(0), arg(1)) {
+                (Some(ok), Some(err)) => {
+                    self.shared_heap_type_for_type_expr(ok).is_none()
+                        && self.shared_heap_type_for_type_expr(err).is_none()
+                        && self.result_payload_inline_recursive_drop_ok(ok, err)
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -6197,6 +6302,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// from the same three head extractors that widened it for struct fields.
     /// Interpreter twin: `field_te_runs_user_drop`.
     pub(super) fn elem_te_runs_user_drop(&self, te: &TypeExpr) -> bool {
+        // B-2026-08-03-3 — a NESTED tuple element (`((Option[Res], i64), 7)`).
+        // The `tuple_field_elem_heads` leg below only reads the inner elements'
+        // HEAD NAMES, so an inner `Option[Res]` read as the body-free "Option"
+        // and the outer walker declined the whole element. `emit_slot_drop_
+        // bodies_at` already recurses correctly once selected, so recursing the
+        // SELECTOR the same way is all that was missing.
+        if let TypeKind::Tuple(inner) = &te.kind {
+            if inner.iter().any(|e| self.elem_te_runs_user_drop(e)) {
+                return true;
+            }
+        }
         if let TypeKind::Path(p) = &te.kind {
             if let Some(head) = p.segments.first() {
                 // Direct element: a non-shared user STRUCT that runs a body.

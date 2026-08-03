@@ -432,6 +432,15 @@ pub struct Interpreter<'a> {
     /// assign) of the same name re-arms it — see the removal in the Let/
     /// Assign arms.
     pub(crate) moved_out_container_bodies_bindings: HashSet<String>,
+    /// B-2026-08-03-3 — the PER-ELEMENT sibling of the set above: `(tuple
+    /// binding, element index)` pairs moved out by a `let x = t.N`. The whole-
+    /// binding record is too coarse (`let t = (r0, r1); let x = t.0;` must
+    /// still run `r1`'s body), so the tuple element walk consults this instead.
+    /// Codegen's twin is `disarm_tuple_elem_bodies_at`, which re-registers the
+    /// walker with the same index masked out; the two must cover the same
+    /// positions or the backends print different things. Cleared for a name by
+    /// `rearm_container_bodies_for_name`.
+    pub(crate) moved_out_tuple_elem_bodies: HashSet<(String, usize)>,
     /// B-2026-07-30-11 (Option/Result leg) — the resolved `Option[P]` /
     /// `Result[O, E]` instantiation per let-bound variable, recorded by the
     /// Let arm through the SAME static resolution chain codegen's
@@ -757,6 +766,7 @@ impl<'a> Interpreter<'a> {
             moved_out_drop_field_bindings: HashSet::new(),
             moved_out_enum_payload_bindings: HashSet::new(),
             moved_out_container_bodies_bindings: HashSet::new(),
+            moved_out_tuple_elem_bodies: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),

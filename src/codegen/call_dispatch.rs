@@ -5539,6 +5539,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(tes) = self.tuple_var_elem_type_exprs.get(var_name) {
             return Some(tes.clone());
         }
+        // B-2026-08-03-3: the let-site's own record (`tuple_binding_elem_tes` —
+        // annotation, else the RHS literal refined through
+        // `refined_tuple_literal_elem_te`) beats the names-derived synthesis
+        // below, which renders an `Option[Res]` element as an EMPTY path when
+        // the element has no recorded type NAME. That empty path reads as a
+        // no-drop leaf, so `suppress_tuple_index_move_source` silently skipped
+        // the move-out neutralization for `let x = t.0`.
         let names = self.tuple_var_elem_type_names.get(var_name)?;
         Some(
             names

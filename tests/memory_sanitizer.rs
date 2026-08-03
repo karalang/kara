@@ -17267,7 +17267,10 @@ fn main() {
         // Result-field positions: making their bodies fire unmasked a
         // pre-existing missing free in each (the payload was previously
         // never allocated at all, LLVM having elided it as dead — proven with
-        // `valgrind --trace-malloc`), tracked as B-2026-08-03-3.
+        // `valgrind --trace-malloc`), tracked as B-2026-08-03-3. The
+        // TUPLE-ELEMENT half of that row is now fixed and covered by
+        // `asan_tuple_held_optres_payload_freed`; only the Result STRUCT FIELD
+        // stays out, still waiting on its entry-copy counterpart.
         assert_clean_asan_run(
             r#"
 struct Res { id: i64, name: String }
@@ -36027,6 +36030,63 @@ fn main() {
             // TITLE: "hi" = 2 chars.  early return finds v == 2.
             &["9", "5", "1", "2", "2"],
             "module_binding_container_for_loop_no_leak",
+        );
+    }
+    #[test]
+    fn asan_tuple_held_optres_payload_freed() {
+        // B-2026-08-03-3 — the leak this row was filed for. An `Option[P]` /
+        // `Result[O, E]` held inside a tuple got NO memory drop in any position
+        // (`emit_tuple_elem_drops` no-op'd on both heads), so the payload's heap
+        // was orphaned. Six positions here; the last two also needed the walker
+        // SELECTOR widened, since it read only inner head names. Covers the
+        // move-out shape too: cap-zeroing alone would have double-freed once the
+        // tuple drop started freeing, so the Option/Result neutralizer landed in
+        // the same slice.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn take(t: (Option[Res], i64)) -> i64 { t.1 }
+fn mk() -> (Option[Res], i64) { (Option.Some(Res { id: 3, name: f"c{3}" }), 30) }
+fn main() {
+    { let t = (Option.Some(Res { id: 1, name: f"a{1}" }), 10); println(t.1); }
+    { let t = (Option.Some(Res { id: 2, name: f"bb{2}" }), 20); println(take(t)); }
+    { let t = mk(); println(t.1); }
+    { let t: (Result[Res, i64], i64) = (Result.Ok(Res { id: 4, name: f"dddd{4}" }), 40); println(t.1); }
+    {
+        let mut v: Vec[(Option[Res], i64)] = Vec.new();
+        v.push((Option.Some(Res { id: 5, name: f"eeeee{5}" }), 50));
+        println(v.len());
+    }
+    { let t = ((Option.Some(Res { id: 6, name: f"ffffff{6}" }), 60), 600); println(t.1); }
+    {
+        let t = (Option.Some(Res { id: 7, name: f"ggggggg{7}" }), 70);
+        let x = t.0;
+        println(t.1);
+    }
+    println("end");
+}
+"#,
+            &[
+                "10",
+                "drop 1 a1",
+                "20",
+                "drop 2 bb2",
+                "30",
+                "drop 3 c3",
+                "40",
+                "drop 4 dddd4",
+                "1",
+                "drop 5 eeeee5",
+                "600",
+                "drop 6 ffffff6",
+                "drop 7 ggggggg7",
+                "70",
+                "end",
+            ],
+            "tuple_held_optres_payload_freed",
         );
     }
 }

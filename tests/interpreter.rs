@@ -29234,3 +29234,75 @@ fn test_enum_own_drop_body_fires_at_nll_end() {
         "1\n50\n2\n41\n51\n999\n"
     );
 }
+
+#[test]
+fn test_tuple_held_optres_payload_bodies_fire() {
+    // B-2026-08-03-3 interp twin. The leak this row is about is codegen-only
+    // (the interpreter frees by value), but two of the six positions were also
+    // BODY-silent here: a `Vec[(Option[Res], i64)]` element (the tuple item walk
+    // only looked at direct structs) and a NESTED tuple. Both are pinned as the
+    // parity side of the codegen fix; the other four already fired and are kept
+    // as controls so a future change can't quietly silence them.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn take(t: (Option[Res], i64)) -> i64 { t.1 }\n\
+             fn mk() -> (Option[Res], i64) { (Option.Some(Res { id: 3, name: f\"c{3}\" }), 30) }\n\
+             fn main() {\n\
+                 println(\"binding:\");\n\
+                 { let t = (Option.Some(Res { id: 1, name: f\"a{1}\" }), 10); println(t.1); }\n\
+                 println(\"param:\");\n\
+                 { let t = (Option.Some(Res { id: 2, name: f\"bb{2}\" }), 20); println(take(t)); }\n\
+                 println(\"returned:\");\n\
+                 { let t = mk(); println(t.1); }\n\
+                 println(\"result:\");\n\
+                 { let t: (Result[Res, i64], i64) = (Result.Ok(Res { id: 4, name: f\"dddd{4}\" }), 40); println(t.1); }\n\
+                 println(\"vec-of-tuple:\");\n\
+                 {\n\
+                     let mut v: Vec[(Option[Res], i64)] = Vec.new();\n\
+                     v.push((Option.Some(Res { id: 5, name: f\"eeeee{5}\" }), 50));\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"nested-tuple:\");\n\
+                 { let t = ((Option.Some(Res { id: 6, name: f\"ffffff{6}\" }), 60), 600); println(t.1); }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "binding:\n10\ndrop 1 a1\nparam:\n20\ndrop 2 bb2\n\
+         returned:\n30\ndrop 3 c3\nresult:\n40\ndrop 4 dddd4\n\
+         vec-of-tuple:\n1\ndrop 5 eeeee5\n\
+         nested-tuple:\n600\ndrop 6 ffffff6\nend\n"
+    );
+}
+
+#[test]
+fn test_tuple_elem_move_out_single_body_fire() {
+    // B-2026-08-03-3 (bodies half) interp twin. `let x = t.N` moved one element
+    // out, but the source tuple's element walk still ran EVERY element, so the
+    // moved one's body printed a full duplicate. Codegen's twin re-emits the
+    // walker with index N masked; here a per-`(binding, index)` record does the
+    // same job. Element 1 is the control that must still fire at scope exit.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"struct-elem:\");\n\
+                 {\n\
+                     let t = (Res { id: 1, name: f\"a{1}\" }, Res { id: 2, name: f\"bb{2}\" });\n\
+                     let x = t.0;\n\
+                     println(t.1.id);\n\
+                 }\n\
+                 println(\"option-elem:\");\n\
+                 {\n\
+                     let t = (Option.Some(Res { id: 3, name: f\"ccc{3}\" }), 30);\n\
+                     let x = t.0;\n\
+                     println(t.1);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "struct-elem:\ndrop 1 a1\n2\ndrop 2 bb2\noption-elem:\ndrop 3 ccc3\n30\nend\n"
+    );
+}

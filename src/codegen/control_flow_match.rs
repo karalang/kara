@@ -518,6 +518,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // free would otherwise double-free against the binding.
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
+                    // B-2026-08-03-3 — the same suppression for a TUPLE-ELEMENT
+                    // scrutinee (`match t.0 { Result.Err(e) => .. }`). The two
+                    // above key on a BINDING in `inline_{option,result}_payload_
+                    // vars`; `t.0` has no binding of its own, and the tuple's
+                    // element drop only started freeing that payload in this
+                    // slice — so without this the consuming arm and the tuple
+                    // drop both freed it.
+                    self.suppress_tuple_elem_optres_payload_cleanup(scrutinee, &arm.pattern);
                     // B-2026-07-30-11 (Option/Result leg): bodies retraction
                     // beside the memory suppressions — see the fn's doc.
                     self.suppress_optres_payload_bodies_for_match(scrutinee, &arm.pattern);
@@ -5032,9 +5040,30 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(elems) = self.place_chain_tuple_tes(object) else {
             return;
         };
-        let Some(te) = elems.get(*index as usize).cloned() else {
+        let Some(mut te) = elems.get(*index as usize).cloned() else {
             return;
         };
+        // B-2026-08-03-3 — `place_chain_tuple_tes` reconstructs elements from
+        // recorded type NAMES, and an element with no recorded name renders as
+        // an EMPTY path, which every arm below reads as a no-drop leaf. That is
+        // how an `Option[Res]` element silently skipped its move-out
+        // neutralization. Patch ONLY that degenerate case from the let-site's
+        // own record; the names-derived spelling is left alone everywhere else,
+        // because it is the one the Vec/String arms were tuned against (an
+        // f-string element's inferred TE spells `str`, and preferring it
+        // wholesale regressed `asan_tuple_index_assignment_heap_elems_freed`).
+        let te_is_empty = matches!(&te.kind, TypeKind::Path(p) if p.segments.is_empty());
+        if te_is_empty {
+            if let ExprKind::Identifier(src) = &object.kind {
+                if let Some(recorded) = self
+                    .tuple_var_elem_tes
+                    .get(src.as_str())
+                    .and_then(|tes| tes.get(*index as usize).cloned())
+                {
+                    te = recorded;
+                }
+            }
+        }
         let Some(base_ptr) = self.field_chain_place_ptr(object) else {
             return;
         };
@@ -5042,6 +5071,109 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, *index as u32, &te);
+        // B-2026-08-03-3 — the BODIES half of the same move-out. Cap-zeroing
+        // neutralizes the source's MEMORY drop but says nothing about its
+        // `__karac_dropelems_tuple_*` walk, which kept firing element `index`'s
+        // user Drop body over the just-zeroed slot (`drop 1 ` with an empty
+        // name, while the interpreter printed a full duplicate). Re-register
+        // the walk with that element masked out; the new binding is the sole
+        // owner of its body.
+        if let ExprKind::Identifier(src) = &object.kind {
+            let src = src.clone();
+            self.disarm_tuple_elem_bodies_at(&src, *index as u32, tuple_ty);
+        }
+    }
+
+    /// Tuple-element sibling of [`Self::suppress_inline_result_payload_cleanup`]
+    /// / `suppress_inline_option_payload_cleanup`: a `match t.N { Some(x) => ..
+    /// }` / `{ Ok(v) => .. }` arm that binds the payload OUT, where element `N`
+    /// is an `Option`/`Result` whose payload the tuple's own drop now frees
+    /// (B-2026-08-03-3). Those two suppressors key on a BINDING registered in
+    /// `inline_{option,result}_payload_vars`; a tuple element has no binding, so
+    /// the consuming arm and the tuple drop both owned the buffer.
+    ///
+    /// Emits into the ARM BODY block, so the zeroing is runtime-conditional on
+    /// that arm being taken — a non-consuming or wildcard arm leaves the tuple
+    /// the sole owner. The bodies retraction beside it is STATIC, matching the
+    /// documented trade at `suppress_container_elem_bodies_for_var`: an
+    /// over-suppressed body prints once too few (a leak, the safe side), an
+    /// under-suppressed one prints twice.
+    pub(super) fn suppress_tuple_elem_optres_payload_cleanup(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::TupleIndex { object, index } = &scrutinee.kind else {
+            return;
+        };
+        let ExprKind::Identifier(src) = &object.kind else {
+            return;
+        };
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if !matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        ) {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let src = src.clone();
+        let Some(te) = self
+            .tuple_var_elem_tes
+            .get(src.as_str())
+            .cloned()
+            .or_else(|| self.tuple_var_elem_tes(src.as_str()))
+            .and_then(|tes| tes.get(*index as usize).cloned())
+        else {
+            return;
+        };
+        if !self.tuple_elem_optres_drop_ok(&te) {
+            return;
+        }
+        let Some(slot) = self.variables.get(src.as_str()).copied() else {
+            return;
+        };
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+            return;
+        };
+        self.zero_tuple_elem_cap_at(slot.ptr, agg_ty, *index as u32, &te);
+        self.disarm_tuple_elem_bodies_at(&src, *index as u32, agg_ty);
+    }
+
+    /// Mask tuple element `index` out of `var_name`'s element-bodies walk after
+    /// a move-out (`let x = t.N`), keeping every OTHER element's body armed.
+    /// The whole-var [`Self::suppress_container_elem_bodies_for_var`] is too
+    /// coarse here — `let t = (r0, r1); let x = t.0;` must still run `r1`'s
+    /// body. Masks accumulate across move-outs; when nothing survives, the
+    /// action simply stays retracted (B-2026-08-03-3).
+    pub(super) fn disarm_tuple_elem_bodies_at(
+        &mut self,
+        var_name: &str,
+        index: u32,
+        tuple_ty: inkwell::types::StructType<'ctx>,
+    ) {
+        let Some(elem_tes) = self.tuple_var_elem_tes.get(var_name).cloned() else {
+            return;
+        };
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            return;
+        };
+        let skip = self
+            .tuple_moved_elem_bodies
+            .entry(var_name.to_string())
+            .or_default();
+        skip.insert(index);
+        let skip = skip.clone();
+        self.suppress_container_elem_bodies_for_var(var_name);
+        if let Some(bodies) =
+            self.emit_tuple_elem_user_drop_bodies_fn_skipping(tuple_ty, &elem_tes, &skip)
+        {
+            self.track_user_drop_var_with_fn("", var_name, slot.ptr, bodies);
+        }
     }
 
     /// Type name of a place-expression root for [`Self::field_chain_place_ptr`]'s

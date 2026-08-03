@@ -670,7 +670,20 @@ impl<'a> super::Interpreter<'a> {
         if self.moved_out_container_bodies_bindings.contains(name) {
             return true;
         }
-        for e in elems {
+        // B-2026-08-03-3 — per-ELEMENT move-outs (`let x = t.0`). Only the
+        // moved indices are skipped; the tuple's other elements still die here.
+        // Empty for every array binding (only a tuple index can be moved out
+        // this way), so the common path is unchanged.
+        let moved: Vec<usize> = self
+            .moved_out_tuple_elem_bodies
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, i)| *i)
+            .collect();
+        for (ei, e) in elems.into_iter().enumerate() {
+            if moved.contains(&ei) {
+                continue;
+            }
             // B-2026-08-01-23 — a nested container element (`Vec[Vec[Res]]`):
             // recurse to the innermost struct elements.
             if let Value::Array(_) = &e {
@@ -692,6 +705,19 @@ impl<'a> super::Interpreter<'a> {
                             self.run_user_drop_body_only(&tn, it.clone());
                         }
                         self.drop_user_drop_fields_of_value(&it);
+                        continue;
+                    }
+                    // B-2026-08-03-3 — an `Option`/`Result` ITEM inside that
+                    // tuple (`Vec[(Option[Res], i64)]`). Only a direct struct
+                    // item was walked, so the payload's body was silent while
+                    // codegen's per-element tuple drop fired it — the same
+                    // run-vs-build divergence -22 closed one level up. Routed
+                    // through the shared value recursion, exactly as the
+                    // DIRECT Option element arm below does.
+                    if let Value::EnumVariant { enum_name, .. } = &it {
+                        if enum_name == "Option" || enum_name == "Result" {
+                            self.run_discarded_value_user_drops(it);
+                        }
                     }
                 }
                 continue;
@@ -2170,6 +2196,7 @@ impl<'a> super::Interpreter<'a> {
     /// of the same name must not silence the new value's walks.
     fn rearm_container_bodies_for_name(&mut self, name: &str) {
         self.moved_out_container_bodies_bindings.remove(name);
+        self.moved_out_tuple_elem_bodies.retain(|(n, _)| n != name);
         self.moved_out_drop_field_bindings.remove(name);
         self.moved_out_enum_payload_bindings.remove(name);
         self.moved_out_user_drop_bindings.remove(name);
@@ -2644,6 +2671,19 @@ impl<'a> super::Interpreter<'a> {
                 // stale record from a prior same-named binding can't silence
                 // the new one.
                 self.record_container_bodies_move_sources(value);
+                // B-2026-08-03-3 — `let x = t.N` moves ONE tuple element out.
+                // The destination now owns its body; without this record the
+                // source tuple's element walk fired a full duplicate at scope
+                // exit (codegen's twin `disarm_tuple_elem_bodies_at` re-emits
+                // the walker with the same index masked). Recorded BEFORE the
+                // re-arm loop below, which only clears names being (re)bound —
+                // `t` is not one of them.
+                if let ExprKind::TupleIndex { object, index } = &value.kind {
+                    if let ExprKind::Identifier(src) = &object.kind {
+                        self.moved_out_tuple_elem_bodies
+                            .insert((src.clone(), *index as usize));
+                    }
+                }
                 // B-2026-07-30-11 (discarded-temp leg): `let _ = <owned>;`
                 // throws the value away with no binding, so no Drop slot ever
                 // ran its user Drop work — a Drop struct literal, a tuple

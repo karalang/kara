@@ -3013,6 +3013,14 @@ pub(super) struct Codegen<'ctx> {
     /// the body would then run on one backend and not the other. Cleared per
     /// function alongside `enum_inst_var_types`.
     pub(crate) tuple_var_elem_tes: HashMap<String, Vec<TypeExpr>>,
+    /// Tuple ELEMENT indices moved out of a let-bound tuple (`let x = t.0`),
+    /// per variable. The element's body now belongs to the destination, so the
+    /// tuple's `__karac_dropelems_tuple_*` walk must skip it — without the mask
+    /// the source fired a SECOND body over the cap-zeroed slot (`drop 1 ` with
+    /// an empty name), while the interpreter fired a full duplicate. Accumulated
+    /// across move-outs so `let a = t.0; let b = t.1;` masks both. Cleared per
+    /// function alongside `tuple_var_elem_tes` (B-2026-08-03-3).
+    pub(crate) tuple_moved_elem_bodies: HashMap<String, std::collections::HashSet<u32>>,
     /// Resolved `Option[P]` / `Result[O, E]` instantiation per let-bound
     /// variable whose payload bodies walk registered
     /// (`__karac_dropelems_opt_*` / `__karac_dropelems_res_*`). Consulted by
@@ -7743,6 +7751,7 @@ impl<'ctx> Codegen<'ctx> {
             concrete_named_type_exprs: HashMap::new(),
             enum_inst_var_types: HashMap::new(),
             tuple_var_elem_tes: HashMap::new(),
+            tuple_moved_elem_bodies: HashMap::new(),
             optres_var_payload_tes: HashMap::new(),
             map_val_bodies_tes: HashMap::new(),
             pattern_binding_types: HashMap::new(),

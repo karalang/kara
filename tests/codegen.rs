@@ -82810,6 +82810,99 @@ fn main() {
             assert_eq!(out, "total: 3\n");
         }
     }
+
+    #[test]
+    fn test_e2e_tuple_held_optres_payload_freed_and_dropped() {
+        // B-2026-08-03-3 — an `Option[P]` / `Result[O, E]` held INSIDE A TUPLE
+        // never freed its payload's heap: `emit_tuple_elem_drops` had a hard
+        // `"Option" | "Result" => {}` no-op, and every admit gate above it went
+        // through `type_expr_has_drop_heap`, which reads Option/Result as
+        // heapless by design. The direct `Vec[Option[Res]]` control was clean
+        // all along, which is what made the tuple hole invisible. All six
+        // positions leaked 2+ bytes each under valgrind before the fix; the last
+        // two (a Vec of such tuples, and a NESTED tuple) were also SILENT on one
+        // backend, because the walker's selector read only inner head names.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn take(t: (Option[Res], i64)) -> i64 { t.1 }
+fn mk() -> (Option[Res], i64) { (Option.Some(Res { id: 3, name: f"c{3}" }), 30) }
+fn main() {
+    println("binding:");
+    { let t = (Option.Some(Res { id: 1, name: f"a{1}" }), 10); println(t.1); }
+    println("param:");
+    { let t = (Option.Some(Res { id: 2, name: f"bb{2}" }), 20); println(take(t)); }
+    println("returned:");
+    { let t = mk(); println(t.1); }
+    println("result:");
+    { let t: (Result[Res, i64], i64) = (Result.Ok(Res { id: 4, name: f"dddd{4}" }), 40); println(t.1); }
+    println("vec-of-tuple:");
+    {
+        let mut v: Vec[(Option[Res], i64)] = Vec.new();
+        v.push((Option.Some(Res { id: 5, name: f"eeeee{5}" }), 50));
+        println(v.len());
+    }
+    println("nested-tuple:");
+    { let t = ((Option.Some(Res { id: 6, name: f"ffffff{6}" }), 60), 600); println(t.1); }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "binding:\n10\ndrop 1 a1\nparam:\n20\ndrop 2 bb2\n\
+                 returned:\n30\ndrop 3 c3\nresult:\n40\ndrop 4 dddd4\n\
+                 vec-of-tuple:\n1\ndrop 5 eeeee5\n\
+                 nested-tuple:\n600\ndrop 6 ffffff6\nend"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tuple_elem_move_out_single_body_fire() {
+        // B-2026-08-03-3 (bodies half) — `let x = t.N` moves ONE tuple element
+        // out. Cap-zeroing already neutralized the source's MEMORY drop, but its
+        // `__karac_dropelems_tuple_*` walk stayed fully armed and fired element
+        // N's body a SECOND time over the just-zeroed slot: `drop 1 ` with an
+        // empty name (the interpreter printed a full duplicate instead — a
+        // divergence on top of the double fire). The whole-binding disarm is too
+        // coarse here, so the walker is re-emitted with only index N masked —
+        // which is why the second element still fires at scope exit.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("struct-elem:");
+    {
+        let t = (Res { id: 1, name: f"a{1}" }, Res { id: 2, name: f"bb{2}" });
+        let x = t.0;
+        println(t.1.id);
+    }
+    println("option-elem:");
+    {
+        let t = (Option.Some(Res { id: 3, name: f"ccc{3}" }), 30);
+        let x = t.0;
+        println(t.1);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "struct-elem:\ndrop 1 a1\n2\ndrop 2 bb2\n\
+                 option-elem:\ndrop 3 ccc3\n30\nend"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

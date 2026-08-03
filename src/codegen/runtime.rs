@@ -943,7 +943,14 @@ impl<'ctx> super::Codegen<'ctx> {
         agg_ty: StructType<'ctx>,
         elem_tes: &[crate::ast::TypeExpr],
     ) -> Option<FunctionValue<'ctx>> {
-        if !elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+        // B-2026-08-03-3 — `type_expr_has_drop_heap` reads `Option`/`Result` as
+        // heapless by design, so a tuple whose only heap hangs off an
+        // Option/Result payload bailed here and got no drop fn at all. OR in the
+        // narrow Option/Result admit `emit_tuple_elem_drops` now honors.
+        if !elem_tes
+            .iter()
+            .any(|e| self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e))
+        {
             return None;
         }
         let fn_name = format!("__karac_drop_tuple_te_{}", Self::tuple_te_sig(elem_tes));
@@ -2087,7 +2094,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 return None;
             }
             let elem_tes = elem_tes.clone();
-            if !elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+            // B-2026-08-03-3 — same Option/Result widening as
+            // `synthesize_tuple_drop_fn_te`'s admit gate: `Vec[(Option[Res],
+            // i64)]` read as heapless here and got no per-element drop, so
+            // every payload leaked.
+            if !elem_tes
+                .iter()
+                .any(|e| self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e))
+            {
                 return None;
             }
             let inkwell::types::BasicTypeEnum::StructType(agg_ty) =
