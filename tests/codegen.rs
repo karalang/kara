@@ -82812,6 +82812,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_inline_option_payload_field_body_fires_once() {
+        // B-2026-08-03-10 — an `Option` FIELD whose payload is a Drop-bearing
+        // struct with NO heap fired the body TWICE at binding death under AOT
+        // (three times when the owner was also passed by value), against one
+        // fire under `karac run`. vg=0 throughout — the payload owns no heap —
+        // so it is a pure body-COUNT bug no sanitizer can see.
+        //
+        // `emit_drop_fn_for_type_expr` has a guard that routes a Drop-bearing
+        // user struct to the MEMORY-ONLY synthesis, precisely so the memory
+        // channel never runs a user body. Its fallback for a struct with
+        // nothing to free called `emit_primitive_drop_fn(type_name)`, which
+        // opens with the same `karac_drop_<T>` module lookup the guard exists to
+        // bypass — and that name IS the user-drop wrapper. The fallback now uses
+        // a `$mem` suffix that cannot collide.
+        //
+        // The controls pin why only this shape broke: a BOXED payload (`Big`, 4
+        // words) reaches a different branch, the `Result` sibling registers no
+        // memory drop for a struct payload at all, and a direct binding never
+        // goes through the field channel.
+        let out = run_program(
+            r#"
+struct Small { id: i64 }
+impl Drop for Small { fn drop(mut ref self) { println(f"drop {self.id}") } }
+struct Big { id: i64, name: String }
+impl Drop for Big { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+struct Hsm { o: Option[Small], t: i64 }
+struct Hb { o: Option[Big], t: i64 }
+struct Hr { r: Result[Small, i64], t: i64 }
+fn take(h: Hsm) -> i64 { h.t }
+fn main() {
+    println("inline-field:");
+    { let h = Hsm { o: Option.Some(Small { id: 1 }), t: 10 }; println(h.t); }
+    println("inline-field-byvalue:");
+    { let h = Hsm { o: Option.Some(Small { id: 2 }), t: 20 }; println(take(h)); }
+    println("boxed-field:");
+    { let h = Hb { o: Option.Some(Big { id: 3, name: f"c{3}" }), t: 30 }; println(h.t); }
+    println("result-sibling:");
+    { let h = Hr { r: Result.Ok(Small { id: 4 }), t: 40 }; println(h.t); }
+    println("direct-binding:");
+    { let o = Option.Some(Small { id: 5 }); println(50); }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "inline-field:\n10\ndrop 1\n\
+                 inline-field-byvalue:\n20\ndrop 2\n\
+                 boxed-field:\n30\ndrop 3 c3\n\
+                 result-sibling:\n40\ndrop 4\n\
+                 direct-binding:\ndrop 5\n50\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_field_move_out_single_body_fire() {
         // B-2026-08-03-8 (bodies half) — `let x = h.f` moves ONE field out, but
         // the struct's `__karac_dropbodies_*` walk stayed fully armed and fired

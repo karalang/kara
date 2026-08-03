@@ -1838,7 +1838,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(f) = self.emit_struct_drop_synthesis(&single) {
                         return f;
                     }
-                    return self.emit_primitive_drop_fn(&type_name);
+                    // B-2026-08-03-10 — the fallback must NOT reuse `type_name`.
+                    // `emit_primitive_drop_fn` opens with the same
+                    // `module.get_function("karac_drop_<T>")` lookup this guard
+                    // exists to bypass, so for a Drop-bearing struct with NO
+                    // heap to free (`struct Small { id: i64 }`,
+                    // `emit_struct_drop_synthesis` -> None) it handed back the
+                    // user-drop WRAPPER and the memory channel ran the body a
+                    // second time. Only shapes that reach the memory channel
+                    // for such a struct were affected — an inline-payload
+                    // `Option[Small]` STRUCT FIELD is the one that does, which
+                    // is why the boxed payload, the `Result` sibling (whose
+                    // narrower admit registers no memory drop here) and the
+                    // direct binding were all correct. A `$mem` suffix cannot
+                    // collide with any user type name.
+                    return self.emit_primitive_drop_fn(&format!("{single}$mem"));
                 }
             }
         }
