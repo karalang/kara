@@ -5144,6 +5144,70 @@ impl<'ctx> super::Codegen<'ctx> {
         self.disarm_tuple_elem_bodies_at(&src, *index as u32, agg_ty);
     }
 
+    /// B-2026-08-03-8 — the BODIES half of a struct-field move-out
+    /// (`let x = h.o`), applied at the same three let-site positions that call
+    /// `suppress_struct_field_move_into_literal` (its MEMORY half). Self-gated
+    /// exactly like that suppressor — an Identifier / `self` object, a
+    /// non-`owned_struct_params` root — so it fires in the same cases and no
+    /// others. Idempotent: the mask accumulates, so being called from more than
+    /// one of those positions for the same field is harmless.
+    pub(super) fn disarm_struct_field_move_bodies(&mut self, value: &Expr) {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return;
+        };
+        let obj = match &object.kind {
+            ExprKind::Identifier(o) => o.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        if self.owned_struct_params.contains(obj.as_str()) {
+            return;
+        }
+        let Some(fidx) = self
+            .var_type_names
+            .get(obj.as_str())
+            .and_then(|sn| self.struct_field_names.get(sn.as_str()))
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        self.disarm_struct_field_bodies_at(&obj, fidx);
+    }
+
+    /// Struct-FIELD sibling of [`Self::disarm_tuple_elem_bodies_at`]: mask field
+    /// `field_idx` out of `var_name`'s `__karac_dropbodies_*` walk after a
+    /// move-out, keeping every OTHER field's body armed (B-2026-08-03-8).
+    /// Retracts through `suppress_struct_field_bodies_for_var` — the CONTAINER
+    /// retraction does not match this action family, which is what made the
+    /// first attempt add an action rather than replace one. The struct's own
+    /// `impl Drop` body wrapper is a separate action and stays armed.
+    pub(super) fn disarm_struct_field_bodies_at(&mut self, var_name: &str, field_idx: usize) {
+        let Some(struct_name) = self.var_type_names.get(var_name).cloned() else {
+            return;
+        };
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            return;
+        };
+        let subst = self
+            .enum_inst_var_types
+            .get(var_name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        let skip = self
+            .struct_moved_field_bodies
+            .entry(var_name.to_string())
+            .or_default();
+        skip.insert(field_idx);
+        let skip = skip.clone();
+        self.suppress_struct_field_bodies_for_var(var_name);
+        if let Some(bodies) =
+            self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip)
+        {
+            self.track_user_drop_var_with_fn(&struct_name, var_name, slot.ptr, bodies);
+        }
+    }
+
     /// Mask tuple element `index` out of `var_name`'s element-bodies walk after
     /// a move-out (`let x = t.N`), keeping every OTHER element's body armed.
     /// The whole-var [`Self::suppress_container_elem_bodies_for_var`] is too

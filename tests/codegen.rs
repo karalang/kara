@@ -82812,6 +82812,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_field_move_out_single_body_fire() {
+        // B-2026-08-03-8 (bodies half) — `let x = h.f` moves ONE field out, but
+        // the struct's `__karac_dropbodies_*` walk stayed fully armed and fired
+        // that field's body a SECOND time. The memory half (this row's first
+        // slice) had already stopped the Option case from SEGVing; this stops
+        // the duplicate print for all three container field kinds. `struct-field`
+        // is the direct-struct control that was correct throughout, and
+        // `sibling-survives` checks the mask is per-FIELD: a struct whose field
+        // was NOT moved still fires at scope exit.
+        //
+        // The retraction is the interesting part: the tuple-element fix's
+        // `suppress_container_elem_bodies_for_var` matches a
+        // `__karac_dropelems_` prefix, which a struct's field-bodies action does
+        // not carry — so masking here needed its own prefix-keyed retraction,
+        // and a naive reuse silently ADDED an action instead of replacing one.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Ho { o: Option[Res], t: i64 }
+struct Hv { v: Vec[Res], t: i64 }
+struct Hs { r: Res, t: i64 }
+fn main() {
+    println("option-field:");
+    { let h = Ho { o: Option.Some(Res { id: 1, name: f"a{1}" }), t: 10 }; let x = h.o; println(h.t); }
+    println("vec-field:");
+    {
+        let mut vv: Vec[Res] = Vec.new();
+        vv.push(Res { id: 2, name: f"bb{2}" });
+        let h = Hv { v: vv, t: 20 };
+        let x = h.v;
+        println(h.t);
+    }
+    println("struct-field:");
+    { let h = Hs { r: Res { id: 3, name: f"ccc{3}" }, t: 30 }; let x = h.r; println(h.t); }
+    println("sibling-survives:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 4, name: f"dddd{4}" });
+        let h = Hv { v: w, t: 40 };
+        println(h.t);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "option-field:\ndrop 1 a1\n10\nvec-field:\ndrop 2 bb2\n20\nstruct-field:\ndrop 3 ccc3\n30\nsibling-survives:\n40\ndrop 4 dddd4\nend");
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_field_and_map_value_tuple_run_element_drop() {
         // B-2026-08-03-7 — the two tuple positions B-2026-08-03-3 did not reach,
         // both silent on BOTH backends. A struct field holding a tuple and a Map

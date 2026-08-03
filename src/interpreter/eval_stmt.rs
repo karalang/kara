@@ -831,6 +831,35 @@ impl<'a> super::Interpreter<'a> {
             self.run_enum_payload_user_drops(name, &value);
             return;
         }
+        // B-2026-08-03-8 — fields moved out by a `let x = h.f` belong to the
+        // destination now. Dropping them from the value before the walk is the
+        // whole mask: the walk resolves each declared field through
+        // `fields.get(..)` and skips a missing one, so no gate has to be
+        // threaded through its several other callers. Codegen's twin re-emits
+        // the walker with the same field index masked.
+        let moved: Vec<String> = self
+            .moved_out_struct_field_bodies
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, f)| f.clone())
+            .collect();
+        if !moved.is_empty() {
+            if let Value::Struct {
+                name: sname,
+                mut fields,
+            } = value
+            {
+                for f in &moved {
+                    fields.remove(f);
+                }
+                let masked = Value::Struct {
+                    name: sname,
+                    fields,
+                };
+                self.drop_user_drop_fields_of_value(&masked);
+                return;
+            }
+        }
         self.drop_user_drop_fields_of_value(&value);
     }
 
@@ -2233,6 +2262,8 @@ impl<'a> super::Interpreter<'a> {
     fn rearm_container_bodies_for_name(&mut self, name: &str) {
         self.moved_out_container_bodies_bindings.remove(name);
         self.moved_out_tuple_elem_bodies.retain(|(n, _)| n != name);
+        self.moved_out_struct_field_bodies
+            .retain(|(n, _)| n != name);
         self.moved_out_drop_field_bindings.remove(name);
         self.moved_out_enum_payload_bindings.remove(name);
         self.moved_out_user_drop_bindings.remove(name);
@@ -2728,6 +2759,14 @@ impl<'a> super::Interpreter<'a> {
                     if let ExprKind::Identifier(src) = &object.kind {
                         self.moved_out_tuple_elem_bodies
                             .insert((src.clone(), *index as usize));
+                    }
+                }
+                // B-2026-08-03-8 — the struct-FIELD peer: `let x = h.f` moves
+                // one field out, so the source's field walk must skip it.
+                if let ExprKind::FieldAccess { object, field } = &value.kind {
+                    if let ExprKind::Identifier(src) = &object.kind {
+                        self.moved_out_struct_field_bodies
+                            .insert((src.clone(), field.clone()));
                     }
                 }
                 // B-2026-07-30-11 (discarded-temp leg): `let _ = <owned>;`

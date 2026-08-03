@@ -2718,6 +2718,27 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_user_drop_field_bodies_fn_skipping(
+            struct_name,
+            subst,
+            &std::collections::HashSet::new(),
+        )
+    }
+
+    /// [`Self::emit_user_drop_field_bodies_fn`] with a set of field indices
+    /// MASKED OUT — the walker for a struct some of whose fields have been moved
+    /// out (`let x = h.o`), whose bodies the destination now owns
+    /// (B-2026-08-03-8). The symbol name folds in the SURVIVING index list, so a
+    /// masked walker never aliases the full one in the module-level memo below.
+    /// `None` when nothing survives, which the caller reads as "leave the action
+    /// retracted". The struct-field peer of
+    /// `emit_tuple_elem_user_drop_bodies_fn_skipping`.
+    pub(super) fn emit_user_drop_field_bodies_fn_skipping(
+        &mut self,
+        struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+        skip: &std::collections::HashSet<usize>,
+    ) -> Option<FunctionValue<'ctx>> {
         // A `shared` parent is dropped through the RC machinery
         // (`__karac_rc_drop_<T>`) against a heap box with a refcount header, so
         // the plain-struct GEPs below would be off by that header. Its wrapper
@@ -2730,10 +2751,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // field names are bare params, so the name-keyed walk returned an
         // empty set for `Box2[Res]` and this fn declined — the mono
         // binding's Drop field was silent at owner death.
-        let field_idxs = self.user_drop_field_indices_mono(struct_name, subst);
+        let field_idxs: Vec<usize> = self
+            .user_drop_field_indices_mono(struct_name, subst)
+            .into_iter()
+            .filter(|i| !skip.contains(i))
+            .collect();
         if field_idxs.is_empty() {
             return None;
         }
+        let skip_suffix: String = if skip.is_empty() {
+            String::new()
+        } else {
+            let mut idxs = field_idxs.clone();
+            idxs.sort_unstable();
+            format!(
+                "$keep{}",
+                idxs.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        };
         let mono_suffix: String = self
             .struct_generic_params
             .get(struct_name)
@@ -2746,7 +2784,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .collect::<String>()
             })
             .unwrap_or_default();
-        let fn_name = format!("__karac_dropbodies_{struct_name}{mono_suffix}");
+        let fn_name = format!("__karac_dropbodies_{struct_name}{mono_suffix}{skip_suffix}");
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }

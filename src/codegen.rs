@@ -3021,6 +3021,12 @@ pub(super) struct Codegen<'ctx> {
     /// across move-outs so `let a = t.0; let b = t.1;` masks both. Cleared per
     /// function alongside `tuple_var_elem_tes` (B-2026-08-03-3).
     pub(crate) tuple_moved_elem_bodies: HashMap<String, std::collections::HashSet<u32>>,
+    /// Struct FIELD indices moved out of a let-bound struct (`let x = h.o`),
+    /// per variable — the field-index sibling of `tuple_moved_elem_bodies`. The
+    /// field's body belongs to the destination, so the struct's
+    /// `__karac_dropbodies_*` walk is re-registered with it masked. Cleared per
+    /// function alongside that map (B-2026-08-03-8).
+    pub(crate) struct_moved_field_bodies: HashMap<String, std::collections::HashSet<usize>>,
     /// Resolved `Option[P]` / `Result[O, E]` instantiation per let-bound
     /// variable whose payload bodies walk registered
     /// (`__karac_dropelems_opt_*` / `__karac_dropelems_res_*`). Consulted by
@@ -7752,6 +7758,7 @@ impl<'ctx> Codegen<'ctx> {
             enum_inst_var_types: HashMap::new(),
             tuple_var_elem_tes: HashMap::new(),
             tuple_moved_elem_bodies: HashMap::new(),
+            struct_moved_field_bodies: HashMap::new(),
             optres_var_payload_tes: HashMap::new(),
             map_val_bodies_tes: HashMap::new(),
             pattern_binding_types: HashMap::new(),

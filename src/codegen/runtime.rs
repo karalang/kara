@@ -5427,6 +5427,37 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-08-03-8 — the STRUCT-FIELD-bodies analogue of
+    /// [`Self::is_container_elem_bodies_fn`]. A struct binding's field-bodies
+    /// action is registered under `__karac_dropbodies_<S>`, NOT the
+    /// `__karac_dropelems_` prefix the container matcher tests for, so the
+    /// container retraction below matches nothing for it — the reason the first
+    /// attempt at masking a moved-out field silently added an action instead of
+    /// replacing one. Deliberately does NOT match the struct's OWN body wrapper
+    /// (`karac_drop_<S>` / `<S>.drop`), which a field move-out must leave armed.
+    fn is_struct_field_bodies_fn(f: FunctionValue<'ctx>) -> bool {
+        f.get_name()
+            .to_str()
+            .is_ok_and(|n| n.starts_with("__karac_dropbodies_"))
+    }
+
+    /// Retract the `__karac_dropbodies_*` field-bodies action for `name`,
+    /// leaving its own-body wrapper and any container-element walker in place
+    /// (B-2026-08-03-8). Paired with a masked re-registration by
+    /// `disarm_struct_field_bodies_at`.
+    pub(super) fn suppress_struct_field_bodies_for_var(&mut self, name: &str) {
+        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+            frame.retain(|action| match action {
+                CleanupAction::UserDrop {
+                    binding_name,
+                    drop_fn,
+                    ..
+                } => binding_name != name || !Self::is_struct_field_bodies_fn(*drop_fn),
+                _ => true,
+            });
+        }
+    }
+
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
         for frame in self.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {

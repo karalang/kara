@@ -4895,6 +4895,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let Some(obj) = obj_name {
                                 if !self.owned_struct_params.contains(obj) {
                                     self.suppress_struct_field_move_into_literal(value);
+                                    // B-2026-08-03-8 — the bodies half of the
+                                    // same move-out; see the fn's doc.
+                                    self.disarm_struct_field_move_bodies(value);
                                 }
                             }
                             // B-2026-08-01-31 — the deeper-place sibling
@@ -5213,6 +5216,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let Some(obj) = obj_name {
                                 if !self.owned_struct_params.contains(obj) {
                                     self.suppress_struct_field_move_into_literal(value);
+                                    // B-2026-08-03-8 — the bodies half of the
+                                    // same move-out; see the fn's doc.
+                                    self.disarm_struct_field_move_bodies(value);
                                 }
                             }
                             // #27 — `let tk = h.ps.0.tok`: the enum field's OBJECT
@@ -5931,6 +5937,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let Some(obj) = obj_name {
                                 if !self.owned_struct_params.contains(obj) {
                                     self.suppress_struct_field_move_into_literal(value);
+                                    // B-2026-08-03-8 — the bodies half of the
+                                    // same move-out; see the fn's doc.
+                                    self.disarm_struct_field_move_bodies(value);
                                 }
                             }
                             // B-2026-08-01-31 — the deeper-place sibling

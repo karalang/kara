@@ -29368,3 +29368,45 @@ fn test_tuple_elem_match_scrutinee_body_fires_at_arm_end() {
         "a\n3\ndrop 3 cccc1\n4\nend\n"
     );
 }
+
+#[test]
+fn test_struct_field_move_out_single_body_fire() {
+    // B-2026-08-03-8 (bodies half) interp twin. `let x = h.f` left the source
+    // struct's field walk running over every field, so the moved one's body
+    // printed a full duplicate. The binding-level walk now drops moved-out
+    // fields from the value before walking it — the whole mask, since the walk
+    // already skips a field the value does not carry. Codegen's twin re-emits
+    // the walker with the same field index masked.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Ho { o: Option[Res], t: i64 }\n\
+             struct Hv { v: Vec[Res], t: i64 }\n\
+             struct Hs { r: Res, t: i64 }\n\
+             fn main() {\n\
+             println(\"option-field:\");\n\
+             { let h = Ho { o: Option.Some(Res { id: 1, name: f\"a{1}\" }), t: 10 }; let x = h.o; println(h.t); }\n\
+             println(\"vec-field:\");\n\
+             {\n\
+             let mut vv: Vec[Res] = Vec.new();\n\
+             vv.push(Res { id: 2, name: f\"bb{2}\" });\n\
+             let h = Hv { v: vv, t: 20 };\n\
+             let x = h.v;\n\
+             println(h.t);\n\
+             }\n\
+             println(\"struct-field:\");\n\
+             { let h = Hs { r: Res { id: 3, name: f\"ccc{3}\" }, t: 30 }; let x = h.r; println(h.t); }\n\
+             println(\"sibling-survives:\");\n\
+             {\n\
+             let mut w: Vec[Res] = Vec.new();\n\
+             w.push(Res { id: 4, name: f\"dddd{4}\" });\n\
+             let h = Hv { v: w, t: 40 };\n\
+             println(h.t);\n\
+             }\n\
+             println(\"end\");\n\
+             }\n"),
+        "option-field:\ndrop 1 a1\n10\nvec-field:\ndrop 2 bb2\n20\nstruct-field:\ndrop 3 ccc3\n30\nsibling-survives:\n40\ndrop 4 dddd4\nend\n"
+    );
+}

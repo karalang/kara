@@ -441,6 +441,14 @@ pub struct Interpreter<'a> {
     /// positions or the backends print different things. Cleared for a name by
     /// `rearm_container_bodies_for_name`.
     pub(crate) moved_out_tuple_elem_bodies: HashSet<(String, usize)>,
+    /// B-2026-08-03-8 — the struct-FIELD peer of the set above: `(struct
+    /// binding, field name)` pairs moved out by a `let x = h.f`. The
+    /// binding-level field walk drops those entries from the value before
+    /// walking it, so the destination is the sole owner of that field's body.
+    /// Codegen's twin is `disarm_struct_field_bodies_at`, which re-registers the
+    /// walker with the same field masked. Cleared for a name by
+    /// `rearm_container_bodies_for_name`.
+    pub(crate) moved_out_struct_field_bodies: HashSet<(String, String)>,
     /// B-2026-07-30-11 (Option/Result leg) — the resolved `Option[P]` /
     /// `Result[O, E]` instantiation per let-bound variable, recorded by the
     /// Let arm through the SAME static resolution chain codegen's
@@ -767,6 +775,7 @@ impl<'a> Interpreter<'a> {
             moved_out_enum_payload_bindings: HashSet::new(),
             moved_out_container_bodies_bindings: HashSet::new(),
             moved_out_tuple_elem_bodies: HashSet::new(),
+            moved_out_struct_field_bodies: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
