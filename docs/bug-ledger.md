@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 43 | 0 |
 | crash | 37 | 0 |
 | soundness | 35 | 0 |
-| diagnostics | 34 | 1 |
+| diagnostics | 34 | 0 |
 | other | 12 | 1 |
 | use-after-free | 11 | 0 |
 
@@ -118,27 +118,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 23 | 1 |
 | cli | 23 | 0 |
 | runtime | 19 | 0 |
-| resolver | 18 | 1 |
-| parser | 10 | 1 |
+| resolver | 18 | 0 |
+| parser | 10 | 0 |
 | lexer | 3 | 0 |
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **884 surfaced · 5 open · 871 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **884 surfaced · 4 open · 872 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
-| B-2026-08-01-36 | 2026-08-01 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level statement and the author is told to "move the statements into `main`, or remove the explicit `main`", two suggestions that both destroy the intent. `E_MODULE_BINDING_NAMING` never fires. | the module-binding recognizer in the parser's top-level item loop (whatever decides `Item::ModuleBinding` vs a top-level statement) and the `file contains both top-level statements and an explicit fn main()` error; E_MODULE_BINDING_NAMING in the resolver, which is the diagnostic that SHOULD fire |
 | B-2026-08-02-1 | 2026-08-02 | other | medium | The Mend scorer counts a CORRECT `karac fix` as having "broken the build" whenever it unmasks errors a earlier-phase failure was hiding. Because the compiler is phased, any fix to a parse error that reveals a typecheck error is scored as a regression — systematically understating fix precision on exactly the multi-layer programs that are most realistic. | examples/mend/harness/mend_score.py — `fix_introduced_new_error` / `runs_where_fix_introduced_new_error` (~line 270) and the `fix_precision_pct` it feeds; rendered as "fixes that broke the build" (~line 322) |
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | MATCH-ARM LEG ONLY (displacement leg fixed in 21a1fb6): consuming an Option[Drop] payload via a match/if-let arm binding on a NAMED binding with a boxed payload runs no user `impl Drop` body under `karac build` while the interpreter runs it — a run-vs-build divergence on the shipping path. Blocker identified: the body's only fire path for a boxed payload is the box drop, which the arm's memory suppressors disarm, so the fix must key on that disarm rather than on arm consumption | — |
 | B-2026-08-03-3 | 2026-08-03 | codegen | medium | a Result[Struct, E] struct field and a tuple-held Option[Struct] never free the payload's heap — latent until B-2026-08-03-1 made the Drop body read it | open |
 
-### Fixed (871)
+### Fixed (872)
 
-<details><summary>871 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>872 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -983,6 +982,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **884 surfaced 
 | B-2026-08-01-32 | codegen | low | Vec.filled's calloc fast path only recognises a SCALAR constant zero, so Vec.filled(n, Vec.new()) store-loops an all-zero aggregate instead of calloc… | 0872d65 |
 | B-2026-08-01-34 | codegen | medium | Generic-monomorph field moved out of a deep chain (`let g = o.h.b` where `b: Boxy[String]`) still double-frees — the B-2026-08-01-31 suppressor decli… | f82c0db |
 | B-2026-08-01-35 | codegen | high | Field store through a FIELD-ROOTED indexed container (`o.hs[i].field = x` where `hs: Vec[P]` is itself a struct field) is SILENTLY DROPPED under kara… | 38d2d23 |
+| B-2026-08-01-36 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level stateme… | FIXED 0584af0. The open question in the filing — how to disambiguate script mode from a module binding — resolves cleanly against design.md § Script mode, which makes script mode and an explicit `fn main()` MUTUALLY EXCLUSIVE (a file with both is already an error). So in a file with explicit main, a top-level `let` cannot be a script statement; it can only be an incorrectly-named module binding. src/parser.rs now reclassifies those into Item::ModuleBinding BEFORE the ambiguity check, so the resolver's existing E_MODULE_BINDING_NAMING fires — exactly the 'widen the recognizer and let the good diagnostic do its job' shape the filing proposed.
+
+END-TO-END RESULT (verified, not inferred): `let mut my_count: i64 = 0;` + two use sites now reports E_MODULE_BINDING_NAMING suggesting `MY_COUNT`, and `karac fix` rewrites the declaration AND both use sites, after which the file re-checks clean. The misdirecting ambiguity error is gone for this shape.
+
+SCOPED DELIBERATELY: only plain-name `let` statements reclassify, and only in a root source file that has an explicit `main`. Expression statements, assignments and tuple destructures are not module-binding shaped, so they stay script statements and keep the ambiguity error — which is the correct diagnostic for them, and is regression-tested in both directions. A file with no explicit `main` is untouched, so script mode still parses `let x = 1;` as a genuine script statement.
+
+Tests: 5 in tests/parser.rs (recognition of a lowercase binding, single-letter `c` on the far side of the old boundary, script mode untouched, expression-statement and tuple-destructure shapes still reporting ambiguity) + 1 in tests/resolver.rs asserting the naming diagnostic fires with the rename and the misdirecting error is absent. |
 | B-2026-08-02-4 | resolver+effect | low | FFI lint suggests `allocates(Heap)` but neither the lint nor E0100 mentions the required `effect resource Heap;` declaration — following the compiler… | 8930667 |
 | B-2026-08-02-2 | typecheck | low | No implicit `*mut T` -> `*const T` weakening at call sites — every consume-direction binding that passes a malloc'd (or otherwise mut) buffer to a `*… | a31d7be |
 | B-2026-08-02-3 | interp | low | Interpreter refuses raw-pointer FFI (`CString.as_ptr` under `karac run --interp`) via a raw Rust panic! + backtrace instead of a structured diagnosti… | 03c8d6a |
