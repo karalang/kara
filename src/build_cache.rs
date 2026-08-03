@@ -266,13 +266,19 @@ pub fn host_target_triple() -> String {
     }
 }
 
-/// Active compiler version as it would appear in a cache key. Sourced
-/// from `CARGO_PKG_VERSION` at compile time — same source as
-/// `dep_resolver::active_toolchain_version()`. Returned as `&'static
-/// str` so the caller can choose between borrowed use and an owned
-/// copy.
+/// Active compiler version as it would appear in a cache key. The FULL
+/// stamped version (`crate::karac_version_string()` — base + git-derived
+/// `dev.<count>+g<sha>` suffix), NOT bare `CARGO_PKG_VERSION`: the
+/// module doc's invalidation story ("any new compiler reads a different
+/// cache slot than the old compiler wrote") only actually happens if the
+/// key's version component changes per compiler build, and the bare
+/// crate version sat at `0.1.0` across every commit — two different
+/// compiler builds shared a slot, the exact stale-cache class the design
+/// promises away. `dep_resolver::active_toolchain_version()` deliberately
+/// stays bare `CARGO_PKG_VERSION` — that one participates in semver
+/// REQUIREMENT matching, where a prerelease tag changes match semantics.
 pub fn active_compiler_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    crate::karac_version_string()
 }
 
 /// Look up the cache entry for `key` under `root`. Returns:

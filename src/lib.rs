@@ -164,6 +164,18 @@ pub fn byte_offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
+/// The full stamped compiler version: `<base>-dev.<count>+g<sha>[.dirty]`,
+/// e.g. `0.1.0-dev.4213+g07bf66e2a`. Base is `CARGO_PKG_VERSION` (a
+/// human decision, moved on citable milestones only); the suffix is
+/// git-derived at build time by `build.rs` (`dev.unknown` on non-git
+/// source builds). Valid semver (prerelease + build metadata), so
+/// consumers that parse it — e.g. `build_cache`'s semver pin — keep
+/// working. `karac --version` prints it, and the embedded short SHA
+/// maps a user's version string directly onto bug-ledger `fix` SHAs.
+pub fn karac_version_string() -> &'static str {
+    concat!(env!("CARGO_PKG_VERSION"), "-", env!("KARAC_VERSION_STAMP"))
+}
+
 /// Tokenize source code into a vector of spanned tokens.
 pub fn tokenize(source: &str) -> Vec<SpannedToken> {
     let mut lexer = Lexer::new(source);

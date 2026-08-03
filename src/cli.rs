@@ -724,7 +724,7 @@ pub enum AffectedByDirection {
 pub fn execute(cmd: Command) {
     match cmd {
         Command::Help => print_help(),
-        Command::Version => println!("karac 0.1.0"),
+        Command::Version => println!("karac {}", crate::karac_version_string()),
         Command::Run {
             file,
             output,

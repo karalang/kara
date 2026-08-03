@@ -27,8 +27,65 @@
 
 use std::env;
 
+/// Emit the git-derived version stamp (`dev.<commit-count>+g<short-sha>`
+/// with a `.dirty` suffix on uncommitted trees) as `KARAC_VERSION_STAMP`.
+/// `karac --version` renders `<CARGO_PKG_VERSION>-<stamp>` — Zig-style
+/// derived build identity: the base version is a human decision that
+/// moves on citable milestones only; the suffix identifies the exact
+/// build with zero bookkeeping, and the short SHA maps a user's version
+/// string directly onto bug-ledger `fix` SHAs and `git log`.
+///
+/// On a non-git checkout (source tarball) every git invocation fails and
+/// the stamp falls back to `dev.unknown` — a build is never blocked on
+/// git being present, but an unstamped binary still says so instead of
+/// masquerading as a known build.
+fn emit_version_stamp() {
+    let git = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git").args(args).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    // Re-stamp when HEAD moves: `.git/HEAD` changes on branch switches,
+    // and the ref file it points at changes on every commit. Cost: one
+    // build-script rerun + an incremental karac recompile per commit —
+    // the price of the version string never lying about which commit
+    // built the binary.
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
+        if let Some(reference) = head.strip_prefix("ref: ") {
+            println!("cargo:rerun-if-changed=.git/{}", reference.trim());
+        }
+    }
+    // A SHALLOW clone truncates history, so `rev-list --count` reports
+    // the clone depth, not the real commit ordinal — and CI checkouts
+    // default to depth 1, which would stamp every release build as
+    // `dev.1`. Never emit a number that lies: shallow clones stamp the
+    // literal `shallow` in the count slot (the short SHA remains the
+    // true identifier), which doubles as the loud signal that a release
+    // pipeline forgot `fetch-depth: 0`.
+    let shallow = std::path::Path::new(".git/shallow").exists();
+    let count = if shallow {
+        Some("shallow".to_string())
+    } else {
+        git(&["rev-list", "--count", "HEAD"])
+    };
+    let sha = git(&["rev-parse", "--short=9", "HEAD"]);
+    let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).map(|s| !s.is_empty());
+    let stamp = match (count, sha) {
+        (Some(count), Some(sha)) => {
+            let dirty_suffix = if dirty == Some(true) { ".dirty" } else { "" };
+            format!("dev.{count}+g{sha}{dirty_suffix}")
+        }
+        _ => "dev.unknown".to_string(),
+    };
+    println!("cargo:rustc-env=KARAC_VERSION_STAMP={stamp}");
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    emit_version_stamp();
 
     // Nothing to do unless the JIT engine is compiled in. Cargo sets
     // `CARGO_FEATURE_<NAME>` for every active feature (uppercased, `-`→`_`).
