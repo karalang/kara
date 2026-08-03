@@ -6337,6 +6337,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // (tag, variant, [(llvm field index, payload struct name)]) for every
         // variant that carries at least one Drop-bearing struct payload.
         let mut targets: EnumPayloadBodyTargets = Vec::new();
+        // A generic enum's payload TypeExpr is the parameter itself, and the
+        // struct lookup below would resolve it against a USER type of the same
+        // name — `struct T { .. }` in a program that also uses `Option[..]`
+        // made `Option` look like it carried a Drop-bearing `T` payload, and
+        // this walker then ran a body over the erased layout's words
+        // (B-2026-08-03-5: a garbage tag printed, and a heap field would have
+        // been freed through a garbage pointer). Skip the enum's own params.
+        let generic_params = self.enum_generic_param_names(enum_name);
         for (tag, vname, tes) in self.enum_variant_field_type_exprs(enum_name) {
             let Some(offsets) = layout.field_word_offsets.get(&vname) else {
                 continue;
@@ -6352,6 +6360,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(name) = p.segments.first().cloned() else {
                     continue;
                 };
+                if generic_params.contains(&name) {
+                    continue;
+                }
                 if self.shared_types.contains_key(&name) || !self.struct_types.contains_key(&name) {
                     continue;
                 }

@@ -5342,7 +5342,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Generic-parameter names of `enum_name`'s declaration (e.g. `["T"]` for
     /// `Option[+T]`, `["T", "E"]` for `Result[+T, +E]`), scanning the user
     /// program then the baked stdlib. Empty for a non-generic enum.
-    fn enum_generic_param_names(&self, enum_name: &str) -> Vec<String> {
+    pub(super) fn enum_generic_param_names(&self, enum_name: &str) -> Vec<String> {
         fn names(items: &[Item], enum_name: &str) -> Option<Vec<String>> {
             items.iter().find_map(|item| match item {
                 Item::EnumDef(e) if e.name == enum_name => Some(

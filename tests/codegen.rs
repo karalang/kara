@@ -5572,6 +5572,43 @@ fn main() {
         }
     }
 
+    /// B-2026-08-03-5 — a user type whose name collides with a generic enum's
+    /// PARAMETER name must not gain a phantom Drop walker.
+    ///
+    /// A generic enum's variant payload `TypeExpr` is the parameter itself, so
+    /// `Option`'s payload reads as the type named `T`. Resolving that against
+    /// `struct_types` found the USER's `struct T` in any program that declared
+    /// one, and `Option` then looked like it carried a Drop-bearing payload:
+    /// `__karac_dropelems_enum_Option` was emitted alongside the real
+    /// `__karac_dropelems_opt_T` and ran a SECOND body over the erased layout's
+    /// words. Here that printed a garbage tag (an address, so it varied run to
+    /// run); with a heap field it would have freed through a garbage pointer.
+    ///
+    /// ASan and LSan are both silent on this shape — the extra fire touches no
+    /// freed pointer — so only an output oracle can see it. Renaming the struct
+    /// to anything but `T` was the bisect.
+    #[test]
+    fn e2e_struct_named_like_enum_generic_param_gets_no_phantom_drop_walker() {
+        let Some(out) = run_program(
+            "struct T { t: i64, name: String }\n\
+             impl Drop for T { fn drop(mut ref self) { println(f\"d{self.t}\"); } }\n\
+             fn mk(t: i64) -> T { return T { t: t, name: \"payload-string-data\" }; }\n\
+             fn main() {\n\
+             \x20   { let p: Option[T] = Some(mk(2)); println(\"a\"); }\n\
+             \x20   { let mut q: Option[T] = Some(mk(3)); q = Some(mk(4)); println(\"b\"); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            // Exactly one body per constructed value, and no phantom third
+            // fire. Before the fix each block emitted an extra `d<garbage>`.
+            "d2\na\nd3\nd4\nb\nend\n"
+        );
+    }
+
     /// B-2026-07-30-11 SHAPE 2 — an owned aggregate TEMP runs its fields' user
     /// `impl Drop`, in every position a temp can occupy.
     ///
