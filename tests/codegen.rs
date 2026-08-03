@@ -78634,6 +78634,58 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_container_clear_runs_element_drop_bodies() {
+        // B-2026-08-03-2 (class 1) — `v.clear()` / `m.clear()` destroy every
+        // element but ran no destructor. Both arms did all the MEMORY work and
+        // none of the body work, so the shapes were vg-clean and silent —
+        // parity-equal, invisible to backend diffing and to any sanitizer, and
+        // only a fire-count oracle sees them. The third block is a
+        // clear-then-reuse control: the cleared element fires, the buffer is
+        // reusable, and the replacement fires at scope exit.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+    println("vecclear:");
+    {
+        let mut v: Vec[Res] = Vec.new();
+        v.push(Res { id: 1, name: f"a{1}" });
+        v.push(Res { id: 2, name: f"b{2}" });
+        v.clear();
+        println(v.len());
+    }
+    println("mapclear:");
+    {
+        let mut m: Map[i64, Res] = Map.new();
+        m.insert(5, Res { id: 3, name: f"c{3}" });
+        m.clear();
+        println(m.len());
+    }
+    println("reuse:");
+    {
+        let mut w: Vec[Res] = Vec.new();
+        w.push(Res { id: 4, name: f"d{4}" });
+        w.clear();
+        w.push(Res { id: 5, name: f"e{5}" });
+        println(w.len());
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "vecclear:\ndrop 1 a1\ndrop 2 b2\n0\nmapclear:\ndrop 3 c3\n0\n\
+                 reuse:\ndrop 4 d4\n1\ndrop 5 e5\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_optres_payload_bodies_in_nested_positions() {
         // B-2026-08-03-1 — an `Option[P]` payload ran its Drop body only when
         // bound DIRECTLY; in every NESTED position it was silent on BOTH

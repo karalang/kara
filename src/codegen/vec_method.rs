@@ -6108,6 +6108,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err(format!("Vec.clear expects 0 arguments, got {}", args.len()));
                 }
                 if let Some(elem_te) = self.var_elem_type_exprs.get(var_name).cloned() {
+                    // B-2026-08-03-2 (class 1) — the element's user Drop BODY,
+                    // which this arm never ran: it went straight to the memory
+                    // drop, so `v.clear()` on a `Vec[Res]` reclaimed the heap
+                    // (vg-clean) while silently skipping every destructor. Same
+                    // walker the binding-death path uses, and it frees nothing,
+                    // so it cannot disturb the drop below. BEFORE the memory
+                    // drop, which is what lets the bodies read the fields they
+                    // print — the same ordering rule as every other site that
+                    // pairs these two channels.
+                    if let Some(bodies) = self.emit_nested_vec_elem_bodies_fn(&elem_te) {
+                        self.builder
+                            .build_call(bodies, &[data_ptr.into()], "")
+                            .unwrap();
+                    }
                     let drop_fn = self.emit_vec_drop_fn(&elem_te);
                     self.builder
                         .build_call(drop_fn, &[data_ptr.into()], "")

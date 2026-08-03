@@ -39,13 +39,29 @@ impl<'a> super::Interpreter<'a> {
         _span: &Span,
     ) -> Option<Value> {
         match method {
+            // B-2026-08-03-2 (class 1) — every entry is destroyed here, so
+            // every VALUE's user Drop BODY must run. The arm replaced the
+            // receiver with an empty table and never touched the old values,
+            // so a Drop-bearing value type lost its destructors silently.
+            // Values are snapshotted, the table is emptied, then the bodies
+            // fire — no borrow of the receiver is live while a body runs.
+            // Codegen twin: the map value-bodies walker now called ahead of
+            // the memory work in `Map.clear`.
             "clear" => {
-                if let Value::Map(_) = obj {
+                if let Value::Map(ref entries) = obj {
+                    let removed: Vec<Value> = entries.iter().map(|(_, v)| v.clone()).collect();
                     self.write_back_receiver(object, Value::Map(Vec::new()));
+                    for v in removed {
+                        self.run_discarded_value_user_drops(v);
+                    }
                     return Some(Value::Unit);
                 }
-                if let Value::SortedMap(_) = obj {
+                if let Value::SortedMap(ref entries) = obj {
+                    let removed: Vec<Value> = entries.values().cloned().collect();
                     self.write_back_receiver(object, Value::SortedMap(BTreeMap::new()));
+                    for v in removed {
+                        self.run_discarded_value_user_drops(v);
+                    }
                     return Some(Value::Unit);
                 }
             }

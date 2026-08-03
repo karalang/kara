@@ -2309,6 +2309,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 // mirroring the scope-exit `FreeMapHandle` cleanup.
                 let key_is_vec = self.llvm_ty_is_vec_struct(key_ty);
                 let val_is_vec = self.llvm_ty_is_vec_struct(val_ty);
+                // B-2026-08-03-2 (class 1) — every entry is destroyed here, so
+                // every VALUE's user Drop BODY must run. This arm did all the
+                // memory work (shared rc-dec walks, per-value drop fn, buffer
+                // frees) and no body work, so `m.clear()` on a Drop-bearing
+                // value type was vg-clean and silently skipped the destructors.
+                // Same walker the binding-death path registers; it frees
+                // nothing, and running it FIRST lets the bodies read the values
+                // the frees below invalidate.
+                if let Some(bodies) = self
+                    .map_val_bodies_tes
+                    .get(var_name)
+                    .cloned()
+                    .and_then(|te| self.emit_map_val_user_drop_bodies_fn(&te))
+                {
+                    self.builder
+                        .build_call(bodies, &[handle_ptr.into()], "")
+                        .unwrap();
+                }
                 if let Some(heap_ty) = self.map_val_shared_heap_type_for(var_name) {
                     self.emit_map_shared_half_rc_dec_walk(map_handle, heap_ty, true);
                 }

@@ -1451,7 +1451,20 @@ impl<'a> super::Interpreter<'a> {
                         ExprKind::Identifier(n) => n.clone(),
                         _ => "<value>".to_string(),
                     };
+                    // B-2026-08-03-2 (class 1) — every element is destroyed
+                    // here, so every element's user Drop BODY must run. Bulk
+                    // removal went straight to Rust's `Vec::clear`, which
+                    // reclaims the interpreter values but knows nothing about
+                    // Kāra destructors, so the side effects were lost. Snapshot
+                    // first and fire AFTER the clear so no read guard is live
+                    // while a body runs (a body may touch the container).
+                    // Codegen twin: the element-bodies walker now called ahead
+                    // of the memory drop in `Vec.clear`.
+                    let removed: Vec<Value> = rc.read().map(|g| g.clone()).unwrap_or_default();
                     try_write_or_panic(rc, &label).clear();
+                    for e in removed {
+                        self.run_discarded_value_user_drops(e);
+                    }
                     return Some(Value::Unit);
                 }
             }

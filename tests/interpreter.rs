@@ -27822,6 +27822,48 @@ fn test_bare_statement_container_removal_discard_fires() {
 }
 
 #[test]
+fn test_container_clear_runs_element_drop_bodies() {
+    // B-2026-08-03-2 (class 1) — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_container_clear_runs_element_drop_bodies`, same source and expected
+    // string. Both backends were silent pre-fix for the same reason on each
+    // side: the clear went straight to the underlying container operation,
+    // which knows nothing about Kāra destructors.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"vecclear:\");\n\
+                 {\n\
+                     let mut v: Vec[Res] = Vec.new();\n\
+                     v.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     v.push(Res { id: 2, name: f\"b{2}\" });\n\
+                     v.clear();\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"mapclear:\");\n\
+                 {\n\
+                     let mut m: Map[i64, Res] = Map.new();\n\
+                     m.insert(5, Res { id: 3, name: f\"c{3}\" });\n\
+                     m.clear();\n\
+                     println(m.len());\n\
+                 }\n\
+                 println(\"reuse:\");\n\
+                 {\n\
+                     let mut w: Vec[Res] = Vec.new();\n\
+                     w.push(Res { id: 4, name: f\"d{4}\" });\n\
+                     w.clear();\n\
+                     w.push(Res { id: 5, name: f\"e{5}\" });\n\
+                     println(w.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "vecclear:\ndrop 1 a1\ndrop 2 b2\n0\nmapclear:\ndrop 3 c3\n0\nreuse:\ndrop 4 d4\n1\ndrop 5 e5\nend\n"
+    );
+}
+
+#[test]
 fn test_optres_payload_bodies_in_nested_positions() {
     // B-2026-08-03-1 — interpreter twin of `tests/codegen.rs`'s
     // `e2e_optres_payload_bodies_in_nested_positions`, same source and
