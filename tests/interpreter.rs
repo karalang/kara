@@ -27776,6 +27776,52 @@ fn test_nested_literal_move_source_disarm() {
 }
 
 #[test]
+fn test_bare_statement_container_removal_discard_fires() {
+    // B-2026-08-03-2 (class 3) — a BUILTIN container removal discarded as a
+    // BARE STATEMENT (`v.pop();`, `m.remove(k);`) was silent here while codegen
+    // fired it: a run-vs-build split in the interpreter-silent direction. The
+    // `let _ = v.pop();` form already worked, through the same method list, so
+    // the two discard STATEMENT SHAPES disagreed with each other as well. The
+    // third block is the bound control, correct throughout.
+    //
+    // Deliberately Option-returning removals only: that is codegen's current
+    // reach, and `v.remove(i)` / `v.swap_remove(i)` (bare `T`) remain silent on
+    // BOTH backends — admitting them here would have created a fresh
+    // divergence rather than removing one. They stay class 2 on the row.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             fn main() {\n\
+                 println(\"vecpop:\");\n\
+                 {\n\
+                     let mut v: Vec[Res] = Vec.new();\n\
+                     v.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     v.pop();\n\
+                     println(v.len());\n\
+                 }\n\
+                 println(\"mapremove:\");\n\
+                 {\n\
+                     let mut m: Map[i64, Res] = Map.new();\n\
+                     m.insert(5, Res { id: 2, name: f\"b{2}\" });\n\
+                     m.remove(5);\n\
+                     println(m.len());\n\
+                 }\n\
+                 println(\"boundpop:\");\n\
+                 {\n\
+                     let mut w: Vec[Res] = Vec.new();\n\
+                     w.push(Res { id: 3, name: f\"c{3}\" });\n\
+                     let p = w.pop();\n\
+                     println(w.len());\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "vecpop:\ndrop 1 a1\n0\nmapremove:\ndrop 2 b2\n0\nboundpop:\ndrop 3 c3\n0\nend\n"
+    );
+}
+
+#[test]
 fn test_optres_payload_bodies_in_nested_positions() {
     // B-2026-08-03-1 — interpreter twin of `tests/codegen.rs`'s
     // `e2e_optres_payload_bodies_in_nested_positions`, same source and

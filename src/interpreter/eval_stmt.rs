@@ -3105,6 +3105,39 @@ impl<'a> super::Interpreter<'a> {
                     ExprKind::MethodCall { method, .. }
                         if !matches!(method.as_str(), "get" | "first" | "last" | "peek") =>
                     {
+                        // B-2026-08-03-2 (class 3) — a BUILTIN container
+                        // removal discarded as a bare statement (`v.pop();`,
+                        // `m.remove(k);`). The `let _ = v.pop();` form already
+                        // fires, through the same method list in
+                        // `discard_rhs_produces_owned_value`; this arm only
+                        // ever admitted USER methods, so the two statement
+                        // forms disagreed — and codegen fires for both, making
+                        // the bare form a run-vs-build split in the
+                        // interpreter-silent direction.
+                        //
+                        // Restricted to an OPTION/RESULT-shaped result, which
+                        // is exactly codegen's current reach: its discard
+                        // registrar is the optres payload walker, and the only
+                        // receivers it resolves a type for are Map-shaped, so
+                        // `v.pop()` and `m.remove(k)` (both `Option`-returning)
+                        // are covered there and `v.remove(i)` / `v.swap_remove(i)`
+                        // (bare `T`) are not. Admitting the bare-`T` forms here
+                        // would FLIP them from both-silent to an
+                        // interpreter-fires/AOT-silent split — measurably worse
+                        // than the shared gap, since AOT additionally leaks
+                        // them. Those stay class 2 on the row until the codegen
+                        // side lands; this arm only removes a divergence.
+                        if matches!(
+                            method.as_str(),
+                            "insert" | "remove" | "pop" | "pop_back" | "pop_front" | "take"
+                        ) && matches!(
+                            &discarded,
+                            Value::EnumVariant { enum_name, .. }
+                                if enum_name == "Option" || enum_name == "Result"
+                        ) {
+                            self.run_discarded_value_user_drops(discarded);
+                            return Ok(Value::Unit);
+                        }
                         match &discarded {
                             Value::Struct { name, .. } => {
                                 let tn = name.clone();
