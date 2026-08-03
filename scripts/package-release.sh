@@ -59,23 +59,19 @@ VERSION="${VERSION_RAW//+/-}"
 # Linux leg: verify the static-LLVM promise before packaging — a bundle
 # that still links libLLVM.so would fail on every user machine without
 # LLVM installed, which is the exact failure this pipeline exists to
-# prevent. (macOS `otool` check is the equivalent; keep both cheap.)
-case "$(uname -s)" in
-Linux)
-    if ldd target/release/karac | grep -q 'libLLVM'; then
-        echo "ERROR: target/release/karac still links libLLVM dynamically:" >&2
-        ldd target/release/karac | grep libLLVM >&2
-        exit 1
-    fi
-    ;;
-Darwin)
-    if otool -L target/release/karac | grep -q 'libLLVM'; then
-        echo "ERROR: target/release/karac still links libLLVM dynamically:" >&2
-        otool -L target/release/karac | grep libLLVM >&2
-        exit 1
-    fi
-    ;;
-esac
+# prevent. (The macOS equivalent runs post-staging, below: brew's LLVM
+# leaves non-libLLVM keg references too — libunwind bit the first
+# dry-run — so that leg relocates them into lib/ and then rejects ANY
+# surviving brew/local reference, not just libLLVM.)
+if [[ "$(uname -s)" == Linux ]]; then
+    for bin in karac karac_jit_runner; do
+        if ldd "target/release/$bin" | grep -q 'libLLVM'; then
+            echo "ERROR: target/release/$bin still links libLLVM dynamically:" >&2
+            ldd "target/release/$bin" | grep libLLVM >&2
+            exit 1
+        fi
+    done
+fi
 
 BUNDLE="karac-${VERSION}-${TARGET_LABEL}"
 STAGE="dist/${BUNDLE}"
@@ -86,6 +82,47 @@ cp target/release/karac "$STAGE/bin/"
 cp target/release/karac_jit_runner "$STAGE/bin/"
 cp target/release/libkarac_runtime.a "$STAGE/lib/"
 cp target/release/libkarac_runtime_min.a "$STAGE/lib/"
+
+# macOS: brew's LLVM links its OWN support dylibs from the keg —
+# libunwind at minimum (brew builds LLVM against LLVM's libunwind, and
+# the static-LLVM link still records `/opt/homebrew/opt/llvm@18/lib/
+# libunwind.1.dylib`, which no user machine has; the first dry-run's
+# clean-runner smoke died on exactly this dyld abort). Relocate every
+# brew-/usr/local-prefixed dylib into the bundle's lib/ and rewrite the
+# references to @executable_path/../lib (@loader_path between dylibs),
+# then re-sign ad hoc — install_name_tool invalidates the signature and
+# arm64 macOS kills unsigned binaries outright.
+if [[ "$(uname -s)" == Darwin ]]; then
+    relocate() { # relocate <macho-path> <ref-prefix>
+        local macho="$1" prefix="$2" dep base deps
+        deps="$(otool -L "$macho" | tail -n +2 | awk '{print $1}' \
+            | grep -E '^(/opt/homebrew|/usr/local)/' || true)"
+        for dep in $deps; do
+            base="$(basename "$dep")"
+            [[ "$base" == "$(basename "$macho")" ]] && continue  # LC_ID line
+            if [[ ! -f "$STAGE/lib/$base" ]]; then
+                cp "$dep" "$STAGE/lib/$base"   # follows the keg symlink
+                chmod u+w "$STAGE/lib/$base"
+                install_name_tool -id "@loader_path/$base" "$STAGE/lib/$base"
+                relocate "$STAGE/lib/$base" "@loader_path"
+            fi
+            install_name_tool -change "$dep" "$prefix/$base" "$macho"
+        done
+        codesign --force --sign - "$macho"
+    }
+    relocate "$STAGE/bin/karac" "@executable_path/../lib"
+    relocate "$STAGE/bin/karac_jit_runner" "@executable_path/../lib"
+
+    # The staged verification: NOTHING in the bundle may reference a
+    # brew or /usr/local path — catch-all, not just libLLVM.
+    for macho in "$STAGE"/bin/* "$STAGE"/lib/*.dylib; do
+        [[ -f "$macho" && "$macho" != *.a ]] || continue
+        if otool -L "$macho" | tail -n +2 | grep -E '^\s*(/opt/homebrew|/usr/local)/'; then
+            echo "ERROR: $macho still references a non-system dylib (above)" >&2
+            exit 1
+        fi
+    done
+fi
 
 cat > "$STAGE/README.md" <<EOF
 # karac ${VERSION_RAW} — development preview (${TARGET_LABEL})
