@@ -7124,6 +7124,51 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-02-25 — the Option/Result sibling of the
+                    // value-enum leg above. `o = None;` / `o = Some(fresh)`
+                    // over a live `Some(payload)` discarded the displaced
+                    // payload's user Drop body: the binding's scope-exit bodies
+                    // action reads the slot AFTER the store, so it only ever
+                    // sees the new value. The leg above cannot cover this — it
+                    // excludes `Option`/`Result` by name, because they never go
+                    // through `enum_layouts`-driven `__karac_drop_<E>` synthesis
+                    // and their payload is a generic param at the layout level.
+                    // The instantiation comes from `optres_var_payload_tes`,
+                    // recorded when the let-site registered the walk.
+                    //
+                    // BODIES ONLY, and deliberately so: the displaced payload's
+                    // memory is already reclaimed by the untouched
+                    // `FreeInlineOptionPayload` / `BoxedEnumDrop` action — the
+                    // pre-fix shape leaked nothing under LSan, it only lost the
+                    // body — so a memory call here would double-free. That is
+                    // exactly what `__karac_dropelems_opt_*` is: it frees
+                    // nothing by construction.
+                    //
+                    // Roundtrips (`o = pass(o)`) are excluded with the rest of
+                    // the RHS-mentions-LHS family: there the NLL channel fires
+                    // the bodies at statement end, and firing here too would
+                    // double them — the same split the enum leg draws.
+                    if !rhs_is_self_alias && !rhs_mentions_lhs {
+                        if let (Some(te), Some(slot)) = (
+                            self.optres_var_payload_tes.get(name.as_str()).cloned(),
+                            self.variables.get(name).copied(),
+                        ) {
+                            // Armed test mirrors the enum leg: a payload moved
+                            // out by a match/if-let arm retracted the walk
+                            // action, so the old value no longer owns it and
+                            // replaying the walk would run the body a second
+                            // time over bits the arm took.
+                            if self.has_armed_container_elem_bodies(name.as_str()) {
+                                if let Some(bodies) =
+                                    self.emit_optres_payload_user_drop_bodies_fn(&te)
+                                {
+                                    self.builder
+                                        .build_call(bodies, &[slot.ptr.into()], "")
+                                        .unwrap();
+                                }
+                            }
+                        }
+                    }
                     if let Some(slot) = self.variables.get(name).copied() {
                         // Coerce a scalar RHS to the slot's width before
                         // storing — narrow-int arithmetic computes at i64

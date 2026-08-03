@@ -874,6 +874,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             // fields before the box drop's scope-exit
                             // interior free, and every move hook retracts it
                             // by name like any UserDrop entry.
+                            // B-2026-08-02-25 residual (match-arm leg): this
+                            // gate also excludes a NAMED binding scrutinee
+                            // (`let o: Option[T] = ..; match o { Some(x) => … }`)
+                            // with a payload wider than the inline area — the
+                            // arm above declines on word count, this one on the
+                            // fresh-temp test, so the body runs nowhere while
+                            // the interpreter fires it. Dropping the temp test
+                            // is NOT the fix: it double-frees
+                            // (`asan_optres_payload_user_drop_bodies_fire_once`,
+                            // whose `match c { Some(r) => { n = n + 1 } }` arm
+                            // binds but does not consume). Only a CONSUMING arm
+                            // retracts the source's walk via
+                            // `suppress_optres_payload_bodies_for_match`; a
+                            // non-consuming one keeps it, and registering here
+                            // then fires the body twice. Closing this needs the
+                            // consuming/non-consuming split visible at
+                            // pattern-binding time — the suppressor knows it
+                            // (`pattern_consumes_field`) but nothing carries it
+                            // here — so the registration can be conditioned on
+                            // the retraction that actually happened.
                             let is_boxed_optres_drop_payload = self
                                 .pattern_binding_scrutinee_is_option_result
                                 && self.pattern_binding_scrutinee_is_fresh_owning_temp

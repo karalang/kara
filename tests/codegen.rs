@@ -5510,6 +5510,68 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-25 — displacing an `Option[T]` binding runs the DISPLACED
+    /// payload's user `impl Drop` body.
+    ///
+    /// `o = None;` / `o = Some(fresh)` over a live `Some(payload)` dropped the
+    /// old payload's body on the floor: the binding's scope-exit bodies action
+    /// reads the slot AFTER the store, so it only ever saw the new value. The
+    /// value-enum sibling of this leg excludes `Option`/`Result` by name (they
+    /// never go through `enum_layouts`-driven `__karac_drop_<E>` synthesis, and
+    /// their payload is a generic param at the layout level), so nothing
+    /// covered them.
+    ///
+    /// No sanitizer could witness this and none did: the displaced payload's
+    /// MEMORY was always freed correctly by the untouched
+    /// `FreeInlineOptionPayload` / `BoxedEnumDrop` action, so ASan and LSan
+    /// stayed silent while the destructor simply never ran. The interpreter ran
+    /// it, making this a run-vs-build divergence on the shipping side. Found by
+    /// `drop_fuzz`'s drop-log oracle.
+    ///
+    /// The fix calls `__karac_dropelems_opt_*`, which frees NOTHING by
+    /// construction, so it cannot double-free beside the existing frees —
+    /// `asan_optres_payload_user_drop_bodies_fire_once` is the over-fire guard.
+    #[test]
+    fn e2e_option_displacement_runs_displaced_payload_user_drop() {
+        // Verbatim the two shapes verified by hand against the interpreter.
+        // Kept narrow on purpose: several near-variants of this program also
+        // emit a SPURIOUS extra body over a stale slot (a garbage tag), which
+        // is a separate pre-existing defect (B-2026-08-03-5) present with or
+        // without this leg — widening the corpus here would assert that bug's
+        // behaviour rather than this fix's.
+        const PRE: &str = "struct Tracked { tag: i64, name: String }\n\
+             impl Drop for Tracked { fn drop(mut ref self) { println(f\"D{self.tag}\"); } }\n\
+             fn new_tracked(tag: i64, name: String) -> Tracked {\n\
+             \x20   println(f\"N{tag}\");\n\
+             \x20   return Tracked { tag: tag, name: name };\n\
+             }\n";
+        const PAY: &str = "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\".to_string()";
+
+        // Displaced to `None` — the old payload's body fires at the assignment.
+        if let Some(out) = run_program(&format!(
+            "{PRE}fn main() {{\n\
+             \x20   let mut o: Option[Tracked] = Some(new_tracked(1i64, {PAY}));\n\
+             \x20   o = None;\n\
+             \x20   println(999);\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "N1\nD1\n999\n");
+        }
+
+        // Displaced to a fresh `Some` — D1 at the assignment, D2 at the
+        // binding's NLL end. Exactly one of each: the walk frees nothing, so a
+        // double here would show up as a second D1.
+        if let Some(out) = run_program(&format!(
+            "{PRE}fn main() {{\n\
+             \x20   let mut o: Option[Tracked] = Some(new_tracked(1i64, {PAY}));\n\
+             \x20   o = Some(new_tracked(2i64, {PAY}));\n\
+             \x20   println(999);\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "N1\nN2\nD1\nD2\n999\n");
+        }
+    }
+
     /// B-2026-07-30-11 SHAPE 2 — an owned aggregate TEMP runs its fields' user
     /// `impl Drop`, in every position a temp can occupy.
     ///
@@ -78803,7 +78865,7 @@ fn main() {
 
     #[test]
     fn test_e2e_tuple_binding_container_element_drop() {
-        // B-2026-08-02-26 — a TUPLE binding whose element is a CONTAINER of
+        // B-2026-08-03-5 — a TUPLE binding whose element is a CONTAINER of
         // Drop-running values (`let t = (xs, 9)` with `xs: Vec[Res]`). Two
         // independent gaps, both AOT-only, so `karac run` was right and
         // `karac build` was wrong in two ways at once:
