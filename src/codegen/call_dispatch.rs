@@ -2304,16 +2304,49 @@ impl<'ctx> super::Codegen<'ctx> {
                         && !arg_flows_into_return
                         && self.struct_types.contains_key(&ret_ty_name)
                     {
-                        if let Some(bodies_fn) = self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
+                        let bodies_fn = self.field_bodies_fn_for_owned_temp(&ret_ty_name);
+                        // B-2026-08-02-28 — the MEMORY half, which this arm
+                        // omitted: it registered the bodies walk and returned,
+                        // so `use_it(mk(xs))` where `mk() -> Holder` and
+                        // `Holder { xs: Vec[Res] }` printed the element body but
+                        // freed nothing, leaking the Vec buffer AND its element
+                        // leaves once per call. Its struct-LITERAL sibling below
+                        // registers both halves for the identical value; the two
+                        // arms differ only in how the temp was produced (a call
+                        // vs an inline literal), which is not a reason to own it
+                        // differently. The callee entry-copies a copy-supported
+                        // struct — `arg_is_entry_copied_heap_struct` already
+                        // resolves exactly this Call shape through
+                        // `fn_return_type_names` — so this caller temp is an
+                        // INDEPENDENT buffer and freeing it cannot touch the
+                        // callee's copy.
+                        let needs_memory_drop = self.aggregate_has_heap_field(agg_ty)
+                            || (self.aggregate_param_copy_supported_struct(
+                                &ret_ty_name,
+                                &mut Vec::new(),
+                            ) && self.struct_field_type_exprs.get(&ret_ty_name).is_some_and(
+                                |ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)),
+                            ));
+                        if needs_memory_drop || bodies_fn.is_some() {
                             let slot =
                                 self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                             self.builder.build_store(slot, val).unwrap();
-                            self.track_user_drop_var_with_fn(
-                                &ret_ty_name,
-                                "__owned_agg_tmp",
-                                slot,
-                                bodies_fn,
-                            );
+                            // ORDER IS LOAD-BEARING, same rule as the
+                            // struct-literal sibling: the frame drains LIFO, so
+                            // memory is pushed FIRST and the bodies walk second,
+                            // making the bodies run BEFORE the fields they read
+                            // are freed.
+                            if needs_memory_drop {
+                                self.track_struct_var(&ret_ty_name, slot);
+                            }
+                            if let Some(bodies_fn) = bodies_fn {
+                                self.track_user_drop_var_with_fn(
+                                    &ret_ty_name,
+                                    "__owned_agg_tmp",
+                                    slot,
+                                    bodies_fn,
+                                );
+                            }
                             return;
                         }
                     }

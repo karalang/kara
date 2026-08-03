@@ -17215,6 +17215,47 @@ fn main() {
     /// first diagnosis) and the NAMED source, whose own-body action used to
     /// stay armed and fire over the moved-from slot.
     #[test]
+    fn asan_nested_call_temp_owned_arg_freed() {
+        // B-2026-08-02-28 — the leak half. A call result consumed directly as
+        // another call's owned argument had no memory owner at all: the fn-call
+        // arm of the owned-arg registrar registered the bodies walk and
+        // returned, so the temp's Vec buffer (32 bytes) plus its element String
+        // (3 indirect) leaked once per call while the body printed normally —
+        // a leak that prints correct output, invisible to any parity or
+        // fire-count check. Includes the `println(use_it(...))` nesting, which
+        // is the shape the row was filed from.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn use_it(h: Holder) -> i64 { h.tag }
+fn main() {
+    println("bound:");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"nn{1}" });
+        let n = use_it(mk(xs));
+        println(n);
+    }
+    println("discard:");
+    {
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 2, name: f"oo{2}" });
+        use_it(mk(ys));
+    }
+    println("end");
+}
+"#,
+            &["bound:", "drop 1 nn1", "9", "discard:", "drop 2 oo2", "end"],
+            "nested_call_temp_owned_arg_freed",
+        );
+    }
+
+    #[test]
     fn asan_tuple_binding_container_element_heap_freed() {
         // B-2026-08-02-26 — a tuple binding whose element is a `Vec[Res]`.
         // The LLVM-type aggregate drop freed the element Vec's BUFFER but not

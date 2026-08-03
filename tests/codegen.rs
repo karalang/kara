@@ -78634,6 +78634,64 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_call_temp_owned_arg_drop() {
+        // B-2026-08-02-28 — a call RESULT consumed directly as another call's
+        // owned argument (`use_it(mk(xs))`). The fn-call arm of the owned-arg
+        // registrar registered the field-BODIES walk and returned, omitting the
+        // memory drop its struct-LITERAL sibling registers for the identical
+        // value — so the body printed while the Holder's Vec buffer and its
+        // element leaves leaked once per call (asan pin
+        // `nested_call_temp_owned_arg_freed` covers that half). Fire count was
+        // already right; this pins the ORDER, which the fix also settled: the
+        // memory drop is pushed first so the LIFO drain runs the body before
+        // the fields it reads are freed. Three shapes — bound outer result,
+        // bare-statement discard, and an inner call taking no argument.
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn mkh() -> Holder {
+    let mut v: Vec[Res] = Vec.new();
+    v.push(Res { id: 7, name: f"g{7}" });
+    Holder { xs: v, tag: 3 }
+}
+fn use_it(h: Holder) -> i64 { h.tag }
+fn main() {
+    println("a");
+    {
+        let mut xs: Vec[Res] = Vec.new();
+        xs.push(Res { id: 1, name: f"a{1}" });
+        let n = use_it(mk(xs));
+        println(n);
+    }
+    println("b");
+    {
+        let mut ys: Vec[Res] = Vec.new();
+        ys.push(Res { id: 2, name: f"b{2}" });
+        use_it(mk(ys));
+    }
+    println("c");
+    {
+        let m = use_it(mkh());
+        println(m);
+    }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "a\ndrop 1 a1\n9\nb\ndrop 2 b2\nc\ndrop 7 g7\n3\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tuple_binding_container_element_drop() {
         // B-2026-08-02-26 — a TUPLE binding whose element is a CONTAINER of
         // Drop-running values (`let t = (xs, 9)` with `xs: Vec[Res]`). Two

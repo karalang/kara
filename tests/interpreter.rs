@@ -27776,6 +27776,51 @@ fn test_nested_literal_move_source_disarm() {
 }
 
 #[test]
+fn test_nested_call_temp_owned_arg_drop() {
+    // B-2026-08-02-28 — interpreter twin of `tests/codegen.rs`'s
+    // `e2e_nested_call_temp_owned_arg_drop`, same source and expected string.
+    // The interpreter never leaked here; the twin pins the ORDER the codegen
+    // fix had to reproduce (body before the frees it reads) for the three
+    // shapes where both backends agree.
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+             }\n\
+             struct Holder { xs: Vec[Res], tag: i64 }\n\
+             fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }\n\
+             fn mkh() -> Holder {\n\
+                 let mut v: Vec[Res] = Vec.new();\n\
+                 v.push(Res { id: 7, name: f\"g{7}\" });\n\
+                 Holder { xs: v, tag: 3 }\n\
+             }\n\
+             fn use_it(h: Holder) -> i64 { h.tag }\n\
+             fn main() {\n\
+                 println(\"a\");\n\
+                 {\n\
+                     let mut xs: Vec[Res] = Vec.new();\n\
+                     xs.push(Res { id: 1, name: f\"a{1}\" });\n\
+                     let n = use_it(mk(xs));\n\
+                     println(n);\n\
+                 }\n\
+                 println(\"b\");\n\
+                 {\n\
+                     let mut ys: Vec[Res] = Vec.new();\n\
+                     ys.push(Res { id: 2, name: f\"b{2}\" });\n\
+                     use_it(mk(ys));\n\
+                 }\n\
+                 println(\"c\");\n\
+                 {\n\
+                     let m = use_it(mkh());\n\
+                     println(m);\n\
+                 }\n\
+                 println(\"end\");\n\
+             }\n"),
+        "a\ndrop 1 a1\n9\nb\ndrop 2 b2\nc\ndrop 7 g7\n3\nend\n"
+    );
+}
+
+#[test]
 fn test_tuple_binding_container_element_drop() {
     // B-2026-08-02-26 — interpreter twin of `tests/codegen.rs`'s
     // `e2e_tuple_binding_container_element_drop`, same source and expected

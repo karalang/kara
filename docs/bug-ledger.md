@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 206 | 0 |
-| leak | 124 | 1 |
+| leak | 124 | 0 |
 | double-free | 89 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 633 | 3 |
+| codegen | 633 | 2 |
 | typecheck | 115 | 1 |
-| interp | 114 | 2 |
+| interp | 114 | 1 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
 | other | 23 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **879 surfaced · 7 open · 864 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **879 surfaced · 6 open · 865 fixed** (2026-05-20 → 2026-08-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,11 +136,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **879 surfaced 
 | B-2026-08-02-6 | 2026-08-02 | resolver+interp | high | A BUILTIN function name in ANY non-call position — `spawn;`, `let f = println;`, `spawn { … }` — passes `karac check` and then panics the interpreter with an internal `unreachable!` whose own message says "should be caught by resolver". USER-defined functions are fine as values, so this is builtins-only. | the resolver's identifier-resolution path for BUILTIN function names used in non-call position; src/interpreter/eval_expr.rs:170 (the `unreachable!` that fires); the codegen twin emits `codegen failed: Undefined variable '<name>'` |
 | B-2026-08-02-13 | 2026-08-02 | typecheck+codegen | high | STDLIB AND USER TYPES SHARE ONE FLAT NAMESPACE, so any user struct that shadows a prelude type name silently takes over that type's codegen identity. `Response` (fixed as B-2026-08-02-7) was one instance of a class: a user `HttpError` double-frees identically, and a user `Match` crashes codegen outright. | src/prelude.rs (the flat prelude name list — `Response`, `HttpError`, `Match`, `Client`, `RequestBuilder`, `Stats`, `Regex`, …), runtime/stdlib/*.kara (where those types are declared), and every name-keyed dispatch site in src/typechecker, src/codegen and src/interpreter (~49 across 14 files) |
 | B-2026-08-02-25 | 2026-08-02 | codegen | high | Displacing an Option[Drop] (`o = None` / `o = Some(new)`) and consuming one via a match arm binding never run the user `impl Drop` body under `karac build` — the interpreter now runs all three correctly, so the shipping path is the wrong one | — |
-| B-2026-08-02-28 | 2026-08-03 | codegen+interp | medium | a call result consumed directly as another call's argument (`use_it(mk(xs))`) leaks the inner temp's heap under AOT and fires its Drop body at a different time than karac run | open |
 
-### Fixed (864)
+### Fixed (865)
 
-<details><summary>864 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>865 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1008,6 +1007,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **879 surfaced 
 | B-2026-08-02-24 | interp | medium | interpreter misses a Map VALUE struct's Vec-field element bodies at owner death; AOT fires them | 0a422d8 |
 | B-2026-08-02-26 | codegen | high | a TUPLE binding whose element is a container of Drop values (`let t = (xs, 9)`, xs: Vec[Res]) runs no Drop body and leaks the elements under AOT whil… | Three edits, one per gap. (1) `emit_tuple_elem_user_drop_bodies_fn` now selects targets via a new TypeExpr-keyed gate `elem_te_runs_user_drop` (the codegen twin of interp's `field_te_runs_user_drop`, assembled from the same three head extractors that widened `type_runs_user_drop` for struct fields) and dispatches each element through a new `emit_tuple_elem_bodies_at` carrying the same four legs the struct-FIELD walker has -- direct struct, Vec/VecDeque element, Map/Set value, nested tuple -- so a tuple element and a struct field of the same type now run the same bodies. Its memoization key moved from the element HEAD NAME to the full mangled TypeExpr, because `(Vec[Res], i64)` and `(Res, i64)` both keyed `0_Res` and the second shape would have reused the first's walker; a direct struct element still mangles to its bare name, so existing symbol names are unchanged. (2) `emit_tuple_elem_drops`' Vec arm diverts to the recursive `karac_drop_Vec_<E>` (drain live elements, then free the buffer) when the Vec's element owns heap, and the let-site prefers the TypeExpr path over the LLVM-type path when a new `tuple_elem_needs_deep_drop` predicate says an element would otherwise be freed shallowly. String and `Vec[primitive]` keep the shallow path, where the buffer free alone is exact. (3) `tuple_binding_elem_tes` refines each literal element through a new `refined_tuple_literal_elem_te`, which rebuilds `Vec[E]` for a collection BINDING from `var_type_names` + `var_elem_type_exprs` and takes a free-function CALL's declared return type verbatim, falling back to the old head-name inference for anything else -- kept local to the tuple let-site rather than changing `infer_arg_elem_te`, which has many other callers. Pins: e2e + interp twin tuple_binding_container_element_drop (all three element sources: named binding, fresh call, annotated) and asan tuple_binding_container_element_heap_freed. The e2e and asan pins were STASH-PROVEN FAILED pre-fix; the interp twin PASSES pre-fix and is deliberately kept, since the interpreter's value-driven tuple walk never lost the element type and the twin pins the parity the fix restored. |
 | B-2026-08-02-27 | codegen+interp | medium | an own-Drop source moved into a let-RHS TUPLE keeps its own body armed: fires twice on both backends, and under AOT the first fire reads the moved-fr… | Codegen: the TUPLE arm of `disarm_container_bodies_move_sources` now uses the strong `suppress_user_drop_for_var`, matching its consuming-arg sibling. Interp: the tuple arm of `record_container_bodies_move_sources` routes through the existing `record_container_move_sources_in_aggregate_arg`, the consuming-arg helper that already put own-`Drop` sources on `moved_out_user_drop_bindings`; the two positions move the value identically, so they now record identically. CORRECTION ON THE RECORD: the first attempt promoted the STRUCT-literal arm alongside the tuple arm, on the reasoning that it would be a no-op because the let-site's `struct_lit_sources` block already retracts the same names. That reasoning covered only the BINDING path. On the WILDCARD path (`let _ = W { r: r0 }`) `struct_lit_sources` never runs, and unlike the tuple position there is no struct-literal discard walker to take over, so the promotion silenced r0's body outright -- caught by `e2e_wildcard_let_discard_place_shapes_single_fire`, the existing pin for exactly that position, which went RED in the full suite. The struct-literal arm therefore stays on the container-only form on BOTH backends, and the asymmetry is deliberate: the tuple arm is safe only because its wildcard position has an owner (`track_discarded_tuple_elem_bodies`) and the struct one does not. GENERALIZABLE: when promoting a disarm to the strong whole-value form, check every POSITION that reaches the same call site -- binding, wildcard discard, arg -- not just the one in the repro; a disarm is only safe where some other channel is provably the new owner. Pins (both STASH-PROVEN FAILED pre-fix): e2e + interp twin tuple_literal_own_drop_source_disarm, each carrying the inline-element control alongside the named-source case so a future change cannot fix the duplicate by silencing both. |
+| B-2026-08-02-28 | codegen+interp | medium | a call result consumed directly as another call's argument (`use_it(mk(xs))`) leaks the inner temp's heap under AOT and fires its Drop body at a diff… | LEAK LEG FIXED (b210). The SHAPE-2 fn-call arm of `track_inline_owned_aggregate_arg` registered the field-BODIES walk and then RETURNED, omitting the memory drop that its struct-LITERAL sibling registers for the identical value -- the two arms differ only in how the temp was produced (a call vs an inline literal), which is not a reason to own it differently. That is why the body printed normally while nothing freed the buffer: a leak that produces CORRECT OUTPUT, so neither parity diffing nor the fire-count oracle could see it; only valgrind did. The arm now mirrors the sibling exactly: the same `needs_memory_drop` gate (LLVM-visible heap field, or a copy-supported struct with a drop-heap field TypeExpr), `track_struct_var` pushed FIRST and the bodies walk second, since the frame drains LIFO and the body must run before the fields it reads are freed. Sound for the same reason the sibling is: the callee entry-copies a copy-supported struct -- `arg_is_entry_copied_heap_struct` already resolves exactly this Call shape through `fn_return_type_names` -- so the caller temp is an INDEPENDENT buffer and freeing it cannot touch the callee's copy. Fixing the order also settled the timing divergence for the bound-result shape (`let n = use_it(mk(xs));`), which now matches `karac run` on both the body position and the value. RESIDUAL (timing only, no leak, tracked here): when the consuming call is NESTED INSIDE another call -- `println(use_it(mk(xs)))` -- AOT fires the temp's body at STATEMENT end (after the enclosing println emits) while the interpreter fires it when the inner call completes (before). Both are self-consistent notions of the temp's death and both are leak-free; reconciling them means changing one backend's temp-drop timing convention wholesale, which is a much larger change than this leak fix and is deliberately not attempted here. Statement-end is codegen's established convention for temps (B-2026-08-01-5). Pins: e2e + interp twin nested_call_temp_owned_arg_drop (bound result, bare-statement discard, and an inner call taking no argument -- the three shapes where both backends agree) and asan nested_call_temp_owned_arg_freed for the leak itself. The e2e and asan pins were STASH-PROVEN FAILED pre-fix; the interp twin passes pre-fix and is kept to pin the order codegen now has to reproduce. |
 
 </details>
 
