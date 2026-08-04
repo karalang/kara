@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 209 | 0 |
-| leak | 127 | 0 |
-| double-free | 91 | 2 |
+| leak | 128 | 1 |
+| double-free | 91 | 1 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
 | run-vs-build | 73 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 645 | 3 |
+| codegen | 646 | 3 |
 | interp | 120 | 0 |
 | typecheck | 116 | 1 |
 | ownership | 37 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **893 surfaced · 5 open · 880 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **894 surfaced · 5 open · 881 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,12 +133,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **893 surfaced 
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-03-9 | 2026-08-03 | typecheck | medium | the canonical `Map[K, Vec[V]]` grouping idiom taught by the corpus is QUADRATIC, but the language already has the O(k) answer -- `Map.entry(k).or_insert(..)` ships on both backends and measures flat. The gap is signposting: nothing leads an author from `get`/`insert` to `entry`, so a lint with a machine-applicable fix is the durable close (headline claim 'no in-place map-value mutation' DISPROVED, see detail) | the stdlib Map API surface (src/interpreter + codegen Map lowering, wherever `get`/`insert` are defined) — needs an in-place map-value mutation path: a `get_mut`-shaped borrow, an entry API, or a `Map.append`-style helper for the container-valued case |
 | B-2026-08-03-12 | 2026-08-03 | codegen | low | `coroutine_preserves_active_span_across_suspend` (tests/coro_e2e.rs) is INTERMITTENT -- the post-resume log line came back unstamped (`[info] after-resume`, span_id=0) on one full-suite run and has not reproduced in 19 attempts since | open |
-| B-2026-08-04-1 | 2026-08-04 | codegen | high | FRESH-TEMP twin of B-2026-08-02-25's match-arm leg: a heap-BOXED Option/Result payload bound out of a `match mk() { Some(r) => .. }` arm runs its Drop BODY against the binding's reconstructed COPY, not the box, so a body that MUTATES a heap field (`self.buf.clear()`) frees the buffer while the box keeps the stale pointer and the scope-exit box drop frees it again | — |
 | B-2026-08-04-2 | 2026-08-04 | codegen | high | A heap-BOXED Option payload bound by a consuming match arm and then MOVED -- into a struct literal, or out as the match's tail value -- double-frees under `karac build` while the interpreter is correct; read-only Drop body, both named and fresh-temp scrutinees | — |
+| B-2026-08-04-3 | 2026-08-04 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee matched by a WILDCARD payload arm (`match mk() { Some(_) => .. }`) gets a box-ONLY free, so the payload struct's inner heap leaks -- the whole-binding sibling (`Some(r)`) is correct because only a Binding sub-pattern populates `inner_struct_name` | — |
 
-### Fixed (880)
+### Fixed (881)
 
-<details><summary>880 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>881 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1044,6 +1044,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-03-8 | codegen+interp | medium | `let x = h.f` moving an Option / Result / Vec FIELD out of a struct never disarms the field's Drop machinery — SEGV for an Option[Struct] field, a do… | Memory half: src/codegen/param_own.rs (`suppress_struct_field_move_into_literal`'s Option/Result arm), pin asan_option_struct_field_move_out_no_double_free. Bodies half: 8407085 (src/codegen/runtime.rs, src/codegen/synth_drop.rs, src/codegen/control_flow_match.rs, src/codegen/stmts.rs, src/codegen.rs, src/codegen/functions.rs, src/interpreter.rs, src/interpreter/eval_stmt.rs; pins test_e2e_struct_field_move_out_single_body_fire, test_struct_field_move_out_single_body_fire). All three pins stash-proven RED; suite 12896/0. |
 | B-2026-08-03-10 | codegen | medium | an Option field whose payload is INLINE (a struct narrow enough to fit the 3-word payload area) fires its Drop body THREE times under AOT when the ow… | 257d666 (src/codegen/clone_drop.rs; pin test_e2e_inline_option_payload_field_body_fires_once, stash-proven RED -- pre-fix AOT prints `drop 1` twice and `drop 2` three times where the interpreter prints each once) |
 | B-2026-08-03-11 | codegen | medium | a struct field holding a MIXED `Result[<Drop struct>, String]` -- one half a direct String/Vec, the other a struct/enum -- is admitted by NEITHER Res… | 0567cea (src/codegen/control_flow_match.rs, src/codegen/param_own.rs; pins asan_mixed_halves_result_struct_field_freed -- the leak oracle, stash-proven RED with 123 bytes leaked in 6 allocations under LSan -- and the companion E2E test_e2e_mixed_halves_result_struct_field_freed, which is green under the stash by construction and guards the six consuming positions against the double-free/double-fire that arming a free invites) |
+| B-2026-08-04-1 | codegen | high | FRESH-TEMP twin of B-2026-08-02-25's match-arm leg: a heap-BOXED Option/Result payload bound out of a `match mk() { Some(r) => . | c89192f (src/codegen/control_flow.rs, src/codegen/control_flow_match.rs; pins codegen.rs::e2e_freshtemp_boxed_optres_payload_arm_body_runs_against_the_box and memory_sanitizer.rs::asan_freshtemp_boxed_optres_payload_arm_body_runs_against_the_box, both stash-proven RED -- the E2E aborts before flushing any output (`left: ""`) and the ASan pin reports a double-free at exit 23) |
 
 </details>
 
