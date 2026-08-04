@@ -358,7 +358,30 @@ mod memory_sanitizer_tests {
             eprintln!("[{label}] ASAN unavailable on this host — skipping");
             return;
         }
-        let Some((stdout, status)) = run_under_asan(src, label) else {
+        // Corpus sweep for fixtures that allocate nothing at `-O2` and so assert
+        // nothing (B-2026-08-04-17):
+        //
+        //   KARAC_ASAN_ALLOC_AUDIT=1 cargo test --features llvm \
+        //     --test memory_sanitizer -- --nocapture
+        //
+        // prints one `ALLOCAUDIT\t<n>\t<label>` line per fixture. A program that
+        // allocates NOTHING reports 3 — the ASAN runtime's own startup
+        // allocations — and `asan_baseline_no_allocations` calibrates that,
+        // so any fixture at 3 did no heap work of its own. Off by default: it
+        // costs an extra ASAN option and a very noisy stderr. Fixtures that
+        // should never be allowed to drift back to zero take a hard floor via
+        // [`assert_clean_asan_run_min_allocs`] instead.
+        let audit = std::env::var("KARAC_ASAN_ALLOC_AUDIT").is_ok_and(|v| v != "0");
+        let ran = if audit {
+            run_under_asan_counting(src, label).map(|(out, err, st)| {
+                let n = asan_malloc_calls(&err).map_or(-1, |n| n as i64);
+                eprintln!("ALLOCAUDIT\t{n}\t{label}");
+                (out, st)
+            })
+        } else {
+            run_under_asan(src, label)
+        };
+        let Some((stdout, status)) = ran else {
             eprintln!("[{label}] setup failed — skipping");
             return;
         };
@@ -12309,23 +12332,38 @@ fn main() {
     // (old freed on grow, new freed on scope-exit). Catches a
     // double-free if the grow path doesn't free the original
     // before swapping the data pointer.
-
+    //
+    // B-2026-08-04-17: this fixture used a literal loop bound and read the
+    // result back through `v.len()` alone, and at `-O2` that made it assert
+    // nothing at all — the whole loop folded to the constant 16 and the binary
+    // performed ZERO heap allocations (measured: 1 alloc, the println buffer;
+    // 3 at `-O0`, which is what the comment above describes). A test for the
+    // Vec GROW path that never grows a Vec. The loop bound now comes from
+    // `env.args().len()` (a stable 1 — the binary is exec'd with no extra argv)
+    // so nothing folds, the assertion reads two ELEMENTS so the buffer is not a
+    // dead allocation LLVM can delete, and the allocation floor keeps both
+    // properties from silently regressing.
     #[test]
     fn asan_vec_with_capacity_push_past_n_grows_once() {
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 fn main() {
+    let base: i64 = env.args().len();
     let mut v: Vec[i64] = Vec.with_capacity(4);
     let mut i = 0;
-    while i < 16 {
+    while i < base + 15 {
         v.push(i);
         i = i + 1;
     }
-    println(v.len());
+    println(f"{v.len()}:{v[0i64]}:{v[15i64]}");
 }
 "#,
-            &["16"],
+            &["16:0:15"],
             "vec_with_capacity_push_past_n_grows_once",
+            // with_capacity(4) plus the 4->8->16 grows, the argv Vec and its
+            // String, and the println buffer. The floor only has to sit above
+            // the 3 an allocation-free run reports.
+            6,
         );
     }
 
