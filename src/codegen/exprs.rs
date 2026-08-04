@@ -1937,6 +1937,44 @@ impl<'ctx> super::Codegen<'ctx> {
         let n_fields = sv.get_type().count_fields();
         let i64_t = self.context.i64_type();
         let zero = i64_t.const_int(0, false);
+        // B-2026-08-04-9 — heap-BOXED payload. When `T`'s word count exceeds
+        // the carrier's payload area, the pack side (`coerce_to_payload_words`)
+        // heap-boxed it and stored the box POINTER in w0, leaving w1/w2 undef.
+        // Both rebuild paths below read the aggregate's payload words as if
+        // they WERE the payload, so a `{ptr,len,cap}` String came back as
+        // `{box_ptr, undef, undef}` — an empty string under AOT while
+        // `karac run` printed the real one, plus both the box and its interior
+        // leaked. `.unwrap()` was unaffected; only `?` reaches here.
+        //
+        // Same predicate and same three steps as `reconstruct_payload_value`'s
+        // debox (control_flow_match.rs), which is the unpack mirror of pack's
+        // `out.len() > num_words`: pre-boxing an oversized payload errored at
+        // pack and never got here, so a width over the area unambiguously
+        // means boxed.
+        //
+        // `?` CONSUMES its operand, so the loaded value owns the interior
+        // outright and the box allocation is dead the moment it is read —
+        // free it here rather than leaving it to a disarm site, which is why
+        // this needs no counterpart in
+        // `suppress_question_source_inline_payload` (that one neutralizes the
+        // INLINE overlay's cap, a field that is not a cap at all for a box).
+        let payload_area_words = (n_fields as usize).saturating_sub(1);
+        let ok_words = Self::llvm_type_word_count(ok_llvm);
+        if ok_words > payload_area_words && payload_area_words > 0 {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let box_ptr = self
+                .builder
+                .build_int_to_ptr(w0.into_int_value(), ptr_ty, "q.box.p")
+                .unwrap();
+            let loaded = self
+                .builder
+                .build_load(ok_llvm, box_ptr, "q.box.ld")
+                .unwrap();
+            self.builder
+                .build_call(self.free_fn, &[box_ptr.into()], "")
+                .unwrap();
+            return Ok(loaded);
+        }
         // A flat-i64 aggregate — the common enum layout `{i64 tag, i64…}`, or a
         // POD struct of i64 words — can be rebuilt by copying ALL its payload
         // words VERBATIM from the Result. `rebuild_value_from_payload_words` only
@@ -1970,6 +2008,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_struct_value();
                 }
+                return Ok(agg.into());
+            }
+        }
+        // B-2026-08-04-9 (second defect, same function) — a MIXED payload
+        // wider than three words. `rebuild_value_from_payload_words` carries
+        // exactly `w0`/`w1`/`w2`, so every word past the third was dropped:
+        // `Mid { name: String, pad: i64 }` is 4 words and fits `Result`'s
+        // 5-word area INLINE, so it never boxes and never reaches the debox
+        // above — `?` handed back the right String and a garbage `pad`
+        // (measured: 1 where the program stored 3), silently, with `karac run`
+        // correct. The flat-copy branch above only rescues an ALL-i64 payload,
+        // which a String-bearing struct is not.
+        //
+        // Read the full payload span and rebuild field-by-field through the
+        // same helper the match-arm path uses, which walks the struct's field
+        // types and slices the words per field width. Only for a struct target
+        // needing more words than the 3-word helper can carry; everything else
+        // keeps the original path byte-for-byte.
+        if let BasicTypeEnum::StructType(est) = ok_llvm {
+            let want = Self::llvm_type_word_count(ok_llvm);
+            let avail = (n_fields as usize).saturating_sub(1);
+            if want > 3 && avail >= want {
+                let words: Vec<inkwell::values::IntValue<'ctx>> = (0..want)
+                    .map(|i| {
+                        self.builder
+                            .build_extract_value(sv, (i + 1) as u32, "q.ok.widew")
+                            .unwrap()
+                            .into_int_value()
+                    })
+                    .collect();
+                let agg = self.reconstruct_struct_from_words(est, &words)?;
                 return Ok(agg.into());
             }
         }

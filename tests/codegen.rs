@@ -5878,6 +5878,92 @@ fn main() {
         }
     }
 
+    /// B-2026-08-04-9 — `?` must reconstruct its unwrapped payload at the
+    /// payload's real width, deboxing when the carrier boxed it.
+    ///
+    /// `reconstruct_question_ok_payload` read words straight out of the
+    /// `Option`/`Result` aggregate and rebuilt from three of them. Two
+    /// independent defects fell out of that, and the fixture separates them
+    /// because they have different widths and different symptoms:
+    ///
+    /// (1) BOXED — `Full` is 6 words, so it exceeds both payload areas and w0
+    /// is the box POINTER, not the payload's first word. The rebuild produced
+    /// `{box_ptr, undef, undef}`: an empty String under AOT while `karac run`
+    /// printed the real one, and both the box and its interior leaked.
+    ///
+    /// (2) WIDE BUT INLINE — `Mid` is 4 words, which FITS `Result`'s 5-word
+    /// area, so it never boxes and never reaches the debox. It still broke,
+    /// because the 3-word rebuild helper dropped every word past the third:
+    /// the String came back right and `pad` came back garbage (1 where the
+    /// program stored 3). Silent, and again correct under `karac run`.
+    ///
+    /// The two carriers are load-bearing on `Mid`: through `Result` it is
+    /// case (2), through `Option` (3-word area) the SAME struct is case (1).
+    /// One type taking both paths is what proves boxing — not the carrier and
+    /// not the type — is the discriminator.
+    ///
+    /// `.unwrap()` on the identical values was always correct, so nothing here
+    /// pins the shared payload machinery; it pins `?` specifically.
+    #[test]
+    fn e2e_question_reconstructs_wide_and_boxed_ok_payloads() {
+        let Some(out) = run_program(
+            "struct Full { name: String, buf: Vec[i64] }\n\
+             struct Mid { name: String, pad: i64 }\n\
+             fn mkf(i: i64) -> Full {\n\
+             \x20   let mut b: Vec[i64] = Vec.new();\n\
+             \x20   b.push(i);\n\
+             \x20   let mut s: String = String.new();\n\
+             \x20   s.push_str(\"wide-\");\n\
+             \x20   s.push_str(f\"{i}\");\n\
+             \x20   return Full { name: s, buf: b };\n\
+             }\n\
+             fn mkm(i: i64) -> Mid {\n\
+             \x20   let mut s: String = String.new();\n\
+             \x20   s.push_str(\"mid-\");\n\
+             \x20   s.push_str(f\"{i}\");\n\
+             \x20   return Mid { name: s, pad: i };\n\
+             }\n\
+             fn resf(i: i64) -> Result[Full, String] { return Result.Ok(mkf(i)); }\n\
+             fn optf(i: i64) -> Option[Full] { return Option.Some(mkf(i)); }\n\
+             fn optm(i: i64) -> Option[Mid] { return Option.Some(mkm(i)); }\n\
+             fn resm(i: i64) -> Result[Mid, String] { return Result.Ok(mkm(i)); }\n\
+             fn run_res(i: i64) -> Result[i64, String] {\n\
+             \x20   let a = resf(i)?;\n\
+             \x20   println(f\"a:{a.name}:{a.buf.len()}\");\n\
+             \x20   let b = resm(i)?;\n\
+             \x20   println(f\"b:{b.name}:{b.pad}\");\n\
+             \x20   let c = resf(i)?;\n\
+             \x20   let Full { name, buf: _ } = c;\n\
+             \x20   println(f\"c:{name}\");\n\
+             \x20   return Result.Ok(1i64);\n\
+             }\n\
+             fn run_opt(i: i64) -> Option[i64] {\n\
+             \x20   let d = optf(i)?;\n\
+             \x20   println(f\"d:{d.name}:{d.buf.len()}\");\n\
+             \x20   let e = optm(i)?;\n\
+             \x20   println(f\"e:{e.name}:{e.pad}\");\n\
+             \x20   return Option.Some(2i64);\n\
+             }\n\
+             fn main() {\n\
+             \x20   match run_res(3i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"res:{v}\"); }\n\
+             \x20       Result.Err(er) => { println(f\"err:{er}\"); }\n\
+             \x20   }\n\
+             \x20   match run_opt(4i64) {\n\
+             \x20       Option.Some(v) => { println(f\"opt:{v}\"); }\n\
+             \x20       Option.None => { println(\"opt:none\"); }\n\
+             \x20   }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a:wide-3:1\nb:mid-3:3\nc:wide-3\nres:1\n\
+             d:wide-4:1\ne:mid-4:4\nopt:2\n"
+        );
+    }
+
     /// B-2026-08-04-5 — destructuring a heap-BOXED `Option`/`Result` payload
     /// with a STRUCT sub-pattern must debox first.
     ///

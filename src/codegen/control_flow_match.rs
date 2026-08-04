@@ -4772,7 +4772,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `IfExpr.then_block: Block`) → "Invalid InsertValueInst operands". This
     /// walks sub-fields by their true word width and recurses, so an arbitrarily
     /// nested heap-bearing payload struct rebuilds correctly.
-    fn reconstruct_struct_from_words(
+    pub(super) fn reconstruct_struct_from_words(
         &self,
         st: inkwell::types::StructType<'ctx>,
         words: &[inkwell::values::IntValue<'ctx>],

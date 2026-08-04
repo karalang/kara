@@ -29419,6 +29419,73 @@ fn test_result_struct_payload_field_freed_and_single_body() {
 }
 
 #[test]
+fn test_question_reconstructs_wide_and_boxed_ok_payloads() {
+    // B-2026-08-04-9 — the ORACLE half. The interpreter has always unwrapped
+    // `?` at the payload's real width; codegen rebuilt from at most three
+    // words read straight out of the enum aggregate, which broke two ways:
+    // a BOXED payload (`Full`, 6 words) came back as the box pointer, and a
+    // WIDE-BUT-INLINE one (`Mid`, 4 words through `Result`'s 5-word area)
+    // lost every word past the third. Both were silent under AOT.
+    //
+    // `Mid` appears under BOTH carriers on purpose — inline through `Result`,
+    // boxed through `Option` — so one type exercises both defects.
+    //
+    // Keep byte-identical to the codegen twin
+    // `e2e_question_reconstructs_wide_and_boxed_ok_payloads`.
+    assert_eq!(
+        run("struct Full { name: String, buf: Vec[i64] }\n\
+             struct Mid { name: String, pad: i64 }\n\
+             fn mkf(i: i64) -> Full {\n\
+             let mut b: Vec[i64] = Vec.new();\n\
+             b.push(i);\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"wide-\");\n\
+             s.push_str(f\"{i}\");\n\
+             return Full { name: s, buf: b };\n\
+             }\n\
+             fn mkm(i: i64) -> Mid {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"mid-\");\n\
+             s.push_str(f\"{i}\");\n\
+             return Mid { name: s, pad: i };\n\
+             }\n\
+             fn resf(i: i64) -> Result[Full, String] { return Result.Ok(mkf(i)); }\n\
+             fn optf(i: i64) -> Option[Full] { return Option.Some(mkf(i)); }\n\
+             fn optm(i: i64) -> Option[Mid] { return Option.Some(mkm(i)); }\n\
+             fn resm(i: i64) -> Result[Mid, String] { return Result.Ok(mkm(i)); }\n\
+             fn run_res(i: i64) -> Result[i64, String] {\n\
+             let a = resf(i)?;\n\
+             println(f\"a:{a.name}:{a.buf.len()}\");\n\
+             let b = resm(i)?;\n\
+             println(f\"b:{b.name}:{b.pad}\");\n\
+             let c = resf(i)?;\n\
+             let Full { name, buf: _ } = c;\n\
+             println(f\"c:{name}\");\n\
+             return Result.Ok(1i64);\n\
+             }\n\
+             fn run_opt(i: i64) -> Option[i64] {\n\
+             let d = optf(i)?;\n\
+             println(f\"d:{d.name}:{d.buf.len()}\");\n\
+             let e = optm(i)?;\n\
+             println(f\"e:{e.name}:{e.pad}\");\n\
+             return Option.Some(2i64);\n\
+             }\n\
+             fn main() {\n\
+             match run_res(3i64) {\n\
+             Result.Ok(v) => { println(f\"res:{v}\"); }\n\
+             Result.Err(er) => { println(f\"err:{er}\"); }\n\
+             }\n\
+             match run_opt(4i64) {\n\
+             Option.Some(v) => { println(f\"opt:{v}\"); }\n\
+             Option.None => { println(\"opt:none\"); }\n\
+             }\n\
+             }\n"),
+        "a:wide-3:1\nb:mid-3:3\nc:wide-3\nres:1\n\
+         d:wide-4:1\ne:mid-4:4\nopt:2\n"
+    );
+}
+
+#[test]
 fn test_boxed_optres_payload_struct_destructure_deboxes() {
     // B-2026-08-04-5 — the ORACLE half. The interpreter has always destructured
     // a heap-BOXED `Option`/`Result` payload with a STRUCT sub-pattern

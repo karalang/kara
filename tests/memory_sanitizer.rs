@@ -35487,6 +35487,84 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-9 — `?` on a heap-BOXED payload owns the box it deboxes.
+    ///
+    /// `?` CONSUMES its operand, so once the box is read the unwrapped value
+    /// owns the interior outright and the box allocation is dead — freeing it
+    /// at the debox is what makes the ownership transfer complete. Before the
+    /// fix nothing freed either: both the box and its interior leaked, and the
+    /// value was garbage besides.
+    ///
+    /// `Mid` is here through `Option` only, where its 4 words exceed the
+    /// 3-word area and it boxes; through `Result` it is inline and never
+    /// reaches this path (the codegen twin covers that half for correctness).
+    ///
+    /// NOT covered, deliberately: the `let <StructPattern> = <expr>?` spelling
+    /// — destructuring DIRECTLY on the `?` rather than through a binding — is
+    /// still leaked, filed as its own row. Routing through a binding first
+    /// (which this fixture does) is clean, and the two spellings differ only
+    /// in whether a binding registers the payload's cleanup. Keeping the
+    /// leaky one out stops LeakSanitizer attributing that row's leak here.
+    #[test]
+    fn asan_question_deboxed_ok_payload_frees_the_box() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+struct Mid { name: String, pad: i64 }
+fn mkf(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    let mut s: String = String.new();
+    s.push_str("payload-string-data");
+    return Full { name: s, buf: b };
+}
+fn mkm(i: i64) -> Mid {
+    let mut s: String = String.new();
+    s.push_str("payload-string-data");
+    return Mid { name: s, pad: i };
+}
+fn resf(i: i64) -> Result[Full, String] { return Result.Ok(mkf(i)); }
+fn optf(i: i64) -> Option[Full] { return Option.Some(mkf(i)); }
+fn optm(i: i64) -> Option[Mid] { return Option.Some(mkm(i)); }
+
+fn step_res(i: i64) -> Result[i64, String] {
+    // 6 words — boxed at Result's 5-word area.
+    let a = resf(i)?;
+    return Result.Ok(a.name.len() + a.buf.len());
+}
+
+fn step_opt(i: i64) -> Option[i64] {
+    // 6 words — boxed at Option's 3-word area.
+    let b = optf(i)?;
+    // 4 words — fits Result inline, but BOXES here.
+    let c = optm(i)?;
+    return Option.Some(b.name.len() + b.buf.len() + c.name.len() + c.pad);
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        match step_res(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 1000i64; }
+        }
+        match step_opt(i) {
+            Option.Some(v) => { n = n + v; }
+            Option.None => { n = n + 1000i64; }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // step_res: 19+1 = 20. step_opt: 19+1 + 19+i = 39+i.
+            // Per iteration 59+i; sum over i in 0..200 = 200*59 + 19900 = 31700.
+            &["31700"],
+            "question_deboxed_ok_payload_frees_the_box",
+        );
+    }
+
     /// B-2026-08-04-6 — a FRESH-TEMP boxed payload destructured by a PARTIAL
     /// struct pattern: the fields the pattern binds are freed by their
     /// bindings, the fields it leaves out are freed by the box.
