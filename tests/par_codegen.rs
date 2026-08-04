@@ -127,6 +127,102 @@ mod par_codegen_tests {
         compile_to_ir(&parsed.program, Some(&ownership), Some(&analysis)).expect("codegen failed")
     }
 
+    /// B-2026-08-01-33 — pins the CODEGEN half of the coupling the ownership
+    /// relaxation rests on.
+    ///
+    /// `check_concurrent_shared_struct` now admits a multi-branch `shared`
+    /// capture when every branch merely PROJECTS an immutable scalar field
+    /// off it. That is only sound because such a projection emits no
+    /// non-atomic refcount traffic — a fact about CODEGEN, asserted nowhere
+    /// until this test. If codegen ever starts retaining across a projection,
+    /// the ownership gate silently stops covering the shape it admits, and
+    /// the failure mode is B-2026-07-28-13's SIGSEGV with nothing pointing at
+    /// the cause. The entry flagged this coupling as FRAGILE; this is the pin.
+    ///
+    /// Asserted on LLVM IR, not on disassembly, for two reasons. It is
+    /// architecture-independent (CI runs an arm64 leg), and — more
+    /// importantly — the plain-vs-atomic distinction is VISIBLE in IR and can
+    /// be erased by the optimizer before it reaches machine code. The plain
+    /// path emits named values `%rc_inc` / `%rc_dec` around a load/add/store;
+    /// the atomic path emits `atomicrmw ... seq_cst`.
+    ///
+    /// Both directions are asserted, so neither a vacuous program nor a
+    /// deleted emitter passes: the admitted shape must contain atomic
+    /// refcount traffic AND no plain traffic, and the materializing sibling
+    /// must contain plain traffic.
+    #[test]
+    fn admitted_shared_projection_emits_no_plain_refcount_rmw() {
+        // The shape `check_concurrent_shared_struct` now admits.
+        let projection = "shared struct Node { a: i64, b: i64 }\n\
+                          fn read(n: i64) -> i64 { n }\n\
+                          fn main() {\n\
+                              let root = Node { a: 2, b: 3 };\n\
+                              par { read(root.a); read(root.b); }\n\
+                          }";
+        let ir = ir_for_analyzed(projection);
+
+        // Positive control: the SharedRc prologue pair really is present, so
+        // this is a program with refcount traffic — not one that trivially
+        // has none and would pass the negative assertion for free.
+        assert!(
+            ir.contains("atomicrmw"),
+            "expected the ParCaptureMode::SharedRc prologue's atomic rc pair \
+             in the admitted program's IR; without it this test would pass \
+             vacuously. IR:\n{ir}"
+        );
+
+        // The property under pin: nothing on this program's code paths does a
+        // NON-ATOMIC refcount read-modify-write. `%rc_inc` / `%rc_dec` are the
+        // plain emitter's value names (`emit_rc_inc` / `emit_rc_dec`).
+        let plain: Vec<&str> = ir
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.contains("%rc_inc") || l.contains("%rc_dec"))
+            .collect();
+        assert!(
+            plain.is_empty(),
+            "an immutable-scalar projection off a captured `shared` binding must \
+             emit NO non-atomic refcount RMW — the ownership gate admits sibling \
+             branches doing this precisely because there is nothing to race. \
+             Found {} plain refcount op(s):\n{}",
+            plain.len(),
+            plain.join("\n")
+        );
+    }
+
+    /// The negative half of the pin above, and the reason root-by-value is
+    /// NOT admitted by `check_concurrent_shared_struct`.
+    ///
+    /// Passing the captured handle by value into a callee emits a PLAIN
+    /// load/add/store refcount pair — and it lives in the CALLEE's body, not
+    /// in the branch function. That placement is why a disassembly census of
+    /// `__par_branch_0_0` alone reports this shape clean: the racy op is one
+    /// frame down, and may be inlined or optimized out of the machine code
+    /// while remaining semantically present. Two branches calling such a
+    /// callee concurrently race on a non-atomic refcount.
+    ///
+    /// If this test ever fails because the plain op is gone, that is not a
+    /// regression — it is the evidence needed to widen the gate to root-by-
+    /// value. Revisit `test_concurrent_shared_struct_still_fires_for_
+    /// materializing_uses` leg (b) in tests/ownership.rs together with it.
+    #[test]
+    fn shared_handle_passed_by_value_still_emits_plain_refcount_rmw() {
+        let materialize = "shared struct Node { a: i64 }\n\
+                           fn take(n: Node) -> i64 { n.a }\n\
+                           fn other(n: i64) -> i64 { n }\n\
+                           fn main() {\n\
+                               let root = Node { a: 2 };\n\
+                               par { take(root); other(7); }\n\
+                           }";
+        let ir = ir_for_analyzed(materialize);
+        assert!(
+            ir.contains("%rc_inc") || ir.contains("%rc_dec"),
+            "expected a PLAIN refcount RMW for a by-value `shared` handle — \
+             its absence would mean the by-value shape became atomic, which \
+             is grounds to widen the ownership gate. IR:\n{ir}"
+        );
+    }
+
     #[test]
     fn collect_all_vec_lowers_to_par_run_gather() {
         // Phase 6 slice 1b — `collect_all_vec(fs)` lowers to a parallel
