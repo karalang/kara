@@ -29459,6 +29459,59 @@ fn test_result_struct_payload_field_freed_and_single_body() {
 }
 
 #[test]
+fn test_tuple_element_borrowed_in_place_for_ref_params() {
+    // B-2026-08-05-1 and -2 — the ORACLE half. The interpreter has always
+    // borrowed a tuple element in place for a `ref` / `mut ref` parameter;
+    // codegen let it fall through to the rvalue path, which copies the
+    // {ptr,len,cap} header into a temp. That temp's scope-exit free
+    // double-freed a buffer the tuple still owned (arm a), and for `mut ref`
+    // the callee mutated the COPY, so the write never reached the tuple and
+    // the following indexed read panicked (arm b). Arms (e)/(f) are the
+    // struct-field spelling, correct on both backends since B-2026-07-12-1 —
+    // that asymmetry is what located the missing arm.
+    //
+    // Keep in step with the codegen twin
+    // `e2e_tuple_element_borrowed_in_place_for_ref_params`. The seed is the
+    // literal 1 here rather than `env.args().len()`: the codegen fixture needs
+    // an opaque seed to survive -O2 folding and 1 is what that yields under its
+    // harness, while `env.args()` in an in-process interpreter test would
+    // report the TEST binary's argv.
+    assert_eq!(
+        run("struct H { a: Vec[i64], b: i64 }\n\
+             fn mkv(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }\n\
+             fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f\"pay-{k}\"); return s; }\n\
+             fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f\"{i}\"); return d; }\n\
+             fn peek(v: ref Vec[i64]) -> i64 { return v[0i64] + v.len(); }\n\
+             fn bump(v: mut ref Vec[i64]) { v.push(42i64); }\n\
+             fn slen(s: ref String) -> i64 { return s.len(); }\n\
+             fn main() {\n\
+                let n: i64 = 1i64;\n\
+                // (a) ref param, TUPLE element — was a double free\n\
+                let t1: (Vec[i64], i64) = (mkv(n), 5i64);\n\
+                println(f\"a:{peek(t1.0)}:{t1.0[1i64]}\");\n\
+                // (b) mut ref param, TUPLE element — the mutation was lost, then panicked\n\
+                let mut t2: (Vec[i64], i64) = (mkv(n), 5i64);\n\
+                bump(mut t2.0);\n\
+                println(f\"b:{t2.0.len()}:{t2.0[2i64]}\");\n\
+                // (c) ref param, tuple element in SECOND position\n\
+                let t3: (i64, Vec[i64]) = (5i64, mkv(n));\n\
+                println(f\"c:{peek(t3.1)}\");\n\
+                // (d) ref param, STRING tuple element\n\
+                let t4: (String, i64) = (mks(n), 5i64);\n\
+                if t4.0.contains(dig(n)) { println(f\"d:{slen(t4.0)}\"); } else { println(\"d:BAD\"); }\n\
+                // CONTROL: the struct-FIELD spelling, correct since B-2026-07-12-1\n\
+                let h1: H = H { a: mkv(n), b: 5i64 };\n\
+                println(f\"e:{peek(h1.a)}:{h1.a[1i64]}\");\n\
+                let mut h2: H = H { a: mkv(n), b: 5i64 };\n\
+                bump(mut h2.a);\n\
+                println(f\"f:{h2.a.len()}:{h2.a[2i64]}\");\n\
+                println(\"end\");\n\
+             }\n"),
+        "a:3:2\nb:3:42\nc:3\nd:5\ne:3:2\nf:3:42\nend\n"
+    );
+}
+
+#[test]
 fn test_named_source_moved_into_a_tuple_element_is_disarmed() {
     // B-2026-08-04-16 — the ORACLE half. The interpreter has always given the
     // tuple element sole ownership of a moved-in value; codegen left the source

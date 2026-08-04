@@ -35820,6 +35820,63 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-1 and -2 — a TUPLE ELEMENT passed to a `ref` or `mut ref`
+    /// parameter is borrowed IN PLACE, so nothing copies its buffer into a temp
+    /// that then frees it, and a `mut ref` mutation lands on the tuple itself.
+    ///
+    /// One missing arm caused both. B-2026-07-12-1 taught the ref-argument path
+    /// to pass a pointer to a struct FIELD instead of letting it reach the
+    /// rvalue path, which shallow-copies the `{ptr,len,cap}` header into a temp
+    /// and queues a scope-exit free of a buffer the owner still holds. The
+    /// tuple spelling never got the sibling arm.
+    ///
+    /// The last two shapes are the struct-field controls — the reference
+    /// implementation this was made to match, and what localized the bug.
+    ///
+    /// Seeded from `env.args().len()` with element and byte reads so the
+    /// buffers are neither folded nor dead-stripped at `-O2` (B-2026-08-04-17);
+    /// ~800 allocations, floored well below that.
+    #[test]
+    fn asan_tuple_element_borrowed_in_place_for_ref_params() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct H { a: Vec[i64], b: i64 }
+fn mkv(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn peek(v: ref Vec[i64]) -> i64 { return v[0i64] + v.len(); }
+fn bump(v: mut ref Vec[i64]) { v.push(42i64); }
+fn slen(s: ref String) -> i64 { return s.len(); }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut acc = 0i64;
+    let mut i = base;
+    while i < base + 100i64 {
+        let t1: (Vec[i64], i64) = (mkv(i), 5i64);
+        acc = acc + peek(t1.0) + t1.0[1i64];
+        let mut t2: (Vec[i64], i64) = (mkv(i), 5i64);
+        bump(mut t2.0);
+        acc = acc + t2.0.len() + t2.0[2i64];
+        let t3: (i64, Vec[i64]) = (5i64, mkv(i));
+        acc = acc + peek(t3.1);
+        let t4: (String, i64) = (mks(i), 5i64);
+        if t4.0.contains(dig(i)) { acc = acc + slen(t4.0); }
+        let h1: H = H { a: mkv(i), b: 5i64 };
+        acc = acc + peek(h1.a);
+        let mut h2: H = H { a: mkv(i), b: 5i64 };
+        bump(mut h2.a);
+        acc = acc + h2.a[2i64];
+        i = i + 1i64;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["30192"],
+            "tuple_element_borrowed_in_place_for_ref_params",
+            300,
+        );
+    }
+
     /// B-2026-08-04-16 — a named heap value moved into a TUPLE ELEMENT is owned
     /// once, by the tuple.
     ///

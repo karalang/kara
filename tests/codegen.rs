@@ -5933,6 +5933,71 @@ fn main() {
         assert_eq!(out, "a:wide-err-3:1\nb:mid-err-4:4\nc:mid-err-5:5\n");
     }
 
+    /// B-2026-08-05-1 and -2 — a TUPLE ELEMENT passed to a `ref` or `mut ref`
+    /// parameter must be borrowed IN PLACE, the way a struct field already is.
+    ///
+    /// Both were one missing arm. B-2026-07-12-1 taught the ref-argument path to
+    /// pass a pointer to a struct FIELD rather than let it fall through to the
+    /// rvalue path, which shallow-copies the `{ptr,len,cap}` header into a temp
+    /// and queues a scope-exit free of it — a buffer the owner still holds. The
+    /// tuple-element spelling never got the sibling arm, so it fell through and
+    /// produced the same `free(): double free detected` that fix was written
+    /// for, with the interpreter correct (arm a).
+    ///
+    /// The `mut ref` half is the same gap wearing a different symptom, which is
+    /// why one arm closes both: the callee got a pointer to that temp copy, so
+    /// `v.push(42)` grew the temp and the write never reached the tuple —
+    /// `t2.0.len()` stayed 2 and the following `t2.0[2]` panicked (arm b). A
+    /// lost mutation is the quieter half; on a shape without a bounds-checked
+    /// read after it, it is a silent wrong answer.
+    ///
+    /// Arms (c) and (d) widen it off the first-position `Vec` special case — a
+    /// second-position element and a `String` element. Arms (e) and (f) are the
+    /// struct-field controls that localized the bug and must stay correct: they
+    /// are the reference implementation this arm was made to match.
+    ///
+    /// Found by a systematic tuple-vs-field parity sweep rather than in the
+    /// wild. Seeded from `env.args().len()` with element and byte reads so the
+    /// buffers survive `-O2` (B-2026-08-04-17).
+    #[test]
+    fn e2e_tuple_element_borrowed_in_place_for_ref_params() {
+        let Some(out) = run_program(
+            "struct H { a: Vec[i64], b: i64 }\n\
+             fn mkv(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }\n\
+             fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f\"pay-{k}\"); return s; }\n\
+             fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f\"{i}\"); return d; }\n\
+             fn peek(v: ref Vec[i64]) -> i64 { return v[0i64] + v.len(); }\n\
+             fn bump(v: mut ref Vec[i64]) { v.push(42i64); }\n\
+             fn slen(s: ref String) -> i64 { return s.len(); }\n\
+             fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   // (a) ref param, TUPLE element — was a double free\n\
+             \x20   let t1: (Vec[i64], i64) = (mkv(n), 5i64);\n\
+             \x20   println(f\"a:{peek(t1.0)}:{t1.0[1i64]}\");\n\
+             \x20   // (b) mut ref param, TUPLE element — the mutation was lost, then panicked\n\
+             \x20   let mut t2: (Vec[i64], i64) = (mkv(n), 5i64);\n\
+             \x20   bump(mut t2.0);\n\
+             \x20   println(f\"b:{t2.0.len()}:{t2.0[2i64]}\");\n\
+             \x20   // (c) ref param, tuple element in SECOND position\n\
+             \x20   let t3: (i64, Vec[i64]) = (5i64, mkv(n));\n\
+             \x20   println(f\"c:{peek(t3.1)}\");\n\
+             \x20   // (d) ref param, STRING tuple element\n\
+             \x20   let t4: (String, i64) = (mks(n), 5i64);\n\
+             \x20   if t4.0.contains(dig(n)) { println(f\"d:{slen(t4.0)}\"); } else { println(\"d:BAD\"); }\n\
+             \x20   // CONTROL: the struct-FIELD spelling, correct since B-2026-07-12-1\n\
+             \x20   let h1: H = H { a: mkv(n), b: 5i64 };\n\
+             \x20   println(f\"e:{peek(h1.a)}:{h1.a[1i64]}\");\n\
+             \x20   let mut h2: H = H { a: mkv(n), b: 5i64 };\n\
+             \x20   bump(mut h2.a);\n\
+             \x20   println(f\"f:{h2.a.len()}:{h2.a[2i64]}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a:3:2\nb:3:42\nc:3\nd:5\ne:3:2\nf:3:42\nend\n");
+    }
+
     /// B-2026-08-04-16 — moving a named heap value into a TUPLE ELEMENT must
     /// disarm the source, the way the struct-field spelling already does.
     ///

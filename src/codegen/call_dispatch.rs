@@ -1452,6 +1452,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 // free detected` under AOT (interp was correct — a silent
                 // run/build divergence). A LOCAL `Vec` arg took the Identifier
                 // fast-path and was clean; only the field place fell through here.
+                // B-2026-08-05-1 / B-2026-08-05-2 — the TUPLE-ELEMENT sibling of
+                // the field arm below, which never got one. `peek(t.0)` with
+                // `v: ref Vec[i64]` fell through to the rvalue path, which
+                // shallow-copies the element's `{ptr,len,cap}` into a temp and
+                // queues a scope-exit free of it — but the tuple still owns that
+                // buffer, so the temp's free doubled it (`free(): double free
+                // detected`, interp correct — the same run/build divergence
+                // B-2026-07-12-1 fixed for `self.names`).
+                //
+                // The `mut ref` spelling is the SAME gap wearing a different
+                // symptom, which is why one arm closes both: `bump(mut t.0)`
+                // handed the callee a pointer to that temp copy, so `v.push(42)`
+                // grew the temp and the write never reached the tuple —
+                // `t.0.len()` stayed 2 and the following `t.0[2]` panicked. A
+                // lost mutation is the quieter half; on a shape without a
+                // bounds-checked read after it, it is a silent wrong answer.
+                //
+                // Gated exactly like the field arm: only a `{ptr,len,cap}`
+                // element (the confirmed class), so a scalar or enum element
+                // keeps the existing path. `field_chain_place_ptr` already walks
+                // a tuple-index hop, and `tuple_index_elem_type_expr` is the
+                // resolver B-2026-08-04-16 factored out for exactly this kind of
+                // "resolve the element the same way the store does" question.
+                if let ExprKind::TupleIndex { object, index } = &a.value.kind {
+                    let elem_is_vec_struct = self
+                        .place_chain_aggregate_llvm_type(object)
+                        .and_then(|t| t.get_field_type_at_index(*index as u32))
+                        .is_some_and(|t| t == self.vec_struct_type().into());
+                    if elem_is_vec_struct {
+                        if let Some(elem_ptr) = self.field_chain_place_ptr(&a.value) {
+                            compiled_args.push(elem_ptr.into());
+                            continue;
+                        }
+                    }
+                }
                 // `lower_field_access_ptr` GEPs the field off the (deref'd, for a
                 // `ref self`) receiver pointer. Only the cleanly-handled Some case
                 // is intercepted; a chained (`a.b.c`) or otherwise unrecognized
