@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 212 | 0 |
-| leak | 130 | 0 |
-| double-free | 94 | 0 |
+| miscompile | 213 | 1 |
+| leak | 131 | 1 |
+| double-free | 95 | 1 |
 | codegen-gap | 88 | 0 |
 | run-vs-build | 76 | 0 |
 | missing-feature | 75 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 658 | 1 |
+| codegen | 661 | 4 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **911 surfaced · 4 open · 899 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **914 surfaced · 7 open · 899 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **911 surfaced 
 | B-2026-08-04-8 | 2026-08-04 | codegen | medium | Bounds-check elimination fails for the CONVERGING two-pointer loop `while lo <= hi { v[base+lo] ... v[base+hi] }` when the index carries a base offset — the flat-2D / row-major scan shape. Isolated on kata #246 (strobogrammatic two-pointer over a flat Vec[u8] corpus of N*LEN bytes): kara keeps 2 per-iteration checks that clang -O3 does not, costing 1.28x on the kata and 1.93x on a work-identical minimal probe. Neither ingredient alone breaks BCE — base+ascending, base+descending, converging-without-base, and even both-ends-from-ONE-ascending-IV all elide cleanly; only the combination of a base offset with a converging two-IV guard defeats it. | — |
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
 | B-2026-08-04-18 | 2026-08-04 | ownership | low | Moving a heap value OUT of an aggregate element and then assigning it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) warns `value 't' moved here, used again here` -- the reassignment re-initializes the element, so the later use is sound; the partial move is tracked against the whole aggregate | src/use_classifier.rs:441 (Assign arm), src/rc_predicate.rs:119 (reassign_kills) |
+| B-2026-08-05-1 | 2026-08-04 | codegen | high | Passing a TUPLE ELEMENT to a `ref` parameter (`peek(t.0)` where `fn peek(v: ref Vec[i64])`) double-frees the element buffer under AOT; the struct-field twin `peek(h.a)` is clean and the interpreter is correct on both | src/codegen (ref-argument lowering for a TupleIndex place) |
+| B-2026-08-05-2 | 2026-08-04 | codegen | high | A `mut ref` parameter given a TUPLE ELEMENT (`bump(mut t.0)`) does not mutate the element under AOT -- the program then PANICS reading the index the mutation should have created, and leaks; the struct-field twin `bump(mut h.a)` mutates correctly | src/codegen (mut-ref argument lowering for a TupleIndex place) |
+| B-2026-08-05-3 | 2026-08-04 | codegen | medium | `Option[(Vec[T], ...)]` leaks the tuple payload's heap element when the Some arm binds and reads it -- 32 bytes definitely lost; the struct payload twin `Option[H]` is clean and the interpreter is correct on both | src/codegen (Option payload drop walk for a TUPLE payload) |
 
 ### Fixed (899)
 
