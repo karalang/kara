@@ -7610,6 +7610,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the chain can't resolve loud-bails instead of silently
                     // dropping the write.
                     self.compile_tuple_index_store(object, *index, val)?;
+                    // B-2026-08-04-16 — the TUPLE sibling of B-2026-07-15-25's
+                    // field-assign move-suppression, which the arm above never
+                    // got. `compile_tuple_index_store` drops the OLD element and
+                    // then MOVES the RHS header into the slot, so a named
+                    // heap-owning source (`let e = …; t.0 = e;`) is left owning
+                    // nothing while its scope-exit cleanup is still armed — it
+                    // and the tuple's element drop then free the same buffer.
+                    // `free(): double free detected`, and a triple free for a
+                    // `Vec[String]` element (buffer plus its elements).
+                    //
+                    // The bug did NOT need the move-OUT half the report led
+                    // with: a plain `t.0 = <named source>` is enough, and a
+                    // fresh-temp RHS was always fine because it has no source
+                    // binding to disarm. Gated on the element being a heap
+                    // Vec/String (FreeVecBuffer) or Map/Set (FreeMapHandle);
+                    // each suppressor is itself a no-op for a non-Identifier or
+                    // non-tracked RHS, so a literal / fn-return RHS is untouched.
+                    if let Some(elem_te) = self.tuple_index_elem_type_expr(object, *index) {
+                        if self.is_string_type_expr(&elem_te)
+                            || self.extract_vec_elem_type(&elem_te).is_some()
+                        {
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                        } else if let ExprKind::Identifier(src) = &value.kind {
+                            if self.map_key_types.contains_key(src.as_str())
+                                || self.set_elem_types.contains_key(src.as_str())
+                            {
+                                self.suppress_map_cleanup_for_tail_identifier(src);
+                            }
+                        }
+                    }
                     // An f-string RHS (`t.0 = f"…"`) MOVES the accumulator's
                     // {ptr,len,cap} header into the element slot, so the
                     // accumulator's own scope-exit FreeVecBuffer must be

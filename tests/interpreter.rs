@@ -29459,6 +29459,59 @@ fn test_result_struct_payload_field_freed_and_single_body() {
 }
 
 #[test]
+fn test_named_source_moved_into_a_tuple_element_is_disarmed() {
+    // B-2026-08-04-16 — the ORACLE half. The interpreter has always given the
+    // tuple element sole ownership of a moved-in value; codegen left the source
+    // binding's cleanup armed as well, so both freed the same buffer and the
+    // program aborted with `free(): double free detected` (a TRIPLE free for a
+    // `Vec[String]` element). The struct-FIELD spelling was correct on both
+    // backends, which is the asymmetry that located the missing arm.
+    //
+    // Keep in step with the codegen twin
+    // `e2e_named_source_moved_into_a_tuple_element_is_disarmed`. The seed is
+    // spelled as the literal 1 here rather than `env.args().len()`: the codegen
+    // fixture needs an opaque seed to survive -O2 folding and 1 is what that
+    // yields under its harness, while `env.args()` inside an in-process
+    // interpreter test would report the TEST binary's argv. Every printed value
+    // is byte-identical to the codegen twin's.
+    assert_eq!(
+        run("struct H { items: Vec[i64], n: i64 }\n\
+             fn mkvec(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }\n\
+             fn mkstr(k: i64) -> String { let mut s: String = String.new(); s.push_str(f\"payload-{k}\"); return s; }\n\
+             fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f\"{i}\"); return d; }\n\
+             fn mkvs(k: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(mkstr(k)); v.push(mkstr(k + 1i64)); return v; }\n\
+             fn main() {\n\
+             let n: i64 = 1i64;\n\
+             let mut t2: (Vec[i64], i64) = (mkvec(n), 3i64);\n\
+             let f: Vec[i64] = mkvec(n + 10i64);\n\
+             t2.0 = f;\n\
+             println(f\"b:{t2.0.len()}:{t2.0[0i64]}\");\n\
+             let mut t3: (i64, Vec[i64]) = (3i64, mkvec(n));\n\
+             let g: Vec[i64] = mkvec(n + 20i64);\n\
+             t3.1 = g;\n\
+             println(f\"c:{t3.1[0i64]}\");\n\
+             let mut t4: (String, i64) = (mkstr(n), 3i64);\n\
+             let s: String = mkstr(n + 30i64);\n\
+             t4.0 = s;\n\
+             if t4.0.contains(digits(n + 30i64)) { println(f\"d:{t4.0.len()}\"); } else { println(\"d:BAD\"); }\n\
+             let mut t5: (Vec[String], i64) = (mkvs(n), 3i64);\n\
+             let w: Vec[String] = mkvs(n + 40i64);\n\
+             t5.0 = w;\n\
+             println(f\"e:{t5.0.len()}:{t5.0[0i64].len()}:{t5.0[1i64].len()}\");\n\
+             let mut t6: (Vec[i64], i64) = (mkvec(n), 3i64);\n\
+             t6.0 = mkvec(n + 50i64);\n\
+             println(f\"f:{t6.0[0i64]}\");\n\
+             let mut h: H = H { items: mkvec(n), n: 3i64 };\n\
+             let hv: Vec[i64] = mkvec(n + 60i64);\n\
+             h.items = hv;\n\
+             println(f\"g:{h.items[0i64]}\");\n\
+             println(\"end\");\n\
+             }\n"),
+        "b:2:11\nc:21\nd:10\ne:2:10:10\nf:51\ng:61\nend\n"
+    );
+}
+
+#[test]
 fn test_freshtemp_result_arm_binding_a_struct_payload_owns_it_once() {
     // B-2026-08-04-11 leg (b) — the ORACLE half. The interpreter has always
     // given the arm's struct-payload binding sole ownership of the buffer;

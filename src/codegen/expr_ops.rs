@@ -2205,6 +2205,52 @@ impl<'ctx> super::Codegen<'ctx> {
     /// chain can't resolve (e.g. a `ref`-param root, which
     /// `field_chain_place_ptr` deliberately bails on) LOUD-bails rather than
     /// silently dropping the write.
+    /// Declared `TypeExpr` of tuple element `index` of the place chain
+    /// `object`, or `None` when neither the recorded element types nor the
+    /// LLVM layout identify one.
+    ///
+    /// Factored out of [`Self::compile_tuple_index_store`] so the store's
+    /// displaced-value drop and the assign arm's move-suppression resolve the
+    /// element the SAME way. B-2026-08-04-16 was exactly that pair drifting:
+    /// the store dropped the old element correctly while the assign arm had no
+    /// suppression at all, so a named source moved into a tuple element stayed
+    /// armed and both it and the element's drop freed one buffer.
+    pub(super) fn tuple_index_elem_type_expr(&self, object: &Expr, index: u64) -> Option<TypeExpr> {
+        let mut elem_te = self
+            .place_chain_tuple_tes(object)
+            .and_then(|tes| tes.get(index as usize).cloned());
+        // A plain tuple binding's element type NAME can be unrecorded
+        // (`let t = (f"a", 2)` — the f-string element records None, which
+        // `tuple_var_elem_tes` renders as an EMPTY path). Fall back to the
+        // LLVM layout: a vec-struct-shaped element is a String/Vec
+        // {ptr,len,cap} header, so synthesize a String TE and the displaced
+        // old buffer still gets the cap-guarded free. (A Vec-of-heap
+        // element's INNER buffers stay a recorded residual on this shape.)
+        if let Some(te) = &elem_te {
+            if matches!(&te.kind, TypeKind::Path(p) if p.segments.is_empty()) {
+                elem_te = None;
+            }
+        }
+        if elem_te.is_none() {
+            if let Some(BasicTypeEnum::StructType(st)) = self
+                .place_chain_aggregate_llvm_type(object)
+                .and_then(|t| t.get_field_type_at_index(index as u32))
+            {
+                if st == self.vec_struct_type() {
+                    elem_te = Some(TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: std::iter::once("String".to_string()).collect(),
+                            generic_args: None,
+                            span: crate::token::Span::default(),
+                        }),
+                        span: crate::token::Span::default(),
+                    });
+                }
+            }
+        }
+        elem_te
+    }
+
     pub(super) fn compile_tuple_index_store(
         &mut self,
         object: &Expr,
@@ -2229,37 +2275,7 @@ impl<'ctx> super::Codegen<'ctx> {
                  receiver's layout"
             ));
         };
-        let mut elem_te = self
-            .place_chain_tuple_tes(object)
-            .and_then(|tes| tes.get(index as usize).cloned());
-        // A plain tuple binding's element type NAME can be unrecorded
-        // (`let t = (f"a", 2)` — the f-string element records None, which
-        // `tuple_var_elem_tes` renders as an EMPTY path). Fall back to the
-        // LLVM layout: a vec-struct-shaped element is a String/Vec
-        // {ptr,len,cap} header, so synthesize a String TE and the displaced
-        // old buffer still gets the cap-guarded free. (A Vec-of-heap
-        // element's INNER buffers stay a recorded residual on this shape.)
-        if let Some(te) = &elem_te {
-            if matches!(&te.kind, TypeKind::Path(p) if p.segments.is_empty()) {
-                elem_te = None;
-            }
-        }
-        if elem_te.is_none() {
-            if let Some(BasicTypeEnum::StructType(st)) =
-                tuple_ty.get_field_type_at_index(index as u32)
-            {
-                if st == self.vec_struct_type() {
-                    elem_te = Some(TypeExpr {
-                        kind: TypeKind::Path(crate::ast::PathExpr {
-                            segments: std::iter::once("String".to_string()).collect(),
-                            generic_args: None,
-                            span: crate::token::Span::default(),
-                        }),
-                        span: crate::token::Span::default(),
-                    });
-                }
-            }
-        }
+        let elem_te = self.tuple_index_elem_type_expr(object, index);
         if let Some(te) = elem_te {
             if !super::vec_method::is_trivially_copyable_te(&te) {
                 let drop_fn = self.emit_drop_fn_for_type_expr(&te);

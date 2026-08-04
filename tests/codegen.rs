@@ -5933,6 +5933,82 @@ fn main() {
         assert_eq!(out, "a:wide-err-3:1\nb:mid-err-4:4\nc:mid-err-5:5\n");
     }
 
+    /// B-2026-08-04-16 — moving a named heap value into a TUPLE ELEMENT must
+    /// disarm the source, the way the struct-field spelling already does.
+    ///
+    /// `compile_tuple_index_store` drops the old element and MOVES the RHS
+    /// header into the slot, but the assign arm never got the sibling of
+    /// B-2026-07-15-25's field-assign move-suppression. The source binding kept
+    /// its scope-exit cleanup armed while owning nothing, so it and the tuple's
+    /// element drop freed the same buffer: `free(): double free detected` under
+    /// AOT and the JIT, while `karac run --interp` printed the right answer.
+    ///
+    /// The bug did NOT need the move-OUT half the report led with. Arm (b) is
+    /// the minimal shape — a plain `t.0 = <named source>`, no move-out anywhere
+    /// — and it aborted identically. Arm (e) is a `Vec[String]` element, which
+    /// was a TRIPLE free (11 allocations, 13 frees: the element buffer and the
+    /// Strings inside it).
+    ///
+    /// The report's own `let mut e = t.0; …; t.0 = e;` spelling is deliberately
+    /// NOT here: the ownership checker warns on it (`value 't' moved here, used
+    /// again here` — an over-broad partial move, filed as B-2026-08-04-18), so
+    /// it trips the harness's ownership gate. Nothing is lost by leaving it out
+    /// — it reaches this codegen path through exactly the assignment arm (b)
+    /// covers, and B-2026-08-04-18 carries a probe for the spelling itself.
+    ///
+    /// The two controls are what localize it: a fresh-temp RHS (f) was always
+    /// correct because there is no source binding to disarm, and the
+    /// struct-FIELD spelling (g) has been correct since B-2026-07-15-25 — that
+    /// asymmetry is what identified the missing arm. Seeded from
+    /// `env.args().len()` and every arm reads an element or the bytes, so the
+    /// payloads survive `-O2` instead of folding away (B-2026-08-04-17).
+    #[test]
+    fn e2e_named_source_moved_into_a_tuple_element_is_disarmed() {
+        let Some(out) = run_program(
+            "struct H { items: Vec[i64], n: i64 }\n\
+             fn mkvec(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }\n\
+             fn mkstr(k: i64) -> String { let mut s: String = String.new(); s.push_str(f\"payload-{k}\"); return s; }\n\
+             fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f\"{i}\"); return d; }\n\
+             fn mkvs(k: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(mkstr(k)); v.push(mkstr(k + 1i64)); return v; }\n\
+             fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   // (b) the minimal shape the report missed: NAMED source, no move-out\n\
+             \x20   let mut t2: (Vec[i64], i64) = (mkvec(n), 3i64);\n\
+             \x20   let f: Vec[i64] = mkvec(n + 10i64);\n\
+             \x20   t2.0 = f;\n\
+             \x20   println(f\"b:{t2.0.len()}:{t2.0[0i64]}\");\n\
+             \x20   // (c) SECOND element position\n\
+             \x20   let mut t3: (i64, Vec[i64]) = (3i64, mkvec(n));\n\
+             \x20   let g: Vec[i64] = mkvec(n + 20i64);\n\
+             \x20   t3.1 = g;\n\
+             \x20   println(f\"c:{t3.1[0i64]}\");\n\
+             \x20   // (d) String element\n\
+             \x20   let mut t4: (String, i64) = (mkstr(n), 3i64);\n\
+             \x20   let s: String = mkstr(n + 30i64);\n\
+             \x20   t4.0 = s;\n\
+             \x20   if t4.0.contains(digits(n + 30i64)) { println(f\"d:{t4.0.len()}\"); } else { println(\"d:BAD\"); }\n\
+             \x20   // (e) Vec[String] element — the TRIPLE-free shape\n\
+             \x20   let mut t5: (Vec[String], i64) = (mkvs(n), 3i64);\n\
+             \x20   let w: Vec[String] = mkvs(n + 40i64);\n\
+             \x20   t5.0 = w;\n\
+             \x20   println(f\"e:{t5.0.len()}:{t5.0[0i64].len()}:{t5.0[1i64].len()}\");\n\
+             \x20   // CONTROL: a fresh-temp RHS has no source binding and was always correct\n\
+             \x20   let mut t6: (Vec[i64], i64) = (mkvec(n), 3i64);\n\
+             \x20   t6.0 = mkvec(n + 50i64);\n\
+             \x20   println(f\"f:{t6.0[0i64]}\");\n\
+             \x20   // CONTROL: the struct-FIELD spelling, correct since B-2026-07-15-25\n\
+             \x20   let mut h: H = H { items: mkvec(n), n: 3i64 };\n\
+             \x20   let hv: Vec[i64] = mkvec(n + 60i64);\n\
+             \x20   h.items = hv;\n\
+             \x20   println(f\"g:{h.items[0i64]}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "b:2:11\nc:21\nd:10\ne:2:10:10\nf:51\ng:61\nend\n");
+    }
+
     /// B-2026-08-04-11 leg (b) — a fresh-temp `Result` arm that BINDS a struct
     /// payload without consuming it must not leave the source's payload drop
     /// armed: the binding already owns the buffer.

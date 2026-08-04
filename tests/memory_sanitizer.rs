@@ -35820,6 +35820,83 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-16 — a named heap value moved into a TUPLE ELEMENT is owned
+    /// once, by the tuple.
+    ///
+    /// `compile_tuple_index_store` drops the old element and moves the RHS
+    /// header into the slot, but the assign arm never got the sibling of
+    /// B-2026-07-15-25's field-assign move-suppression, so the source binding
+    /// stayed armed while owning nothing. Both freed the same buffer. The
+    /// `Vec[String]` element was a triple free — the element buffer and the
+    /// Strings inside it.
+    ///
+    /// The move-OUT the report led with is not required: a plain
+    /// `t.0 = <named source>` aborts identically, and that minimal spelling is
+    /// what runs here. The report's own `let mut e = t.0; …; t.0 = e;` form is
+    /// left out because the ownership checker warns on it (B-2026-08-04-18), so
+    /// it would trip this harness's ownership gate; it reaches the same
+    /// assignment arm regardless.
+    /// The last two shapes are the controls that localized it and must stay
+    /// clean — a fresh-temp RHS has no source binding to disarm, and the
+    /// struct-FIELD spelling has been correct since B-2026-07-15-25.
+    ///
+    /// Seeded from `env.args().len()` with element and byte reads throughout so
+    /// the buffers are neither folded nor dead-stripped at `-O2`
+    /// (B-2026-08-04-17); ~1.9k allocations, floored well below that.
+    #[test]
+    fn asan_named_source_moved_into_a_tuple_element_is_disarmed() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct H { items: Vec[i64], n: i64 }
+fn mkvec(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }
+fn mkstr(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"payload-{k}"); return s; }
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn mkvs(k: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(mkstr(k)); return v; }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut acc = 0i64;
+    let mut i = base;
+    while i < base + 100i64 {
+        // A NAMED source with no move-out — the minimal shape.
+        let mut t2: (Vec[i64], i64) = (mkvec(i), 3i64);
+        let f: Vec[i64] = mkvec(i + 1i64);
+        t2.0 = f;
+        acc = acc + t2.0[0i64];
+        // Second element position.
+        let mut t3: (i64, Vec[i64]) = (3i64, mkvec(i));
+        let g: Vec[i64] = mkvec(i + 2i64);
+        t3.1 = g;
+        acc = acc + t3.1[0i64];
+        // String element.
+        let mut t4: (String, i64) = (mkstr(i), 3i64);
+        let s: String = mkstr(i + 3i64);
+        t4.0 = s;
+        if t4.0.contains(digits(i + 3i64)) { acc = acc + t4.0.len(); }
+        // Vec[String] element — the triple-free shape.
+        let mut t5: (Vec[String], i64) = (mkvs(i), 3i64);
+        let w: Vec[String] = mkvs(i + 4i64);
+        t5.0 = w;
+        if t5.0[0i64].contains(digits(i + 4i64)) { acc = acc + t5.0[0i64].len(); }
+        // CONTROL: a fresh-temp RHS has no source binding to disarm.
+        let mut t6: (Vec[i64], i64) = (mkvec(i), 3i64);
+        t6.0 = mkvec(i + 5i64);
+        acc = acc + t6.0[0i64];
+        // CONTROL: the struct-FIELD spelling, correct since B-2026-07-15-25.
+        let mut h: H = H { items: mkvec(i), n: 3i64 };
+        let hv: Vec[i64] = mkvec(i + 6i64);
+        h.items = hv;
+        acc = acc + h.items[0i64];
+        i = i + 1i64;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["23598"],
+            "named_source_moved_into_a_tuple_element_is_disarmed",
+            500,
+        );
+    }
+
     /// B-2026-08-04-11 leg (b) — a fresh-temp `Result` arm that BINDS a struct
     /// payload without consuming it owns that payload exactly once.
     ///
