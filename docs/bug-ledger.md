@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 209 | 0 |
-| leak | 128 | 1 |
+| leak | 128 | 0 |
 | double-free | 91 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 647 | 3 |
+| codegen | 647 | 2 |
 | interp | 121 | 1 |
 | typecheck | 116 | 0 |
 | ownership | 37 | 1 |
@@ -124,21 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **896 surfaced · 5 open · 883 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **896 surfaced · 4 open · 884 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-03-12 | 2026-08-03 | codegen | low | `coroutine_preserves_active_span_across_suspend` (tests/coro_e2e.rs) is INTERMITTENT -- the post-resume log line came back unstamped (`[info] after-resume`, span_id=0) on one full-suite run and has not reproduced in 19 attempts since | open |
-| B-2026-08-04-3 | 2026-08-04 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee matched by a WILDCARD payload arm (`match mk() { Some(_) => .. }`) gets a box-ONLY free, so the payload struct's inner heap leaks -- the whole-binding sibling (`Some(r)`) is correct because only a Binding sub-pattern populates `inner_struct_name` | — |
 | B-2026-08-04-4 | 2026-08-04 | interp | medium | INTERPRETER: a Drop-body move record is keyed by BINDING NAME and outlives its block, so a later same-named binding that was never moved is treated as moved and its user `impl Drop` body is silently skipped -- rename the second binding and the body fires | — |
 | B-2026-08-04-5 | 2026-08-04 | codegen | high | ICE: destructuring a heap-BOXED Option/Result payload with a STRUCT sub-pattern (`match o { Some(Full { name, buf }) => .. }`) panics the compiler with `ExtractOutOfRange` -- `build_extract_value` runs against the Option aggregate instead of the deboxed payload | — |
 
-### Fixed (883)
+### Fixed (884)
 
-<details><summary>883 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>884 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1047,6 +1046,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-03-11 | codegen | medium | a struct field holding a MIXED `Result[<Drop struct>, String]` -- one half a direct String/Vec, the other a struct/enum -- is admitted by NEITHER Res… | 0567cea (src/codegen/control_flow_match.rs, src/codegen/param_own.rs; pins asan_mixed_halves_result_struct_field_freed -- the leak oracle, stash-proven RED with 123 bytes leaked in 6 allocations under LSan -- and the companion E2E test_e2e_mixed_halves_result_struct_field_freed, which is green under the stash by construction and guards the six consuming positions against the double-free/double-fire that arming a free invites) |
 | B-2026-08-04-1 | codegen | high | FRESH-TEMP twin of B-2026-08-02-25's match-arm leg: a heap-BOXED Option/Result payload bound out of a `match mk() { Some(r) => . | c89192f (src/codegen/control_flow.rs, src/codegen/control_flow_match.rs; pins codegen.rs::e2e_freshtemp_boxed_optres_payload_arm_body_runs_against_the_box and memory_sanitizer.rs::asan_freshtemp_boxed_optres_payload_arm_body_runs_against_the_box, both stash-proven RED -- the E2E aborts before flushing any output (`left: ""`) and the ASan pin reports a double-free at exit 23) |
 | B-2026-08-04-2 | codegen | high | A heap-BOXED Option payload bound by a consuming match arm and then MOVED -- into a struct literal, or out as the match's tail value -- double-frees… | 8f8696d (src/codegen.rs, src/codegen/control_flow.rs, src/codegen/control_flow_match.rs, src/codegen/exprs.rs, src/codegen/functions.rs, src/codegen/mono.rs, src/codegen/pattern_binding.rs, src/codegen/runtime.rs, src/codegen/shadow.rs, src/codegen/stmts.rs; pins codegen.rs::e2e_boxed_optres_payload_view_move_transfers_box_interior (stash-proven RED -- aborts before flushing any output) and memory_sanitizer.rs::asan_boxed_optres_payload_view_move_has_one_owner, both carrying the by-value-arg and no-move controls that the first cut got wrong) |
+| B-2026-08-04-3 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee matched by a WILDCARD payload arm (`match mk() { Some(_) => . | bad9a7a (src/codegen/control_flow.rs, src/codegen/control_flow_match.rs; pins memory_sanitizer.rs::asan_wildcard_boxed_optres_payload_frees_the_struct_interior, stash-proven RED under LeakSanitizer, covering the `Option` wildcard, the `Result` Err-side wildcard, and a whole-binding control) |
 
 </details>
 
