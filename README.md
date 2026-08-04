@@ -391,6 +391,29 @@ We took a **tree-walk interpreter first** approach: language semantics were vali
 
 ## Getting Started
 
+### Install a prebuilt dev preview
+
+Self-contained preview builds (no LLVM or Rust needed) are on the
+[releases page](https://github.com/karalang/kara/releases) for x86_64/aarch64
+Linux and Apple-silicon macOS. Download the newest tarball for your platform,
+then:
+
+```bash
+tar xzf karac-*.tar.gz
+export PATH="$PWD/karac-<version>-<platform>/bin:$PATH"
+karac --version
+```
+
+The layout is relocatable — the unpacked directory can live anywhere. macOS:
+clear Gatekeeper quarantine once with `xattr -dr com.apple.quarantine
+<unpacked-dir>`. `karac run` (JIT) needs nothing else; `karac build` (native
+binaries) needs a C linker (`build-essential` / Xcode CLT). WASM targets are
+not bundled — build from source for those. These are pre-v1 previews: expect
+breakage, and report issues with the exact `karac --version` string (its
+`+g<sha>` suffix pins the build's commit).
+
+### Build from source
+
 ```bash
 cargo build                          # build the compiler (no LLVM backend)
 cargo test                           # run the front-end tests (lexer, parser, resolver, typechecker, effect, ownership, interpreter)
