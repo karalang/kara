@@ -1,12 +1,21 @@
 # Release pipeline (dev-preview downloadable artifacts).
 #
-# Two ways to run:
-#   - workflow_dispatch: dry-run the whole pipeline (build + clean-runner
-#     smoke) without publishing anything — the way to iterate on it.
-#   - tag push `v*`: same pipeline, then a DRAFT GitHub release with the
-#     tarballs + sha256s attached. Draft on purpose: nothing publishes
-#     without a human clicking the button (unannounced-dev-preview
-#     posture; the launch decides when releases go loud).
+# Ways to run:
+#   - workflow_dispatch, `tag` input empty: dry-run the whole pipeline
+#     (build + clean-runner smoke) without publishing anything — the way
+#     to iterate on it.
+#   - workflow_dispatch with a `tag` input (e.g. v0.1.0-dev): same
+#     pipeline, then a DRAFT release for that tag at the built commit.
+#     The tag itself is created by GitHub when the draft is published —
+#     so the tag can never exist without smoke-passed binaries behind
+#     it. This is also the only release path from a cloud session: the
+#     session git gateway rejects tag pushes (403, same policy as ref
+#     deletion), so tag-first is a local-machine-only flow.
+#   - tag push `v*` (from a machine that can push tags): same pipeline,
+#     then a DRAFT release on the existing tag.
+#   Draft on purpose, in every mode: nothing publishes without a human
+#   clicking the button (unannounced-dev-preview posture; the launch
+#   decides when releases go loud).
 #
 # Design notes:
 #   - `fetch-depth: 0` is load-bearing: the version stamp marks shallow
@@ -26,6 +35,11 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Draft a release for this tag (e.g. v0.1.0-dev); empty = dry-run"
+        required: false
+        default: ""
   push:
     tags: ["v*"]
 
@@ -166,7 +180,7 @@ jobs:
 
   release:
     name: Draft GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     needs: smoke
     runs-on: ubuntu-24.04
     steps:
@@ -181,7 +195,12 @@ jobs:
         with:
           draft: true
           prerelease: true
-          name: ${{ github.ref_name }} (dev preview)
+          # On dispatch, the tag doesn't exist yet: GitHub creates it at
+          # target_commitish when the draft is PUBLISHED. On tag push,
+          # the existing tag wins and target_commitish is ignored.
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ inputs.tag || github.ref_name }} (dev preview)
           body: |
             Pre-v1 development preview of the Kāra compiler. Expect
             breakage; report issues with the exact `karac --version`
