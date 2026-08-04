@@ -99,9 +99,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Option[Wide]/Result[Wide,_] scrutinee (box-only — the bound payload
         // owns its inner heap). Registers in the enclosing frame, so the box
         // frees on both the match and miss edges.
-        if freshtemp_enum.is_none() {
-            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
-        }
+        let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val)
+        } else {
+            None
+        };
         // Fresh-temp INLINE-heap `Result` scrutinee (`if let Ok(_) = cell.set(v)`)
         // and fresh-temp `Option[shared]` scrutinee (`if let Some(n) = st.pop()`)
         // — the `match` path (compile_match) registers both, but the if-let path
@@ -166,7 +168,8 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
             self.current_variant_payload_bindings.extend(vp_names);
         }
-        let saved_shape_flags = self.set_scrutinee_shape_flags_for_pattern(pattern, value);
+        let saved_shape_flags =
+            self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.current_variant_payload_bindings.clear();
@@ -445,9 +448,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (drains each iteration). An `Option` loop terminates on `None` (no
         // box), so no miss-edge box free is needed; a `Result`-terminating
         // boxed `Err` miss is deferred (spike §1, rare shape).
-        if freshtemp_enum.is_none() {
-            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
-        }
+        let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val)
+        } else {
+            None
+        };
         // Fresh-temp inline-`Result` / `Option[shared]` scrutinee — mirror the
         // match + if-let chain so `while let Some(n) = st.pop()` over a
         // `Vec[shared T]` releases the popped node's transferred ref per
@@ -478,7 +483,8 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
             self.current_variant_payload_bindings.extend(vp_names);
         }
-        let saved_shape_flags = self.set_scrutinee_shape_flags_for_pattern(pattern, value);
+        let saved_shape_flags =
+            self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.current_variant_payload_bindings.clear();
@@ -555,6 +561,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         pattern: &Pattern,
         scrutinee: &Expr,
+        freshtemp_boxed_slot: Option<PointerValue<'ctx>>,
     ) -> ScrutineeShapeFlags<'ctx> {
         let saved = (
             self.pattern_binding_scrutinee_is_option_result,
@@ -569,9 +576,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-01-13 — see `compile_match`'s twin derivation.
         self.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
-        // B-2026-08-02-25 (match-arm leg) — see `compile_match`'s twin.
+        // B-2026-08-02-25 (match-arm leg) + B-2026-08-04-1 (its fresh-temp
+        // twin) — see `compile_match`'s twin derivation. Named source first;
+        // a fresh temp has no armed walk to sample, so it falls through to the
+        // staged `__freshtemp_boxed_scrut` slot. The two are mutually exclusive
+        // by construction (a temp has no name), so the order is documentation
+        // rather than a tie-break.
         self.pattern_binding_scrutinee_payload_bodies_src =
-            self.scrutinee_armed_payload_bodies_action(scrutinee);
+            match self.scrutinee_armed_payload_bodies_action(scrutinee) {
+                Some(found) => Some(found),
+                None => self.freshtemp_payload_bodies_action(scrutinee, freshtemp_boxed_slot),
+            };
         let en = self.variant_pattern_enum_name(pattern);
         self.pattern_binding_scrutinee_is_option_result =
             matches!(en.as_deref(), Some("Option") | Some("Result"));
@@ -627,6 +642,51 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return None,
         };
         self.armed_container_elem_bodies_action(name)
+    }
+
+    /// B-2026-08-04-1 — the FRESH-TEMP counterpart of
+    /// `scrutinee_armed_payload_bodies_action`. A temp has no named source and
+    /// so no armed walk to sample, but `track_freshtemp_boxed_enum_scrutinee`
+    /// does stage the scrutinee aggregate into `__freshtemp_boxed_scrut` and
+    /// register the box drop against it — so that slot is the same kind of
+    /// subject the named route re-homes: the one holding the box pointer the
+    /// scope-exit free will read.
+    ///
+    /// Why it has to be that slot and not the arm binding's alloca: the binding
+    /// holds a reconstructed COPY of the payload's `{ptr,len,cap}`, and a Drop
+    /// body that MUTATES a heap field (`self.buf.clear()`) run against the copy
+    /// frees the buffer and zeroes the copy's cap while the box keeps the stale
+    /// pointer — then the box drop frees it again. Registering the tag-guarded
+    /// `__karac_dropelems_opt_*` walk over the staged slot puts the mutation
+    /// where the later free looks.
+    ///
+    /// `None` whenever any ingredient is missing — no staged slot (non-boxed,
+    /// non-fresh, or a borrow scrutinee), no resolvable instantiation, or a
+    /// payload that runs no user Drop — and the caller then keeps the
+    /// pre-existing bodies-only-over-the-copy registration, i.e. today's
+    /// behavior.
+    pub(super) fn freshtemp_payload_bodies_action(
+        &mut self,
+        scrutinee: &Expr,
+        staged_slot: Option<PointerValue<'ctx>>,
+    ) -> Option<(PointerValue<'ctx>, inkwell::values::FunctionValue<'ctx>)> {
+        let slot = staged_slot?;
+        let te = self.optres_scrutinee_type_expr(scrutinee)?;
+        let walker = self.emit_optres_payload_user_drop_bodies_fn(&te)?;
+        Some((slot, walker))
+    }
+
+    /// The instantiated `Option[T]` / `Result[O, E]` a match/if-let scrutinee
+    /// EXPRESSION produces. Same two-step resolution
+    /// `track_discarded_optres_payload_bodies` uses for the discarded-temp
+    /// case: the span table first (a ctor or typed producer records the
+    /// instantiation there), then the fn-return / `pop`-family derivation for
+    /// the calls whose span the table misses.
+    fn optres_scrutinee_type_expr(&self, e: &Expr) -> Option<crate::ast::TypeExpr> {
+        self.enum_inst_type_exprs
+            .get(&(e.span.offset, e.span.length))
+            .cloned()
+            .or_else(|| self.untyped_let_boxed_enum_te(e))
     }
 
     /// B-2026-08-01-13 — is the scrutinee an Identifier naming an OWNED
@@ -731,9 +791,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // boxed-payload scrutinee (box-only). Registers in the enclosing frame,
         // so it frees after the escaped bindings on the match edge and via the
         // divergent else edge's cleanup walk on the miss edge.
-        if freshtemp_enum.is_none() {
-            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
-        }
+        let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
+            self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val)
+        } else {
+            None
+        };
         // Fresh-temp inline-`Result` / `Option[shared]` scrutinee — mirror the
         // match + if-let chain so `let Some(n) = st.pop() else { … }` over a
         // `Vec[shared T]` releases the popped node's transferred ref instead of
@@ -794,7 +856,8 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::collect_variant_payload_binding_names(pattern, false, &mut vp_names);
             self.current_variant_payload_bindings.extend(vp_names);
         }
-        let saved_shape_flags = self.set_scrutinee_shape_flags_for_pattern(pattern, value);
+        let saved_shape_flags =
+            self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.current_variant_payload_bindings.clear();

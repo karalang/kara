@@ -194,10 +194,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Mutually exclusive with the user-enum path above — seeded Option /
         // Result have all-`None` drop kinds, so `materialize_freshtemp_enum_
         // scrutinee` returns None for them; the gate makes that explicit.
-        if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
+        let freshtemp_boxed_slot = if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
-            self.track_freshtemp_boxed_enum_scrutinee(scrutinee, &pats, scrut);
-        }
+            self.track_freshtemp_boxed_enum_scrutinee(scrutinee, &pats, scrut)
+        } else {
+            None
+        };
         // Fresh-temp INLINE-heap `Result` scrutinee (`match cell.set(v) { Err(_)
         // => {} }`, B-2026-07-12-2 gap 2a): neither the enum-drop nor boxed path
         // above tracks a discarded fitting inline heap payload (a `String`/`Vec`
@@ -294,9 +296,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // path, so the bind site re-homes the body onto the arm binding. Sample
         // once, above the arm loop: the first consuming arm's retraction must
         // not make later arms read `None` and skip their own registration.
+        //
+        // B-2026-08-04-1 — the fresh-temp twin falls out of the same slot. A
+        // temp has no name and so no armed walk to sample, but the boxed
+        // tracker above staged the scrutinee aggregate into
+        // `__freshtemp_boxed_scrut`; that slot holds the box pointer the
+        // scope-exit free reads, so it is the right subject for the same
+        // reason the named route uses the source's. The two are mutually
+        // exclusive by construction.
         let saved_bodies_src = self.pattern_binding_scrutinee_payload_bodies_src;
         self.pattern_binding_scrutinee_payload_bodies_src =
-            self.scrutinee_armed_payload_bodies_action(scrutinee);
+            match self.scrutinee_armed_payload_bodies_action(scrutinee) {
+                Some(found) => Some(found),
+                None => self.freshtemp_payload_bodies_action(scrutinee, freshtemp_boxed_slot),
+            };
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -6616,17 +6629,23 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    ///
+    /// Returns the staged `__freshtemp_boxed_scrut` alloca when it registered
+    /// one. B-2026-08-04-1 needs it: that slot — not the arm binding's
+    /// reconstructed copy — is the subject the payload's Drop BODY walk must
+    /// run against, because the box it points at is what the scope-exit box
+    /// drop later reads. See `freshtemp_payload_bodies_action`.
     pub(super) fn track_freshtemp_boxed_enum_scrutinee(
         &mut self,
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
-    ) {
+    ) -> Option<PointerValue<'ctx>> {
         if !self.expr_yields_fresh_owned_temp(scrutinee) {
-            return;
+            return None;
         }
         let BasicValueEnum::StructValue(sv) = val else {
-            return;
+            return None;
         };
         for pat in patterns {
             let PatternKind::TupleVariant {
@@ -6657,9 +6676,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(l) => l.llvm_type,
                 None => continue,
             };
-            let Some(fn_val) = self.current_fn else {
-                return;
-            };
+            let fn_val = self.current_fn?;
             let alloca =
                 self.create_entry_alloca(fn_val, "__freshtemp_boxed_scrut", llvm_ty.into());
             let _ = self.builder.build_store(alloca, sv);
@@ -6712,7 +6729,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     &variant,
                     Some(inner_drop),
                 );
-                return;
+                return Some(alloca);
             }
             // Whole-TUPLE payload binding (`Some(kv)` where `kv: (String,
             // String)`, B-2026-07-18-3): the box holds a >3-word tuple whose
@@ -6748,7 +6765,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.track_boxed_enum_var_with_inner_drop(
                                         &enum_name, alloca, &enum_name, &variant, inner_drop,
                                     );
-                                    return;
+                                    return Some(alloca);
                                 }
                             }
                         }
@@ -6771,8 +6788,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 &variant,
                 inner_struct_name.as_deref(),
             );
-            return;
+            return Some(alloca);
         }
+        None
     }
 
     /// Fresh-temp INLINE (fitting, `<=` area) heap `Result` match scrutinee

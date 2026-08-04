@@ -5674,6 +5674,84 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-1 — the FRESH-TEMP twin: a boxed payload bound out of
+    /// `match mk() { Some(r) => … }` runs its Drop body against the BOX.
+    ///
+    /// The named-source leg (B-2026-08-02-25) re-homes the source's own
+    /// `__karac_dropelems_opt_*` action onto the arm binding; a fresh temp has
+    /// no named source, so it kept registering `__karac_dropbodies_only_<T>`
+    /// over the binding's reconstructed COPY of `{ptr,len,cap}`. The box still
+    /// owns the payload's memory, so a Drop body that MUTATES a heap field
+    /// freed the buffer and zeroed the copy's cap while the box kept the stale
+    /// pointer — and the scope-exit box drop freed it again. The fix threads
+    /// the staged `__freshtemp_boxed_scrut` slot to the bind site and registers
+    /// the same tag-guarded walk over THAT.
+    ///
+    /// The bodies here mutate (`self.buf.clear()`) on purpose: with a read-only
+    /// body this whole family is green either way, which is exactly why the
+    /// defect outlived the leg that shares its root cause. Reading `buf[0]` in
+    /// the body and in the arm also pins that the clear happens after the read,
+    /// so a resurrected copy-subject bug shows up as wrong output and not only
+    /// as an abort.
+    #[test]
+    fn e2e_freshtemp_boxed_optres_payload_arm_body_runs_against_the_box() {
+        let Some(out) = run_program(
+            "struct Full { name: String, buf: Vec[i64] }\n\
+             impl Drop for Full {\n\
+             \x20   fn drop(mut ref self) { println(f\"D{self.buf[0]}\"); self.buf.clear(); }\n\
+             }\n\
+             struct Wide { tag: i64, a: String, buf: Vec[i64] }\n\
+             impl Drop for Wide {\n\
+             \x20   fn drop(mut ref self) { println(f\"W{self.buf[0]}\"); self.buf.clear(); }\n\
+             }\n\
+             fn mk(i: i64) -> Full {\n\
+             \x20   let mut b: Vec[i64] = Vec.new();\n\
+             \x20   b.push(i);\n\
+             \x20   return Full { name: \"payload-string-data\", buf: b };\n\
+             }\n\
+             fn mkw(i: i64) -> Wide {\n\
+             \x20   let mut b: Vec[i64] = Vec.new();\n\
+             \x20   b.push(i);\n\
+             \x20   return Wide { tag: i, a: \"payload-string-data\", buf: b };\n\
+             }\n\
+             fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }\n\
+             fn res(i: i64) -> Result[Wide, i64] { return Result.Ok(mkw(i)); }\n\
+             fn main() {\n\
+             \x20   match opt(1i64) {\n\
+             \x20       Option.Some(r) => { println(f\"a{r.buf[0]}\"); }\n\
+             \x20       Option.None => { println(\"a-none\"); }\n\
+             \x20   }\n\
+             \x20   println(\"a-end\");\n\
+             \x20   if let Option.Some(r) = opt(2i64) { println(f\"b{r.buf[0]}\"); }\n\
+             \x20   println(\"b-end\");\n\
+             \x20   match res(4i64) {\n\
+             \x20       Result.Ok(r) => { println(f\"d{r.buf[0]}\"); }\n\
+             \x20       Result.Err(e) => { println(f\"d-err{e}\"); }\n\
+             \x20   }\n\
+             \x20   println(\"d-end\");\n\
+             \x20   let mut v: Vec[Full] = Vec.new();\n\
+             \x20   v.push(mk(5i64));\n\
+             \x20   while let Option.Some(r) = v.pop() {\n\
+             \x20       println(f\"e{r.buf[0]}\");\n\
+             \x20   }\n\
+             \x20   println(\"e-end\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // `Full` is 6 words and `Wide` 7, so both are boxed — `Wide` also past
+        // Result's wider 5-word area, which is the point of including it.
+        assert_eq!(
+            out,
+            "a1\nD1\na-end\n\
+             b2\nD2\nb-end\n\
+             d4\nW4\nd-end\n\
+             e5\nD5\ne-end\n\
+             end\n"
+        );
+    }
+
     /// B-2026-08-03-5 — a user type whose name collides with a generic enum's
     /// PARAMETER name must not gain a phantom Drop walker.
     ///

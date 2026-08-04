@@ -35268,6 +35268,75 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-1 — the FRESH-TEMP sibling of the guard above.
+    ///
+    /// Same defect, same subject rule, different route into it: a temp has no
+    /// named source whose action can be re-homed, so the bind site used to
+    /// register a bodies-only walker over the binding's reconstructed COPY.
+    /// `self.buf.clear()` then freed the buffer and zeroed the copy's cap while
+    /// the box kept the stale `{ptr,len,cap}`, and the box drop freed it again.
+    /// The fix threads the staged `__freshtemp_boxed_scrut` slot through so the
+    /// walk runs against the box.
+    ///
+    /// `d` is the control on the other side: a non-consuming `Some(_)` arm
+    /// binds nothing, so there is no registration to make and nothing here may
+    /// change for it. (That shape has its own PRE-EXISTING 32-byte leak — a
+    /// wildcard payload leaves `inner_struct_name` empty, so the box drop is
+    /// box-only — filed as B-2026-08-04-3 and deliberately kept OUT of this
+    /// program, since LSan would attribute it here.)
+    #[test]
+    fn asan_freshtemp_boxed_optres_payload_arm_body_runs_against_the_box() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+impl Drop for Full {
+    fn drop(mut ref self) {
+        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        self.buf.clear();
+    }
+}
+
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+
+fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // FRESH-TEMP match arm — no named source to re-home from.
+        match opt(i) {
+            Option.Some(r) => { n = n + r.buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // if-let sibling.
+        if let Option.Some(r) = opt(i) { n = n + r.buf.len(); }
+        // let-else sibling: the binding escapes into the enclosing frame.
+        let Option.Some(r3) = opt(i) else { return; }
+        n = n + r3.buf.len();
+        // while-let over `pop()` — a fresh temp per iteration, and the one
+        // shape here whose scrutinee type comes from the pop-family
+        // derivation rather than the fn-return table.
+        let mut v: Vec[Full] = Vec.new();
+        v.push(mk(i));
+        while let Option.Some(r) = v.pop() {
+            n = n + r.buf.len();
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 4 element reads per iteration x 200 = 800.
+            &["800"],
+            "freshtemp_boxed_optres_payload_arm_body_runs_against_the_box",
+        );
+    }
+
     // B-2026-07-30-11 (Map-values leg) — value bodies for let-bound Maps,
     // plus the remove-tombstone skip, the insert-of-binding full disarm, and
     // the whole-map rebind disarm. Same unsafe-direction guard as the other
