@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 74 | 1 |
 | false-positive | 55 | 0 |
 | perf | 43 | 0 |
-| crash | 37 | 0 |
+| crash | 38 | 1 |
 | soundness | 35 | 0 |
 | diagnostics | 35 | 0 |
 | other | 13 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 646 | 2 |
+| codegen | 647 | 3 |
 | interp | 121 | 1 |
 | typecheck | 116 | 0 |
 | ownership | 37 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **895 surfaced · 4 open · 883 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **896 surfaced · 5 open · 883 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **895 surfaced 
 | B-2026-08-03-12 | 2026-08-03 | codegen | low | `coroutine_preserves_active_span_across_suspend` (tests/coro_e2e.rs) is INTERMITTENT -- the post-resume log line came back unstamped (`[info] after-resume`, span_id=0) on one full-suite run and has not reproduced in 19 attempts since | open |
 | B-2026-08-04-3 | 2026-08-04 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee matched by a WILDCARD payload arm (`match mk() { Some(_) => .. }`) gets a box-ONLY free, so the payload struct's inner heap leaks -- the whole-binding sibling (`Some(r)`) is correct because only a Binding sub-pattern populates `inner_struct_name` | — |
 | B-2026-08-04-4 | 2026-08-04 | interp | medium | INTERPRETER: a Drop-body move record is keyed by BINDING NAME and outlives its block, so a later same-named binding that was never moved is treated as moved and its user `impl Drop` body is silently skipped -- rename the second binding and the body fires | — |
+| B-2026-08-04-5 | 2026-08-04 | codegen | high | ICE: destructuring a heap-BOXED Option/Result payload with a STRUCT sub-pattern (`match o { Some(Full { name, buf }) => .. }`) panics the compiler with `ExtractOutOfRange` -- `build_extract_value` runs against the Option aggregate instead of the deboxed payload | — |
 
 ### Fixed (883)
 
