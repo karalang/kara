@@ -2280,14 +2280,23 @@ fn new_crate(tag: i64, name: String) -> Crate {
     /// Two-sided, like `tests/extern_keep_list.rs`'s: `run()` reports a pin
     /// that stopped firing, so a fixed bug forces its own pin out instead of
     /// silently disarming the gate for that kind forever.
-    /// Repointed 2026-08-02: B-2026-07-30-11 closed in 8de98fe, and the
-    /// two-sided check did its job — `interp:drop-never-ran` stopped firing
-    /// entirely while `seq`/`autopar` kept going (13 of 30 programs, down from
-    /// ~62% on all three surfaces). The closure fixed the interpreter and left
-    /// codegen behind, converting a shared gap into a run/build split, now
-    /// filed as B-2026-08-02-25. The pin follows the live bug, not the id it
-    /// was created with.
-    const KNOWN_OPEN: &[(&str, &str)] = &[("drop-never-ran", "B-2026-08-02-25")];
+    /// EMPTY as of 2026-08-05, and that is the intended resting state: every
+    /// signature kind gates again.
+    ///
+    /// The list existed for one entry and the two-sided check retired it on
+    /// schedule. `drop-never-ran` was pinned to B-2026-07-30-11 at ~62% of
+    /// programs across all three surfaces; 8de98fe fixed the interpreter leg
+    /// and the pin reported `interp` going quiet while `seq`/`autopar` kept
+    /// firing, which is what identified the remaining codegen half as a
+    /// run/build split (B-2026-08-02-25). After 21a1fb6 (displacement) and
+    /// 542d7d7 (match-arm) the kind stopped firing entirely — 0 findings over
+    /// 30 programs and 21,480 balanced constructions — and the stale-pin
+    /// warning said so, which is this entry's removal.
+    ///
+    /// Re-pin only for a bug that is genuinely open and genuinely noisy, and
+    /// re-read the cost documented above before doing it: a pinned kind stops
+    /// gating for NEW bugs too.
+    const KNOWN_OPEN: &[(&str, &str)] = &[];
 
     /// The ledger id explaining `sig`, if it is a pinned known-open kind.
     fn known_open_for(sig: &str) -> Option<&'static str> {
