@@ -29419,6 +29419,88 @@ fn test_result_struct_payload_field_freed_and_single_body() {
 }
 
 #[test]
+fn test_named_optres_boxed_payload_arm_runs_user_drop_body() {
+    // B-2026-08-02-25 (match-arm leg) — the ORACLE half. The interpreter has
+    // always fired the payload's Drop body at the arm binding's death here; AOT
+    // was silent for a heap-BOXED payload, which made this a run-vs-build split
+    // on the SHIPPING side. Pinning the oracle keeps the codegen twin honest:
+    // it is judged by matching this byte for byte.
+    //
+    // `Wide` is 4 words, so it is BOXED at Option's 3-word payload area and
+    // INLINE at Result's 5-word one; `Wider` is 7 and boxed in both. Widths are
+    // load-bearing — a boxing threshold is what separated the working spelling
+    // from the broken one — so do not "simplify" these structs.
+    //
+    // Keep byte-identical to the codegen twin
+    // `e2e_named_optres_boxed_payload_arm_runs_user_drop_body`.
+    assert_eq!(
+        run("struct Wide { tag: i64, name: String }\n\
+             impl Drop for Wide { fn drop(mut ref self) { println(f\"D{self.tag}\") } }\n\
+             struct Wider { tag: i64, a: String, b: String }\n\
+             impl Drop for Wider { fn drop(mut ref self) { println(f\"W{self.tag}\") } }\n\
+             struct Narrow { name: String }\n\
+             impl Drop for Narrow { fn drop(mut ref self) { println(f\"N{self.name}\") } }\n\
+             fn mkw(t: i64) -> Wide { return Wide { tag: t, name: \"payload-string-data\" }; }\n\
+             fn mkr(t: i64) -> Wider {\n\
+             return Wider { tag: t, a: \"payload-string-data\", b: \"second-payload-str\" };\n\
+             }\n\
+             fn main() {\n\
+             {\n\
+             let o: Option[Wide] = Some(mkw(1i64));\n\
+             match o {\n\
+             Some(r) => { println(f\"a{r.tag}\"); }\n\
+             None => { println(\"a-none\"); }\n\
+             }\n\
+             println(\"a-end\");\n\
+             }\n\
+             {\n\
+             let o: Option[Wide] = Some(mkw(2i64));\n\
+             if let Some(r) = o { println(f\"b{r.tag}\"); }\n\
+             println(\"b-end\");\n\
+             }\n\
+             {\n\
+             let o: Option[Wide] = Some(mkw(3i64));\n\
+             let Some(r) = o else { return; }\n\
+             println(f\"c{r.tag}\");\n\
+             println(\"c-end\");\n\
+             }\n\
+             {\n\
+             let o: Result[Wider, i64] = Ok(mkr(4i64));\n\
+             match o {\n\
+             Ok(r) => { println(f\"d{r.tag}\"); }\n\
+             Err(e) => { println(f\"d-err{e}\"); }\n\
+             }\n\
+             println(\"d-end\");\n\
+             }\n\
+             {\n\
+             let o: Option[Wide] = Some(mkw(5i64));\n\
+             match o {\n\
+             Some(_) => { println(\"e\"); }\n\
+             None => { println(\"e-none\"); }\n\
+             }\n\
+             println(\"e-end\");\n\
+             }\n\
+             {\n\
+             let o: Option[Narrow] = Some(Narrow { name: \"n6\" });\n\
+             match o {\n\
+             Some(r) => { println(f\"f{r.name}\"); }\n\
+             None => { println(\"f-none\"); }\n\
+             }\n\
+             println(\"f-end\");\n\
+             }\n\
+             println(\"end\");\n\
+             }\n"),
+        "a1\nD1\na-end\n\
+         b2\nD2\nb-end\n\
+         c3\nD3\nc-end\n\
+         d4\nW4\nd-end\n\
+         e\nD5\ne-end\n\
+         fn6\nNn6\nf-end\n\
+         end\n"
+    );
+}
+
+#[test]
 fn test_struct_field_move_out_single_body_fire() {
     // B-2026-08-03-8 (bodies half) interp twin. `let x = h.f` left the source
     // struct's field walk running over every field, so the moved one's body

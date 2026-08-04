@@ -35198,6 +35198,76 @@ fn main() {
         );
     }
 
+    /// B-2026-08-02-25 (match-arm leg) — re-homing a BOXED payload's Drop body
+    /// onto the arm binding must run it against the BOX, not the binding's copy.
+    ///
+    /// This is the guard for the sharp edge of that leg. A boxed payload's
+    /// memory stays owned by the box drop; the arm binding holds a reconstructed
+    /// COPY of `{ptr,len,cap}`. Run `Full.drop` — whose body calls
+    /// `self.buf.clear()` — against that copy and the buffer is freed while the
+    /// BOX keeps the stale pointer, so the scope-exit box drop frees it again.
+    /// The first attempt at this leg did exactly that and double-freed all four
+    /// consuming shapes below. Re-registering the SOURCE's own
+    /// `__karac_dropelems_opt_*` action under the binding's NAME (same walker,
+    /// same slot, new fire point) is what makes the mutation land where the
+    /// later free reads it.
+    ///
+    /// The read-only bodies the E2E pins use cannot catch this — they touch no
+    /// heap — so the payload here deliberately mutates. `d` is the control: a
+    /// non-consuming arm keeps the source's walk and must stay clean too.
+    #[test]
+    fn asan_boxed_optres_payload_arm_body_runs_against_the_box() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+impl Drop for Full {
+    fn drop(mut ref self) {
+        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        self.buf.clear();
+    }
+}
+
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // NAMED source, consuming match arm — the body re-homes onto `r`.
+        let a: Option[Full] = Option.Some(mk(i));
+        match a {
+            Option.Some(r) => { n = n + r.buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // if-let sibling.
+        let b: Option[Full] = Option.Some(mk(i));
+        if let Option.Some(r) = b { n = n + r.buf.len(); }
+        // let-else sibling: the binding lands in the ENCLOSING frame, so its
+        // action drains there rather than in an arm frame.
+        let c: Option[Full] = Option.Some(mk(i));
+        let Option.Some(r3) = c else { return; }
+        n = n + r3.buf.len();
+        // CONTROL: non-consuming arm, source keeps its own walk.
+        let d: Option[Full] = Option.Some(mk(i));
+        match d {
+            Option.Some(_) => { n = n + 1i64; }
+            Option.None => { n = n + 100i64; }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 1 + 1 + 1 element read + 1 = 4 per iteration x 200 = 800.
+            &["800"],
+            "boxed_optres_payload_arm_body_runs_against_the_box",
+        );
+    }
+
     // B-2026-07-30-11 (Map-values leg) — value bodies for let-bound Maps,
     // plus the remove-tombstone skip, the insert-of-binding full disarm, and
     // the whole-map rebind disarm. Same unsafe-direction guard as the other

@@ -288,6 +288,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_owned_param_flag = self.pattern_binding_scrutinee_is_owned_param;
         self.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-08-02-25 (match-arm leg) — the source binding's payload-bodies
+        // walk is armed HERE, before any arm's suppressor runs. A consuming arm
+        // retracts it; for a BOXED payload that walk is the body's only fire
+        // path, so the bind site re-homes the body onto the arm binding. Sample
+        // once, above the arm loop: the first consuming arm's retraction must
+        // not make later arms read `None` and skip their own registration.
+        let saved_bodies_src = self.pattern_binding_scrutinee_payload_bodies_src;
+        self.pattern_binding_scrutinee_payload_bodies_src =
+            self.scrutinee_armed_payload_bodies_action(scrutinee);
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -785,6 +794,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
         self.pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
         self.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
+        self.pattern_binding_scrutinee_payload_bodies_src = saved_bodies_src;
         self.match_scrutinee_enum_hint = saved_scrut_enum_hint;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of

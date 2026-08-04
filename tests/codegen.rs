@@ -5572,6 +5572,108 @@ fn main() {
         }
     }
 
+    /// B-2026-08-02-25 (match-arm leg) — a consuming `Some(x)` / `Ok(x)` arm on
+    /// a NAMED `Option`/`Result` binding runs the payload's user `impl Drop`
+    /// body when that payload is heap-BOXED.
+    ///
+    /// The two registrations that could own the body both declined: the inline
+    /// arm on word count, and the boxed arm on its fresh-owning-temp test. So
+    /// the source's `__karac_dropelems_opt_*` walk — retracted by the arm, since
+    /// a binding sub-pattern consumes — was the body's only fire path, and with
+    /// it gone the destructor ran NOWHERE while `karac run` ran it.
+    ///
+    /// The discriminator is WIDTH, not `Option`-vs-`Result`: the payload area is
+    /// 3 words for `Option` and 5 for `Result`, so `Wide` (4 words) is boxed in
+    /// an `Option` and inline in a `Result`, and `Wider` (7) is boxed in both.
+    /// An earlier note on the ledger row read the Result spelling of case 1 as
+    /// "correct" and the Option spelling as "broken"; both were really reports
+    /// about which side of the boxing threshold the payload landed on. Case 4
+    /// therefore uses `Wider`, or it would exercise the inline arm again.
+    ///
+    /// No sanitizer sees this class — the payload's memory is freed correctly by
+    /// the untouched `BoxedEnumDrop` either way, so only the destructor's
+    /// side effect goes missing. Cases 5 and 6 are the over-fire guards in the
+    /// other direction: a non-consuming arm (whose source keeps its walk) and
+    /// an inline payload (the pre-existing arm) must each still print ONE body.
+    #[test]
+    fn e2e_named_optres_boxed_payload_arm_runs_user_drop_body() {
+        const PRE: &str = "struct Wide { tag: i64, name: String }\n\
+             impl Drop for Wide { fn drop(mut ref self) { println(f\"D{self.tag}\"); } }\n\
+             struct Wider { tag: i64, a: String, b: String }\n\
+             impl Drop for Wider { fn drop(mut ref self) { println(f\"W{self.tag}\"); } }\n\
+             struct Narrow { name: String }\n\
+             impl Drop for Narrow { fn drop(mut ref self) { println(f\"N{self.name}\"); } }\n\
+             fn mkw(t: i64) -> Wide { return Wide { tag: t, name: \"payload-string-data\" }; }\n\
+             fn mkr(t: i64) -> Wider {\n\
+             \x20   return Wider { tag: t, a: \"payload-string-data\", b: \"second-payload-str\" };\n\
+             }\n";
+        let Some(out) = run_program(&format!(
+            "{PRE}fn main() {{\n\
+             \x20   {{\n\
+             \x20       let o: Option[Wide] = Some(mkw(1i64));\n\
+             \x20       match o {{\n\
+             \x20           Some(r) => {{ println(f\"a{{r.tag}}\"); }}\n\
+             \x20           None => {{ println(\"a-none\"); }}\n\
+             \x20       }}\n\
+             \x20       println(\"a-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Option[Wide] = Some(mkw(2i64));\n\
+             \x20       if let Some(r) = o {{ println(f\"b{{r.tag}}\"); }}\n\
+             \x20       println(\"b-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Option[Wide] = Some(mkw(3i64));\n\
+             \x20       let Some(r) = o else {{ return; }}\n\
+             \x20       println(f\"c{{r.tag}}\");\n\
+             \x20       println(\"c-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Result[Wider, i64] = Ok(mkr(4i64));\n\
+             \x20       match o {{\n\
+             \x20           Ok(r) => {{ println(f\"d{{r.tag}}\"); }}\n\
+             \x20           Err(e) => {{ println(f\"d-err{{e}}\"); }}\n\
+             \x20       }}\n\
+             \x20       println(\"d-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Option[Wide] = Some(mkw(5i64));\n\
+             \x20       match o {{\n\
+             \x20           Some(_) => {{ println(\"e\"); }}\n\
+             \x20           None => {{ println(\"e-none\"); }}\n\
+             \x20       }}\n\
+             \x20       println(\"e-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Option[Narrow] = Some(Narrow {{ name: \"n6\" }});\n\
+             \x20       match o {{\n\
+             \x20           Some(r) => {{ println(f\"f{{r.name}}\"); }}\n\
+             \x20           None => {{ println(\"f-none\"); }}\n\
+             \x20       }}\n\
+             \x20       println(\"f-end\");\n\
+             \x20   }}\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )) else {
+            return;
+        };
+        // Every body lands at the BINDING's death, before the block's trailing
+        // print — including case 3, whose `let … else` binding lives in the
+        // enclosing frame rather than an arm's. That case is why the NLL gate
+        // in `fire_due_user_drops` had to learn the `__karac_dropbodies_only_`
+        // prefix: registering the walk alone made it print after `c-end`.
+        assert_eq!(
+            out,
+            "a1\nD1\na-end\n\
+             b2\nD2\nb-end\n\
+             c3\nD3\nc-end\n\
+             d4\nW4\nd-end\n\
+             e\nD5\ne-end\n\
+             fn6\nNn6\nf-end\n\
+             end\n"
+        );
+    }
+
     /// B-2026-08-03-5 — a user type whose name collides with a generic enum's
     /// PARAMETER name must not gain a phantom Drop walker.
     ///

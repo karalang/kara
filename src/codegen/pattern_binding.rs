@@ -874,29 +874,63 @@ impl<'ctx> super::Codegen<'ctx> {
                             // fields before the box drop's scope-exit
                             // interior free, and every move hook retracts it
                             // by name like any UserDrop entry.
-                            // B-2026-08-02-25 residual (match-arm leg): this
-                            // gate also excludes a NAMED binding scrutinee
-                            // (`let o: Option[T] = ..; match o { Some(x) => … }`)
-                            // with a payload wider than the inline area — the
-                            // arm above declines on word count, this one on the
-                            // fresh-temp test, so the body runs nowhere while
-                            // the interpreter fires it. Dropping the temp test
-                            // is NOT the fix: it double-frees
-                            // (`asan_optres_payload_user_drop_bodies_fire_once`,
-                            // whose `match c { Some(r) => { n = n + 1 } }` arm
-                            // binds but does not consume). Only a CONSUMING arm
-                            // retracts the source's walk via
-                            // `suppress_optres_payload_bodies_for_match`; a
-                            // non-consuming one keeps it, and registering here
-                            // then fires the body twice. Closing this needs the
-                            // consuming/non-consuming split visible at
-                            // pattern-binding time — the suppressor knows it
-                            // (`pattern_consumes_field`) but nothing carries it
-                            // here — so the registration can be conditioned on
-                            // the retraction that actually happened.
+                            // B-2026-08-02-25 (match-arm leg) — the second
+                            // admitting signal beside the fresh temp: a NAMED
+                            // scrutinee (`let o: Option[T] = ..; match o {
+                            // Some(x) => … }`) whose payload-bodies walk was
+                            // ARMED when the match began. A binding sub-pattern
+                            // is consuming by definition
+                            // (`pattern_consumes_field`), so reaching here means
+                            // `suppress_optres_payload_bodies_for_match` retracts
+                            // that walk — and for a boxed payload the arm above
+                            // has already declined on word count, leaving the
+                            // body with no owner at all while the interpreter
+                            // fires it.
+                            //
+                            // The two routes register DIFFERENT things, and the
+                            // difference is the whole point.
+                            //
+                            //  * NAMED source: RE-HOME the source's own
+                            //    `__karac_dropelems_opt_*` action — same walker,
+                            //    same SOURCE SLOT, new binding name. The box, not
+                            //    the arm, still owns the payload's memory, so a
+                            //    Drop body that MUTATES a heap field
+                            //    (`self.buf.clear()`) has to run against the
+                            //    box's copy — the one the scope-exit box drop
+                            //    reads. Point it at this binding's reconstructed
+                            //    alloca instead and the body frees the buffer +
+                            //    zeroes THAT cap while the box keeps a stale
+                            //    `{ptr,len,cap}`, and the box drop frees it
+                            //    again. Renaming also moves the fire from the
+                            //    source's death to the binding's, which is where
+                            //    the interpreter puts it.
+                            //  * FRESH TEMP: no named source and so no action to
+                            //    sample; keep the bodies-only walker over the
+                            //    binding's copy (B-2026-07-30-11's original
+                            //    registration, unchanged here).
+                            //
+                            // Why sample a flag rather than look for the
+                            // retraction: `bind_pattern_values` runs BEFORE the
+                            // suppressor block, so the action is still armed at
+                            // this point; the flag is sampled above the arm loop
+                            // and reports the pre-retraction state for every arm.
+                            //
+                            // The pairing is what keeps this from double-firing.
+                            // Armed-and-consumed hands the body from source to
+                            // binding (one fire); armed-and-NOT-consumed is a
+                            // wildcard arm that binds nothing, so there is no
+                            // registration to make; never-armed means the source
+                            // owns no body and neither does the binding. Owned
+                            // params stay excluded for the B-2026-08-01-13 reason
+                            // the inline arm gives: the caller's fire owns that
+                            // body.
+                            let rehome_src = self
+                                .pattern_binding_scrutinee_payload_bodies_src
+                                .filter(|_| !self.pattern_binding_scrutinee_is_owned_param);
                             let is_boxed_optres_drop_payload = self
                                 .pattern_binding_scrutinee_is_option_result
-                                && self.pattern_binding_scrutinee_is_fresh_owning_temp
+                                && (self.pattern_binding_scrutinee_is_fresh_owning_temp
+                                    || rehome_src.is_some())
                                 && !self.pattern_binding_scrutinee_is_shared_enum
                                 && self.struct_types.contains_key(tn)
                                 && !self.shared_types.contains_key(tn)
@@ -909,12 +943,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .current_variant_payload_bindings
                                     .contains(name.as_str());
                             if is_boxed_optres_drop_payload {
-                                let tn_owned = tn.to_string();
-                                if let Some(f) =
-                                    self.emit_struct_user_drop_bodies_only_fn(&tn_owned)
-                                {
+                                if let Some((src_ptr, src_fn)) = rehome_src {
                                     let name_owned = name.clone();
-                                    self.track_user_drop_var_with_fn("", &name_owned, alloca, f);
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &name_owned,
+                                        src_ptr,
+                                        src_fn,
+                                    );
+                                } else {
+                                    let tn_owned = tn.to_string();
+                                    if let Some(f) =
+                                        self.emit_struct_user_drop_bodies_only_fn(&tn_owned)
+                                    {
+                                        let name_owned = name.clone();
+                                        self.track_user_drop_var_with_fn(
+                                            "",
+                                            &name_owned,
+                                            alloca,
+                                            f,
+                                        );
+                                    }
                                 }
                             }
                             // B-2026-07-31-12 — the ENUM sibling of the

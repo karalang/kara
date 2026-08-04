@@ -20,9 +20,21 @@ use crate::ast::*;
 
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicTypeEnum, IntType};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, PointerValue};
 
 use super::state::LoopFrame;
+
+/// Saved scrutinee-shape state for `set_scrutinee_shape_flags_for_pattern` /
+/// `restore_scrutinee_shape_flags`: `(is_option_result, optres_area,
+/// is_shared_enum, is_fresh_owning_temp, is_owned_param, payload_bodies_src)`.
+pub(super) type ScrutineeShapeFlags<'ctx> = (
+    bool,
+    usize,
+    bool,
+    bool,
+    bool,
+    Option<(PointerValue<'ctx>, inkwell::values::FunctionValue<'ctx>)>,
+);
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── IfLet ────────────────────────────────────────────────────
@@ -543,19 +555,23 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         pattern: &Pattern,
         scrutinee: &Expr,
-    ) -> (bool, usize, bool, bool, bool) {
+    ) -> ScrutineeShapeFlags<'ctx> {
         let saved = (
             self.pattern_binding_scrutinee_is_option_result,
             self.pattern_binding_scrutinee_optres_area,
             self.pattern_binding_scrutinee_is_shared_enum,
             self.pattern_binding_scrutinee_is_fresh_owning_temp,
             self.pattern_binding_scrutinee_is_owned_param,
+            self.pattern_binding_scrutinee_payload_bodies_src,
         );
         self.pattern_binding_scrutinee_is_fresh_owning_temp =
             self.scrutinee_expr_is_owning_fresh_temp(scrutinee);
         // B-2026-08-01-13 — see `compile_match`'s twin derivation.
         self.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-08-02-25 (match-arm leg) — see `compile_match`'s twin.
+        self.pattern_binding_scrutinee_payload_bodies_src =
+            self.scrutinee_armed_payload_bodies_action(scrutinee);
         let en = self.variant_pattern_enum_name(pattern);
         self.pattern_binding_scrutinee_is_option_result =
             matches!(en.as_deref(), Some("Option") | Some("Result"));
@@ -570,13 +586,47 @@ impl<'ctx> super::Codegen<'ctx> {
         saved
     }
 
-    /// Restore the quintuple saved by `set_scrutinee_shape_flags_for_pattern`.
-    pub(super) fn restore_scrutinee_shape_flags(&mut self, saved: (bool, usize, bool, bool, bool)) {
+    /// Restore the sextuple saved by `set_scrutinee_shape_flags_for_pattern`.
+    pub(super) fn restore_scrutinee_shape_flags(&mut self, saved: ScrutineeShapeFlags<'ctx>) {
         self.pattern_binding_scrutinee_is_option_result = saved.0;
         self.pattern_binding_scrutinee_optres_area = saved.1;
         self.pattern_binding_scrutinee_is_shared_enum = saved.2;
         self.pattern_binding_scrutinee_is_fresh_owning_temp = saved.3;
         self.pattern_binding_scrutinee_is_owned_param = saved.4;
+        self.pattern_binding_scrutinee_payload_bodies_src = saved.5;
+    }
+
+    /// B-2026-08-02-25 (match-arm leg) — the armed `__karac_dropelems_opt_*` /
+    /// `__karac_dropelems_res_*` payload-bodies action on this scrutinee, as
+    /// `(slot, walker)`. A consuming `Some(x)` / `Ok(x)` / `Err(x)` arm
+    /// retracts it (`suppress_optres_payload_bodies_for_match`), so `Some`
+    /// here says "the source is about to stop owning the payload's Drop
+    /// body" — and for a heap-BOXED payload that walk is the body's ONLY fire
+    /// path, since the box drop runs the payload's MEMORY-only drop
+    /// (B-2026-08-03-10).
+    ///
+    /// The SLOT travels with the walker deliberately: the re-homed
+    /// registration re-runs this same action against this same source slot,
+    /// only under the arm binding's name so it fires at the binding's death
+    /// instead of the source's. See the field's doc for why the binding's own
+    /// reconstructed copy is the wrong subject.
+    ///
+    /// Must be sampled BEFORE the arm's suppressors run. Both callers do:
+    /// `compile_match` derives its scrutinee flags above the arm loop, and
+    /// the if-let / while-let / let-else helper above runs before its own
+    /// suppressor block. Restricted to the same scrutinee spellings the
+    /// suppressor accepts (a bare name / `self`), so the two agree by
+    /// construction.
+    pub(super) fn scrutinee_armed_payload_bodies_action(
+        &self,
+        e: &Expr,
+    ) -> Option<(PointerValue<'ctx>, inkwell::values::FunctionValue<'ctx>)> {
+        let name = match &e.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return None,
+        };
+        self.armed_container_elem_bodies_action(name)
     }
 
     /// B-2026-08-01-13 — is the scrutinee an Identifier naming an OWNED

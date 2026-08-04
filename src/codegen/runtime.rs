@@ -5406,6 +5406,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the coarse any-action test stays true and cannot express "the payload
     /// is gone" — which the own-Drop enum reassign leg needs (firing either
     /// body on a moved-out payload reads cap-zeroed bits: `drop 0`).
+    /// B-2026-08-02-25 (match-arm leg) — the `(slot, walker)` of `name`'s armed
+    /// `__karac_dropelems_*` action, for a consuming match arm to RE-HOME onto
+    /// the payload binding it introduces. The pair travels together on purpose:
+    /// the re-registration must keep the SOURCE's slot as the subject (a boxed
+    /// payload's memory stays owned by the box, so a mutating Drop body has to
+    /// mutate the box's copy) while taking the BINDING's name, which is what
+    /// moves the fire from the source's death to the binding's.
+    ///
+    /// Innermost armed action wins, matching the retraction helpers' scan.
+    pub(super) fn armed_container_elem_bodies_action(
+        &self,
+        name: &str,
+    ) -> Option<(PointerValue<'ctx>, FunctionValue<'ctx>)> {
+        self.scope_cleanup_actions.iter().rev().find_map(|frame| {
+            frame.iter().rev().find_map(|action| match action {
+                CleanupAction::UserDrop {
+                    binding_name,
+                    binding_ptr,
+                    drop_fn,
+                    ..
+                } if binding_name == name && Self::is_container_elem_bodies_fn(*drop_fn) => {
+                    Some((*binding_ptr, *drop_fn))
+                }
+                _ => None,
+            })
+        })
+    }
+
     pub(super) fn has_armed_container_elem_bodies(&self, name: &str) -> bool {
         self.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {

@@ -2532,6 +2532,27 @@ pub(super) struct Codegen<'ctx> {
     /// instead of the body+memory wrapper — firing here too doubled the
     /// body on both backends (`match w { E2.B(r2) => … }` with `w: E2`).
     pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
+    /// B-2026-08-02-25 (match-arm leg) — the `(slot, walker)` of the armed
+    /// `__karac_dropelems_opt_*` / `__karac_dropelems_res_*` payload-bodies
+    /// action on a NAMED `Option`/`Result` scrutinee, sampled BEFORE the arm's
+    /// suppressors run (which is also before `bind_pattern_values`), so it
+    /// reports the pre-retraction state for every arm alike.
+    ///
+    /// `Some` means two things at once, and the registration needs both.
+    /// (1) The source's walk is about to be RETRACTED by
+    /// `suppress_optres_payload_bodies_for_match` — a binding sub-pattern
+    /// consumes by definition — so for a heap-BOXED payload, which the inline
+    /// registration declines on word count, the body would otherwise run
+    /// nowhere. (2) It carries the SUBJECT the re-homed walk must use: the
+    /// SOURCE's Option/Result slot, not the arm binding's reconstructed copy.
+    /// That distinction is load-bearing — a boxed payload's memory stays owned
+    /// by the box, so a Drop body that MUTATES a heap field (`self.buf.clear()`)
+    /// must mutate the BOX's copy, the one the later box drop reads. Run
+    /// against the binding's copy instead, the body frees the buffer and zeroes
+    /// the copy's cap while the box keeps the stale `{ptr,len,cap}`, and the box
+    /// drop frees it a second time.
+    pub(crate) pattern_binding_scrutinee_payload_bodies_src:
+        Option<(inkwell::values::PointerValue<'ctx>, FunctionValue<'ctx>)>,
     /// B-2026-08-01-15 — locals that are whole-move REBINDS of an owned
     /// param (`let h2 = h;`), transitively. A destructure or match on one
     /// is a param-view bind exactly like the direct param case
@@ -7696,6 +7717,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_is_fresh_owning_temp: false,
             pattern_binding_scrutinee_is_owned_param: false,
+            pattern_binding_scrutinee_payload_bodies_src: None,
             param_view_locals: HashSet::new(),
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,
