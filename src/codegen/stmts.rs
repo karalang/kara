@@ -8122,7 +8122,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = val else {
             return Ok(());
         };
-        let fresh = self.expr_yields_fresh_owned_temp(value);
+        // B-2026-08-04-10 — `let S { a, b } = f()?;`. A `?` is not a `Call`, so
+        // `expr_yields_fresh_owned_temp` said no and the leaf bindings never
+        // registered their cleanup: both heap fields leaked, silently, with
+        // correct output on both backends. Look THROUGH the `?` at its operand
+        // instead — `?` moves its Ok payload out and the operand's own cleanup
+        // is disarmed at the `?` site, so when the operand is a fresh owned
+        // temp the unwrapped value is one too.
+        //
+        // Scoped to this destructure rather than widened inside
+        // `expr_yields_fresh_owned_temp`, whose other callers (the fresh-temp
+        // scrutinee trackers) have their own ownership contracts that a `?`
+        // operand has not been measured against. Recursing on the operand also
+        // leaves `let S { .. } = r?` (a named binding) at today's behavior —
+        // only the shape the probes prove broken changes.
+        let fresh = match &value.kind {
+            ExprKind::Question(inner) => self.expr_yields_fresh_owned_temp(inner),
+            _ => self.expr_yields_fresh_owned_temp(value),
+        };
 
         // Place-source (`let S { a, b } = s`) where the source struct `s` is
         // CALLEE-OWNED — a bare by-value param deep-copied at entry (#14/#17

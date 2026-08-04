@@ -35499,12 +35499,13 @@ fn main() {
     /// 3-word area and it boxes; through `Result` it is inline and never
     /// reaches this path (the codegen twin covers that half for correctness).
     ///
-    /// NOT covered, deliberately: the `let <StructPattern> = <expr>?` spelling
-    /// — destructuring DIRECTLY on the `?` rather than through a binding — is
-    /// still leaked, filed as its own row. Routing through a binding first
-    /// (which this fixture does) is clean, and the two spellings differ only
-    /// in whether a binding registers the payload's cleanup. Keeping the
-    /// leaky one out stops LeakSanitizer attributing that row's leak here.
+    /// Both spellings are here — through an intermediate binding, and
+    /// destructuring DIRECTLY on the `?`. They took different paths and broke
+    /// separately: the direct destructure additionally leaked both heap fields
+    /// because `expr_yields_fresh_owned_temp` matches only `Call`/`MethodCall`,
+    /// so a `?` RHS looked like a place-source and the leaf bindings never
+    /// registered their cleanup (B-2026-08-04-10). `.unwrap()` and a direct
+    /// call were always fine, which is what localized it to that predicate.
     #[test]
     fn asan_question_deboxed_ok_payload_frees_the_box() {
         assert_clean_asan_run(
@@ -35541,6 +35542,12 @@ fn step_opt(i: i64) -> Option[i64] {
     return Option.Some(b.name.len() + b.buf.len() + c.name.len() + c.pad);
 }
 
+fn step_destructure(i: i64) -> Result[i64, String] {
+    // Destructured DIRECTLY on the `?`, with no binding in between.
+    let Full { name, buf } = resf(i)?;
+    return Result.Ok(name.len() + buf.len());
+}
+
 fn main() {
     let mut n = 0i64;
     let mut i = 0i64;
@@ -35553,14 +35560,19 @@ fn main() {
             Option.Some(v) => { n = n + v; }
             Option.None => { n = n + 1000i64; }
         }
+        match step_destructure(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 1000i64; }
+        }
         i = i + 1i64;
     }
     println(n);
 }
 "#,
-            // step_res: 19+1 = 20. step_opt: 19+1 + 19+i = 39+i.
-            // Per iteration 59+i; sum over i in 0..200 = 200*59 + 19900 = 31700.
-            &["31700"],
+            // step_res 19+1 = 20, step_opt 19+1 + 19+i = 39+i, step_destructure
+            // 19+1 = 20. Per iteration 79+i; over i in 0..200 that is
+            // 200*79 + 19900 = 35700.
+            &["35700"],
             "question_deboxed_ok_payload_frees_the_box",
         );
     }
