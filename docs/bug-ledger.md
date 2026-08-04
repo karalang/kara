@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 211 | 0 |
+| miscompile | 212 | 0 |
 | leak | 130 | 0 |
-| double-free | 92 | 1 |
+| double-free | 93 | 2 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
 | run-vs-build | 75 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 654 | 2 |
+| codegen | 656 | 3 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
-| ownership | 37 | 1 |
-| autopar | 31 | 1 |
+| ownership | 38 | 2 |
+| autopar | 32 | 1 |
 | cli | 24 | 0 |
 | other | 23 | 0 |
 | runtime | 19 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **905 surfaced · 3 open · 894 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **907 surfaced · 4 open · 895 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-04-8 | 2026-08-04 | codegen | medium | Bounds-check elimination fails for the CONVERGING two-pointer loop `while lo <= hi { v[base+lo] ... v[base+hi] }` when the index carries a base offset — the flat-2D / row-major scan shape. Isolated on kata #246 (strobogrammatic two-pointer over a flat Vec[u8] corpus of N*LEN bytes): kara keeps 2 per-iteration checks that clang -O3 does not, costing 1.28x on the kata and 1.93x on a work-identical minimal probe. Neither ingredient alone breaks BCE — base+ascending, base+descending, converging-without-base, and even both-ends-from-ONE-ascending-IV all elide cleanly; only the combination of a base offset with a converging two-IV guard defeats it. | — |
 | B-2026-08-04-11 | 2026-08-04 | codegen | high | `match <fresh Result temp> { Err(e) => .. }` ABORTS with `free(): double free detected` when the arm BINDS a struct payload whose heap was moved in from a LOCAL (`let s = ..; return E { msg: s }`) -- building the same field inline in the literal is clean, as are Option, a named scrutinee, and a wildcard arm | src/codegen/control_flow_match.rs (track_freshtemp_inline_result_scrutinee) |
+| B-2026-08-04-16 | 2026-08-04 | codegen+ownership | high | Moving a Vec OUT of a tuple element, mutating it, and moving it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) aborts with `free(): double free detected in tcache 2` under both AOT and the JIT; the interpreter runs it. The struct-field analogue (`let mut e = h.items; ...; h.items = e;`) is correct, so this is again the TUPLE spelling of a walk that handles the field spelling. Independent of auto-par (`KARAC_NO_AUTOPAR=1` reproduces it) and independent of B-2026-08-04-15, which is fixed | — |
 
-### Fixed (894)
+### Fixed (895)
 
-<details><summary>894 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>895 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1056,6 +1057,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-12 | codegen | high | `?` PROPAGATING an Err whose payload is a struct wider than THREE words silently drops every word past the third -- the Err mirror of B-2026-08-04-9'… | e6a2eca (src/codegen/exprs.rs; pins codegen.rs::e2e_question_propagates_a_wide_inline_err_payload_whole, stash-proven RED on the exact wrong field value, with a BOXED 6-word control and a no-`?` control) |
 | B-2026-08-04-13 | codegen | high | The descending-loop bounds-check skip (B-2026-07-17-1) reads the facts it rests on with `stmt_writes_ident`, which sees only TOP-LEVEL assignment tar… | 484c2c9 |
 | B-2026-08-04-14 | interp | medium | The interpreter silently DROPPED an out-of-range index-assign: `v[100] = 7` on a 2-element Vec produced no error, no growth, and no store — while AOT… | a4ca760 |
+| B-2026-08-04-15 | autopar+codegen | high | AUTO-PAR SILENTLY DROPS STORES through a tuple-element receiver: `t.0.push(x)` recorded NO write in the dependency walk, so two pushes to the same Ve… | 567d5aa |
 
 </details>
 
