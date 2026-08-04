@@ -96,8 +96,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 131 | 1 |
 | double-free | 95 | 1 |
 | codegen-gap | 88 | 0 |
+| missing-feature | 76 | 1 |
 | run-vs-build | 76 | 0 |
-| missing-feature | 75 | 1 |
 | false-positive | 56 | 1 |
 | perf | 44 | 1 |
 | crash | 39 | 0 |
@@ -115,8 +115,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 116 | 0 |
 | ownership | 39 | 2 |
 | autopar | 32 | 1 |
+| cli | 25 | 0 |
 | other | 24 | 1 |
-| cli | 24 | 0 |
 | runtime | 19 | 0 |
 | resolver | 18 | 0 |
 | parser | 10 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **914 surfaced · 7 open · 899 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **915 surfaced · 7 open · 900 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -138,9 +138,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **914 surfaced 
 | B-2026-08-05-2 | 2026-08-04 | codegen | high | A `mut ref` parameter given a TUPLE ELEMENT (`bump(mut t.0)`) does not mutate the element under AOT -- the program then PANICS reading the index the mutation should have created, and leaks; the struct-field twin `bump(mut h.a)` mutates correctly | src/codegen (mut-ref argument lowering for a TupleIndex place) |
 | B-2026-08-05-3 | 2026-08-04 | codegen | medium | `Option[(Vec[T], ...)]` leaks the tuple payload's heap element when the Some arm binds and reads it -- 32 bytes definitely lost; the struct payload twin `Option[H]` is clean and the interpreter is correct on both | src/codegen (Option payload drop walk for a TUPLE payload) |
 
-### Fixed (899)
+### Fixed (900)
 
-<details><summary>899 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>900 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1065,6 +1065,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-16 | codegen+ownership | high | Moving a Vec OUT of a tuple element, mutating it, and moving it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) aborts with `free(): double free detect… | e986284 (src/codegen/stmts.rs tuple-assign arm; src/codegen/expr_ops.rs tuple_index_elem_type_expr). Pins codegen.rs::e2e_named_source_moved_into_a_tuple_element_is_disarmed, memory_sanitizer.rs::asan_named_source_moved_into_a_tuple_element_is_disarmed (floored at 500 allocations against ~1.8k), interpreter.rs::test_named_source_moved_into_a_tuple_element_is_disarmed. Both codegen tests are stash-proven RED against the unfixed compiler (the E2E aborts to empty output, the ASAN case reports a memory error); the interpreter twin passes both ways, as the oracle should. Verified across 16 probe shapes -- both element positions, Vec / String / Vec[String] elements, both-Vec tuples, fresh-temp vs named sources, and the struct-field control -- all clean on both backends with matching alloc/free counts. cargo test --features llvm: 12974 passed, 0 failed. |
 | B-2026-08-04-19 | codegen | high | Double-free (masked at -O2, hard at -O0/JIT): an owned struct/enum binding moved by an ASSIGNMENT — `o.h = h` into a heap-owning user-struct field, o… | 06bf3145 |
 | B-2026-08-04-20 | codegen | medium | The `KARAC_TEST_JIT=1` codegen parity leg did not set KARAC_PROGRAM_ARGS, so `env.args().len()` returned 2 (the `karac_jit_runner` argv `[runner, <ir… | 39b0c294 |
+| B-2026-08-04-21 | cli | medium | `karac fmt` silently deleted every declaration modifier it had no printer for (`unsafe fn`, `comptime fn`, `comptime` param prefix) | PENDING |
 
 </details>
 

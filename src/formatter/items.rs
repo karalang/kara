@@ -154,6 +154,16 @@ impl super::Formatter {
         self.format_attributes(&f.attributes);
         self.write_indent();
         self.write_visibility(f.visibility());
+        // Declaration modifiers, in the order the parser accepts them
+        // (`pub comptime unsafe fn`). Dropping either one rewrites the user's
+        // declaration into a different one — `karac fmt` must never do that,
+        // whether or not the rule behind the modifier is enforced yet.
+        if f.is_comptime {
+            self.write_str("comptime ");
+        }
+        if f.is_unsafe {
+            self.write_str("unsafe ");
+        }
         self.write_str("fn ");
         self.write_ident(&f.name);
         self.format_generic_params(&f.generic_params);
@@ -188,6 +198,9 @@ impl super::Formatter {
                 self.write_str(", ");
             }
             first = false;
+            if p.is_comptime {
+                self.write_str("comptime ");
+            }
             self.format_pattern(&p.pattern);
             self.write_str(": ");
             self.format_type_expr(&p.ty);
@@ -535,6 +548,9 @@ impl super::Formatter {
 
     pub(super) fn format_trait_method(&mut self, m: &TraitMethod) {
         self.write_indent();
+        if m.is_unsafe {
+            self.write_str("unsafe ");
+        }
         self.write_str("fn ");
         self.write_ident(&m.name);
         self.format_generic_params(&m.generic_params);

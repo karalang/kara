@@ -12679,3 +12679,58 @@ fn frozen_is_restricted_to_parameter_position_in_stage_1() {
         );
     }
 }
+
+// ── `karac fmt` declaration-modifier fidelity (B-2026-08-04-21) ──
+
+/// `karac fmt` silently DELETED every declaration modifier it had no printer
+/// for: `unsafe fn` came back `fn`, `comptime fn` came back `fn`, and a
+/// `comptime` parameter prefix vanished — on free functions, impl methods, and
+/// trait-method signatures alike. A formatter that rewrites a declaration into
+/// a different declaration is corrupting source, and it gets worse as the rules
+/// behind those modifiers land: today `unsafe fn` is not yet enforced at call
+/// sites, so the deletion is inert; the day it is, `karac fmt` becomes a
+/// silent semantic edit.
+///
+/// The bar is exact round-trip, so this asserts the modifiers survive AND that
+/// reformatting is a fixpoint — a printer that emits a form the parser reads
+/// back differently is the same bug wearing a disguise.
+#[test]
+fn declaration_modifiers_round_trip_through_the_formatter() {
+    let src = concat!(
+        "pub unsafe fn danger() -> i64 { 1 }\n",
+        "comptime fn twice(comptime n: i64) -> i64 { n + n }\n",
+        "struct S { v: i64 }\n",
+        "impl S {\n",
+        "    pub unsafe fn m(ref self) -> i64 { self.v }\n",
+        "}\n",
+        "trait T {\n",
+        "    unsafe fn risky(ref self) -> i64;\n",
+        "}\n",
+    );
+    let prog = parse(src);
+    assert!(prog.errors.is_empty(), "setup: {:?}", prog.errors);
+    let formatted = karac::formatter::format_program(&prog.program);
+    for expected in [
+        "pub unsafe fn danger()",
+        "comptime fn twice(comptime n: i64)",
+        "pub unsafe fn m(ref self)",
+        "unsafe fn risky(ref self)",
+    ] {
+        assert!(
+            formatted.contains(expected),
+            "`karac fmt` dropped a declaration modifier: expected {expected:?} in:\n{formatted}"
+        );
+    }
+
+    let reparsed = parse(&formatted);
+    assert!(
+        reparsed.errors.is_empty(),
+        "formatted output must re-parse; got {:?}",
+        reparsed.errors
+    );
+    assert_eq!(
+        karac::formatter::format_program(&reparsed.program),
+        formatted,
+        "`karac fmt` must be a fixpoint on declaration modifiers"
+    );
+}
