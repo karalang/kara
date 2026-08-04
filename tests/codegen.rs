@@ -5878,6 +5878,79 @@ fn main() {
         }
     }
 
+    /// B-2026-08-04-11 leg (a) — an f-string INTERPOLATION of a heap field
+    /// consumes it, exactly as passing that field by value to a free fn does.
+    ///
+    /// `match g(i) { Err(e) => println(f"{e.msg}") }` over a fresh `Result`
+    /// temp whose Err payload is a struct with a String field ABORTED with
+    /// `free(): double free detected`, while `karac run` printed the right
+    /// answer. The by-value spelling `println(e.msg)` was already handled —
+    /// `wrapper_arm_moves_heap_field_to_free_fn` exists for it — and an
+    /// interpolation is the same move wearing different syntax, which that
+    /// predicate did not recognize. `consume_class` scored it borrow-only, the
+    /// arm kept the source's inline-payload drop armed, and it freed a buffer
+    /// the interpolation had already consumed.
+    ///
+    /// The first four arms are the discriminator that found this: identical
+    /// payload, only the arm body varies. The by-value arg and the
+    /// interpolation must both be treated as moves; a genuine READ of the
+    /// field (`.len()`) and a bound-but-unused binding must both NOT be, or
+    /// the source drop is suppressed with no second owner and the payload
+    /// leaks instead.
+    ///
+    /// The last three are the immunities that localize it: a wildcard arm
+    /// (nothing binds, so nothing ever competed with the source drop), the
+    /// same struct through `Option` (this registration is `Result`-only), and
+    /// a NAMED scrutinee (which takes the ordinary binding path).
+    #[test]
+    fn e2e_fstring_interpolation_of_a_payload_heap_field_is_a_move() {
+        let Some(out) = run_program(
+            "struct Wrap { msg: String }\n\
+             fn mk(i: i64) -> Wrap { return Wrap { msg: f\"err-payload-{i}\" }; }\n\
+             fn g(i: i64) -> Result[i64, Wrap] { return Result.Err(mk(i)); }\n\
+             fn gopt(i: i64) -> Option[Wrap] { return Option.Some(mk(i)); }\n\
+             fn main() {\n\
+             \x20   match g(1i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(e.msg); }\n\
+             \x20   }\n\
+             \x20   match g(2i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(f\"b:{e.msg}\"); }\n\
+             \x20   }\n\
+             \x20   match g(3i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(f\"c:{e.msg.len()}\"); }\n\
+             \x20   }\n\
+             \x20   match g(4i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(\"d:unused\"); }\n\
+             \x20   }\n\
+             \x20   match g(5i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(_) => { println(\"e:wild\"); }\n\
+             \x20   }\n\
+             \x20   match gopt(6i64) {\n\
+             \x20       Option.Some(w) => { println(f\"f:{w.msg}\"); }\n\
+             \x20       Option.None => { println(\"f:none\"); }\n\
+             \x20   }\n\
+             \x20   let r: Result[i64, Wrap] = g(7i64);\n\
+             \x20   match r {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(f\"g:{e.msg}\"); }\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "err-payload-1\nb:err-payload-2\nc:13\nd:unused\n\
+             e:wild\nf:err-payload-6\ng:err-payload-7\nend\n"
+        );
+    }
+
     /// B-2026-08-04-9 — `?` must reconstruct its unwrapped payload at the
     /// payload's real width, deboxing when the carrier boxed it.
     ///

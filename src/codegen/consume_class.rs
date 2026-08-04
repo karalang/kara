@@ -426,21 +426,47 @@ pub(crate) fn binding_fields_passed_to_free_fn_arg(
     e: &Expr,
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    walk_exprs(e, &mut |x| {
-        let ExprKind::Call { callee, args } = &x.kind else {
-            return;
-        };
-        if !matches!(&callee.kind, ExprKind::Identifier(_)) {
-            return;
+    let note = |target: &Expr, out: &mut Vec<(String, String)>| {
+        if let ExprKind::FieldAccess { object, field } = &target.kind {
+            if let ExprKind::Identifier(root) = &object.kind {
+                if names.iter().any(|n| n == root) {
+                    out.push((root.clone(), field.clone()));
+                }
+            }
         }
-        for a in args {
-            if let ExprKind::FieldAccess { object, field } = &a.value.kind {
-                if let ExprKind::Identifier(root) = &object.kind {
-                    if names.iter().any(|n| n == root) {
-                        out.push((root.clone(), field.clone()));
+    };
+    walk_exprs(e, &mut |x| {
+        match &x.kind {
+            ExprKind::Call { callee, args } => {
+                if !matches!(&callee.kind, ExprKind::Identifier(_)) {
+                    return;
+                }
+                for a in args {
+                    note(&a.value, &mut out);
+                }
+            }
+            // B-2026-08-04-11 leg (a) — an f-string INTERPOLATION of a heap
+            // field consumes it exactly as a by-value free-fn arg does; the
+            // formatter takes the buffer. `println(e.msg)` and
+            // `println(f"{e.msg}")` differ only in syntax, and scoring the
+            // first as a move while scoring the second as a borrow left the
+            // source's inline-payload drop armed over a buffer the
+            // interpolation had already consumed — `free(): double free
+            // detected`, SIGABRT, on a plain `match g() { Err(e) => .. }` over
+            // a struct error type.
+            //
+            // A hole whose expression is anything OTHER than a direct
+            // `binding.field` — `{e.msg.len()}`, `{e.code}`, a call — reads
+            // rather than moves and is not noted, which is what keeps the
+            // clean probes clean.
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let crate::ast::ParsedInterpolationPart::Expr(inner, _) = part {
+                        note(inner, &mut out);
                     }
                 }
             }
+            _ => {}
         }
     });
     out
