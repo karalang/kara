@@ -2259,7 +2259,7 @@ impl<'a> super::Interpreter<'a> {
     /// Re-arm a name that just received a FRESH value (a new `let` binding or
     /// an assignment target): stale move-out records from a previous binding
     /// of the same name must not silence the new value's walks.
-    fn rearm_container_bodies_for_name(&mut self, name: &str) {
+    pub(super) fn rearm_container_bodies_for_name(&mut self, name: &str) {
         self.moved_out_container_bodies_bindings.remove(name);
         self.moved_out_tuple_elem_bodies.retain(|(n, _)| n != name);
         self.moved_out_struct_field_bodies

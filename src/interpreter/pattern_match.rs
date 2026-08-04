@@ -45,6 +45,21 @@ impl<'a> super::Interpreter<'a> {
                 }
                 self.env.push_scope();
                 self.bind_pattern(&arm.pattern, scrutinee.clone());
+                // B-2026-08-04-4 — an arm binding holds a FRESH value, so a
+                // stale move-out record left by an earlier, unrelated binding
+                // of the same NAME must not silence its drops.
+                //
+                // The move-out sets are keyed by name alone, with no scope
+                // component, so they are re-armed at each site that rebinds a
+                // name. `let` and assignment already did; a match arm did not,
+                // which is the whole defect: `match o { Some(r) => v.push(r) }`
+                // records `r` as moved-into-a-container, and a LATER sibling
+                // block's `match o2 { Some(r) => .. }` inherited that record
+                // and skipped its own `impl Drop` body. Renaming the second
+                // binding made the body fire — the name was the only trigger.
+                for bound in arm.pattern.binding_names() {
+                    self.rearm_container_bodies_for_name(&bound);
+                }
                 // B-2026-07-30-11 (match-arm leg): the taken arm's moved-out
                 // Drop-bearing payload bindings get REAL Drop slots. Stash
                 // them; the arm body's block executor adopts them into its

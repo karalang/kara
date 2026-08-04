@@ -29541,3 +29541,56 @@ fn test_struct_field_move_out_single_body_fire() {
         "option-field:\ndrop 1 a1\n10\nvec-field:\ndrop 2 bb2\n20\nstruct-field:\ndrop 3 ccc3\n30\nsibling-survives:\n40\ndrop 4 dddd4\nend\n"
     );
 }
+
+/// B-2026-08-04-4 — the interpreter's move-out records are keyed by BINDING
+/// NAME with no scope component, and a match arm did not re-arm the names it
+/// binds. So a container-push move recorded for one block's `r` outlived its
+/// block and silenced an unrelated later `r`'s `impl Drop` body.
+///
+/// The name was the entire trigger: renaming the second binding made the body
+/// fire. That is why this test runs BOTH spellings and asserts they agree —
+/// pinning only the reused-name case would pass against a fix that broke the
+/// distinct-name one, and pinning only one output would not show that the
+/// difference used to be the bug.
+///
+/// AOT was correct throughout, so this was a run-vs-build split on the `karac
+/// run` side.
+#[test]
+fn match_arm_rebinding_a_moved_name_still_runs_its_drop_body() {
+    let program = |second: &str| {
+        format!(
+            "struct Res {{ id: i64, name: String }}\n\
+             impl Drop for Res {{ fn drop(mut ref self) {{ println(\"D\" + self.id.to_string()); }} }}\n\
+             fn main() {{\n\
+                 let o: Option[Res] = Option.Some(Res {{ id: 4, name: \"pay4\" }});\n\
+                 let mut v: Vec[Res] = Vec.new();\n\
+                 match o {{\n\
+                     Option.Some(r) => {{ v.push(r); }}\n\
+                     Option.None => {{}}\n\
+                 }}\n\
+                 println(v[0].name);\n\
+                 let o2: Option[Res] = Option.Some(Res {{ id: 6, name: \"pay6\" }});\n\
+                 match o2 {{\n\
+                     Option.Some({second}) => {{ println({second}.name); }}\n\
+                     Option.None => {{}}\n\
+                 }}\n\
+                 println(\"end\");\n\
+             }}"
+        )
+    };
+    // `q` never collided, so this spelling was always correct — it is the
+    // control that a too-broad fix would break.
+    let distinct = run_no_errors(&program("q"));
+    // `r` reuses the name the first arm moved into the Vec. This printed
+    // without `D6` before the fix.
+    let reused = run_no_errors(&program("r"));
+    assert!(
+        reused.contains("D6"),
+        "reusing a moved binding's NAME in a later match arm must not silence \
+         that arm's Drop body; got: {reused:?}"
+    );
+    assert_eq!(
+        distinct, reused,
+        "the binding's NAME must not change observable drop behaviour"
+    );
+}
