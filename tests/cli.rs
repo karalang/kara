@@ -23888,3 +23888,76 @@ fn build_deque_head_in_auto_par_split_fn_does_not_ice() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Human diagnostics render the offending source line with a caret run under
+/// the span.
+///
+/// The structured data was always there — `karac check --output=json` emits
+/// `code` / `class` / `expected` / `got` for the same diagnostic — but the
+/// human renderer printed `file:line:col: message` and nothing else, so a
+/// reader got a coordinate and had to go open the file. On a compiler whose
+/// pitch is diagnostic quality, that asymmetry is what a human evaluator sees
+/// first.
+///
+/// Pins three things the renderer has to get right, not just "a snippet
+/// appears": the caret's COLUMN, its WIDTH (it must cover the span, here the
+/// whole string literal), and tab alignment — the caret line reproduces the
+/// source line's own leading tabs rather than substituting spaces, because a
+/// space-per-tab misaligns at every tab width but one.
+#[test]
+fn check_renders_a_source_snippet_with_a_caret_under_the_span() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-diag-snippet-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // Space-indented: caret starts under the literal and spans all 12 chars.
+    let spaces = tmp.join("spaces.kara");
+    std::fs::write(
+        &spaces,
+        "fn main() {\n    let x: i64 = \"not an int\";\n    println(x);\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("spaces.kara")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error[typecheck]: spaces.kara:2:18: expected 'i64', found 'String'"),
+        "header line changed shape:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("2 |     let x: i64 = \"not an int\";"),
+        "source line missing from the snippet:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("  |                  ^^^^^^^^^^^^"),
+        "caret is misplaced or the wrong width:\n{stderr}"
+    );
+
+    // Tab-indented: the caret line carries a real tab, so it stays under the
+    // literal however the terminal renders tab stops.
+    let tabs = tmp.join("tabs.kara");
+    std::fs::write(&tabs, "fn main() {\n\tlet y: i64 = \"tabbed\";\n}\n").unwrap();
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("tabs.kara")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("  | \t             ^^^^^^^^"),
+        "caret line did not reproduce the source line's tab:\n{stderr:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

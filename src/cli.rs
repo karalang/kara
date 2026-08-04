@@ -1483,6 +1483,71 @@ fn print_text_diagnostics(pipeline: &Pipeline) {
     }
 }
 
+/// Render the source line a diagnostic points at, with a caret run under the
+/// spanned text.
+///
+/// Every phase already carries a precise `(line, column, length)` span and the
+/// JSON renderer already exposes the structured fields, but the human renderer
+/// printed only `file:line:col: message` — so a reader got a coordinate and had
+/// to go find the code themselves, on a compiler whose pitch is diagnostic
+/// quality. This closes that asymmetry at the rendering layer; no diagnostic
+/// data changes.
+///
+/// Returns `None` — and the caller then prints the header alone, exactly as
+/// before — when there is no single source text (project mode builds a
+/// synthetic super-program and sets `source: None`, B-2026-08-04-7), or when
+/// the span does not land in it. A diagnostic is still strictly better than a
+/// panic here, so every failure path degrades to today's output.
+fn diagnostic_snippet(
+    source: Option<&str>,
+    line: usize,
+    column: usize,
+    length: usize,
+) -> Option<String> {
+    let src = source?;
+    if line == 0 || column == 0 {
+        return None;
+    }
+    let line_text = src.lines().nth(line - 1)?;
+    let gutter = line.to_string();
+    let pad = " ".repeat(gutter.len());
+    // Build the caret's left padding from the line's OWN leading characters,
+    // keeping tabs as tabs: a space-per-tab would misalign the caret under any
+    // tab width but 1, and tab-indented Kāra is legal.
+    let prefix: String = line_text
+        .chars()
+        .take(column - 1)
+        .map(|c| if c == '\t' { '\t' } else { ' ' })
+        .collect();
+    // Clamp to this line: a span covering several lines underlines the first
+    // one to its end rather than running past it. `max(1)` keeps a zero-length
+    // span (an insertion point) visible as a single caret.
+    let width = line_text
+        .chars()
+        .skip(column - 1)
+        .take(length.max(1))
+        .count()
+        .max(1);
+    Some(format!(
+        "\n{pad} |\n{gutter} | {line_text}\n{pad} | {prefix}{}",
+        "^".repeat(width)
+    ))
+}
+
+/// `header` plus its source snippet, when one can be rendered.
+fn with_snippet(
+    header: String,
+    source: Option<&str>,
+    line: usize,
+    column: usize,
+    length: usize,
+) -> String {
+    match diagnostic_snippet(source, line, column, length) {
+        Some(snip) => header + &snip,
+        None => header,
+    }
+}
+
 /// Render the text-mode diagnostic stream as one string block per
 /// diagnostic (multi-line for diagnostics that carry notes/help).
 /// Factored out of `print_text_diagnostics` for the multi-target check
@@ -1490,40 +1555,71 @@ fn print_text_diagnostics(pipeline: &Pipeline) {
 /// runs to deduplicate target-agnostic findings (`cmd_check_targets`).
 fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     let filename = &pipeline.filename;
+    let source = pipeline.source.as_deref();
     let mut out: Vec<String> = Vec::new();
     for err in &pipeline.parsed.errors {
-        out.push(format!(
-            "error[parse]: {}:{}:{}: {}",
-            filename, err.span.line, err.span.column, err.message
+        out.push(with_snippet(
+            format!(
+                "error[parse]: {}:{}:{}: {}",
+                filename, err.span.line, err.span.column, err.message
+            ),
+            source,
+            err.span.line,
+            err.span.column,
+            err.span.length,
         ));
     }
     if let Some(ref r) = pipeline.resolved {
         for err in &r.errors {
-            out.push(format!(
-                "error[resolve]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+            out.push(with_snippet(
+                format!(
+                    "error[resolve]: {}:{}:{}: {}",
+                    filename, err.span.line, err.span.column, err.message
+                ),
+                source,
+                err.span.line,
+                err.span.column,
+                err.span.length,
             ));
         }
     }
     if let Some(ref t) = pipeline.typed {
         for err in &t.errors {
-            out.push(format!(
-                "error[typecheck]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+            out.push(with_snippet(
+                format!(
+                    "error[typecheck]: {}:{}:{}: {}",
+                    filename, err.span.line, err.span.column, err.message
+                ),
+                source,
+                err.span.line,
+                err.span.column,
+                err.span.length,
             ));
         }
     }
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
             if err.kind == EffectErrorKind::FfiLintHint {
-                out.push(format!(
-                    "note[effect]: {}:{}:{}: {}",
-                    filename, err.span.line, err.span.column, err.message
+                out.push(with_snippet(
+                    format!(
+                        "note[effect]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    ),
+                    source,
+                    err.span.line,
+                    err.span.column,
+                    err.span.length,
                 ));
             } else {
-                out.push(format!(
-                    "error[effect]: {}:{}:{}: {}",
-                    filename, err.span.line, err.span.column, err.message
+                out.push(with_snippet(
+                    format!(
+                        "error[effect]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    ),
+                    source,
+                    err.span.line,
+                    err.span.column,
+                    err.span.length,
                 ));
             }
         }
@@ -1548,9 +1644,15 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // one place the `par struct` answer is spelled out — was visible
             // only to a reader of the compiler source. Print it, in the same
             // `help:` shape the notes loop uses.
-            let mut block = format!(
-                "{}: {}:{}:{}: {}",
-                label, filename, err.span.line, err.span.column, err.message
+            let mut block = with_snippet(
+                format!(
+                    "{}: {}:{}:{}: {}",
+                    label, filename, err.span.line, err.span.column, err.message
+                ),
+                source,
+                err.span.line,
+                err.span.column,
+                err.span.length,
             );
             if let Some(ref sugg) = err.suggestion {
                 write!(block, "\n  help: {sugg}").unwrap();
@@ -1574,9 +1676,15 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 crate::ownership::OwnershipErrorKind::RcFallbackNote => "perf[rc-fallback]",
                 _ => "note[ownership]",
             };
-            let mut block = format!(
-                "{}: {}:{}:{}: {}",
-                label, filename, note.span.line, note.span.column, note.message
+            let mut block = with_snippet(
+                format!(
+                    "{}: {}:{}:{}: {}",
+                    label, filename, note.span.line, note.span.column, note.message
+                ),
+                source,
+                note.span.line,
+                note.span.column,
+                note.span.length,
             );
             if let Some(ref s) = note.suggestion {
                 write!(block, "\n  help: {s}").unwrap();
@@ -1640,9 +1748,15 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     if let Some(ref comptime) = pipeline.comptime_errors {
         for err in comptime {
             // The message already carries its `error[E_COMPTIME_*]:` prefix.
-            out.push(format!(
-                "error[comptime]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+            out.push(with_snippet(
+                format!(
+                    "error[comptime]: {}:{}:{}: {}",
+                    filename, err.span.line, err.span.column, err.message
+                ),
+                source,
+                err.span.line,
+                err.span.column,
+                err.span.length,
             ));
         }
     }
