@@ -29419,6 +29419,104 @@ fn test_result_struct_payload_field_freed_and_single_body() {
 }
 
 #[test]
+fn test_boxed_optres_payload_struct_destructure_deboxes() {
+    // B-2026-08-04-5 — the ORACLE half. The interpreter has always destructured
+    // a heap-BOXED `Option`/`Result` payload with a STRUCT sub-pattern
+    // correctly; codegen CRASHED on it (`ExtractOutOfRange`), because a bare
+    // `Full { .. }` path resolved to the prelude's `enum ChannelError { Full }`
+    // and both payload-sizing arms fell to their 1-word defaults. Pinning the
+    // oracle keeps the codegen twin honest.
+    //
+    // The struct name `Full` is load-bearing: renaming it to anything the
+    // prelude does not use as a variant name is the one-line bisect, so a
+    // rename here would silently retire the test.
+    //
+    // Keep byte-identical to the codegen twin
+    // `e2e_boxed_optres_payload_struct_destructure_deboxes`.
+    assert_eq!(
+        run("struct Full { name: String, buf: Vec[i64] }\n\
+             struct Narrow { name: String }\n\
+             fn mk(i: i64) -> Full {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(i);\n\
+             return Full { name: f\"pay-{i}\", buf: v };\n\
+             }\n\
+             fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }\n\
+             fn res(i: i64) -> Result[i64, Full] { return Result.Err(mk(i)); }\n\
+             fn main() {\n\
+             let o: Option[Full] = Option.Some(mk(1i64));\n\
+             match o {\n\
+             Option.Some(Full { name, buf }) => { println(f\"a:{name}:{buf.len()}\"); }\n\
+             Option.None => { println(\"a:none\"); }\n\
+             }\n\
+             match opt(2i64) {\n\
+             Option.Some(Full { name, buf }) => { println(f\"b:{name}:{buf.len()}\"); }\n\
+             Option.None => { println(\"b:none\"); }\n\
+             }\n\
+             match res(3i64) {\n\
+             Result.Ok(v) => { println(f\"c:ok{v}\"); }\n\
+             Result.Err(Full { name, buf }) => { println(f\"c:{name}:{buf.len()}\"); }\n\
+             }\n\
+             let o4: Option[Full] = Option.Some(mk(4i64));\n\
+             match o4 {\n\
+             Option.Some(Full { name, buf: _ }) => { println(f\"d:{name}\"); }\n\
+             Option.None => { println(\"d:none\"); }\n\
+             }\n\
+             let o5: Option[Full] = Option.Some(mk(5i64));\n\
+             if let Option.Some(Full { name, buf }) = o5 {\n\
+             println(f\"e:{name}:{buf.len()}\");\n\
+             }\n\
+             let mut v6: Vec[Full] = Vec.new();\n\
+             v6.push(mk(6i64));\n\
+             while let Option.Some(Full { name, buf }) = v6.pop() {\n\
+             println(f\"f:{name}:{buf.len()}\");\n\
+             }\n\
+             let o7: Option[Narrow] = Option.Some(Narrow { name: f\"nar-{7i64}\" });\n\
+             match o7 {\n\
+             Option.Some(Narrow { name }) => { println(f\"g:{name}\"); }\n\
+             Option.None => { println(\"g:none\"); }\n\
+             }\n\
+             println(\"end\");\n\
+             }\n"),
+        "a:pay-1:1\nb:pay-2:1\nc:pay-3:1\nd:pay-4\n\
+         e:pay-5:1\nf:pay-6:1\ng:nar-7\nend\n"
+    );
+}
+
+#[test]
+fn test_struct_pattern_wins_over_a_same_named_enum_variant() {
+    // B-2026-08-04-5, the general hazard behind the ICE. All three resolution
+    // tiers: a plain struct scrutinee whose type shares a name with an enum
+    // variant, the same bare name over a scrutinee that IS that enum (the
+    // scrutinee hint must still win), and the qualified spelling.
+    //
+    // Keep byte-identical to the codegen twin
+    // `e2e_struct_pattern_wins_over_a_same_named_enum_variant`.
+    assert_eq!(
+        run("struct Full { a: i64 }\n\
+             enum Holder { Full { a: i64 }, Nothing }\n\
+             fn main() {\n\
+             let s: Full = Full { a: 11i64 };\n\
+             match s {\n\
+             Full { a } => { println(f\"s:{a}\"); }\n\
+             }\n\
+             let h: Holder = Holder.Full { a: 22i64 };\n\
+             match h {\n\
+             Full { a } => { println(f\"v:{a}\"); }\n\
+             Nothing => { println(\"v:none\"); }\n\
+             }\n\
+             let h2: Holder = Holder.Nothing;\n\
+             match h2 {\n\
+             Holder.Full { a } => { println(f\"q:{a}\"); }\n\
+             Holder.Nothing => { println(\"q:none\"); }\n\
+             }\n\
+             println(\"end\");\n\
+             }\n"),
+        "s:11\nv:22\nq:none\nend\n"
+    );
+}
+
+#[test]
 fn test_named_optres_boxed_payload_arm_runs_user_drop_body() {
     // B-2026-08-02-25 (match-arm leg) — the ORACLE half. The interpreter has
     // always fired the payload's Drop body at the arm binding's death here; AOT

@@ -5878,6 +5878,124 @@ fn main() {
         }
     }
 
+    /// B-2026-08-04-5 — destructuring a heap-BOXED `Option`/`Result` payload
+    /// with a STRUCT sub-pattern must debox first.
+    ///
+    /// `struct Full { name: String, buf: Vec[i64] }` is 6 words, so it is
+    /// heap-boxed at `Option`'s 3-word payload area. `Some(Full { name, buf })`
+    /// used to CRASH the compiler with `ExtractOutOfRange`: the resolvers that
+    /// size the payload search variant names across every known enum, and the
+    /// prelude's `enum ChannelError { Full, .. }` claimed the bare path. Both
+    /// sizing arms then missed `enum_layouts["ChannelError"]`-shaped answers
+    /// and fell to their 1-word / i64 defaults, so the debox predicate
+    /// (`want > field_words.len()`, 1 > 3) was false and the struct bind arm
+    /// extracted field 1 out of a `{ i64 }` aggregate.
+    ///
+    /// The name is `Full` on purpose — renaming the struct is the one-line
+    /// bisect, so a rename here would silently retire the test.
+    #[test]
+    fn e2e_boxed_optres_payload_struct_destructure_deboxes() {
+        // (a) named scrutinee, (b) fresh temp, (c) `Result`'s Err half,
+        // (d) PARTIAL destructure, (e) if-let, (f) while-let over `Vec.pop`,
+        // (g) the INLINE control — a 3-word payload that is never boxed, and
+        // whose path already worked, so the fix must leave it byte-identical.
+        let Some(out) = run_program(
+            "struct Full { name: String, buf: Vec[i64] }\n\
+             struct Narrow { name: String }\n\
+             fn mk(i: i64) -> Full {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(i);\n\
+             \x20   return Full { name: f\"pay-{i}\", buf: v };\n\
+             }\n\
+             fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }\n\
+             fn res(i: i64) -> Result[i64, Full] { return Result.Err(mk(i)); }\n\
+             fn main() {\n\
+             \x20   let o: Option[Full] = Option.Some(mk(1i64));\n\
+             \x20   match o {\n\
+             \x20       Option.Some(Full { name, buf }) => { println(f\"a:{name}:{buf.len()}\"); }\n\
+             \x20       Option.None => { println(\"a:none\"); }\n\
+             \x20   }\n\
+             \x20   match opt(2i64) {\n\
+             \x20       Option.Some(Full { name, buf }) => { println(f\"b:{name}:{buf.len()}\"); }\n\
+             \x20       Option.None => { println(\"b:none\"); }\n\
+             \x20   }\n\
+             \x20   match res(3i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"c:ok{v}\"); }\n\
+             \x20       Result.Err(Full { name, buf }) => { println(f\"c:{name}:{buf.len()}\"); }\n\
+             \x20   }\n\
+             \x20   let o4: Option[Full] = Option.Some(mk(4i64));\n\
+             \x20   match o4 {\n\
+             \x20       Option.Some(Full { name, buf: _ }) => { println(f\"d:{name}\"); }\n\
+             \x20       Option.None => { println(\"d:none\"); }\n\
+             \x20   }\n\
+             \x20   let o5: Option[Full] = Option.Some(mk(5i64));\n\
+             \x20   if let Option.Some(Full { name, buf }) = o5 {\n\
+             \x20       println(f\"e:{name}:{buf.len()}\");\n\
+             \x20   }\n\
+             \x20   let mut v6: Vec[Full] = Vec.new();\n\
+             \x20   v6.push(mk(6i64));\n\
+             \x20   while let Option.Some(Full { name, buf }) = v6.pop() {\n\
+             \x20       println(f\"f:{name}:{buf.len()}\");\n\
+             \x20   }\n\
+             \x20   let o7: Option[Narrow] = Option.Some(Narrow { name: f\"nar-{7i64}\" });\n\
+             \x20   match o7 {\n\
+             \x20       Option.Some(Narrow { name }) => { println(f\"g:{name}\"); }\n\
+             \x20       Option.None => { println(\"g:none\"); }\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a:pay-1:1\nb:pay-2:1\nc:pay-3:1\nd:pay-4\n\
+             e:pay-5:1\nf:pay-6:1\ng:nar-7\nend\n"
+        );
+    }
+
+    /// B-2026-08-04-5, the general hazard behind the ICE — a user struct whose
+    /// name is also some enum's variant name must still destructure as itself,
+    /// and the enum's variant must still win when the match really is over the
+    /// enum.
+    ///
+    /// The collision resolver has three tiers and all three are exercised:
+    /// `s` is a plain `Full` (the struct must win over `Holder.Full`, which is
+    /// what the fix redirects); `h` is a `Holder` matched by the BARE variant
+    /// name (the scrutinee hint must still win, or the fix would over-reach and
+    /// turn every shadowed variant pattern into a struct destructure); `h2`
+    /// uses the QUALIFIED spelling, which was never ambiguous.
+    ///
+    /// Before the fix `s`'s arm tag-compared the struct's first field against
+    /// `Holder.Full`'s tag, fell through every arm, and `main` returned junk.
+    #[test]
+    fn e2e_struct_pattern_wins_over_a_same_named_enum_variant() {
+        let Some(out) = run_program(
+            "struct Full { a: i64 }\n\
+             enum Holder { Full { a: i64 }, Nothing }\n\
+             fn main() {\n\
+             \x20   let s: Full = Full { a: 11i64 };\n\
+             \x20   match s {\n\
+             \x20       Full { a } => { println(f\"s:{a}\"); }\n\
+             \x20   }\n\
+             \x20   let h: Holder = Holder.Full { a: 22i64 };\n\
+             \x20   match h {\n\
+             \x20       Full { a } => { println(f\"v:{a}\"); }\n\
+             \x20       Nothing => { println(\"v:none\"); }\n\
+             \x20   }\n\
+             \x20   let h2: Holder = Holder.Nothing;\n\
+             \x20   match h2 {\n\
+             \x20       Holder.Full { a } => { println(f\"q:{a}\"); }\n\
+             \x20       Holder.Nothing => { println(\"q:none\"); }\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "s:11\nv:22\nq:none\nend\n");
+    }
+
     /// B-2026-08-03-5 — a user type whose name collides with a generic enum's
     /// PARAMETER name must not gain a phantom Drop walker.
     ///

@@ -3345,11 +3345,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // field-by-name extraction differs from the positional
             // tuple-variant path; binding still works via
             // `bind_pattern_values`).
+            // B-2026-08-04-5 — `!struct_pattern_names_a_user_struct` keeps a
+            // bare `S { .. }` destructure of a *plain struct* out of this arm
+            // when some enum in scope (a prelude one, typically) happens to
+            // declare a variant of the same name. `enum_tag_for_variant` is a
+            // bare-name lookup with no struct awareness, so `struct Item` +
+            // `enum Holder { Item { .. } }` used to land here, tag-compare the
+            // struct's first field against `Holder.Item`'s tag, and fall
+            // through every arm. A qualified path (`Holder.Item { .. }`) or a
+            // scrutinee that really is the enum still takes this arm — only the
+            // ambiguous bare-name-over-a-struct case is redirected.
             PatternKind::Struct { path, .. }
-                if path.len() > 1
-                    || self
-                        .enum_tag_for_variant(path.last().map(|s| s.as_str()).unwrap_or(""))
-                        .is_some() =>
+                if !self.struct_pattern_names_a_user_struct(pattern)
+                    && (path.len() > 1
+                        || self
+                            .enum_tag_for_variant(path.last().map(|s| s.as_str()).unwrap_or(""))
+                            .is_some()) =>
             {
                 let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
                 // Qualified-preferring tag (see the `Binding` / `TupleVariant`
@@ -3645,20 +3656,48 @@ impl<'ctx> super::Codegen<'ctx> {
         self.variant_pattern_enum_and_tag(pat).map(|(ty, _)| ty)
     }
 
-    /// Resolve `(enum llvm type, expected tag)` for a *variant* sub-pattern
-    /// (`E.A(c)` / `E.S { .. }` / a fieldless `Binding` variant `E.B`), or
-    /// `None` if the pattern is not an enum-variant pattern. **The tag and
-    /// type come from the SAME layout**, resolved by preferring the
-    /// qualified enum segment in the path (`E` in `E.A`). This is load-
-    /// bearing for correctness, not just determinism: `TcpError` and
-    /// `TlsError` share both the `{i64, i64}` LLVM shape *and* the variant
-    /// names `AddrInUse` / `ConnectionRefused` / `PermissionDenied`, so a
-    /// bare-name tag lookup (`enum_tag_for_variant`) is genuinely ambiguous
-    /// — it can return `TlsError`'s tag for a `TcpError` value and make the
-    /// wrong arm match. The qualified path (`TcpError.AddrInUse`) pins the
-    /// enum; the unqualified fallback keeps type and tag from one layout so
-    /// they at least agree. Used by the nested-variant condition recursion
-    /// and `reconstruct_payload_value`.
+    /// B-2026-08-04-5 — is this a bare `Name { .. }` destructure whose
+    /// single-segment path names a *user struct*? Then it is unambiguously a
+    /// struct pattern: no Kāra syntax spells a unit variant that way, so the
+    /// unqualified variant-name scan below must decline rather than hand back
+    /// whichever enum happens to carry a variant of the same name.
+    ///
+    /// The prelude alone seeds 14 enums whose variant names include `Full`,
+    /// `Display`, `Object`, `Number`, `Int`, `Timeout`, `NotFound`, `Other`
+    /// and `Env` — all plausible user struct names. A user `struct Full`
+    /// destructured as `Some(Full { name, buf })` resolved to
+    /// `ChannelError`, whose unit-only layout is `{ i64 }`; the payload
+    /// sizing arms then fell to their 1-word / i64 defaults, the debox never
+    /// fired, and the struct bind arm's `build_extract_value(sv, 1)` on a
+    /// 1-field aggregate ICE'd with `ExtractOutOfRange`.
+    ///
+    /// A QUALIFIED path (`Holder.Item { .. }`) and a scrutinee whose enum
+    /// really declares the variant both keep their enum reading — the first
+    /// via the `path.len() == 1` test, the second via the scrutinee-hint
+    /// escape below — so only the genuinely ambiguous bare-name-over-a-struct
+    /// case is redirected. Restricted to `PatternKind::Struct` on purpose: a
+    /// bare `Int(v)` tuple-variant pattern must still resolve through the
+    /// scrutinee hint even when a `struct Int` is in scope.
+    pub(super) fn struct_pattern_names_a_user_struct(&self, pat: &Pattern) -> bool {
+        let PatternKind::Struct { path, .. } = &pat.kind else {
+            return false;
+        };
+        if path.len() != 1 || !self.struct_types.contains_key(path[0].as_str()) {
+            return false;
+        }
+        // The match really is over an enum that declares this variant
+        // (`match h { Item { a } => .. }` with `h: Holder` and
+        // `enum Holder { Item { a: i64 } }`): the pattern is the variant, not
+        // the same-named struct. Mirrors the `#39` scrutinee-hint preference
+        // the two resolvers apply just above their unqualified scans.
+        let hint_claims_it = self
+            .match_scrutinee_enum_hint
+            .as_deref()
+            .and_then(|h| self.enum_layouts.get(h))
+            .is_some_and(|l| l.tags.contains_key(path[0].as_str()));
+        !hint_claims_it
+    }
+
     /// Resolve the **enum name** a variant sub-pattern belongs to, by the
     /// same qualified-segment-preferred / user-vs-seed-fallback logic as
     /// [`Self::variant_pattern_enum_and_tag`] (which returns the LLVM type +
@@ -3695,6 +3734,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        if self.struct_pattern_names_a_user_struct(pat) {
+            return None;
+        }
         let mut user_hit: Option<String> = None;
         let mut seed_hit: Option<String> = None;
         for (en, l) in &self.enum_layouts {
@@ -3709,6 +3751,20 @@ impl<'ctx> super::Codegen<'ctx> {
         user_hit.or(seed_hit)
     }
 
+    /// Resolve `(enum llvm type, expected tag)` for a *variant* sub-pattern
+    /// (`E.A(c)` / `E.S { .. }` / a fieldless `Binding` variant `E.B`), or
+    /// `None` if the pattern is not an enum-variant pattern. **The tag and
+    /// type come from the SAME layout**, resolved by preferring the
+    /// qualified enum segment in the path (`E` in `E.A`). This is load-
+    /// bearing for correctness, not just determinism: `TcpError` and
+    /// `TlsError` share both the `{i64, i64}` LLVM shape *and* the variant
+    /// names `AddrInUse` / `ConnectionRefused` / `PermissionDenied`, so a
+    /// bare-name tag lookup (`enum_tag_for_variant`) is genuinely ambiguous
+    /// — it can return `TlsError`'s tag for a `TcpError` value and make the
+    /// wrong arm match. The qualified path (`TcpError.AddrInUse`) pins the
+    /// enum; the unqualified fallback keeps type and tag from one layout so
+    /// they at least agree. Used by the nested-variant condition recursion
+    /// and `reconstruct_payload_value`.
     pub(super) fn variant_pattern_enum_and_tag(
         &self,
         pat: &Pattern,
@@ -3738,6 +3794,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Some((layout.llvm_type, tag));
                 }
             }
+        }
+        if self.struct_pattern_names_a_user_struct(pat) {
+            return None;
         }
         // Unqualified fallback: user-vs-seed preference, type + tag from the
         // SAME layout (so a downstream tag compare stays self-consistent).

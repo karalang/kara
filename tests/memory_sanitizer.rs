@@ -35398,6 +35398,95 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-5 — a STRUCT sub-pattern over a heap-BOXED payload
+    /// deboxes, and the leaf bindings end up owning the interior exactly once.
+    ///
+    /// The fix that made this shape compile at all was a name-resolution one
+    /// (a bare `Full { .. }` path resolved to the prelude's
+    /// `ChannelError.Full`), but it lands squarely on the ownership machinery:
+    /// with the debox now firing, `suppress_boxed_payload_struct_destructure`
+    /// became reachable for the first time. This pin is what says the leaf
+    /// bindings free the fields and the box drop does not free them again.
+    ///
+    /// Reading `.name` and `.buf.len()` in every case is load-bearing — with
+    /// the buffers dead the allocations are elided and the whole test passes
+    /// vacuously.
+    ///
+    /// NOT covered, deliberately: a FRESH-TEMP scrutinee whose struct
+    /// destructure leaves the `Vec` field UNBOUND (`match opt(i) { Some(Full {
+    /// name, buf: _ }) => .. }`). That shape leaks the unbound field's buffer
+    /// — the box drop stays box-only for any struct destructure, which is
+    /// right when every field is bound and wrong when some are not. It is
+    /// filed as its own row; keeping it out of this pin stops LeakSanitizer
+    /// from attributing that leak here. The NAMED-scrutinee twin is clean and
+    /// IS covered below.
+    #[test]
+    fn asan_boxed_optres_payload_struct_destructure_owns_the_interior_once() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+struct Narrow { name: String }
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }
+fn res(i: i64) -> Result[i64, Full] { return Result.Err(mk(i)); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Named scrutinee, full destructure.
+        let o: Option[Full] = Option.Some(mk(i));
+        match o {
+            Option.Some(Full { name, buf }) => { n = n + name.len() + buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // Fresh temp, full destructure.
+        match opt(i) {
+            Option.Some(Full { name, buf }) => { n = n + name.len() + buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // Result's Err half — the variant picks which generic arg is boxed.
+        match res(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(Full { name, buf }) => { n = n + name.len() + buf.len(); }
+        }
+        // Named scrutinee, PARTIAL destructure: the box keeps the unbound
+        // field. (The fresh-temp twin of this leaks — see the doc note.)
+        let o4: Option[Full] = Option.Some(mk(i));
+        match o4 {
+            Option.Some(Full { name, buf: _ }) => { n = n + name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // A bound field that ESCAPES the arm still has exactly one owner.
+        let o5: Option[Full] = Option.Some(mk(i));
+        let mut keep: Vec[String] = Vec.new();
+        match o5 {
+            Option.Some(Full { name, buf }) => { keep.push(name); n = n + buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        n = n + keep[0].len();
+        // CONTROL: the INLINE (3-word, never boxed) payload the fix must
+        // leave byte-identical.
+        let o6: Option[Narrow] = Option.Some(Narrow { name: "payload-string-data" });
+        match o6 {
+            Option.Some(Narrow { name }) => { n = n + name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // Per iteration: 19+1, 19+1, 19+1, 19, 1+19, 19 = 118. x200 = 23600.
+            &["23600"],
+            "boxed_optres_payload_struct_destructure_owns_the_interior_once",
+        );
+    }
+
     /// B-2026-08-04-2 — a boxed payload bound whole and then MOVED must leave
     /// exactly one owner of the box's interior.
     ///
