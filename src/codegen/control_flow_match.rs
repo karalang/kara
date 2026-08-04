@@ -6744,12 +6744,27 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(payload) = subs.first() else {
                 continue;
             };
-            if self.pattern_payload_word_count(payload) <= area {
-                continue;
-            }
+            // Hoisted above the width gate: B-2026-08-04-3's wildcard sizing
+            // needs the variant to pick the right `Result` half.
             let Some(variant) = path.last().cloned() else {
                 continue;
             };
+            // B-2026-08-04-3 — a WILDCARD payload has no type of its own, so
+            // `pattern_payload_word_count` falls to its 1-word default and this
+            // width gate rejected the arm before the `inner_struct_name`
+            // derivation below could see it. Size it from the SCRUTINEE's
+            // instantiation instead, the same source that arm uses.
+            let payload_words = match &payload.kind {
+                PatternKind::Wildcard => self
+                    .optres_scrutinee_payload_struct_name_for(scrutinee, &variant)
+                    .and_then(|n| self.struct_types.get(n.as_str()).copied())
+                    .map(|st| Self::llvm_type_word_count(st.into()))
+                    .unwrap_or(1),
+                _ => self.pattern_payload_word_count(payload),
+            };
+            if payload_words <= area {
+                continue;
+            }
             let llvm_ty = match self.enum_layouts.get(enum_name.as_str()) {
                 Some(l) => l.llvm_type,
                 None => continue,
@@ -6857,6 +6872,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)
                     })
                 }
+                // B-2026-08-04-3 — a WILDCARD payload binds NOTHING, so the box
+                // is the only owner its interior will ever have and the walk
+                // must run. Before this the arm fell into `_ => None` and the
+                // free went box-ONLY, stranding the payload struct's heap
+                // fields (32 bytes per `match mk() { Some(_) => … }`, probes
+                // b228/x1 for `Option` and b228/x6 for `Result`'s Err side).
+                //
+                // Sharing the `_ => None` arm with a struct DESTRUCTURE is what
+                // made this look consistent: there the arm is right, because
+                // the pattern's leaf bindings each own and free their field, so
+                // walking the interior would double-free. Binds-nothing and
+                // binds-the-parts need opposite answers, and matching on
+                // `payload.kind` alone collapsed them.
+                //
+                // The type comes from the SCRUTINEE's instantiation rather than
+                // the sub-pattern, since a wildcard carries none — the same
+                // resolution `freshtemp_payload_bodies_action` uses. Borrow
+                // scrutinees stay excluded for the reason the `Binding` arm
+                // gives: their box interior aliases the container's storage.
+                PatternKind::Wildcard if !scrutinee_is_borrow => self
+                    .optres_scrutinee_payload_struct_name_for(scrutinee, &variant)
+                    .filter(|n| {
+                        self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)
+                    }),
                 _ => None,
             };
             self.track_boxed_enum_var(

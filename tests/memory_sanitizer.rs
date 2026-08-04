@@ -35337,6 +35337,67 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-3 — a WILDCARD payload arm still needs the box's inner
+    /// walk: it binds nothing, so the box is the only owner the interior will
+    /// ever have.
+    ///
+    /// `track_freshtemp_boxed_enum_scrutinee` derived the payload struct name
+    /// from a `Binding` sub-pattern only, so a wildcard fell into the same
+    /// `_ => None` arm as a struct DESTRUCTURE and the free went box-ONLY,
+    /// stranding the payload's heap fields. That arm is correct for the
+    /// destructure — its leaf bindings each own and free their field — so
+    /// binds-nothing and binds-the-parts needed splitting apart.
+    ///
+    /// A wildcard carries no type, which also meant the width gate above the
+    /// derivation rejected the arm first (`pattern_payload_word_count` falls to
+    /// its 1-word default), so both the size and the name now come from the
+    /// scrutinee's instantiation. Both `Option` and `Result`'s Err side are
+    /// here because the variant picks which generic arg to read.
+    #[test]
+    fn asan_wildcard_boxed_optres_payload_frees_the_struct_interior() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }
+fn res(i: i64) -> Result[i64, Full] { return Result.Err(mk(i)); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // Wildcard payload, Option — binds nothing, so the box must free the
+        // interior.
+        match opt(i) {
+            Option.Some(_) => { n = n + 1i64; }
+            Option.None => { n = n + 100i64; }
+        }
+        // Wildcard payload on Result's Err side — the variant decides which
+        // generic arg the payload type comes from.
+        match res(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 1i64; }
+        }
+        // CONTROL: a whole binding, where the box already owned the interior.
+        match opt(i) {
+            Option.Some(r) => { n = n + r.buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 3 per iteration x 200 = 600.
+            &["600"],
+            "wildcard_boxed_optres_payload_frees_the_struct_interior",
+        );
+    }
+
     /// B-2026-08-04-2 — a boxed payload bound whole and then MOVED must leave
     /// exactly one owner of the box's interior.
     ///

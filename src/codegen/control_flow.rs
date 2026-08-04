@@ -706,13 +706,45 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((slot, walker))
     }
 
+    /// B-2026-08-04-3 — the payload STRUCT name of a boxed `Option`/`Result`
+    /// scrutinee, for the arms that need it when the sub-pattern carries no
+    /// type of its own (a wildcard binds nothing, so `pattern_binding_types`
+    /// has no entry to consult).
+    ///
+    /// Takes the FIRST generic arg for `Option` and, for `Result`, whichever
+    /// of `Ok`/`Err` the variant names — the caller passes the variant it is
+    /// registering the box drop for, so the two cannot be crossed.
+    pub(super) fn optres_scrutinee_payload_struct_name_for(
+        &self,
+        scrutinee: &Expr,
+        variant: &str,
+    ) -> Option<String> {
+        use crate::ast::{GenericArg, TypeKind};
+        let te = self.optres_scrutinee_type_expr(scrutinee)?;
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let args = p.generic_args.as_ref()?;
+        let idx = match variant {
+            "Err" => 1usize,
+            _ => 0usize,
+        };
+        let GenericArg::Type(pt) = args.get(idx)? else {
+            return None;
+        };
+        let TypeKind::Path(pp) = &pt.kind else {
+            return None;
+        };
+        pp.segments.first().cloned()
+    }
+
     /// The instantiated `Option[T]` / `Result[O, E]` a match/if-let scrutinee
     /// EXPRESSION produces. Same two-step resolution
     /// `track_discarded_optres_payload_bodies` uses for the discarded-temp
     /// case: the span table first (a ctor or typed producer records the
     /// instantiation there), then the fn-return / `pop`-family derivation for
     /// the calls whose span the table misses.
-    fn optres_scrutinee_type_expr(&self, e: &Expr) -> Option<crate::ast::TypeExpr> {
+    pub(super) fn optres_scrutinee_type_expr(&self, e: &Expr) -> Option<crate::ast::TypeExpr> {
         self.enum_inst_type_exprs
             .get(&(e.span.offset, e.span.length))
             .cloned()
