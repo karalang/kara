@@ -7310,6 +7310,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     if rhs_is_param_view && (lhs_is_tracked_struct || lhs_is_tracked_value_enum) {
                         self.suppress_user_drop_for_var(name);
                         self.param_view_locals.insert(name.clone());
+                        // B-2026-08-04-19 — the retraction above drops only the
+                        // LHS's BODIES; the source param's memory drop is
+                        // name-blind and survives (per the note above), so a
+                        // value ENUM's moved-in payload was left owned by both
+                        // `w` and `w2` and double-freed at -O0 / on the JIT lane
+                        // (masked at -O2 by DSE). Zero the source enum's
+                        // live-variant payload caps so its EnumDrop no-ops, `w2`
+                        // the sole owner. The struct sibling is already disarmed
+                        // upstream (`h2 = h` is clean), so scope this to the enum.
+                        if lhs_is_tracked_value_enum {
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                        }
                     }
                     // Tensor move (`w = other`, an owned tensor binding moved
                     // into `w`): after the store both slots hold the same block
@@ -7469,6 +7481,31 @@ impl<'ctx> super::Codegen<'ctx> {
                                 || self.set_elem_types.contains_key(src.as_str())
                             {
                                 self.suppress_map_cleanup_for_tail_identifier(src);
+                            } else if matches!(&field_te.kind, TypeKind::Path(p)
+                                if p.segments.last().is_some_and(|n|
+                                    self.struct_types.contains_key(n.as_str())
+                                    && !self.shared_types.contains_key(n.as_str())))
+                            {
+                                // B-2026-08-04-19 — `o.h = h` moving an owned
+                                // struct binding into a heap-owning USER-STRUCT
+                                // field. The Vec/String and Map/Set arms above do
+                                // not fire (the field is a struct), so nothing
+                                // disarmed the SOURCE: its transitive heap was
+                                // left owned by BOTH `h` and `o.h`, and the
+                                // source's scope-exit `__karac_drop_struct_<T>`
+                                // freed it a second time. Masked at -O2 (DSE drops
+                                // the dead source store) but a hard double-free at
+                                // -O0 and on the unoptimized JIT lane — the leg
+                                // B-2026-08-01-19 left open (it retracted the
+                                // BASE's bodies, not the source's memory drop).
+                                // Zero the source struct's caps so its StructDrop
+                                // no-ops, and retract its Drop bodies, leaving `o`
+                                // the sole owner (mirrors the Vec/String arm's
+                                // struct-aware `suppress_source_vec_cleanup_for_arg`,
+                                // only reached above for a heap field).
+                                let src = src.clone();
+                                self.suppress_source_vec_cleanup_for_arg(value);
+                                self.suppress_user_drop_for_var(&src);
                             }
                         }
                     }
