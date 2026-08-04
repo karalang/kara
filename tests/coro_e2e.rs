@@ -1983,6 +1983,51 @@ mod tests {
         );
     }
 
+    /// B-2026-08-03-12. The pre-suspend active-span snapshot must be emitted
+    /// BEFORE `event_loop_register_fd_cancel` — the instant the frame becomes
+    /// reachable by a dispatcher thread. `register_fd` inserts the parked record
+    /// into the event loop and wakes its poller; from that point a resumer may
+    /// run the post-suspend edge on another core, and that edge LOADS the
+    /// active-span slot. A store emitted after the publication is therefore
+    /// racing a reader, and when the reader wins it reinstalls the fresh frame's
+    /// zero instead of the real span.
+    ///
+    /// This is an ORDERING pin, and it has to be, because the bug is invisible
+    /// to the E2E sibling `coroutine_preserves_active_span_across_suspend`: with
+    /// the snapshot on the wrong side that test still passed 10/10 here, and
+    /// 19/19 when the entry was filed — the resumer has to win a
+    /// two-instruction window. Forcing the window open (a ~2 ms spin between
+    /// `register_fd` and the store) failed it 4/5, and the same spin passes 8/8
+    /// with the snapshot hoisted. A behavioural test cannot hold that line; the
+    /// instruction order can.
+    ///
+    /// Post-CoroSplit IR: the ramp keeps everything up to the first suspend, so
+    /// both anchors survive. `llvm.coro.save` — which sits between them and is
+    /// what lets a resume operate on a committed frame at all — does not; it is
+    /// consumed by the split, so it cannot be part of the assertion.
+    #[test]
+    fn coroutine_active_span_snapshot_precedes_frame_publication() {
+        let ir = compile_coro_split_ir(HANDLER_SRC).expect("coro IR");
+        let ramp = extract_fn_ir(&ir, "@serve_one(")
+            .unwrap_or_else(|| panic!("no serve_one ramp in IR:\n{ir}"));
+
+        let snap = ramp
+            .find("@karac_tracing_get_active_span")
+            .unwrap_or_else(|| panic!("no active-span snapshot in ramp:\n{ramp}"));
+        let publish = ramp
+            .find("@karac_runtime_event_loop_register_fd_cancel")
+            .unwrap_or_else(|| panic!("no register_fd_cancel in ramp:\n{ramp}"));
+
+        assert!(
+            snap < publish,
+            "the active-span snapshot must precede `register_fd_cancel`, which \
+             publishes the coroutine frame to the reactor — after it, a \
+             dispatcher thread may resume this coroutine and read the frame slot \
+             before the ramp has written it (B-2026-08-03-12). \
+             snapshot@{snap} publish@{publish}; ramp:\n{ramp}"
+        );
+    }
+
     #[test]
     fn coroutine_heap_local_freed_on_destroy_edge() {
         let ir = match compile_coro_split_ir(HEAP_HANDLER_SRC) {

@@ -876,6 +876,53 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("karac_runtime_scheduler_start_dispatcher declared in Codegen::new");
         self.builder.build_call(start_disp, &[], "").unwrap();
 
+        // Active-span preservation across the suspend (phase-8 line 153 Phase 2).
+        // The ambient active span is a per-*thread* TLS register; a coroutine can
+        // resume on a different dispatcher worker than the one it parked on, so
+        // the resuming thread's register reflects whatever it last ran, not this
+        // coroutine's pre-suspend span. Snapshot it into a frame-resident slot
+        // here and restore it on every post-suspend edge (resume + destroy). The
+        // cross-suspend load below forces CoroSplit to spill this alloca into the
+        // coro frame — the same residency mechanism the token relies on. The two
+        // `karac_tracing_*` accessors are unconditional runtime externs (declared
+        // in `Codegen::new`, always present in the archive), so this is safe even
+        // for a program that never touches `std.tracing`.
+        //
+        // THE SNAPSHOT MUST PRECEDE `coro.save` (B-2026-08-03-12). Everything
+        // below the save is racing a resumer: the save commits the frame's resume
+        // state, `register_fd` then publishes the frame to the reactor, and from
+        // that instant a dispatcher thread may resume this coroutine on another
+        // core while the ramping thread is still executing. With the snapshot
+        // emitted after `register_fd` — where it originally sat — the resume edge
+        // could load the frame slot BEFORE the ramp wrote it, reinstalling the
+        // fresh frame's zero instead of the real span, and the post-resume log
+        // line came back unstamped (`span_id=0`, indistinguishable from a genuine
+        // Phase-2 regression). It is a data race on the slot, not merely a lost
+        // value. Reproduced deterministically by spinning ~2 ms between
+        // `register_fd` and the store: 4/5 failures, versus 0/13 without.
+        //
+        // The read is of the RAMPING thread's TLS and nothing between here and
+        // the suspend touches it, so hoisting is value-preserving; it just moves
+        // the frame write to before the frame is reachable by anyone else.
+        let active_span_slot = self
+            .builder
+            .build_alloca(i64_ty, &format!("kara.coro.active_span.{n}"))
+            .unwrap();
+        let active_span_snap = self
+            .builder
+            .build_call(
+                self.karac_tracing_get_active_span_fn,
+                &[],
+                "kara.coro.active_span.snap",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_store(active_span_slot, active_span_snap)
+            .unwrap();
+
         // Mark the cross-thread resume point BEFORE `register_fd` publishes this
         // coroutine's handle to the reactor. `register_fd` inserts the parked
         // record into the (sharded) event loop and wakes its poller; under load
@@ -918,37 +965,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_struct_gep(ctx.parked_ty, parked, 2, "kara.coro.parked.token")
             .unwrap();
+        // This store is on the racy side of the publication above and cannot be
+        // hoisted — the token does not exist until `register_fd` returns it. It
+        // is nonetheless benign, which is worth recording because it looks like
+        // the bug hoisted out of here (B-2026-08-03-12). The difference is what
+        // reads it: the post-suspend edges load this field only to hand it to
+        // `deregister_fd`, and the dispatcher claims each registration via a
+        // one-shot `take_registration` BEFORE it fires — so in exactly the racing
+        // case (a resumer that won) the deregister is already a no-op whatever
+        // the field holds. The active-span slot had no such property: its value
+        // was consumed.
         self.builder.build_store(token_field, token).unwrap();
-
-        // Active-span preservation across the suspend (phase-8 line 153 Phase 2).
-        // The ambient active span is a per-*thread* TLS register; a coroutine can
-        // resume on a different dispatcher worker than the one it parked on, so
-        // the resuming thread's register reflects whatever it last ran, not this
-        // coroutine's pre-suspend span. Snapshot it into a frame-resident slot
-        // here and restore it on every post-suspend edge (resume + destroy). The
-        // cross-suspend load below forces CoroSplit to spill this alloca into the
-        // coro frame — the same residency mechanism the token relies on. The two
-        // `karac_tracing_*` accessors are unconditional runtime externs (declared
-        // in `Codegen::new`, always present in the archive), so this is safe even
-        // for a program that never touches `std.tracing`.
-        let active_span_slot = self
-            .builder
-            .build_alloca(i64_ty, &format!("kara.coro.active_span.{n}"))
-            .unwrap();
-        let active_span_snap = self
-            .builder
-            .build_call(
-                self.karac_tracing_get_active_span_fn,
-                &[],
-                "kara.coro.active_span.snap",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_int_value();
-        self.builder
-            .build_store(active_span_slot, active_span_snap)
-            .unwrap();
 
         // Suspend; switch to the shared suspend-return (default), a fresh resume
         // block (case 0), and a fresh per-park DESTROY block (case 1). The
