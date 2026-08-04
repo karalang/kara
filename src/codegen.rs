@@ -2017,6 +2017,15 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_function` (whole-body analysis, so it is stable across the
     /// function).
     pub(crate) descending_skips: HashMap<crate::resolver::SpanKey, bce_length_pin::DescendingSkip>,
+    /// Converging two-pointer bounds-check skips for the current function
+    /// (bce_length_pin.rs, B-2026-08-04-8): each maps an inner converging
+    /// loop's condition `SpanKey` to the `(base_var, idx_vars, vec_vars)`
+    /// whose SUM-index upper check that loop's body may skip
+    /// (`base + idx < vec.len()` proven from a length pin, the enclosing
+    /// counter's bound, and the guard that bounds both converging indices by
+    /// `hi`'s init). Consumed in `compile_while`, which pushes the matching
+    /// `UpperBoundSum` facts. Populated at `compile_function`.
+    pub(crate) converging_skips: HashMap<crate::resolver::SpanKey, bce_length_pin::ConvergingSkip>,
     /// Stack of `(lo, hi)` variable-name pairs from dominating strict
     /// `while lo < hi` guards (innermost last). When a `let mid = lo +
     /// (hi - lo) / 2` (or `(lo + hi) / 2`) binding is compiled under such
@@ -7691,6 +7700,7 @@ impl<'ctx> Codegen<'ctx> {
             asserted_index_bounds: Vec::new(),
             pending_vec_len_pins: HashMap::new(),
             descending_skips: HashMap::new(),
+            converging_skips: HashMap::new(),
             vec_len_pins: Vec::new(),
             binsearch_guard_stack: Vec::new(),
             binsearch_assume_emitted: false,

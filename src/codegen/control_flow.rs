@@ -2109,6 +2109,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 pushed_count += 1;
             }
         }
+        // Converging two-pointer skip (bce_length_pin.rs, B-2026-08-04-8): both
+        // indices of a recognised `while lo <= hi` are proven `base + idx <
+        // vec.len()` (length pin + enclosing counter bound + the guard that
+        // bounds `lo` by `hi`'s init). Push the SUM-index facts so
+        // `emit_split_bounds_check` drops the upper half on `v[base + lo]` and
+        // `v[base + hi]` — and the sign half too when the analysis could also
+        // place the row origin and both indices at or above zero.
+        if let Some(skip) = self.converging_skips.get(&cond_key).cloned() {
+            for vec_var in &skip.vec_vars {
+                for idx_var in &skip.idx_vars {
+                    self.asserted_index_bounds
+                        .push(super::state::AssertedIndexBound::SumIndex {
+                            base_var: skip.base_var.clone(),
+                            idx_var: idx_var.clone(),
+                            vec_var: vec_var.clone(),
+                            lower_proven: skip.lower_proven,
+                        });
+                    pushed_count += 1;
+                }
+            }
+        }
         // Monotone facts: `x >= / <= its preheader value`, consumed by
         // LLVM's range passes to fold checks the source guard can't
         // express (conditionally-updated write heads / cursors).

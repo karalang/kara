@@ -13474,6 +13474,55 @@ fn main() {
     // cleanup releases the four heap buffers exactly once.
 
     #[test]
+    fn test_converging_two_pointer_bce_skip_stays_in_bounds() {
+        // B-2026-08-04-8: the converging skip drops BOTH halves of the bounds
+        // check on `v[base + lo]` / `v[base + hi]`, so nothing at runtime
+        // stops an over-wide index from walking off the buffer. ASAN is the
+        // backstop: it reads AND writes every cell of the last row (the tight
+        // case the linear identity has to get exactly right — `base + hi_init`
+        // must land on the final element, not one past it).
+        //
+        // Rows are deliberately ODD-width so `lo` and `hi` meet on a middle
+        // cell, and the corpus is exactly `n * len` so there is no slack to
+        // absorb an off-by-one.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let n = 7i64;
+    let len = 5i64;
+    let mut v: Vec[i64] = Vec.filled(n * len, 0i64);
+    let mut i = 0i64;
+    while i < n {
+        let base = i * len;
+        let mut lo = 0i64;
+        let mut hi = len - 1i64;
+        while lo <= hi {
+            v[base + lo] = v[base + lo] + 1i64;
+            v[base + hi] = v[base + hi] + 1i64;
+            lo = lo + 1i64;
+            hi = hi - 1i64;
+        }
+        i = i + 1i64;
+    }
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < n * len {
+        total = total + v[k];
+        k = k + 1i64;
+    }
+    println(f"{total}");
+}
+"#,
+            // Per row the pairs are (0,4), (1,3), (2,2): every cell gets +1,
+            // and the middle cell gets +1 again because `lo` and `hi` land on
+            // it together on the last iteration. So 5 + 1 = 6 per row, and
+            // 6 * 7 = 42 overall.
+            &["42"],
+            "converging_two_pointer_bce_skip",
+        );
+    }
+
+    #[test]
     fn test_auto_par_returns_no_use_after_move_no_double_drop() {
         // Each `read_*` builds a fresh `Vec[i64]` of three elements;
         // the parent sums the four `.len()` values and prints `12`.

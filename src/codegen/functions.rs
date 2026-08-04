@@ -2177,6 +2177,14 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             crate::codegen::bce_length_pin::compute_descending_skips(&func.body)
         };
+        // Converging two-pointer skips (B-2026-08-04-8): the row-major
+        // `v[base + lo]` / `v[base + hi]` shape. Same whole-body-analysis and
+        // kill-switch discipline as the descending path above.
+        self.converging_skips = if std::env::var("KARAC_BCE_CONV_SKIP").as_deref() == Ok("0") {
+            std::collections::HashMap::new()
+        } else {
+            crate::codegen::bce_length_pin::compute_converging_skips(&func.body)
+        };
 
         // Slice-parameter scoped-alias metadata (alias-metadata slice 4). Runs
         // after the param-registration loop above, so its map entries survive

@@ -3919,6 +3919,30 @@ impl<'ctx> super::Codegen<'ctx> {
     ///     `i + k` may reach `len` even when `i < len` ⇒ upper NOT proven.
     ///   - bare `i` (offset 0): both facts carry through unchanged.
     pub(super) fn index_bounds_already_proven(&self, index: &Expr, vec_var: &str) -> (bool, bool) {
+        // Sum-index form `v[base + idx]` (B-2026-08-04-8): the index is two
+        // variables added, so it never decomposes into the bare-index /
+        // constant-offset shape below. The upper half is always proven when
+        // such a fact exists; the lower half rides along when the analysis
+        // could also place the row origin and both converging indices at or
+        // above zero.
+        if let Some((a, b)) = Self::index_sum_var_pair(index) {
+            let hit = self.asserted_index_bounds.iter().find_map(|f| match f {
+                AssertedIndexBound::SumIndex {
+                    base_var,
+                    idx_var,
+                    vec_var: bound_vec,
+                    lower_proven,
+                } if bound_vec == vec_var
+                    && ((base_var == a && idx_var == b) || (base_var == b && idx_var == a)) =>
+                {
+                    Some(*lower_proven)
+                }
+                _ => None,
+            });
+            if let Some(lower_proven) = hit {
+                return (lower_proven, true);
+            }
+        }
         let Some((idx_name, offset_sign)) = Self::index_var_and_offset_sign(index) else {
             return (false, false);
         };
@@ -3941,6 +3965,37 @@ impl<'ctx> super::Codegen<'ctx> {
         let lower = has_lower && offset_sign >= 0;
         let upper = has_upper && offset_sign <= 0;
         (lower, upper)
+    }
+
+    /// Decompose a two-variable sum index `v[a + b]` into `(a, b)` — surface
+    /// `Binary(Add)` or trait-lowered `Call { Path([ty, "add"]), .. }`. Both
+    /// operands must be bare identifiers; anything else (a constant offset, a
+    /// computed operand, a subtraction) returns `None` and falls through to
+    /// `index_var_and_offset_sign`. Matches the fact shape emitted by the
+    /// converging two-pointer analysis.
+    fn index_sum_var_pair(index: &Expr) -> Option<(&str, &str)> {
+        let (a, b) = match &index.kind {
+            ExprKind::Binary {
+                op: BinOp::Add,
+                left,
+                right,
+            } => (left.as_ref(), right.as_ref()),
+            ExprKind::Call { callee, args } if args.len() == 2 => {
+                let ExprKind::Path { segments, .. } = &callee.kind else {
+                    return None;
+                };
+                if segments.len() == 2 && segments[1] == "add" {
+                    (&args[0].value, &args[1].value)
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        match (&a.kind, &b.kind) {
+            (ExprKind::Identifier(x), ExprKind::Identifier(y)) => Some((x.as_str(), y.as_str())),
+            _ => None,
+        }
     }
 
     /// Decompose an index expression into `(idx_var, offset_sign)` where

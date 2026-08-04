@@ -1763,6 +1763,20 @@ fn vec_length_lower_bounds(body: &Block) -> HashMap<String, BoundTerm> {
 fn analyze_block_lbs(block: &Block, whole: &RegionBindings, out: &mut HashMap<String, BoundTerm>) {
     let stmts = &block.stmts;
     for (li, stmt) in stmts.iter().enumerate() {
+        // `let v = Vec.filled(E, x)` states the length outright: `v.len() == E`,
+        // so no fill loop needs to be found. The post-binding stability gates
+        // below are shared with the counted-fill path.
+        if let Some((v, size)) = filled_vec_binding(stmt) {
+            if whole.rebound.get(&v) == Some(&1) {
+                if let Some(bound) = normalize_bound(size) {
+                    if lb_stable_after(block, li, &v, &bound) {
+                        out.insert(v, bound);
+                        continue;
+                    }
+                }
+            }
+            continue;
+        }
         let Some(v) = empty_vec_binding(stmt) else {
             continue;
         };
@@ -1780,33 +1794,70 @@ fn analyze_block_lbs(block: &Block, whole: &RegionBindings, out: &mut HashMap<St
                 continue;
             }
         }
-        let after = &stmts[fill.fi + 1..];
-        if !vec_len_stable_after(after, &block.final_expr, &v) {
-            continue;
-        }
-        let mut idents = Vec::new();
-        bound_idents(&bound, &mut idents);
-        if idents
-            .iter()
-            .any(|b| !var_unwritten_after(after, &block.final_expr, b))
-        {
-            continue;
-        }
-        let region = region_bindings(after, &block.final_expr);
-        if region.is_rebound(&v)
-            || idents
-                .iter()
-                .any(|b| region.is_rebound(b) || region.assigned.contains(b))
-        {
-            continue;
-        }
         // Inclusive fill runs one extra iteration, so `len >= BOUND + 1`.
         let lb = if fill.inclusive {
-            BoundTerm::Bin(BoundOp::Add, Box::new(bound), Box::new(BoundTerm::Int(1)))
+            BoundTerm::Bin(
+                BoundOp::Add,
+                Box::new(bound.clone()),
+                Box::new(BoundTerm::Int(1)),
+            )
         } else {
-            bound
+            bound.clone()
         };
+        if !lb_stable_after(block, fill.fi, &v, &bound) {
+            continue;
+        }
         out.insert(v, lb);
+    }
+}
+
+/// Shared post-definition soundness gate for a length lower bound `v.len() >=
+/// BOUND` established at `stmts[def_idx]`: from there to the end of the block,
+/// `v`'s length must be stable and every identifier of `BOUND` unwritten, so
+/// the relation cannot be falsified at any later index site.
+fn lb_stable_after(block: &Block, def_idx: usize, v: &str, bound: &BoundTerm) -> bool {
+    let after = &block.stmts[def_idx + 1..];
+    if !vec_len_stable_after(after, &block.final_expr, v) {
+        return false;
+    }
+    let mut idents = Vec::new();
+    bound_idents(bound, &mut idents);
+    if idents
+        .iter()
+        .any(|b| !var_unwritten_after(after, &block.final_expr, b))
+    {
+        return false;
+    }
+    let region = region_bindings(after, &block.final_expr);
+    if region.is_rebound(v) {
+        return false;
+    }
+    !idents
+        .iter()
+        .any(|b| region.is_rebound(b) || region.assigned.contains(b))
+}
+
+/// `let v = Vec.filled(SIZE, elem)` → `(v, &SIZE)`. `Vec.filled` produces a Vec
+/// of exactly `SIZE` elements, so it pins the length directly rather than via a
+/// counted fill loop. (A negative `SIZE` traps in the runtime constructor, so a
+/// surviving binding always has `len == SIZE >= 0`.)
+fn filled_vec_binding(stmt: &Stmt) -> Option<(String, &Expr)> {
+    let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+        return None;
+    };
+    let PatternKind::Binding(name) = &pattern.kind else {
+        return None;
+    };
+    let ExprKind::Call { callee, args } = &value.kind else {
+        return None;
+    };
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled" && args.len() == 2 {
+        Some((name.clone(), &args[0].value))
+    } else {
+        None
     }
 }
 
@@ -2329,6 +2380,544 @@ fn init_below_bound(e_bt: &BoundTerm, counter: &str, u_max: &BoundTerm, b_pin: &
     diff.terms.is_empty() && diff.konst >= 1
 }
 
+// ===================================================================
+// Converging two-pointer + base-offset skip (B-2026-08-04-8)
+// ===================================================================
+//
+// Neither the ascending pin path nor the descending skip above reaches the
+// **row-major two-pointer** shape — a flat `N * STRIDE` buffer walked from
+// both ends within each row:
+//
+// ```text
+// let mut v = Vec.filled(n * len, 0u8);      // len == n * len
+// let mut i = 0;
+// while i < n {
+//     let base = i * len;                    // row offset
+//     let mut lo = 0;
+//     let mut hi = len - 1;
+//     while lo <= hi {                       // CONVERGING: two moving indices
+//         ... v[base + lo] ... v[base + hi];  // <-- two bounds checks/iteration
+//         lo = lo + 1;
+//         hi = hi - 1;
+//     }
+//     i = i + 1;
+// }
+// ```
+//
+// Measured on LeetCode #246: neither ingredient alone defeats LLVM —
+// `base + ascending`, `base + descending`, converging-without-base, and
+// both-ends-from-a-single-ascending-IV all elide cleanly. Only a base offset
+// **combined with** a converging two-variable guard survives, because the
+// index is the SUM `base + j` (so the existing bare-index/constant-offset
+// matcher does not apply) and `j`'s range is fixed jointly by the two
+// co-moving variables rather than by a single affine IV. Cost: 1.93x on a
+// work-identical probe that differs only in the guard shape.
+//
+// **Soundness.** The pushed fact is `base + j < v.len()` at every eval of
+// `v[base + j]` in the inner body. The proof, entirely fail-closed:
+//   1. A `Vec.filled(E, _)` or counted fill pins `v.len() >= B_pin`
+//      (`vec_length_lower_bounds`, whole-function invariance gates).
+//   2. `hi` is monotone NON-INCREASING in the inner body (only top-level
+//      `hi = hi - C` / `hi -= C`), so `hi <= hi_init` at every point.
+//   3. `lo`'s only writes are top-level `lo = lo + C` / `lo += C` that come
+//      AFTER every other mention of `lo` in the body. So at each `v[base+lo]`,
+//      `lo` still holds its body-entry value, where the loop guard gives
+//      `lo <= hi` (or `lo < hi`) and hence `lo <= hi <= hi_init`. The
+//      ordering gate is load-bearing: unlike the descending case, an
+//      ascending index that is stepped BEFORE its use can exceed the bound
+//      the guard established.
+//   4. So BOTH indices are `<= hi_init`, and it suffices to prove
+//      `base + hi_init < B_pin`. `base` is unwritten in the inner body
+//      (loop-invariant) and its sole init is a linear `E_base(i)`; `i` is
+//      unwritten from the enclosing body-entry to that init, so the enclosing
+//      guard `i <= u_max` holds there.
+//   5. `init_below_bound` proves `B_pin - (E_base + hi_init)[i := u_max] >= 1`
+//      as a linear identity — the same cancellation the descending path uses,
+//      so every identifier of the substituted sum also appears in `B_pin`
+//      with an identical coefficient and the relation holds at runtime.
+//
+// Because the row extent (`n`, `len`) is typically a literal binding rather
+// than a symbolic parameter, and `n * len` is NOT affine in `{n, len}`, the
+// proof first substitutes immutable integer-literal `let`s (`fold_consts`).
+// Without that step the identity is a product of two symbolic terms and
+// `bound_to_linear` fails closed.
+//
+// Only the UPPER half is skipped; the lower (`idx < 0`) half stays for LLVM
+// to fold from the monotone assumes, exactly as in the descending path.
+
+/// A recognised converging two-pointer skip, keyed (in the returned map) by
+/// the inner loop's condition span. Codegen pushes an `UpperBoundSum` fact per
+/// (`idx_var`, `vec_var`) pair while compiling that loop's body.
+#[derive(Debug, Clone)]
+pub(crate) struct ConvergingSkip {
+    /// The loop-invariant row offset (`base` in `v[base + lo]`).
+    pub base_var: String,
+    /// The converging index variables (`lo` and `hi`), both proven
+    /// `base + idx < v.len()`.
+    pub idx_vars: Vec<String>,
+    /// The Vecs those facts apply to.
+    pub vec_vars: Vec<String>,
+    /// Whether `base + idx >= 0` was also proven, so the bounds check can be
+    /// dropped ENTIRELY rather than leaving the sign half behind.
+    pub lower_proven: bool,
+}
+
+/// Analyse a function body and return the converging two-pointer skips it
+/// proves, keyed by the inner loop's condition `SpanKey`.
+pub(crate) fn compute_converging_skips(body: &Block) -> HashMap<SpanKey, ConvergingSkip> {
+    let mut out = HashMap::new();
+    let lbs = vec_length_lower_bounds(body);
+    if lbs.is_empty() {
+        return out;
+    }
+    let consts = int_const_bindings(body);
+    let lbs: HashMap<String, BoundTerm> = lbs
+        .into_iter()
+        .map(|(v, b)| {
+            let folded = fold_consts(&b, &consts);
+            (v, folded)
+        })
+        .collect();
+    for_each_block(body, &mut |block| {
+        scan_enclosing_loops_conv(block, &lbs, &consts, &mut out)
+    });
+    out
+}
+
+fn scan_enclosing_loops_conv(
+    block: &Block,
+    lbs: &HashMap<String, BoundTerm>,
+    consts: &HashMap<String, i64>,
+    out: &mut HashMap<SpanKey, ConvergingSkip>,
+) {
+    for (pos, stmt) in block.stmts.iter().enumerate() {
+        let StmtKind::Expr(e) = &stmt.kind else {
+            continue;
+        };
+        let Some((counter, u_max, enc_body)) = as_enclosing_loop(e) else {
+            continue;
+        };
+        let u_max = fold_consts(&u_max, consts);
+        // The counter's MINIMUM, used only for the optional lower-half proof:
+        // a `for` range states it outright, a `while` takes it from the
+        // counter's sole definition before the loop. `None` simply means the
+        // lower half is not proven.
+        let u_min = counter_min(e, &block.stmts[..pos], &counter).map(|m| fold_consts(&m, consts));
+        analyze_enclosing_body_conv(&counter, &u_max, u_min.as_ref(), enc_body, lbs, consts, out);
+    }
+}
+
+/// The enclosing counter's minimum value: the `for` range's start (`0` when
+/// omitted), or the `while` counter's sole scalar definition among the
+/// statements preceding the loop.
+fn counter_min(e: &Expr, before: &[Stmt], counter: &str) -> Option<BoundTerm> {
+    match &e.kind {
+        ExprKind::For { iterable, .. } => {
+            let ExprKind::Range { start, .. } = &iterable.kind else {
+                return None;
+            };
+            match start.as_deref() {
+                None => Some(BoundTerm::Int(0)),
+                Some(st) => normalize_bound(st),
+            }
+        }
+        _ => sole_scalar_init(before, counter),
+    }
+}
+
+/// Scan an enclosing loop body for inner converging loops that qualify.
+#[allow(clippy::too_many_arguments)]
+fn analyze_enclosing_body_conv(
+    counter: &str,
+    u_max: &BoundTerm,
+    u_min: Option<&BoundTerm>,
+    enc_body: &Block,
+    lbs: &HashMap<String, BoundTerm>,
+    consts: &HashMap<String, i64>,
+    out: &mut HashMap<SpanKey, ConvergingSkip>,
+) {
+    let stmts = &enc_body.stmts;
+    for (pos, stmt) in stmts.iter().enumerate() {
+        let StmtKind::Expr(e) = &stmt.kind else {
+            continue;
+        };
+        let ExprKind::While {
+            condition, body, ..
+        } = &e.kind
+        else {
+            continue;
+        };
+        let Some((lo, hi)) = as_converging_guard(condition) else {
+            continue;
+        };
+        if lo == hi || lo == counter || hi == counter {
+            continue;
+        }
+        // The enclosing counter must be UNWRITTEN before this inner loop, so
+        // the enclosing guard's `counter <= u_max` still holds at the inits.
+        if stmts[..pos].iter().any(|s| stmt_writes_ident(s, counter)) {
+            continue;
+        }
+        // `hi` non-increasing everywhere; `lo`'s steps strictly after its uses.
+        if !only_monotone_decrement(body, &hi) || !increments_are_trailing(body, &lo) {
+            continue;
+        }
+        let Some(hi_init) = sole_scalar_init(&stmts[..pos], &hi) else {
+            continue;
+        };
+        let hi_init = fold_consts(&hi_init, consts);
+        // Lower-half prerequisites, all optional: both indices must still hold
+        // their body-entry values at every use (so the guard's `lo_init <= lo
+        // <= hi` chain applies to `hi` too), and `lo`'s init must be placeable.
+        let lo_init = sole_scalar_init(&stmts[..pos], &lo).map(|b| fold_consts(&b, consts));
+        let lower_shape_ok = decrements_are_trailing(body, &hi) && lo_init.is_some();
+
+        // Candidate `(vec, base)` pairs actually indexed as `v[base + lo/hi]`.
+        let idx_names = [lo.clone(), hi.clone()];
+        let mut chosen: Option<(String, Vec<String>)> = None;
+        // A single skip covers every (idx, vec) pair it names, so the lower
+        // half is claimed only if it holds for ALL of them.
+        let mut lower_all = true;
+        for (v, base) in collect_base_indexed(body, &idx_names) {
+            if base == lo || base == hi || !lbs.contains_key(&v) {
+                continue;
+            }
+            // `base` must be loop-invariant across the inner body.
+            if stmt_touches_var(&body.stmts, &body.final_expr, &base) {
+                continue;
+            }
+            let Some(e_base) = sole_scalar_init(&stmts[..pos], &base) else {
+                continue;
+            };
+            let e_base_kept = fold_consts(&e_base, consts);
+            let max_idx = BoundTerm::Bin(
+                BoundOp::Add,
+                Box::new(e_base_kept.clone()),
+                Box::new(hi_init.clone()),
+            );
+            if !init_below_bound(&max_idx, counter, u_max, &lbs[&v]) {
+                continue;
+            }
+            // `base + lo_init >= 0` with the counter at its minimum proves the
+            // sign half for BOTH indices (each is `>= lo_init` at its use).
+            let lower_ok = lower_shape_ok
+                && match (u_min, &lo_init) {
+                    (Some(m), Some(li)) => sum_nonneg_at_min(&e_base_kept, li, counter, m),
+                    _ => false,
+                };
+            lower_all &= lower_ok;
+            // One `base` per inner loop keeps the emitted fact unambiguous;
+            // a second distinct base disqualifies rather than guesses.
+            match &mut chosen {
+                None => chosen = Some((base, vec![v])),
+                Some((b, vs)) if *b == base => vs.push(v),
+                Some(_) => {
+                    chosen = None;
+                    break;
+                }
+            }
+        }
+        let Some((base_var, mut vec_vars)) = chosen else {
+            continue;
+        };
+        vec_vars.sort();
+        vec_vars.dedup();
+        let mut idx_vars = vec![lo, hi];
+        idx_vars.sort();
+        out.insert(
+            SpanKey::from_span(&condition.span),
+            ConvergingSkip {
+                base_var,
+                idx_vars,
+                vec_vars,
+                lower_proven: lower_all,
+            },
+        );
+    }
+}
+
+/// A converging guard `lo <= hi` / `lo < hi` with both sides bare identifiers.
+fn as_converging_guard(cond: &Expr) -> Option<(String, String)> {
+    match &cond.kind {
+        ExprKind::Binary {
+            op: BinOp::LtEq | BinOp::Lt,
+            left,
+            right,
+        } => Some((ident(left)?, ident(right)?)),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() == 2 && matches!(segments[1].as_str(), "le" | "lt") {
+                Some((ident(&args[0].value)?, ident(&args[1].value)?))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Every write to `lo` in `body` is a top-level `lo = lo + C` / `lo += C` (C a
+/// positive int literal), and `lo` is not mentioned at all after the first such
+/// step. So at every OTHER mention of `lo` — in particular every `v[base + lo]`
+/// index — `lo` still holds its body-entry value, which the loop guard bounds.
+///
+/// Zero steps is accepted (an unchanged `lo` trivially keeps its entry value);
+/// what must be excluded is a step that happens BEFORE a use, or any write
+/// form other than a clean increment.
+fn increments_are_trailing(body: &Block, lo: &str) -> bool {
+    let mut stepped = false;
+    for s in &body.stmts {
+        if is_clean_increment_stmt(s, lo) {
+            stepped = true;
+            continue;
+        }
+        if stepped {
+            if stmt_mentions_ident(s, lo) {
+                return false;
+            }
+        } else if stmt_touches_var(std::slice::from_ref(s), &None, lo) {
+            return false;
+        }
+    }
+    let Some(e) = &body.final_expr else {
+        return true;
+    };
+    if stmt_touches_var(&[], &body.final_expr, lo) {
+        return false;
+    }
+    !(stepped && expr_mentions_ident(e, lo))
+}
+
+/// Mirror of `increments_are_trailing` for the DEcrementing index: every write
+/// to `hi` is a top-level clean decrement and `hi` is not mentioned after the
+/// first one. Needed only for the LOWER half — the upper half rides on plain
+/// monotonicity (`hi <= hi_init` regardless of ordering), but a lower bound on
+/// a shrinking value is only valid before it shrinks.
+fn decrements_are_trailing(body: &Block, hi: &str) -> bool {
+    let mut stepped = false;
+    for s in &body.stmts {
+        if is_clean_decrement_stmt(s, hi) {
+            stepped = true;
+            continue;
+        }
+        if stepped {
+            if stmt_mentions_ident(s, hi) {
+                return false;
+            }
+        } else if stmt_touches_var(std::slice::from_ref(s), &None, hi) {
+            return false;
+        }
+    }
+    let Some(e) = &body.final_expr else {
+        return true;
+    };
+    if stmt_touches_var(&[], &body.final_expr, hi) {
+        return false;
+    }
+    !(stepped && expr_mentions_ident(e, hi))
+}
+
+/// Prove `E_base + lo_init >= 0` by evaluating at the counter's MINIMUM:
+/// substitute `counter := u_min` (valid because `E_base` is non-decreasing in
+/// the counter, so its minimum over `counter >= u_min` is there) and check the
+/// result is a non-negative constant. Mirrors `init_below_bound`, which does
+/// the same substitution at the maximum for the upper half.
+fn sum_nonneg_at_min(
+    e_base: &BoundTerm,
+    lo_init: &BoundTerm,
+    counter: &str,
+    u_min: &BoundTerm,
+) -> bool {
+    let sum = BoundTerm::Bin(
+        BoundOp::Add,
+        Box::new(e_base.clone()),
+        Box::new(lo_init.clone()),
+    );
+    let (Some(lin), Some(min_lin)) = (bound_to_linear(&sum), bound_to_linear(u_min)) else {
+        return false;
+    };
+    let a = *lin.terms.get(counter).unwrap_or(&0);
+    if a < 0 {
+        return false;
+    }
+    let mut without = lin.clone();
+    without.terms.remove(counter);
+    let Some(scaled) = lin_scale(&min_lin, a) else {
+        return false;
+    };
+    let Some(at_min) = lin_add(&without, &scaled) else {
+        return false;
+    };
+    at_min.terms.is_empty() && at_min.konst >= 0
+}
+
+fn is_clean_increment_stmt(s: &Stmt, lo: &str) -> bool {
+    match &s.kind {
+        StmtKind::Assign { target, value } if is_ident_expr(target, lo) => {
+            is_add_pos_const(value, lo)
+        }
+        StmtKind::CompoundAssign {
+            target,
+            op: CompoundOp::Add,
+            value,
+        } if is_ident_expr(target, lo) => is_pos_int_lit(value),
+        _ => false,
+    }
+}
+
+/// `value` is `lo + C` / `C + lo` (C a positive int literal) — surface
+/// `Binary(Add)` or trait-lowered `Call { Path([ty,"add"]), .. }`.
+fn is_add_pos_const(value: &Expr, lo: &str) -> bool {
+    match &value.kind {
+        ExprKind::Binary {
+            op: BinOp::Add,
+            left,
+            right,
+        } => {
+            (is_ident_expr(left, lo) && is_pos_int_lit(right))
+                || (is_pos_int_lit(left) && is_ident_expr(right, lo))
+        }
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return false;
+            };
+            segments.len() == 2
+                && segments[1] == "add"
+                && ((is_ident_expr(&args[0].value, lo) && is_pos_int_lit(&args[1].value))
+                    || (is_pos_int_lit(&args[0].value) && is_ident_expr(&args[1].value, lo)))
+        }
+        _ => false,
+    }
+}
+
+/// Collect `(vec_var, base_var)` for every `v[base + idx]` / `v[idx + base]` in
+/// `body` where `idx` is one of `idx_names` and both `base` and `v` are bare
+/// identifiers. Sorted+deduped so the emitted fact set is deterministic.
+fn collect_base_indexed(body: &Block, idx_names: &[String]) -> Vec<(String, String)> {
+    // The predicate always reports `false` so `body_any`'s short-circuit never
+    // fires and the walk visits every sub-expression; hits accumulate in the
+    // cell instead of the return value.
+    let cell: std::cell::RefCell<Vec<(String, String)>> = std::cell::RefCell::new(Vec::new());
+    let collect = |e: &Expr| {
+        if let ExprKind::Index { object, index } = &e.kind {
+            if let ExprKind::Identifier(v) = &object.kind {
+                if let Some(base) = sum_with_index_var(index, idx_names) {
+                    cell.borrow_mut().push((v.clone(), base));
+                }
+            }
+        }
+        false
+    };
+    body_any(body, &collect);
+    let mut out = cell.into_inner();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `index` is `base + idx` or `idx + base` where `idx` is one of `idx_names`
+/// and `base` is a bare identifier → `Some(base)`. Handles the surface
+/// `Binary(Add)` and the trait-lowered `Call { Path([ty,"add"]), .. }` forms.
+fn sum_with_index_var(index: &Expr, idx_names: &[String]) -> Option<String> {
+    let (l, r) = match &index.kind {
+        ExprKind::Binary {
+            op: BinOp::Add,
+            left,
+            right,
+        } => (left.as_ref(), right.as_ref()),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 || segments[1] != "add" {
+                return None;
+            }
+            (&args[0].value, &args[1].value)
+        }
+        _ => return None,
+    };
+    let (ln, rn) = (ident(l)?, ident(r)?);
+    if idx_names.contains(&rn) && !idx_names.contains(&ln) {
+        Some(ln)
+    } else if idx_names.contains(&ln) && !idx_names.contains(&rn) {
+        Some(rn)
+    } else {
+        None
+    }
+}
+
+/// Immutable integer-literal `let` bindings of the whole function: `x` bound
+/// exactly once to an integer literal and never assigned, shadowed, or
+/// mut-written. Substituting these is what makes the `n * len` row-extent
+/// products affine (see the section comment).
+fn int_const_bindings(body: &Block) -> HashMap<String, i64> {
+    let whole = region_bindings(&body.stmts, &body.final_expr);
+    let mut cand: HashMap<String, i64> = HashMap::new();
+    for_each_block(body, &mut |block| {
+        for s in &block.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &s.kind {
+                if let PatternKind::Binding(n) = &pattern.kind {
+                    if let ExprKind::Integer(v, _) = &value.kind {
+                        cand.insert(n.clone(), *v);
+                    }
+                }
+            }
+        }
+    });
+    cand.retain(|n, _| {
+        whole.rebound.get(n) == Some(&1)
+            && !whole.assigned.contains(n)
+            && !mut_used_anywhere(body, n)
+    });
+    cand
+}
+
+/// Whether `name` is ever passed as a `mut`-marked argument or used as a
+/// method-call receiver anywhere in `body`. Deliberately scans statement
+/// *values* only: `stmt_writes_bound` reports a `let name = ..` binding as a
+/// write to `name`, which is correct for its "unwritten AFTER this point" use
+/// but would reject every candidate here (each is introduced by exactly such a
+/// binding). Rebinding and assignment are covered separately by
+/// `region_bindings`. `expr_writes_bound` recurses through nested blocks, so
+/// the top-level scan is exhaustive.
+fn mut_used_anywhere(body: &Block, name: &str) -> bool {
+    let stmt_hit = |s: &Stmt| match &s.kind {
+        StmtKind::Let { value, .. } => expr_writes_bound(value, name),
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            expr_writes_bound(target, name) || expr_writes_bound(value, name)
+        }
+        StmtKind::Expr(e) => expr_writes_bound(e, name),
+        StmtKind::LetUninit { .. } => false,
+        // Unanalyzed statement kinds — fail closed.
+        _ => true,
+    };
+    body.stmts.iter().any(stmt_hit)
+        || body
+            .final_expr
+            .as_ref()
+            .is_some_and(|e| expr_writes_bound(e, name))
+}
+
+/// Replace every identifier of `bt` that has an immutable integer-literal
+/// binding with that literal. Pure rewriting — the resulting term denotes the
+/// same runtime value.
+fn fold_consts(bt: &BoundTerm, consts: &HashMap<String, i64>) -> BoundTerm {
+    match bt {
+        BoundTerm::Ident(s) => match consts.get(s) {
+            Some(v) => BoundTerm::Int(*v),
+            None => bt.clone(),
+        },
+        BoundTerm::Int(_) => bt.clone(),
+        BoundTerm::Bin(op, l, r) => BoundTerm::Bin(
+            *op,
+            Box::new(fold_consts(l, consts)),
+            Box::new(fold_consts(r, consts)),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2815,6 +3404,206 @@ mod tests {
         // exercised by the E2E tests. Here we just confirm the pin is recorded
         // for the `cols + 1` bound (fill recognised).
         assert!(pins_vec(src, "dp"));
+    }
+
+    // ── Converging two-pointer skip (B-2026-08-04-8) ────────────────
+
+    /// Parse `src` and return the converging skips for the first function as a
+    /// sorted `Vec<(base_var, idx_vars, vec_vars)>`.
+    fn conv_skips(src: &str) -> Vec<(String, Vec<String>, Vec<String>)> {
+        let parsed = crate::parse(src);
+        let body = parsed
+            .program
+            .items
+            .into_iter()
+            .find_map(|it| match it {
+                Item::Function(f) => Some(f.body),
+                _ => None,
+            })
+            .expect("a function");
+        let mut out: Vec<(String, Vec<String>, Vec<String>)> = compute_converging_skips(&body)
+            .into_values()
+            .map(|s| (s.base_var, s.idx_vars, s.vec_vars))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// `ROW_MAJOR` with `from` replaced by `to`, asserting the anchor actually
+    /// matched. A silently-missed replacement would leave the ORIGINAL (firing)
+    /// program behind and turn a negative test into a vacuous pass — which is
+    /// exactly how the first draft of these gates reported green.
+    fn mutate(from: &str, to: &str) -> String {
+        assert!(
+            ROW_MAJOR.contains(from),
+            "anchor not found in ROW_MAJOR: {from:?}"
+        );
+        ROW_MAJOR.replace(from, to)
+    }
+
+    /// The canonical row-major two-pointer: a `Vec.filled(n * len, _)` corpus
+    /// walked from both ends within each row.
+    const ROW_MAJOR: &str = "fn f() -> i64 {\n\
+            let n = 20i64;\n\
+            let len = 32i64;\n\
+            let mut v: Vec[u8] = Vec.filled(n * len, 48u8);\n\
+            let mut acc = 0i64;\n\
+            let mut i = 0i64;\n\
+            while i < n {\n\
+              let base = i * len;\n\
+              let mut lo = 0i64;\n\
+              let mut hi = len - 1i64;\n\
+              while lo <= hi {\n\
+                acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);\n\
+                lo = lo + 1i64;\n\
+                hi = hi - 1i64;\n\
+              }\n\
+              i = i + 1i64;\n\
+            }\n\
+            acc\n\
+        }";
+
+    #[test]
+    fn fires_on_row_major_two_pointer() {
+        assert_eq!(
+            conv_skips(ROW_MAJOR),
+            vec![(
+                "base".to_string(),
+                vec!["hi".to_string(), "lo".to_string()],
+                vec!["v".to_string()]
+            )]
+        );
+    }
+
+    /// The single skip's `lower_proven` flag, or `None` if nothing fired.
+    fn conv_lower(src: &str) -> Option<bool> {
+        let parsed = crate::parse(src);
+        let body = parsed
+            .program
+            .items
+            .into_iter()
+            .find_map(|it| match it {
+                Item::Function(f) => Some(f.body),
+                _ => None,
+            })
+            .expect("a function");
+        let m = compute_converging_skips(&body);
+        assert!(m.len() <= 1, "expected at most one skip, got {}", m.len());
+        m.into_values().next().map(|s| s.lower_proven)
+    }
+
+    #[test]
+    fn proves_the_lower_half_for_the_canonical_shape() {
+        // `base = i * len` with `i >= 0` and `lo` starting at 0 puts every
+        // index at or above zero, so the check disappears ENTIRELY.
+        assert_eq!(conv_lower(ROW_MAJOR), Some(true));
+    }
+
+    #[test]
+    fn keeps_the_lower_half_when_hi_steps_before_its_use() {
+        // `hi = hi - 1` BEFORE the index still bounds `hi` ABOVE (it only
+        // shrinks), so the upper half is still proven — but `hi` may now be
+        // below `lo_init`, so the sign half must survive. This pins the two
+        // halves as independently gated.
+        let src = mutate(
+            "acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);\nlo = lo + 1i64;\nhi = hi - 1i64;",
+            "hi = hi - 1i64;\nacc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);\nlo = lo + 1i64;",
+        );
+        assert_eq!(conv_lower(&src), Some(false));
+    }
+
+    #[test]
+    fn keeps_the_lower_half_when_the_row_origin_can_be_negative() {
+        // The enclosing counter starts below zero, so `base = i * len` can be
+        // negative even though the upper bound still holds.
+        let src = mutate("let mut i = 0i64;", "let mut i = -4i64;");
+        assert_eq!(conv_lower(&src), Some(false));
+    }
+
+    #[test]
+    fn fires_with_strict_converging_guard() {
+        // `while lo < hi` bounds `lo` by `hi` just as `<=` does.
+        let src = mutate("while lo <= hi", "while lo < hi");
+        assert_eq!(conv_skips(&src).len(), 1);
+    }
+
+    #[test]
+    fn fires_for_index_assign_targets() {
+        // The construction half of the shape: both ends are ASSIGNED, not read.
+        let src = mutate(
+            "acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);",
+            "v[base + lo] = 48u8; v[base + hi] = 48u8;",
+        );
+        assert_eq!(conv_skips(&src).len(), 1);
+    }
+
+    // ── Negatives: each soundness gate, one at a time ────────────────
+
+    #[test]
+    fn no_fire_when_ascending_index_steps_before_its_use() {
+        // `lo = lo + 1` BEFORE the index: at the use, `lo` may already exceed
+        // the `lo <= hi <= hi_init` bound the guard established. Skipping the
+        // check here would be an OOB read.
+        let src = mutate(
+            "acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);\nlo = lo + 1i64;",
+            "lo = lo + 1i64;\nacc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);",
+        );
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_hi_is_not_monotone() {
+        // `hi` reset upward inside the body breaks `hi <= hi_init`.
+        let src = mutate("hi = hi - 1i64;", "hi = hi + 1i64;");
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_base_is_written_in_the_inner_body() {
+        let src = mutate("lo = lo + 1i64;", "base = base + 1i64; lo = lo + 1i64;");
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_the_row_does_not_fit_the_pinned_length() {
+        // `base = i * len` but rows are `len + 1` wide: the last row runs off
+        // the end, and the linear identity must refuse it.
+        let src = mutate("let mut hi = len - 1i64;", "let mut hi = len;");
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_the_enclosing_counter_is_written_before_the_inner_loop() {
+        let src = mutate("let base = i * len;", "i = i + 1i64; let base = i * len;");
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_the_vec_length_is_not_pinned() {
+        // A bare `Vec.new()` with no counted fill: nothing bounds `v.len()`.
+        let src = mutate("Vec.filled(n * len, 48u8)", "Vec.new()");
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_the_vec_is_resized_after_the_pin() {
+        let src = mutate("let mut acc = 0i64;", "let mut acc = 0i64; v.push(1u8);");
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_a_bound_identifier_is_mutated_after_the_pin() {
+        // `len` written after the pin: `n * len` no longer describes v.len().
+        let src = mutate("let len = 32i64;", "let mut len = 32i64;")
+            .replace("let mut acc = 0i64;", "let mut acc = 0i64; len = 64i64;");
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_for_a_plain_single_index_loop() {
+        // No sum index: the existing bare-index paths own this shape.
+        let src = mutate("v[base + lo]", "v[lo]").replace("v[base + hi]", "v[hi]");
+        assert!(conv_skips(&src).is_empty());
     }
 
     // ── Descending-loop bounds-check skip (B-2026-07-17-1) ──────────

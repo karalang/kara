@@ -1364,6 +1364,24 @@ pub(crate) enum AssertedIndexBound {
     /// during guard parsing to resolve `idx_var < n` where `n` is a
     /// local binding to `vec_var.len()`.
     UpperBound { idx_var: String, vec_var: String },
+    /// `base_var + idx_var < vec_var.len()` is known true in the current
+    /// scope, for the SUM index expression specifically — `vec_var[base_var +
+    /// idx_var]` (either operand order). Emitted by the converging
+    /// two-pointer analysis (`bce_length_pin.rs`, B-2026-08-04-8) for the
+    /// row-major shape `v[base + lo]` / `v[base + hi]`, where the index is a
+    /// sum of two variables and so never matches the bare-index /
+    /// constant-offset forms `UpperBound` is keyed on.
+    SumIndex {
+        base_var: String,
+        idx_var: String,
+        vec_var: String,
+        /// Whether `base_var + idx_var >= 0` was ALSO proven. The upper half
+        /// is what justifies the fact's existence and is always proven; the
+        /// lower half needs the extra "no step before the use" gate on the
+        /// DEcrementing index plus a non-negative row origin, so it is
+        /// reported separately. Both proven ⇒ no runtime check at all.
+        lower_proven: bool,
+    },
 }
 
 /// Direction of a syntactically-monotone loop variable — a `let mut`

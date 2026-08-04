@@ -33699,6 +33699,66 @@ fn second() -> i64 {
         );
     }
 
+    /// The canonical row-major converging two-pointer, shared by the two IR
+    /// wiring tests below. Its ONLY Vec index sites are `v[base + lo]` and
+    /// `v[base + hi]`, so any surviving `vidx.` bounds-check block in the IR
+    /// belongs to them.
+    const CONV_TWO_POINTER_SRC: &str = r#"
+fn row_scan() -> i64 {
+    let n = 20i64;
+    let len = 32i64;
+    let v: Vec[u8] = Vec.filled(n * len, 48u8);
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        let base = i * len;
+        let mut lo = 0i64;
+        let mut hi = len - 1i64;
+        while lo <= hi {
+            acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);
+            lo = lo + 1i64;
+            hi = hi - 1i64;
+        }
+        i = i + 1i64;
+    }
+    acc
+}
+"#;
+
+    #[test]
+    fn test_ir_converging_two_pointer_bce_skip_wiring() {
+        // B-2026-08-04-8: the converging skip proves `base + lo` and
+        // `base + hi` are both in range for the row-major shape — upper from
+        // the length pin + enclosing counter bound, lower from a non-negative
+        // row origin — so BOTH halves are elided and no check block is emitted
+        // at all.
+        let ir = ir_for(CONV_TWO_POINTER_SRC);
+        assert!(
+            !ir.contains("vidx."),
+            "expected the converging two-pointer loads to carry NO bounds \
+             check, but found a `vidx.` block:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_converging_skip_refused_when_index_steps_before_use() {
+        // The soundness gate, at the IR level: stepping `lo` BEFORE the index
+        // means `lo` can exceed the bound the `lo <= hi` guard established, so
+        // the skip must NOT fire and the full combined check must survive.
+        // Same program as above with only the statement order changed.
+        let src = CONV_TWO_POINTER_SRC.replace(
+            "acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);\n            lo = lo + 1i64;",
+            "lo = lo + 1i64;\n            acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);",
+        );
+        assert_ne!(src, CONV_TWO_POINTER_SRC, "reorder anchor did not match");
+        let ir = ir_for(&src);
+        assert!(
+            ir.contains("vidx.ok"),
+            "expected the reordered loop to KEEP its combined bounds check \
+             (the skip is unsound there), got:\n{ir}"
+        );
+    }
+
     #[test]
     fn test_ir_descending_loop_bce_skip_wiring() {
         // B-2026-07-17-1: the descending-loop skip proves `k < row.len()` for
