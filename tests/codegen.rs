@@ -24980,6 +24980,18 @@ fn main() {
         let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
         let mut cmd = std::process::Command::new(runner);
         cmd.arg(&ir_path);
+        // Run==build parity for `env.args()`: under the JIT the hosting process
+        // is `karac_jit_runner`, so an unset KARAC_PROGRAM_ARGS makes
+        // `karac_runtime_env_args_into` fall back to the RUNNER's argv
+        // (`[runner, <ir>.ll]`, len 2) instead of the program's own (an AOT
+        // binary sees just `[argv0]`, len 1). A test that folds
+        // `env.args().len()` into its output (a deliberate not-a-constant, e.g.
+        // `e2e_named_source_moved_into_a_tuple_element_is_disarmed`) then
+        // diverges from the AOT oracle by exactly that off-by-one. `karac run`
+        // already sets this var (cli.rs) — the harness must too. One synthetic
+        // argv0 element ⇒ len 1, matching AOT; the value is unread (tests use
+        // `.len()`). B-2026-07-29-18 built this channel for precisely this.
+        cmd.env("KARAC_PROGRAM_ARGS", &ir_path);
 
         let output = output_with_hang_watchdog(cmd);
 
