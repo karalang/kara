@@ -2718,9 +2718,10 @@ fn collect_impl_trait_spans<'t>(ty: &'t TypeExpr, out: &mut Vec<&'t Span>) {
         }
         TypeKind::Array { element, .. } => collect_impl_trait_spans(element, out),
         TypeKind::Pointer { inner, .. } => collect_impl_trait_spans(inner, out),
-        TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Weak(inner) => {
-            collect_impl_trait_spans(inner, out)
-        }
+        TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::Weak(inner)
+        | TypeKind::Frozen(inner) => collect_impl_trait_spans(inner, out),
         TypeKind::MutSlice(element) => collect_impl_trait_spans(element, out),
         TypeKind::FnType {
             params,

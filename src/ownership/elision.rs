@@ -2954,6 +2954,7 @@ fn type_expr_mentions_deep(te: &TypeExpr, name: &str) -> bool {
         TypeKind::Array { element, .. } => type_expr_mentions_deep(element, name),
         TypeKind::Pointer { inner, .. }
         | TypeKind::Ref(inner)
+        | TypeKind::Frozen(inner)
         | TypeKind::MutRef(inner)
         | TypeKind::MutSlice(inner)
         | TypeKind::Weak(inner) => type_expr_mentions_deep(inner, name),

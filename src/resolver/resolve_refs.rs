@@ -66,7 +66,12 @@ impl<'a> super::Resolver<'a> {
                     }
                 }
             }
-            TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Weak(inner) => {
+            // `Frozen` joins the borrow-like forms: stage 1 resolves it
+            // exactly as its inner type (B-2026-08-01-33 mechanism 3).
+            TypeKind::Ref(inner)
+            | TypeKind::MutRef(inner)
+            | TypeKind::Weak(inner)
+            | TypeKind::Frozen(inner) => {
                 self.resolve_type_expr(inner);
             }
             TypeKind::MutSlice(element) => {

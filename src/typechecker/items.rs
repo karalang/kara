@@ -473,7 +473,8 @@ impl<'a> super::TypeChecker<'a> {
             | TypeKind::Ref(inner)
             | TypeKind::MutRef(inner)
             | TypeKind::MutSlice(inner)
-            | TypeKind::Weak(inner) => {
+            | TypeKind::Weak(inner)
+            | TypeKind::Frozen(inner) => {
                 self.check_type_expr_visibility(inner, generic_scope, type_vis, context, owner);
             }
             TypeKind::FnType {
@@ -2259,7 +2260,8 @@ impl<'a> super::TypeChecker<'a> {
             | TypeKind::Ref(inner)
             | TypeKind::MutRef(inner)
             | TypeKind::MutSlice(inner)
-            | TypeKind::Weak(inner) => Self::type_expr_mentions_type(inner, target),
+            | TypeKind::Weak(inner)
+            | TypeKind::Frozen(inner) => Self::type_expr_mentions_type(inner, target),
             TypeKind::FnType {
                 params,
                 return_type,
@@ -3680,9 +3682,10 @@ impl<'a> super::TypeChecker<'a> {
             }
             TypeKind::Array { element, .. } => Self::walk_for_impl_trait(element, f),
             TypeKind::Pointer { inner, .. } => Self::walk_for_impl_trait(inner, f),
-            TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Weak(inner) => {
-                Self::walk_for_impl_trait(inner, f)
-            }
+            TypeKind::Ref(inner)
+            | TypeKind::MutRef(inner)
+            | TypeKind::Weak(inner)
+            | TypeKind::Frozen(inner) => Self::walk_for_impl_trait(inner, f),
             TypeKind::MutSlice(element) => Self::walk_for_impl_trait(element, f),
             TypeKind::FnType {
                 params,
@@ -3733,7 +3736,9 @@ impl<'a> super::TypeChecker<'a> {
         found_ref: &mut bool,
     ) {
         match &ty.kind {
-            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
+            // `frozen T` is a borrow-like form, so it signals a reference
+            // capture exactly as `ref`/`mut ref` do — the conservative side.
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Frozen(inner) => {
                 *found_ref = true;
                 Self::collect_capture_signals(inner, generic_param_names, type_params, found_ref);
             }

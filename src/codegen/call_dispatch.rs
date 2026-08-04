@@ -5776,7 +5776,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     return false;
                 };
                 let inner = match &field_te.kind {
-                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner,
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Frozen(inner) => {
+                        inner
+                    }
                     _ => return false,
                 };
                 match &inner.kind {

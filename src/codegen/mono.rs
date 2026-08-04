@@ -80,7 +80,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut out = Vec::new();
         for (param, arg) in func.params.iter().zip(args.iter()) {
             let peeled = match &param.ty.kind {
-                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Frozen(inner) => {
+                    inner.as_ref()
+                }
                 _ => &param.ty,
             };
             let TypeKind::Path(path) = &peeled.kind else {
@@ -136,7 +138,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default()).into();
         for (param, arg) in func.params.iter().zip(args.iter()) {
             let peeled = match &param.ty.kind {
-                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Frozen(inner) => {
+                    inner.as_ref()
+                }
                 _ => &param.ty,
             };
             let TypeKind::Path(path) = &peeled.kind else {

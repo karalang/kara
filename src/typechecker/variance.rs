@@ -152,7 +152,12 @@ fn collect_occurrences(
         }
         // `ref T` target is covariant; `mut ref T` / `mut Slice[T]`
         // targets are invariant (the load-bearing soundness pin).
-        TypeKind::Ref(inner) => collect_occurrences(inner, ctx, tracked, position, out),
+        // `frozen T` is a read-only handle — covariant like `ref T`. It can
+        // never be written through (that is the whole point of the mode), so
+        // the invariance the `mut` forms need does not apply.
+        TypeKind::Ref(inner) | TypeKind::Frozen(inner) => {
+            collect_occurrences(inner, ctx, tracked, position, out)
+        }
         TypeKind::MutRef(inner) | TypeKind::MutSlice(inner) => {
             collect_occurrences(inner, Variance::Invariant, tracked, position, out);
         }

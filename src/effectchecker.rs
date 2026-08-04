@@ -1889,7 +1889,8 @@ fn collect_effect_var_names_in_type(ty: &TypeExpr, out: &mut Vec<String>) {
         | TypeKind::Ref(inner)
         | TypeKind::MutRef(inner)
         | TypeKind::MutSlice(inner)
-        | TypeKind::Weak(inner) => {
+        | TypeKind::Weak(inner)
+        | TypeKind::Frozen(inner) => {
             collect_effect_var_names_in_type(inner, out);
         }
         // `impl Trait` slice 1 stub: the type-expression carries an
@@ -2066,6 +2067,10 @@ fn format_type_expr_with_subs(
                 }
                 None => {}
             }
+        }
+        TypeKind::Frozen(inner) => {
+            out.push_str("frozen ");
+            format_type_expr_with_subs(inner, type_subs, var_bindings, out);
         }
         TypeKind::Ref(inner) => {
             out.push_str("ref ");

@@ -15,8 +15,57 @@ use crate::token::Token;
 impl super::Parser {
     // ── Types ────────────────────────────────────────────────────
 
+    /// Whether `tok` can START a type expression. Used only to disambiguate
+    /// the contextual `frozen` mode from an ordinary identifier, so it lists
+    /// the type-leading tokens rather than trying to be a full FIRST set:
+    /// `frozen Node` is the mode, a lone `frozen` is a path.
+    fn token_begins_type(tok: &Token) -> bool {
+        matches!(
+            tok,
+            Token::Identifier { .. }
+                | Token::Ref
+                | Token::Mut
+                | Token::LeftParen
+                | Token::LeftBracket
+                | Token::Star
+        )
+    }
+
     pub(crate) fn parse_type(&mut self) -> Option<TypeExpr> {
         let start = self.current_span();
+
+        // `frozen Type` — B-2026-08-01-33 mechanism 3, stage 1.
+        //
+        // A CONTEXTUAL keyword, not a reserved word: `frozen` stays a legal
+        // identifier everywhere else, so adding the mode cannot break an
+        // existing program that uses the name. The guard is the same shape the
+        // `mut Slice[T]` arm below already uses — recognise it only when the
+        // NEXT token can begin a type, so a bare `frozen` used as a type name
+        // still parses as the path it always did.
+        // STAGE 1 NORMALIZES THE MODE AWAY HERE, and that is the point. The
+        // stage's contract is `frozen T` ≡ `T` — inert, no guarantees yet — and
+        // the honest way to implement an identity is to erase it at the single
+        // point of construction rather than teach every downstream pass to see
+        // through it. The attempt to do the latter first found three separate
+        // rounds of `TypeKind::Ref | MutRef` unwrap sites across codegen
+        // (call_dispatch, functions, mono, and the param type-name registry)
+        // and there was no reason to believe the fourth round was the last;
+        // every one of them is a place a later phase could disagree about what
+        // `frozen` means. One erasure cannot disagree with itself.
+        //
+        // `TypeKind::Frozen` and its match arms exist and are exercised by the
+        // arms' own exhaustiveness — stage 2 flips this `return inner` to
+        // `return Frozen(inner)` once the escape checker gives the mode
+        // something to mean, and the walk sites are already correct for it.
+        //
+        // Cost, stated because it is real: `karac fmt` does not round-trip the
+        // keyword while this erasure stands, since the AST no longer records it.
+        if let Token::Identifier { name, .. } = self.peek_token() {
+            if name == "frozen" && Self::token_begins_type(&self.peek_token_at(1)) {
+                self.advance();
+                return self.parse_type();
+            }
+        }
 
         match self.peek_token() {
             // ref Type

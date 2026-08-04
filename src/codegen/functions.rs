@@ -563,7 +563,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|p| {
                 let bare = match &p.ty.kind {
-                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Frozen(inner) => {
+                        inner.as_ref()
+                    }
                     _ => &p.ty,
                 };
                 self.tensor_var_info_from_type_expr(bare)
@@ -1746,10 +1748,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // whether the param is value-typed or pointer-typed.
                 let path_for_type_name = match &param.ty.kind {
                     TypeKind::Path(p) => Some(p),
-                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => match &inner.kind {
-                        TypeKind::Path(p) => Some(p),
-                        _ => None,
-                    },
+                    // `frozen T` joins the borrow-wrapped forms: stage 1 treats
+                    // it exactly as `T`, so the param's field/variant lookups
+                    // must resolve through it the same way (B-2026-08-01-33).
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Frozen(inner) => {
+                        match &inner.kind {
+                            TypeKind::Path(p) => Some(p),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 };
                 if let Some(path) = path_for_type_name {

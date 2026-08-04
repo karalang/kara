@@ -12547,3 +12547,76 @@ fn tuple_destructure_top_level_stays_a_script_statement() {
         result.errors
     );
 }
+
+// ── `frozen T` — B-2026-08-01-33 mechanism 3, stage 1 ────────────
+
+/// `frozen` is a CONTEXTUAL keyword, so every one of these must still parse as
+/// an ordinary identifier. This is the property that lets the mode be added
+/// without a breaking change, and it is the only thing stage 1 can regress in
+/// existing programs — the mode itself is inert.
+#[test]
+fn frozen_remains_a_legal_identifier() {
+    for src in [
+        "fn main() { let frozen = 5; println(f\"{frozen}\"); }",
+        "fn main() { let frozen: i64 = 9; let y = frozen + 1; println(f\"{y}\"); }",
+        "fn frozen() -> i64 { 3 }\nfn main() { println(f\"{frozen()}\"); }",
+        // A PARAMETER named `frozen` — the position where the mode is read, so
+        // the disambiguation is load-bearing rather than incidental.
+        "fn f(frozen: i64) -> i64 { frozen }\nfn main() { println(f\"{f(2)}\"); }",
+    ] {
+        let result = parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "`frozen` must stay usable as an identifier; got {:?} for {src}",
+            result.errors
+        );
+    }
+}
+
+/// The mode parses in the positions stage 1 claims, and — because stage 1
+/// normalizes it away at construction — no `TypeKind::Frozen` survives into the
+/// tree. Asserting the erased SHAPE (rather than string-diffing whole programs,
+/// whose spans legitimately differ by the width of the keyword) is what makes
+/// "inert" a tested property rather than a comment: when stage 2 starts
+/// recording the mode, this test fails and names the decision.
+#[test]
+fn frozen_parses_and_is_erased_in_stage_1() {
+    use karac::ast::{Item, TypeKind};
+
+    // Parameter position — the position stage 1 is actually about.
+    let r = parse("shared struct N { val: i64 }\nfn r(n: frozen N) -> i64 { n.val }\n");
+    assert!(
+        r.errors.is_empty(),
+        "`frozen` must parse; got {:?}",
+        r.errors
+    );
+    let Some(Item::Function(f)) = r.program.items.get(1) else {
+        panic!("expected the function item");
+    };
+    assert!(
+        matches!(&f.params[0].ty.kind, TypeKind::Path(p) if p.segments == ["N"]),
+        "stage 1 must erase the mode, leaving a bare path; got {:?}",
+        f.params[0].ty.kind
+    );
+
+    // Nested position, to pin that erasure is not special-cased to the top
+    // level: `Vec[frozen N]` must come out as plain `Vec[N]`.
+    let r = parse("shared struct N { val: i64 }\nfn r(v: Vec[frozen N]) -> i64 { v.len() }\n");
+    assert!(
+        r.errors.is_empty(),
+        "`frozen` must parse nested; got {:?}",
+        r.errors
+    );
+    let Some(Item::Function(f)) = r.program.items.get(1) else {
+        panic!("expected the function item");
+    };
+    let TypeKind::Path(p) = &f.params[0].ty.kind else {
+        panic!("expected Vec path, got {:?}", f.params[0].ty.kind);
+    };
+    let args = p.generic_args.as_ref().expect("Vec[...] generic args");
+    assert_eq!(
+        format!("{:?}", args).matches("Frozen").count(),
+        0,
+        "no Frozen node may survive anywhere in the argument: {args:?}"
+    );
+}

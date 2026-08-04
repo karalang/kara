@@ -372,6 +372,20 @@ pub enum TypeKind {
     },
     Ref(Box<TypeExpr>),
     MutRef(Box<TypeExpr>),
+    /// `frozen T` — B-2026-08-01-33 mechanism 3, stage 1. A non-owning,
+    /// NON-COUNTING handle to a deeply-immutable `shared` value whose lifetime
+    /// is guaranteed to span the current region. See
+    /// [`docs/spikes/freeze-point-design.md`](../../docs/spikes/freeze-point-design.md).
+    ///
+    /// Stage 1 lands the SURFACE ONLY: every downstream pass treats
+    /// `frozen T` exactly as `T`, so the mode is inert — RC traffic is still
+    /// emitted and `E_CONCURRENT_SHARED_STRUCT` still fires on a multi-branch
+    /// capture. That is deliberate and is the safe order to build this in:
+    /// admitting a `frozen` binding across `par` branches BEFORE the escape
+    /// checker exists would hand out a non-counting handle with nothing
+    /// stopping it from outliving its owner, which is a use-after-free. The
+    /// admission is wired only once the checks it depends on hold.
+    Frozen(Box<TypeExpr>),
     /// `mut Slice[T]` — a mutable slice view. The inner `TypeExpr` is the
     /// element type `T`. Distinct from `MutRef(Slice[T])`, which would be a
     /// mutable borrow of a slice value (and is not part of the language).

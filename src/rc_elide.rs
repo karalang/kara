@@ -1076,6 +1076,7 @@ fn result_wraps_shared(te: &TypeExpr, carriers: &HashSet<String>) -> bool {
         TypeKind::Array { element, .. } => result_wraps_shared(element, carriers),
         TypeKind::Pointer { inner, .. }
         | TypeKind::Ref(inner)
+        | TypeKind::Frozen(inner)
         | TypeKind::MutRef(inner)
         | TypeKind::MutSlice(inner)
         | TypeKind::Weak(inner) => result_wraps_shared(inner, carriers),
@@ -1120,6 +1121,7 @@ fn type_shared_payload(te: &TypeExpr, carriers: &HashSet<String>) -> Option<Stri
         TypeKind::Array { element, .. } => type_shared_payload(element, carriers),
         TypeKind::Pointer { inner, .. }
         | TypeKind::Ref(inner)
+        | TypeKind::Frozen(inner)
         | TypeKind::MutRef(inner)
         | TypeKind::MutSlice(inner)
         | TypeKind::Weak(inner) => type_shared_payload(inner, carriers),

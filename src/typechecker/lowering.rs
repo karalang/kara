@@ -121,6 +121,18 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // STAGE 1 (B-2026-08-01-33 mechanism 3): `frozen T` lowers to the
+            // SAME semantic type as `T` — there is deliberately no
+            // `Type::Frozen`. Keeping the mode out of the semantic type is what
+            // makes this increment inert: no downstream pass can act on it, so
+            // none can act on it WRONGLY before the escape checker exists.
+            // `parent_is_ref` is passed through rather than forced to `true`
+            // (as the `Ref` arm below does) so an opaque foreign type under a
+            // bare `frozen` is still rejected — fail-closed while the mode
+            // carries no guarantees yet.
+            TypeKind::Frozen(inner) => {
+                self.lower_type_expr_inner(inner, generic_scope, parent_is_ref)
+            }
             TypeKind::Ref(inner) => Type::Ref(Box::new(self.lower_type_expr_inner(
                 inner,
                 generic_scope,

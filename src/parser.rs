@@ -944,6 +944,10 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
                 write_type_for_diagnostic(rt, out);
             }
         }
+        TypeKind::Frozen(inner) => {
+            out.push_str("frozen ");
+            write_type_for_diagnostic(inner, out);
+        }
         TypeKind::Ref(inner) => {
             out.push_str("ref ");
             write_type_for_diagnostic(inner, out);

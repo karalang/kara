@@ -166,6 +166,10 @@ impl super::Formatter {
                     self.format_type_expr(rt);
                 }
             }
+            TypeKind::Frozen(inner) => {
+                self.write_str("frozen ");
+                self.format_type_expr(inner);
+            }
             TypeKind::Ref(inner) => {
                 self.write_str("ref ");
                 self.format_type_expr(inner);

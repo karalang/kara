@@ -1177,7 +1177,8 @@ fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl FnMut(&mut Span)) {
         | crate::ast::TypeKind::Ref(inner)
         | crate::ast::TypeKind::MutRef(inner)
         | crate::ast::TypeKind::MutSlice(inner)
-        | crate::ast::TypeKind::Weak(inner) => visit_type_spans_mut(inner, visit),
+        | crate::ast::TypeKind::Weak(inner)
+        | crate::ast::TypeKind::Frozen(inner) => visit_type_spans_mut(inner, visit),
         crate::ast::TypeKind::FnType {
             params,
             return_type,
