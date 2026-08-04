@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 209 | 0 |
-| leak | 129 | 1 |
+| leak | 129 | 0 |
 | double-free | 91 | 0 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 648 | 1 |
+| codegen | 648 | 0 |
 | interp | 121 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 37 | 1 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **898 surfaced · 2 open · 888 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **898 surfaced · 1 open · 889 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
-| B-2026-08-04-6 | 2026-08-04 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee destructured by a PARTIAL struct sub-pattern (`match mk() { Some(Full { name, buf: _ }) => .. }`) leaks the unbound `Vec` field's buffer -- the box drop stays box-ONLY for any struct destructure, which is right when every field is bound and wrong when some are not | — |
 
-### Fixed (888)
+### Fixed (889)
 
-<details><summary>888 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>889 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1048,6 +1047,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-3 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee matched by a WILDCARD payload arm (`match mk() { Some(_) => . | bad9a7a (src/codegen/control_flow.rs, src/codegen/control_flow_match.rs; pins memory_sanitizer.rs::asan_wildcard_boxed_optres_payload_frees_the_struct_interior, stash-proven RED under LeakSanitizer, covering the `Option` wildcard, the `Result` Err-side wildcard, and a whole-binding control) |
 | B-2026-08-04-4 | interp | medium | INTERPRETER: a Drop-body move record is keyed by BINDING NAME and outlives its block, so a later same-named binding that was never moved is treated a… | 168c887 |
 | B-2026-08-04-5 | codegen | high | ICE: destructuring a heap-BOXED Option/Result payload with a STRUCT sub-pattern (`match o { Some(Full { name, buf }) => . | 9908f6a (src/codegen/control_flow_match.rs; pins codegen.rs::e2e_boxed_optres_payload_struct_destructure_deboxes and ::e2e_struct_pattern_wins_over_a_same_named_enum_variant, both stash-proven RED with the exact `ExtractOutOfRange` ICE, their interpreter oracles interpreter.rs::test_boxed_optres_payload_struct_destructure_deboxes and ::test_struct_pattern_wins_over_a_same_named_enum_variant, and memory_sanitizer.rs::asan_boxed_optres_payload_struct_destructure_owns_the_interior_once for the ownership side the debox made reachable) |
+| B-2026-08-04-6 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee destructured by a PARTIAL struct sub-pattern (`match mk() { Some(Full { name, buf: _ }) => . | 7ecdec0 (src/codegen/control_flow_match.rs, src/codegen/control_flow.rs; pins memory_sanitizer.rs::asan_freshtemp_boxed_payload_partial_destructure_owns_every_field, stash-proven RED under LeakSanitizer at 19,200 bytes, covering `field: _`, `..`, the String half, the `Result` Err side, and an all-fields-bound control for the double-free direction) |
 | B-2026-08-04-7 | cli | high | EVERY project-mode `karac build` fails immediately: it opens the PACKAGE NAME as a source path (`error: cannot read 'solo'`), so a manifest-driven bu… | 4c52d82 (src/cli.rs; no new test -- the 36 pre-existing `tests/cli.rs` cases were the RED signal and are the pin: 524 passed / 36 failed before, 560 passed / 0 failed after) |
 
 </details>
