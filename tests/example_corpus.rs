@@ -370,7 +370,12 @@ fn the_gate_is_not_vacuous() {
     }
     for (file, _) in KNOWN_BROKEN_FILES {
         assert!(
-            targeted.iter().any(|r| r.to_string_lossy() == *file),
+            // Normalize the path separator: `KNOWN_BROKEN_FILES` pins use `/`,
+            // but `to_string_lossy()` yields `\` on Windows (matches the same
+            // normalization `file_targeted_examples_check` applies at its key).
+            targeted
+                .iter()
+                .any(|r| r.to_string_lossy().replace('\\', "/") == *file),
             "KNOWN_BROKEN_FILES names '{file}', which is not a file-targeted example",
         );
     }
