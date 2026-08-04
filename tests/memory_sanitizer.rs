@@ -449,6 +449,12 @@ mod memory_sanitizer_tests {
             got, expected_stdout,
             "[{label}] unexpected stdout (ASAN passed, but output mismatched)"
         );
+        // Join the `KARAC_ASAN_ALLOC_AUDIT` sweep too, so a corpus scan sees
+        // every fixture rather than only the unfloored ones.
+        if std::env::var("KARAC_ASAN_ALLOC_AUDIT").is_ok_and(|v| v != "0") {
+            let n = asan_malloc_calls(&stderr).map_or(-1, |n| n as i64);
+            eprintln!("ALLOCAUDIT\t{n}\t{label}");
+        }
         match asan_malloc_calls(&stderr) {
             Some(n) => assert!(
                 n >= min_allocs,
@@ -12242,20 +12248,25 @@ fn main() {
 
     #[test]
     fn asan_vec_growth_multiple_reallocs() {
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 fn main() {
+    let base: i64 = env.args().len();
     let mut v: Vec[i64] = Vec.new();
-    let mut i = 0;
-    while i < 32 {
+    let mut i = base;
+    while i < base + 32 {
         v.push(i);
         i = i + 1;
     }
-    println(v.len());
+    println(f"{v.len()}:{v[0i64]}:{v[31i64]}");
 }
 "#,
-            &["32"],
+            &["32:1:32"],
             "vec_growth_multiple_reallocs",
+            // B-2026-08-04-17: a literal seed let this fold away entirely at -O2
+            // (measured 0 program allocations). Opaque seed + a live read of the
+            // buffer, with a floor so it cannot drift back.
+            6,
         );
     }
 
@@ -12267,15 +12278,22 @@ fn main() {
 
     #[test]
     fn asan_vec_with_capacity_unused_buffer_freed() {
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 fn main() {
-    let v: Vec[i64] = Vec.with_capacity(16);
-    println(v.len());
+    let base: i64 = env.args().len();
+    let v: Vec[i64] = Vec.with_capacity(base + 15i64);
+    println(f"{v.len()}");
 }
 "#,
             &["0"],
             "vec_with_capacity_unused_buffer_freed",
+            // B-2026-08-04-17: a literal capacity let the whole allocation fold
+            // away at -O2. An OPAQUE capacity survives even though the buffer is
+            // never read, which is what this fixture needs — its subject is a
+            // buffer that is allocated, never used, and must still be freed, so
+            // it cannot force liveness with a read the way the others do.
+            6,
         );
     }
 
@@ -12309,20 +12327,25 @@ fn main() {
 
     #[test]
     fn asan_vec_with_capacity_push_exact_n_no_grow() {
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 fn main() {
+    let base: i64 = env.args().len();
     let mut v: Vec[i64] = Vec.with_capacity(16);
-    let mut i = 0;
-    while i < 16 {
+    let mut i = base;
+    while i < base + 16 {
         v.push(i);
         i = i + 1;
     }
-    println(v.len());
+    println(f"{v.len()}:{v[0i64]}:{v[15i64]}");
 }
 "#,
-            &["16"],
+            &["16:1:16"],
             "vec_with_capacity_push_exact_n_no_grow",
+            // B-2026-08-04-17: a literal seed let this fold away entirely at -O2
+            // (measured 0 program allocations). Opaque seed + a live read of the
+            // buffer, with a floor so it cannot drift back.
+            6,
         );
     }
 
@@ -12820,17 +12843,23 @@ fn main() {
 
     #[test]
     fn asan_string_new_push_str() {
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
 fn main() {
+    let base: i64 = env.args().len();
     let mut s = String.new();
     s.push_str("hello ");
-    s.push_str("world");
-    println(s.len());
+    s.push_str(f"world-{base}");
+    if s.contains(digits(base)) { println(f"{s.len()}"); } else { println("BAD"); }
 }
 "#,
-            &["11"],
+            &["13"],
             "string_new_push_str",
+            // B-2026-08-04-17: a literal seed let this fold away entirely at -O2
+            // (measured 0 program allocations). Opaque seed + a live read of the
+            // buffer, with a floor so it cannot drift back.
+            7,
         );
     }
 
@@ -16565,29 +16594,34 @@ fn main() {
         // type into a value-type wrapper" pattern. Pre-fix the struct
         // had no scope-exit drop, so the inner Vec's data buffer leaked
         // when h went out of scope.
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 struct Holder { v: Vec[i64] }
-fn build() -> i64 {
+fn build(k: i64) -> i64 {
     let mut inner: Vec[i64] = Vec.new();
-    inner.push(1i64);
-    inner.push(2i64);
-    inner.push(3i64);
+    inner.push(k);
+    inner.push(k + 1i64);
+    inner.push(k + 2i64);
     let h: Holder = Holder { v: inner };
-    42i64
+    return h.v[0i64] + h.v[2i64];
 }
 fn main() {
+    let base: i64 = env.args().len();
     let mut s = 0i64;
-    let mut i = 0i64;
-    while i < 10 {
-        s = s + build();
+    let mut i = base;
+    while i < base + 10i64 {
+        s = s + build(i);
         i = i + 1;
     }
-    println(s);
+    println(f"{s}");
 }
 "#,
-            &["420"],
+            &["130"],
             "struct_with_vec_field_freed_on_scope_exit",
+            // B-2026-08-04-17: a literal seed let this fold away entirely at -O2
+            // (measured 0 program allocations). Opaque seed + a live read of the
+            // buffer, with a floor so it cannot drift back.
+            10,
         );
     }
 
@@ -16894,27 +16928,35 @@ fn main() { let h = build(); let v = takev(h); println(v[0]); }
     fn asan_struct_with_string_field_freed_on_scope_exit() {
         // String is layout-equivalent to Vec[u8] (`{ptr, len, cap}`)
         // and is treated identically by the struct-drop synthesis.
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
 struct Named { name: String }
-fn build() -> i64 {
+fn build(k: i64) -> i64 {
     let mut s = String.new();
-    s.push_str("hello");
+    s.push_str("hello-");
+    s.push_str(f"{k}");
     let n: Named = Named { name: s };
-    99i64
+    if n.name.contains(digits(k)) { return n.name.len(); }
+    return 0i64;
 }
 fn main() {
+    let base: i64 = env.args().len();
     let mut sum = 0i64;
-    let mut i = 0i64;
-    while i < 5 {
-        sum = sum + build();
+    let mut i = base;
+    while i < base + 5i64 {
+        sum = sum + build(i);
         i = i + 1;
     }
-    println(sum);
+    println(f"{sum}");
 }
 "#,
-            &["495"],
+            &["35"],
             "struct_with_string_field_freed_on_scope_exit",
+            // B-2026-08-04-17: a literal seed let this fold away entirely at -O2
+            // (measured 0 program allocations). Opaque seed + a live read of the
+            // buffer, with a floor so it cannot drift back.
+            10,
         );
     }
 
@@ -16923,30 +16965,35 @@ fn main() {
         // Two Vec fields in one struct — verifies the per-field loop
         // in `emit_struct_drop_synthesis` correctly emits cleanup for
         // both, not just the first.
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 struct Pair { a: Vec[i64], b: Vec[i64] }
-fn build() -> i64 {
+fn build(k: i64) -> i64 {
     let mut x: Vec[i64] = Vec.new();
-    x.push(10i64);
+    x.push(k * 10i64);
     let mut y: Vec[i64] = Vec.new();
-    y.push(20i64);
-    y.push(30i64);
+    y.push(k * 20i64);
+    y.push(k * 30i64);
     let p: Pair = Pair { a: x, b: y };
-    0i64
+    return p.a[0i64] + p.b[1i64];
 }
 fn main() {
+    let base: i64 = env.args().len();
     let mut s = 0i64;
-    let mut i = 0i64;
-    while i < 5 {
-        s = s + build();
+    let mut i = base;
+    while i < base + 5i64 {
+        s = s + build(i);
         i = i + 1;
     }
-    println(s);
+    println(f"{s}");
 }
 "#,
-            &["0"],
+            &["600"],
             "struct_with_multiple_vec_fields_freed_on_scope_exit",
+            // B-2026-08-04-17: a literal seed let this fold away entirely at -O2
+            // (measured 0 program allocations). Opaque seed + a live read of the
+            // buffer, with a floor so it cannot drift back.
+            10,
         );
     }
 
@@ -18701,28 +18748,35 @@ fn main() {
         // receiver temp is freed exactly once — Linux `detect_leaks=1` is the
         // leak oracle, macOS catches any double-free (e.g. a per-site reused
         // temp slot freed against a stale buffer, or compounding).
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
-fn make_vec() -> Vec[i64] {
+fn make_vec(k: i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
-    v.push(1_i64);
-    v.push(2_i64);
-    v.push(3_i64);
+    v.push(k);
+    v.push(k + 1_i64);
+    v.push(k + 2_i64);
     return v;
 }
 
 fn main() {
+    let base: i64 = env.args().len();
     let mut total = 0i64;
-    let mut i = 0;
-    while i < 8 {
-        total = total + make_vec().len();
+    let mut i = base;
+    while i < base + 8i64 {
+        total = total + make_vec(i).len();
         i = i + 1;
     }
-    println(total);
+    println(f"{total}");
 }
 "#,
             &["24"],
             "method_chain_intermediate_vec_freed",
+            // B-2026-08-04-17: a literal seed let this fold away entirely at -O2
+            // (measured 0 program allocations). The subject here is `.len()` on a
+            // fresh temp, so the fixture cannot read the buffer's contents without
+            // changing the shape under test — instead the temp is built from an
+            // opaque argument, which is enough to keep the allocation live.
+            10,
         );
     }
 
