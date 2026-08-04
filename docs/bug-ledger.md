@@ -97,11 +97,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 92 | 1 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
-| run-vs-build | 74 | 0 |
+| run-vs-build | 75 | 0 |
 | false-positive | 55 | 0 |
 | perf | 44 | 1 |
 | crash | 39 | 0 |
-| soundness | 35 | 0 |
+| soundness | 36 | 0 |
 | diagnostics | 35 | 0 |
 | other | 13 | 0 |
 | use-after-free | 12 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 653 | 2 |
-| interp | 121 | 0 |
+| codegen | 654 | 2 |
+| interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **903 surfaced · 3 open · 892 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **905 surfaced · 3 open · 894 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -134,9 +134,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **903 surfaced 
 | B-2026-08-04-8 | 2026-08-04 | codegen | medium | Bounds-check elimination fails for the CONVERGING two-pointer loop `while lo <= hi { v[base+lo] ... v[base+hi] }` when the index carries a base offset — the flat-2D / row-major scan shape. Isolated on kata #246 (strobogrammatic two-pointer over a flat Vec[u8] corpus of N*LEN bytes): kara keeps 2 per-iteration checks that clang -O3 does not, costing 1.28x on the kata and 1.93x on a work-identical minimal probe. Neither ingredient alone breaks BCE — base+ascending, base+descending, converging-without-base, and even both-ends-from-ONE-ascending-IV all elide cleanly; only the combination of a base offset with a converging two-IV guard defeats it. | — |
 | B-2026-08-04-11 | 2026-08-04 | codegen | high | `match <fresh Result temp> { Err(e) => .. }` ABORTS with `free(): double free detected` when the arm F-STRING-INTERPOLATES a heap field of a struct payload (or reads `.len()` on a Vec field) -- the source's inline-payload drop stays armed because neither use is classified as a move | src/codegen/control_flow_match.rs (track_freshtemp_inline_result_scrutinee) |
 
-### Fixed (892)
+### Fixed (894)
 
-<details><summary>892 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>894 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1054,6 +1054,8 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-9 | codegen | high | `?` on an Option/Result whose payload is heap-BOXED unwraps the BOX POINTER as if it were the payload's first word -- the value comes out empty or ga… | 60087fc (src/codegen/exprs.rs, src/codegen/control_flow_match.rs for the helper's visibility; pins codegen.rs::e2e_question_reconstructs_wide_and_boxed_ok_payloads, its interpreter oracle interpreter.rs::test_question_reconstructs_wide_and_boxed_ok_payloads, and memory_sanitizer.rs::asan_question_deboxed_ok_payload_frees_the_box -- the first two stash-proven RED on the exact garbage output, the third at 12,800 bytes under LeakSanitizer) |
 | B-2026-08-04-10 | codegen | medium | `let <StructPattern> = <expr>?;` -- a struct destructure written DIRECTLY on a `?` whose payload is heap-boxed -- leaks the payload's heap fields; ro… | a82b4ff (src/codegen/stmts.rs; pins the extended memory_sanitizer.rs::asan_question_deboxed_ok_payload_frees_the_box, stash-proven RED against this commit's change alone at 6,400 bytes under LeakSanitizer) |
 | B-2026-08-04-12 | codegen | high | `?` PROPAGATING an Err whose payload is a struct wider than THREE words silently drops every word past the third -- the Err mirror of B-2026-08-04-9'… | e6a2eca (src/codegen/exprs.rs; pins codegen.rs::e2e_question_propagates_a_wide_inline_err_payload_whole, stash-proven RED on the exact wrong field value, with a BOXED 6-word control and a no-`?` control) |
+| B-2026-08-04-13 | codegen | high | The descending-loop bounds-check skip (B-2026-07-17-1) reads the facts it rests on with `stmt_writes_ident`, which sees only TOP-LEVEL assignment tar… | 484c2c9 |
+| B-2026-08-04-14 | interp | medium | The interpreter silently DROPPED an out-of-range index-assign: `v[100] = 7` on a 2-element Vec produced no error, no growth, and no store — while AOT… | a4ca760 |
 
 </details>
 
