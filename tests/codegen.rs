@@ -5878,6 +5878,61 @@ fn main() {
         }
     }
 
+    /// B-2026-08-04-12 — `?` PROPAGATING an Err carries the payload's whole
+    /// width, not its first three words.
+    ///
+    /// The non-converting branch of `compile_question`'s error staging built
+    /// its return words as a literal `vec![w0, w1, w2]`. `Err4 { msg: String,
+    /// code: i64 }` is 4 words and FITS `Result`'s 5-word area, so it stays
+    /// INLINE and never takes a pointer path — propagating it kept the String
+    /// and handed back garbage for `code` (measured as 0 and as 32 in two
+    /// programs, i.e. whatever was in the slot), silently, with `karac run`
+    /// correct.
+    ///
+    /// Same three-word cap as B-2026-08-04-9's second defect, on the Err side.
+    /// The two controls are what make the axis legible: `Err6` is 6 words and
+    /// BOXES, so it rides a pointer in w0 and never depended on the cap; and
+    /// matching the same `Result` WITHOUT a `?` wrapper was always correct, so
+    /// it is the propagation and not the construction or the match.
+    ///
+    /// A 3-word error struct is immune, which is most hand-written ones — the
+    /// reason this needs a payload-width axis of its own rather than one
+    /// representative error type.
+    #[test]
+    fn e2e_question_propagates_a_wide_inline_err_payload_whole() {
+        let Some(out) = run_program(
+            "struct Err6 { msg: String, codes: Vec[i64] }\n\
+             struct Err4 { msg: String, code: i64 }\n\
+             fn mk6(i: i64) -> Err6 {\n\
+             \x20   let mut c: Vec[i64] = Vec.new();\n\
+             \x20   c.push(i);\n\
+             \x20   return Err6 { msg: f\"wide-err-{i}\", codes: c };\n\
+             }\n\
+             fn mk4(i: i64) -> Err4 { return Err4 { msg: f\"mid-err-{i}\", code: i }; }\n\
+             fn fail6(i: i64) -> Result[i64, Err6] { return Result.Err(mk6(i)); }\n\
+             fn fail4(i: i64) -> Result[i64, Err4] { return Result.Err(mk4(i)); }\n\
+             fn prop6(i: i64) -> Result[i64, Err6] { let v = fail6(i)?; return Result.Ok(v); }\n\
+             fn prop4(i: i64) -> Result[i64, Err4] { let v = fail4(i)?; return Result.Ok(v); }\n\
+             fn main() {\n\
+             \x20   match prop6(3i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"a:ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(f\"a:{e.msg}:{e.codes.len()}\"); }\n\
+             \x20   }\n\
+             \x20   match prop4(4i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"b:ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(f\"b:{e.msg}:{e.code}\"); }\n\
+             \x20   }\n\
+             \x20   match fail4(5i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"c:ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(f\"c:{e.msg}:{e.code}\"); }\n\
+             \x20   }\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a:wide-err-3:1\nb:mid-err-4:4\nc:mid-err-5:5\n");
+    }
+
     /// B-2026-08-04-11 leg (a) — an f-string INTERPOLATION of a heap field
     /// consumes it, exactly as passing that field by value to a free fn does.
     ///

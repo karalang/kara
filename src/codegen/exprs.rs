@@ -1724,8 +1724,37 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(v) => self
                 .coerce_to_payload_words(v, outer_word_count.max(1))
                 .unwrap_or_else(|_| vec![w0_i]),
-            // No conversion: the inner words ARE the error's words.
-            None => vec![w0_i, w1_i, w2_i],
+            // No conversion: the inner words ARE the error's words. Take ALL of
+            // them, not the first three (B-2026-08-04-12). The literal
+            // `vec![w0_i, w1_i, w2_i]` silently truncated any `E` wider than
+            // three words: `Err4 { msg: String, code: i64 }` is 4 words and
+            // fits `Result`'s 5-word area INLINE, so it never boxes and never
+            // takes a pointer path — `?`-propagating it kept the String and
+            // handed back garbage for `code`, with `karac run` correct. Same
+            // three-word cap that bit the Ok side (B-2026-08-04-9's second
+            // defect); this is its Err twin, and this one line is the whole of
+            // it because both consumers below — the fn-level Err aggregate and
+            // the `with_provider` retarget one — build from `ret_words`.
+            //
+            // Bounded by the OUTER slot count as well as the inner width: the
+            // aggregate writers already clamp, and taking the min keeps the
+            // extract loop from indexing past the source aggregate when an
+            // outer `E` is wider than the inner one.
+            None => {
+                let n = inner_word_count.min(outer_word_count).max(1);
+                (0..n)
+                    .map(|i| match i {
+                        0 => w0_i,
+                        1 => w1_i,
+                        2 => w2_i,
+                        _ => self
+                            .builder
+                            .build_extract_value(val.into_struct_value(), (i + 1) as u32, "q_wider")
+                            .unwrap()
+                            .into_int_value(),
+                    })
+                    .collect()
+            }
         };
 
         if self.wp_return_retarget_active() {
