@@ -50,33 +50,37 @@ impl super::Parser {
         // `mut Slice[T]` arm below already uses — recognise it only when the
         // NEXT token can begin a type, so a bare `frozen` used as a type name
         // still parses as the path it always did.
-        // STAGE 1 NORMALIZES THE MODE AWAY HERE, and that is the point. The
-        // stage's contract is `frozen T` ≡ `T` — inert, no guarantees yet — and
-        // the honest way to implement an identity is to erase it at the single
-        // point of construction rather than teach every downstream pass to see
-        // through it. The attempt to do the latter first found three separate
-        // rounds of `TypeKind::Ref | MutRef` unwrap sites across codegen
-        // (call_dispatch, functions, mono, and the param type-name registry)
-        // and there was no reason to believe the fourth round was the last;
-        // every one of them is a place a later phase could disagree about what
-        // `frozen` means. One erasure cannot disagree with itself.
+        // THE MODE LEAVES THE TYPE TREE HERE, and that is the point. It is not
+        // discarded — `parse_param` picks it up off `frozen_consumed` and
+        // records it on [`Param::is_frozen`], where every later phase can see
+        // it. What it does NOT do is travel inside the `TypeExpr`.
         //
-        // `TypeKind::Frozen` and its match arms exist and are exercised by the
-        // arms' own exhaustiveness — stage 2 flips this `return inner` to
-        // `return Frozen(inner)` once the escape checker gives the mode
-        // something to mean, and the walk sites are already correct for it.
-        //
-        // Cost, stated because it is real: `karac fmt` does not round-trip the
-        // keyword while this erasure stands, since the AST no longer records it.
+        // `TypeKind::Frozen` exists and every walk in the compiler handles it,
+        // but nothing constructs it, because a mode inside the type tree means
+        // every phase that unwraps `Ref | MutRef` must learn a third form.
+        // Trying that first turned up four rounds of such sites in codegen
+        // alone (`call_dispatch`, `functions`, `mono`, then the param
+        // type-name registry) with no reason to believe the fourth was the
+        // last, and each one is a place a later phase could disagree about what
+        // `frozen` means. A bit on the parameter cannot disagree with itself,
+        // and it keeps the mode away from codegen by construction — codegen
+        // will learn which values are non-counting through the plain-data
+        // `elidable_ref_params` hint channel, per the codegen-containment
+        // invariant. The variant stays for stage 2, when widening `frozen`
+        // past parameter position will genuinely need a type-level mode.
         if let Token::Identifier { name, .. } = self.peek_token() {
             if name == "frozen" && Self::token_begins_type(&self.peek_token_at(1)) {
                 let kw_span = self.current_span();
                 self.advance();
-                if !frozen_ok {
+                if frozen_ok {
+                    self.frozen_consumed = true;
+                } else {
                     self.error_at(
-                        "`frozen` is only supported on a parameter type (stage 1); \
-                         it is not yet accepted on a `let` annotation, a struct \
-                         field, a return type, or inside a generic argument",
+                        "`frozen` is only supported on a Kara function's parameter \
+                         type (stage 1); it is not yet accepted on a `let` \
+                         annotation, a struct field, a return type, inside a \
+                         generic argument, or on a foreign-import (`extern`) \
+                         parameter",
                         kw_span,
                     );
                 }

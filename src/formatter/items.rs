@@ -203,6 +203,13 @@ impl super::Formatter {
             }
             self.format_pattern(&p.pattern);
             self.write_str(": ");
+            // `frozen` is recorded on the param, not inside its type
+            // (see `Param::is_frozen`), so it has to be written back here —
+            // `format_type_expr` will never see it. Without this, `karac fmt`
+            // would silently drop the keyword.
+            if p.is_frozen {
+                self.write_str("frozen ");
+            }
             self.format_type_expr(&p.ty);
             if let Some(ref dv) = p.default_value {
                 self.write_str(" = ");

@@ -331,6 +331,30 @@ pub struct Param {
     /// `comptime` param requires a comptime-known argument) lands with the
     /// evaluator. Spec: deferred.md § Comptime (form 3, the parameter prefix).
     pub is_comptime: bool,
+    /// `frozen`-prefixed parameter — a non-owning, non-counting handle to a
+    /// deeply-immutable `shared` value (B-2026-08-01-33 mechanism 3;
+    /// [`docs/spikes/freeze-point-design.md`](../../docs/spikes/freeze-point-design.md)).
+    /// Stage 1 records the marker and nothing else: the mode is inert, so
+    /// `frozen T` still means exactly `T` to every phase.
+    ///
+    /// **Recorded here, deliberately, rather than in the parameter's
+    /// [`TypeExpr`].** `TypeKind::Frozen` exists and every walk handles it,
+    /// but the parser does not construct it — carrying the mode inside the
+    /// type tree means every phase that unwraps `Ref | MutRef` must learn to
+    /// see through a third form, and codegen has more such sites than anyone
+    /// enumerated (four rounds found, none of them the last). The mode is a
+    /// *property of the parameter*, exactly like `is_comptime` above, and the
+    /// phases that will act on it — escape checking, the freeze-site
+    /// immutability check, `par` admission — ask about parameters, not about
+    /// type trees. Codegen learns which values are non-counting through a
+    /// plain-data hint (the `elidable_ref_params` channel), never through the
+    /// AST, which is what keeps the codegen-containment invariant intact.
+    ///
+    /// The cost of that choice is that this bit only spans the one position
+    /// stage 1 accepts. Widening `frozen` to `let` annotations, struct fields,
+    /// or generic arguments is what `TypeKind::Frozen` is retained for, and it
+    /// is a stage-2 decision that needs a checker behind each position first.
+    pub is_frozen: bool,
 }
 
 impl Param {

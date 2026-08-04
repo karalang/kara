@@ -1454,6 +1454,11 @@ impl super::Parser {
                 default_value: None,
                 doc_comment,
                 is_comptime,
+                // The anonymous-parameter recovery shape (`fn f(Type)`) is an
+                // error either way, and its type is parsed without the
+                // `frozen` permission, so a `frozen` there is already
+                // reported. Never frozen.
+                is_frozen: false,
             });
         }
 
@@ -1466,10 +1471,21 @@ impl super::Parser {
         self.expect(&Token::Colon)?;
         // The one position stage 1 accepts `frozen` (B-2026-08-01-33). Scoped
         // to this single call so the flag cannot leak into a default-value
-        // expression or a sibling parse.
-        self.frozen_ok = true;
+        // expression or a sibling parse. `parse_type` reports back through
+        // `frozen_consumed`, which is cleared here as well as taken, so a
+        // parameter can never inherit a previous parameter's mode.
+        //
+        // NOT on a foreign-import parameter: an `extern` signature is ABI, and
+        // the mode's meaning comes entirely from checking the callee's body,
+        // which for a foreign function does not exist. Accepting it there would
+        // record a mode that can never mean anything — the same
+        // accept-a-spelling-with-undecided-semantics trap the positional
+        // restriction exists to avoid, refused for the same reason.
+        self.frozen_ok = self.fn_context_stack.last() != Some(&FnContext::Extern);
+        self.frozen_consumed = false;
         let ty = self.parse_type();
         self.frozen_ok = false;
+        let is_frozen = std::mem::take(&mut self.frozen_consumed);
         let ty = ty?;
         let default_value = if self.eat(&Token::Equal) {
             Some(self.parse_expression()?)
@@ -1484,6 +1500,7 @@ impl super::Parser {
             default_value,
             doc_comment,
             is_comptime,
+            is_frozen,
         })
     }
 

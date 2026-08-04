@@ -574,6 +574,10 @@ pub(super) fn make_impl_method_function(
             default_value: None,
             doc_comment: None,
             is_comptime: false,
+            // A desugared `self` receiver. `frozen self` is not a stage-1
+            // form — the mode is only accepted by `parse_param`, and self
+            // params never go through it.
+            is_frozen: false,
         };
         f.params.insert(0, self_param);
     }
@@ -646,6 +650,10 @@ pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Functi
             default_value: None,
             doc_comment: None,
             is_comptime: false,
+            // A desugared `self` receiver. `frozen self` is not a stage-1
+            // form — the mode is only accepted by `parse_param`, and self
+            // params never go through it.
+            is_frozen: false,
         };
         f.params.insert(0, self_param);
     }

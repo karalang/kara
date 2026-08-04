@@ -114,12 +114,17 @@ Each stage is independently useful and independently testable.
 
 **Landed so far (inert):** `TypeKind::Frozen` with all 16 exhaustive-match sites
 handled; `frozen T` parsed as a *contextual* keyword (so no program using the
-name breaks); accepted only in a parameter's top-level type and rejected
-elsewhere; verified that `E_CONCURRENT_SHARED_STRUCT` still fires on a
+name breaks); accepted only in the top-level type of a **Kāra function's**
+parameter and rejected elsewhere — including on a foreign-import (`extern`)
+parameter, where an ABI signature has no callee body to check and the mode
+could never mean anything; the mode **recorded on `Param::is_frozen`** and
+round-tripped by
+`karac fmt`; verified that a `frozen N` parameter compiles and runs identically
+to a plain `N` one, and that `E_CONCURRENT_SHARED_STRUCT` still fires on a
 multi-branch capture of a `frozen` binding.
 
-**Two things learned by building it, both of which change what stage 2 should
-do.**
+**Three things learned by building it. Findings 2 and 3 supersede the staging
+above; read them before starting anything from that list.**
 
 **1. Per-site transparency is the wrong shape; normalize once.** Teaching
 downstream phases to see through `Frozen` was tried first and found three
@@ -127,33 +132,68 @@ separate rounds of `TypeKind::Ref | MutRef` unwrap sites — `call_dispatch`,
 `functions`, `mono`, then the param type-name registry — with no reason to think
 the next round was the last. Each is a place a later phase could disagree about
 what `frozen` means. Stage 1's contract is that `frozen T` **is** `T`, and the
-honest implementation of an identity is one erasure at the point of
-construction, which cannot disagree with itself.
+honest implementation of an identity is one decision at the point of
+construction, which cannot disagree with itself. (That decision was first an
+*erasure*; finding 3 replaces it with a *recording* — same single point, but it
+keeps the information instead of throwing it away.)
 
-**2. THE ESCAPE CHECKER CANNOT BE BUILT ON WHAT STAGE 1 SHIPPED, and the
-staging above reads as though it can.** Stage 1 erases the mode at parse time,
-so by the time any checking phase runs there is nothing left to check.
-Un-erasing is a *prerequisite* for the escape checker, not a follow-on. The
-architecture that resolves it:
+**2. THE ESCAPE CHECKER CANNOT BE BUILT ON WHAT STAGE 1 FIRST SHIPPED, and the
+staging above reads as though it can.** As first landed, stage 1 erased the mode
+at parse time, so by the time any checking phase ran there was nothing left to
+check. Un-erasing is a *prerequisite* for the escape checker, not a follow-on.
 
-* the parser **retains** `Frozen`;
-* resolver / typechecker / ownership **see** it — they must, in order to check
-  it;
-* a single normalization pass strips it **after** ownership and **before**
-  codegen.
+**3. Un-erasing does NOT mean putting the mode back in the type tree.** The
+first plan for (2) was: parser retains `TypeKind::Frozen`, the checking phases
+see it, and one normalization pass strips it after ownership and before codegen.
+That plan is wrong in a way worth recording, because it looks right.
 
-That last step is what keeps it tractable: codegen never learns the mode exists,
-so none of the unwrap sites from finding (1) need to change, and it matches the
-codegen-containment invariant in CLAUDE.md (analysis phases talk to codegen
-through plain-data hints, not new types). Because stage 1 restricts `frozen` to
-parameter positions, the strip pass only walks function and impl-method params
-— bounded, not a full-program type walk. Widening the accepted positions in
-stage 2 widens that pass in step, which is a reason to keep the restriction
-until each position has a checker behind it.
+Its problem is the strip pass. For codegen never to see `Frozen`, the strip has
+to run on **every** path that reaches a backend — and there are many:
+`Pipeline::run_all_checks` in `cli.rs` covers the CLI, but `lib.rs` has four
+more interpreter drivers, plus `repl.rs`, `test_jit_dispatch.rs`, and
+`drop_differential.rs`. Each takes `&Program` immutably at the backend
+boundary, so the strip cannot live at the boundary itself; it has to be
+installed correctly at each entry point, and a single missed one puts the
+compiler straight back into the whack-a-mole of finding (1) — with a *silent*
+failure mode, since a missed strip only shows up on programs that use the
+keyword.
 
-So the revised stage 1 remainder is: **un-erase + strip pass → escape checker →
-freeze-site immutability check → par admission**, in that order, with admission
-still last for the reason already given.
+What replaced it: **the mode is recorded on the parameter, as
+`Param::is_frozen`, and never enters the type tree at all.** The precedent is
+already in the AST — `Param::is_comptime` is exactly this: a parameter-position
+prefix modifier, recorded as a bit, with its rule landing later. `parse_type`
+still recognizes the keyword (so the misplaced-use diagnostic stays focused
+wherever it appears) and reports it back to `parse_param` through a one-shot
+flag.
+
+This is strictly better on the axis that matters:
+
+* **Every checking phase can see it immediately** — resolver, typechecker,
+  ownership, `concurrency` all have the `Param` in hand. That is the whole
+  point of un-erasing, delivered without a new pass.
+* **Codegen cannot see it, by construction** — not "because a pass removed
+  it", but because it was never in the structure codegen reads. No entry-point
+  audit, no strip pass, no silent failure mode. Codegen will learn which values
+  are non-counting the way `rc_elide.rs` already does it: a plain-data hint set,
+  per the codegen-containment invariant.
+* **`karac fmt` round-trips** — the param printer writes the keyword back.
+  (Adding that printer is what turned up B-2026-08-04-21: `karac fmt` was
+  silently deleting `unsafe fn`, `comptime fn`, and `comptime` param prefixes,
+  the same class of bug for three modifiers that had shipped without one.)
+
+The cost, stated plainly: **a bit on `Param` only spans parameter position.**
+That is exactly the surface stage 1 accepts, so nothing is lost today — but
+widening `frozen` to `let` annotations, struct fields, or generic arguments in
+stage 2 does need a type-level mode. `TypeKind::Frozen` and its ~16
+exhaustively-checked walk arms are retained unconstructed for that, and the
+variant's doc comment says so; re-deriving them later would be redoing verified
+work. Widening a position and giving it a checker are the same task, which is
+the reason to keep the restriction until stage 2 does both.
+
+So the revised stage 1 remainder is: **escape checker → freeze-site
+immutability check → par admission**, in that order, with admission still last
+for the reason already given. The un-erasure that used to head this list is
+done — it is `Param::is_frozen`, and it cost no pass at all.
 
 ## Risks, stated plainly
 

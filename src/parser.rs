@@ -46,18 +46,26 @@ pub struct ParseResult {
 }
 
 /// Surrounding signature kind for parameter parsing — selects between the
-/// trait-method and free-function anonymous-parameter diagnostics.
+/// trait-method and free-function anonymous-parameter diagnostics, and gates
+/// parameter modes that only make sense on a Kāra function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FnContext {
     /// `fn` inside a `trait { ... }` body. Drives `E_TRAIT_METHOD_ANONYMOUS_PARAM`.
     TraitMethod,
-    /// Free function, impl method, or extern function. Drives
-    /// `E_FN_ANONYMOUS_PARAM`. Impl methods reuse the free-function
-    /// diagnostic per design.md § Trait method parameter names — required;
-    /// the rule only requires *trait declarations* to name parameters,
-    /// but the focused diagnostic for free fns helps catch the equivalent
-    /// type-only paste typo.
+    /// Free function or impl method. Drives `E_FN_ANONYMOUS_PARAM`. Impl
+    /// methods reuse the free-function diagnostic per design.md § Trait method
+    /// parameter names — required; the rule only requires *trait declarations*
+    /// to name parameters, but the focused diagnostic for free fns helps catch
+    /// the equivalent type-only paste typo.
     Function,
+    /// A foreign-import signature — `unsafe extern "C" { fn … }` or a host
+    /// function. Shares `Function`'s anonymous-param diagnostic (it falls
+    /// through the same default arm), but is distinguished because a foreign
+    /// signature is ABI, not Kāra code: there is no body to analyze and the
+    /// callee is opaque, so parameter modes whose meaning comes from checking
+    /// the callee — `frozen` (B-2026-08-01-33) — are rejected here rather than
+    /// accepted-and-ignored.
+    Extern,
 }
 
 // `.` is both the path separator and the field/method access operator. The parser
@@ -82,20 +90,28 @@ pub struct Parser {
     pub(crate) tokens: Vec<SpannedToken>,
     pub(crate) pos: usize,
     pub(crate) errors: Vec<ParseError>,
+    /// B-2026-08-01-33 mechanism 3, stage 1: `true` only while parsing the
+    /// TOP-LEVEL type of a parameter, which is the one position the stage
+    /// claims. `frozen` elsewhere (a `let` annotation, a struct field, a
+    /// generic argument like `Vec[frozen N]`) is REJECTED rather than silently
+    /// accepted: those positions will mean something different once the mode
+    /// is sticky (stage 2), and accepting them now would let programs depend
+    /// on a spelling whose semantics are still undecided. Fail-closed.
+    pub(crate) frozen_ok: bool,
+    /// Set by `parse_type` when it consumes a *permitted* `frozen` keyword,
+    /// read and cleared by `parse_param` into [`Param::is_frozen`]. The
+    /// keyword is recognized deep inside the type parse (so the misplaced-use
+    /// diagnostic can be focused wherever it appears) but belongs to the
+    /// parameter, so it has to travel back up — this is the wire. Never set
+    /// when `frozen_ok` was false, so a rejected `frozen` cannot mark its
+    /// parameter.
+    pub(crate) frozen_consumed: bool,
     /// Script mode (design.md § Script mode): when `true` (the default —
     /// root source files), top-level statements synthesize a unit
     /// `fn main()`. Item-only contexts — comptime `ast.item` quotes,
     /// `mod`-loaded module files — set this `false` via
     /// [`Parser::items_only`], turning top-level statements into a parse
     /// error instead of a synthesized entry point.
-    /// B-2026-08-01-33 mechanism 3, stage 1: `true` only while parsing the
-    /// TOP-LEVEL type of a parameter, which is the one position the stage
-    /// claims. `frozen` elsewhere (a `let` annotation, a struct field, a
-    /// generic argument like `Vec[frozen N]`) is REJECTED rather than silently
-    /// accepted-and-erased: those positions will mean something different once
-    /// the mode is sticky (stage 2), and accepting them now would let programs
-    /// depend on a spelling whose semantics are still undecided. Fail-closed.
-    pub(crate) frozen_ok: bool,
     pub(crate) allow_script_mode: bool,
     /// Active labels for disambiguating `break label` vs `break value` and
     /// for routing labeled-block label scopes. Each entry carries a
@@ -200,6 +216,7 @@ impl Parser {
             loop_labels: Vec::new(),
             errors: Vec::new(),
             frozen_ok: false,
+            frozen_consumed: false,
             allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),

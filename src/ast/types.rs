@@ -377,6 +377,18 @@ pub enum TypeKind {
     /// is guaranteed to span the current region. See
     /// [`docs/spikes/freeze-point-design.md`](../../docs/spikes/freeze-point-design.md).
     ///
+    /// **NOTHING CONSTRUCTS THIS VARIANT TODAY — read [`Param::is_frozen`]
+    /// first.** The parser records the mode on the *parameter*, not inside its
+    /// type, because a mode in the type tree has to be unwrapped at every site
+    /// that already unwraps `Ref | MutRef`, and four separate rounds of such
+    /// sites turned up in codegen alone before that approach was abandoned.
+    /// The variant and its (exhaustively handled) match arms are retained
+    /// because stage 2 — widening `frozen` past parameter position, where a
+    /// per-param bit no longer suffices — genuinely needs a type-level mode,
+    /// and re-deriving the ~16 walk sites is work already done and verified.
+    /// Anything added here must keep the arms complete; do not reach for a
+    /// wildcard.
+    ///
     /// Stage 1 lands the SURFACE ONLY: every downstream pass treats
     /// `frozen T` exactly as `T`, so the mode is inert — RC traffic is still
     /// emitted and `E_CONCURRENT_SHARED_STRUCT` still fires on a multi-branch

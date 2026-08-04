@@ -12573,15 +12573,22 @@ fn frozen_remains_a_legal_identifier() {
     }
 }
 
-/// The mode parses in the positions stage 1 claims, and — because stage 1
-/// normalizes it away at construction — no `TypeKind::Frozen` survives into the
-/// tree. Asserting the erased SHAPE (rather than string-diffing whole programs,
-/// whose spans legitimately differ by the width of the keyword) is what makes
-/// "inert" a tested property rather than a comment: when stage 2 starts
-/// recording the mode, this test fails and names the decision.
+/// The mode is RECORDED ON THE PARAMETER and kept OUT OF THE TYPE TREE — the
+/// two halves of `Param::is_frozen`'s contract, and both are load-bearing.
+///
+/// The `is_frozen` half is what makes the mode visible to the phases that will
+/// act on it (escape checking, `par` admission). The bare-path half is what
+/// keeps it away from codegen: a `TypeKind::Frozen` in a parameter's type would
+/// have to be unwrapped at every site that already unwraps `Ref | MutRef`, and
+/// those sites are more numerous than any enumeration of them has been right
+/// about. Asserting the SHAPE rather than string-diffing whole programs is
+/// deliberate — spans legitimately differ by the width of the keyword.
 #[test]
-fn frozen_parses_and_is_erased_in_stage_1() {
+fn frozen_is_recorded_on_the_param_not_in_the_type() {
     use karac::ast::{Item, TypeKind};
+
+    let bare_path =
+        |p: &karac::ast::Param| matches!(&p.ty.kind, TypeKind::Path(pa) if pa.segments == ["N"]);
 
     // Parameter position — the position stage 1 is actually about.
     let r = parse("shared struct N { val: i64 }\nfn r(n: frozen N) -> i64 { n.val }\n");
@@ -12594,13 +12601,17 @@ fn frozen_parses_and_is_erased_in_stage_1() {
         panic!("expected the function item");
     };
     assert!(
-        matches!(&f.params[0].ty.kind, TypeKind::Path(p) if p.segments == ["N"]),
-        "stage 1 must erase the mode, leaving a bare path; got {:?}",
+        f.params[0].is_frozen,
+        "the mode must be recorded on the param"
+    );
+    assert!(
+        bare_path(&f.params[0]),
+        "the mode must NOT reach the type tree; got {:?}",
         f.params[0].ty.kind
     );
 
-    // A second parameter, to pin that erasure is not a one-off on the first:
-    // both come out as bare paths.
+    // Two frozen params, to pin that the flag is re-armed per parameter rather
+    // than latched once per function.
     let r =
         parse("shared struct N { val: i64 }\nfn r(a: frozen N, b: frozen N) -> i64 { a.val }\n");
     assert!(
@@ -12612,12 +12623,79 @@ fn frozen_parses_and_is_erased_in_stage_1() {
         panic!("expected the function item");
     };
     for (i, p) in f.params.iter().enumerate() {
-        assert!(
-            matches!(&p.ty.kind, TypeKind::Path(path) if path.segments == ["N"]),
-            "param {i} must erase to a bare path; got {:?}",
-            p.ty.kind
-        );
+        assert!(p.is_frozen, "param {i} must be recorded frozen");
+        assert!(bare_path(p), "param {i} must keep a bare path type");
     }
+
+    // The mixed case is the one that would catch a latched flag: an unmarked
+    // parameter AFTER a frozen one must come out unmarked.
+    let r = parse("shared struct N { val: i64 }\nfn r(a: frozen N, b: N) -> i64 { a.val }\n");
+    assert!(
+        r.errors.is_empty(),
+        "`frozen` must parse; got {:?}",
+        r.errors
+    );
+    let Some(Item::Function(f)) = r.program.items.get(1) else {
+        panic!("expected the function item");
+    };
+    assert!(f.params[0].is_frozen, "first param is frozen");
+    assert!(
+        !f.params[1].is_frozen,
+        "an unmarked param following a frozen one must not inherit the mode"
+    );
+
+    // And a parameter NAMED `frozen` is not a frozen parameter — the contextual
+    // -keyword disambiguation, checked on the recorded bit rather than only on
+    // the absence of a parse error.
+    let r = parse("fn f(frozen: i64) -> i64 { frozen }\n");
+    assert!(
+        r.errors.is_empty(),
+        "`frozen` must stay a legal param name; got {:?}",
+        r.errors
+    );
+    let Some(Item::Function(f)) = r.program.items.first() else {
+        panic!("expected the function item");
+    };
+    assert!(
+        !f.params[0].is_frozen,
+        "a param NAMED `frozen` must not be marked frozen"
+    );
+}
+
+/// `karac fmt` must round-trip the keyword. Because the mode lives on the param
+/// rather than in its type, `format_type_expr` cannot print it — the param
+/// printer has to, and if it ever stops, `karac fmt` silently deletes a mode
+/// from the user's source. That is a formatter bug of the worst kind (it
+/// changes meaning once the mode is live), so it gets its own test rather than
+/// riding along on the parse assertions.
+#[test]
+fn frozen_round_trips_through_the_formatter() {
+    let src = "shared struct N { val: i64 }\nfn r(a: frozen N, b: N) -> i64 { a.val + b.val }\n";
+    let prog = parse(src);
+    assert!(prog.errors.is_empty(), "setup: {:?}", prog.errors);
+    let formatted = karac::formatter::format_program(&prog.program);
+    assert!(
+        formatted.contains("a: frozen N"),
+        "formatter must print the mode back; got:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("b: N") && !formatted.contains("b: frozen N"),
+        "formatter must not invent the mode on an unmarked param; got:\n{formatted}"
+    );
+
+    // Idempotence: reformatting the formatted text is a fixpoint, which is what
+    // proves the printed form re-parses to the same marking.
+    let reparsed = parse(&formatted);
+    assert!(
+        reparsed.errors.is_empty(),
+        "formatted output must re-parse; got {:?}",
+        reparsed.errors
+    );
+    assert_eq!(
+        karac::formatter::format_program(&reparsed.program),
+        formatted,
+        "`karac fmt` must be a fixpoint on a `frozen` parameter"
+    );
 }
 
 /// Stage 1 accepts `frozen` in ONE position — a parameter's top-level type —
@@ -12662,6 +12740,14 @@ fn frozen_is_restricted_to_parameter_position_in_stage_1() {
             "generic argument",
             "shared struct N { val: i64 }\nfn r(v: Vec[frozen N]) -> i64 { v.len() }\n",
         ),
+        // A FOREIGN-IMPORT parameter. An `extern` signature is ABI: there is
+        // no callee body to escape-check and the callee is not Kara code, so
+        // the mode can never mean anything there. Rejected rather than
+        // accepted-and-ignored, for the same reason as the positions above.
+        (
+            "extern fn parameter",
+            "shared struct N { val: i64 }\nunsafe extern \"C\" {\n    fn ext(n: frozen N) -> i64;\n}\n",
+        ),
         (
             "nested on itself",
             "shared struct N { val: i64 }\nfn r(n: frozen frozen N) -> i64 { n.val }\n",
@@ -12670,10 +12756,9 @@ fn frozen_is_restricted_to_parameter_position_in_stage_1() {
     for (label, src) in rejected {
         let result = parse(src);
         assert!(
-            result
-                .errors
-                .iter()
-                .any(|e| e.to_string().contains("only supported on a parameter type")),
+            result.errors.iter().any(|e| e
+                .to_string()
+                .contains("only supported on a Kara function's parameter")),
             "[{label}] `frozen` must be rejected outside parameter position; got {:?}",
             result.errors
         );

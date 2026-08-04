@@ -186,7 +186,7 @@ impl super::Parser {
         }
         self.expect(&Token::LeftParen)?;
 
-        self.fn_context_stack.push(FnContext::Function);
+        self.fn_context_stack.push(FnContext::Extern);
         let mut params = Vec::new();
         while !self.check(&Token::RightParen) && !self.is_at_end() {
             params.push(self.parse_param()?);
@@ -270,7 +270,7 @@ impl super::Parser {
         }
 
         self.expect(&Token::LeftParen)?;
-        self.fn_context_stack.push(FnContext::Function);
+        self.fn_context_stack.push(FnContext::Extern);
         let mut params = Vec::new();
         while !self.check(&Token::RightParen) && !self.is_at_end() {
             params.push(self.parse_param()?);
