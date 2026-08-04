@@ -99,10 +99,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 75 | 1 |
 | run-vs-build | 73 | 0 |
 | false-positive | 55 | 0 |
-| perf | 44 | 1 |
+| perf | 43 | 0 |
 | crash | 37 | 0 |
 | soundness | 35 | 0 |
-| diagnostics | 34 | 0 |
+| diagnostics | 35 | 1 |
 | other | 13 | 1 |
 | use-after-free | 12 | 0 |
 
@@ -112,10 +112,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 645 | 3 |
 | interp | 120 | 0 |
-| typecheck | 115 | 0 |
+| typecheck | 116 | 1 |
 | ownership | 37 | 1 |
 | autopar | 31 | 1 |
-| other | 24 | 1 |
+| other | 23 | 0 |
 | cli | 23 | 0 |
 | runtime | 19 | 0 |
 | resolver | 18 | 0 |
@@ -131,7 +131,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **893 surfaced 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
-| B-2026-08-03-9 | 2026-08-03 | other | high | No IN-PLACE map-value mutation, so the canonical `Map[K, Vec[V]]` grouping idiom is QUADRATIC. Extending a key's list is a read-clone-modify-reinsert, so a word occurring k times costs O(k^2) element copies where C/Rust/Go/Python are O(k). Measured 1000x slower than CPython on identical work at n=128k | the stdlib Map API surface (src/interpreter + codegen Map lowering, wherever `get`/`insert` are defined) — needs an in-place map-value mutation path: a `get_mut`-shaped borrow, an entry API, or a `Map.append`-style helper for the container-valued case |
+| B-2026-08-03-9 | 2026-08-03 | typecheck | medium | the canonical `Map[K, Vec[V]]` grouping idiom taught by the corpus is QUADRATIC, but the language already has the O(k) answer -- `Map.entry(k).or_insert(..)` ships on both backends and measures flat. The gap is signposting: nothing leads an author from `get`/`insert` to `entry`, so a lint with a machine-applicable fix is the durable close (headline claim 'no in-place map-value mutation' DISPROVED, see detail) | the stdlib Map API surface (src/interpreter + codegen Map lowering, wherever `get`/`insert` are defined) — needs an in-place map-value mutation path: a `get_mut`-shaped borrow, an entry API, or a `Map.append`-style helper for the container-valued case |
 | B-2026-08-03-12 | 2026-08-03 | codegen | low | `coroutine_preserves_active_span_across_suspend` (tests/coro_e2e.rs) is INTERMITTENT -- the post-resume log line came back unstamped (`[info] after-resume`, span_id=0) on one full-suite run and has not reproduced in 19 attempts since | open |
 | B-2026-08-04-1 | 2026-08-04 | codegen | high | FRESH-TEMP twin of B-2026-08-02-25's match-arm leg: a heap-BOXED Option/Result payload bound out of a `match mk() { Some(r) => .. }` arm runs its Drop BODY against the binding's reconstructed COPY, not the box, so a body that MUTATES a heap field (`self.buf.clear()`) frees the buffer while the box keeps the stale pointer and the scope-exit box drop frees it again | — |
 | B-2026-08-04-2 | 2026-08-04 | codegen | high | A heap-BOXED Option payload bound by a consuming match arm and then MOVED -- into a struct literal, or out as the match's tail value -- double-frees under `karac build` while the interpreter is correct; read-only Drop body, both named and fresh-temp scrutinees | — |
