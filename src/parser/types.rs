@@ -34,6 +34,14 @@ impl super::Parser {
     pub(crate) fn parse_type(&mut self) -> Option<TypeExpr> {
         let start = self.current_span();
 
+        // One-shot: take the permission and clear it, so ONLY the outermost
+        // `parse_type` of a parameter can accept `frozen`. Clearing it inside
+        // the `frozen` branch alone was not enough — generic arguments are
+        // parsed by a different descent, so `Vec[frozen N]` kept the flag lit
+        // and was wrongly accepted. Taking it here covers every nested position
+        // by construction rather than by enumerating them.
+        let frozen_ok = std::mem::replace(&mut self.frozen_ok, false);
+
         // `frozen Type` — B-2026-08-01-33 mechanism 3, stage 1.
         //
         // A CONTEXTUAL keyword, not a reserved word: `frozen` stays a legal
@@ -62,7 +70,20 @@ impl super::Parser {
         // keyword while this erasure stands, since the AST no longer records it.
         if let Token::Identifier { name, .. } = self.peek_token() {
             if name == "frozen" && Self::token_begins_type(&self.peek_token_at(1)) {
+                let kw_span = self.current_span();
                 self.advance();
+                if !frozen_ok {
+                    self.error_at(
+                        "`frozen` is only supported on a parameter type (stage 1); \
+                         it is not yet accepted on a `let` annotation, a struct \
+                         field, a return type, or inside a generic argument",
+                        kw_span,
+                    );
+                }
+                // Parsing continues through the inner type either way, so one
+                // misplaced keyword does not cascade into unrelated errors.
+                // The flag was already taken above, so a nested `frozen`
+                // (`frozen frozen T`) is rejected on the inner occurrence.
                 return self.parse_type();
             }
         }

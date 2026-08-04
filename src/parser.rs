@@ -88,6 +88,14 @@ pub struct Parser {
     /// `mod`-loaded module files — set this `false` via
     /// [`Parser::items_only`], turning top-level statements into a parse
     /// error instead of a synthesized entry point.
+    /// B-2026-08-01-33 mechanism 3, stage 1: `true` only while parsing the
+    /// TOP-LEVEL type of a parameter, which is the one position the stage
+    /// claims. `frozen` elsewhere (a `let` annotation, a struct field, a
+    /// generic argument like `Vec[frozen N]`) is REJECTED rather than silently
+    /// accepted-and-erased: those positions will mean something different once
+    /// the mode is sticky (stage 2), and accepting them now would let programs
+    /// depend on a spelling whose semantics are still undecided. Fail-closed.
+    pub(crate) frozen_ok: bool,
     pub(crate) allow_script_mode: bool,
     /// Active labels for disambiguating `break label` vs `break value` and
     /// for routing labeled-block label scopes. Each entry carries a
@@ -191,6 +199,7 @@ impl Parser {
             pos: 0,
             loop_labels: Vec::new(),
             errors: Vec::new(),
+            frozen_ok: false,
             allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),

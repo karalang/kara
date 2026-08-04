@@ -1464,7 +1464,13 @@ impl super::Parser {
         let pattern = self.parse_param_pattern()?;
         self.allow_type_class_param_name = false;
         self.expect(&Token::Colon)?;
-        let ty = self.parse_type()?;
+        // The one position stage 1 accepts `frozen` (B-2026-08-01-33). Scoped
+        // to this single call so the flag cannot leak into a default-value
+        // expression or a sibling parse.
+        self.frozen_ok = true;
+        let ty = self.parse_type();
+        self.frozen_ok = false;
+        let ty = ty?;
         let default_value = if self.eat(&Token::Equal) {
             Some(self.parse_expression()?)
         } else {

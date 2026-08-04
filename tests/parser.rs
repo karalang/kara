@@ -12599,24 +12599,83 @@ fn frozen_parses_and_is_erased_in_stage_1() {
         f.params[0].ty.kind
     );
 
-    // Nested position, to pin that erasure is not special-cased to the top
-    // level: `Vec[frozen N]` must come out as plain `Vec[N]`.
-    let r = parse("shared struct N { val: i64 }\nfn r(v: Vec[frozen N]) -> i64 { v.len() }\n");
+    // A second parameter, to pin that erasure is not a one-off on the first:
+    // both come out as bare paths.
+    let r =
+        parse("shared struct N { val: i64 }\nfn r(a: frozen N, b: frozen N) -> i64 { a.val }\n");
     assert!(
         r.errors.is_empty(),
-        "`frozen` must parse nested; got {:?}",
+        "`frozen` must parse; got {:?}",
         r.errors
     );
     let Some(Item::Function(f)) = r.program.items.get(1) else {
         panic!("expected the function item");
     };
-    let TypeKind::Path(p) = &f.params[0].ty.kind else {
-        panic!("expected Vec path, got {:?}", f.params[0].ty.kind);
-    };
-    let args = p.generic_args.as_ref().expect("Vec[...] generic args");
-    assert_eq!(
-        format!("{:?}", args).matches("Frozen").count(),
-        0,
-        "no Frozen node may survive anywhere in the argument: {args:?}"
-    );
+    for (i, p) in f.params.iter().enumerate() {
+        assert!(
+            matches!(&p.ty.kind, TypeKind::Path(path) if path.segments == ["N"]),
+            "param {i} must erase to a bare path; got {:?}",
+            p.ty.kind
+        );
+    }
+}
+
+/// Stage 1 accepts `frozen` in ONE position — a parameter's top-level type —
+/// and rejects it everywhere else rather than silently accepting and erasing
+/// it. Those other positions will mean something different once the mode is
+/// sticky (stage 2), so accepting them now would let programs depend on a
+/// spelling whose semantics are undecided. Fail-closed while the mode is inert.
+#[test]
+fn frozen_is_restricted_to_parameter_position_in_stage_1() {
+    let accepted = [
+        "shared struct N { val: i64 }\nfn r(n: frozen N) -> i64 { n.val }\n",
+        // Re-armed per parameter, not once per function.
+        "shared struct N { val: i64 }\nfn r(a: frozen N, b: frozen N) -> i64 { a.val + b.val }\n",
+    ];
+    for src in accepted {
+        let result = parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "`frozen` must be accepted on a parameter; got {:?} for {src}",
+            result.errors
+        );
+    }
+
+    let rejected = [
+        (
+            "let annotation",
+            "shared struct N { val: i64 }\nfn main() { let x: frozen N = N { val: 1 }; }\n",
+        ),
+        (
+            "struct field",
+            "shared struct N { val: i64 }\nstruct H { n: frozen N }\n",
+        ),
+        (
+            "return type",
+            "shared struct N { val: i64 }\nfn r(n: N) -> frozen N { n }\n",
+        ),
+        // The generic-argument case is the one a per-branch flag reset missed:
+        // generic args are a separate descent, so the permission has to be
+        // consumed by the outermost `parse_type` rather than cleared inside the
+        // `frozen` arm. Keeping it here pins that.
+        (
+            "generic argument",
+            "shared struct N { val: i64 }\nfn r(v: Vec[frozen N]) -> i64 { v.len() }\n",
+        ),
+        (
+            "nested on itself",
+            "shared struct N { val: i64 }\nfn r(n: frozen frozen N) -> i64 { n.val }\n",
+        ),
+    ];
+    for (label, src) in rejected {
+        let result = parse(src);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.to_string().contains("only supported on a parameter type")),
+            "[{label}] `frozen` must be rejected outside parameter position; got {:?}",
+            result.errors
+        );
+    }
 }
