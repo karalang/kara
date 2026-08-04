@@ -614,6 +614,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the consumed fields inside the box so the binding's
                     // BoxedEnumDrop inner walk frees only unbound fields.
                     self.suppress_boxed_payload_struct_destructure(scrutinee, &arm.pattern);
+                    // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field
+                    // split, against the box staged by
+                    // `track_freshtemp_boxed_enum_scrutinee`. No-ops for a
+                    // named or borrow scrutinee (the slot is `None`).
+                    self.suppress_freshtemp_boxed_payload_struct_destructure(
+                        freshtemp_boxed_slot,
+                        &arm.pattern,
+                    );
                 }
                 // #15: a struct-FIELD enum scrutinee (`match spanned.tok { … }`).
                 // Runs regardless of the identifier/fresh-temp split above —
@@ -3678,6 +3686,36 @@ impl<'ctx> super::Codegen<'ctx> {
     /// case is redirected. Restricted to `PatternKind::Struct` on purpose: a
     /// bare `Int(v)` tuple-variant pattern must still resolve through the
     /// scrutinee hint even when a `struct Int` is in scope.
+    /// Does this pattern BIND at least one name, as opposed to only testing?
+    /// Drives ownership questions where "who frees this" hinges on whether a
+    /// leaf binding took the value: a `_`, a literal, or a range binds
+    /// nothing, so whatever held the value still owns it. Structural patterns
+    /// recurse; a struct field written in shorthand (`S { x }`) binds by the
+    /// field's own name and needs no sub-pattern.
+    ///
+    /// Mirrors `use_classifier::pattern_binds_anything` minus its
+    /// unit-variant-name check, which needs the resolver's table — codegen's
+    /// callers here are already inside a payload destructure, where a bare
+    /// name is a binding.
+    fn pattern_binds_anything(pat: &Pattern) -> bool {
+        match &pat.kind {
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
+                false
+            }
+            PatternKind::Binding(_) => true,
+            PatternKind::AtBinding { by_ref, .. } => !by_ref,
+            PatternKind::Tuple(pats) | PatternKind::TupleVariant { patterns: pats, .. } => {
+                pats.iter().any(Self::pattern_binds_anything)
+            }
+            PatternKind::Struct { fields, .. } => fields.iter().any(|f| match &f.pattern {
+                Some(sub) => Self::pattern_binds_anything(sub),
+                None => true,
+            }),
+            PatternKind::Or(alts) => alts.iter().any(Self::pattern_binds_anything),
+            _ => true,
+        }
+    }
+
     pub(super) fn struct_pattern_names_a_user_struct(&self, pat: &Pattern) -> bool {
         let PatternKind::Struct { path, .. } = &pat.kind else {
             return false;
@@ -6363,6 +6401,38 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.boxed_enum_payload_vars.contains(name.as_str()) {
             return;
         }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        self.suppress_boxed_payload_struct_destructure_at(slot.ptr, pattern);
+    }
+
+    /// B-2026-08-04-6 — the FRESH-TEMP twin of
+    /// [`Self::suppress_boxed_payload_struct_destructure`]. A temp scrutinee
+    /// (`match opt(i) { Some(Full { name, buf: _ }) => … }`) has no named
+    /// variable to look up, so the named entry point bails on its first line
+    /// and nothing disarmed anything; paired with the tracker's box-ONLY free
+    /// that left every field of a destructured payload unowned, and the
+    /// UNBOUND ones leaked. `track_freshtemp_boxed_enum_scrutinee` now walks
+    /// the whole interior for a struct destructure and hands its staged box
+    /// slot here so the BOUND fields get disarmed exactly as they do on the
+    /// named path.
+    pub(super) fn suppress_freshtemp_boxed_payload_struct_destructure(
+        &mut self,
+        slot: Option<PointerValue<'ctx>>,
+        pattern: &Pattern,
+    ) {
+        let Some(slot) = slot else { return };
+        self.suppress_boxed_payload_struct_destructure_at(slot, pattern);
+    }
+
+    /// Shared body of the two entry points above: `slot` points at the
+    /// Option/Result aggregate whose w0 holds the box pointer.
+    fn suppress_boxed_payload_struct_destructure_at(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        pattern: &Pattern,
+    ) {
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
             return;
         };
@@ -6398,9 +6468,6 @@ impl<'ctx> super::Codegen<'ctx> {
         if Self::llvm_type_word_count(st.into()) <= area {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()).copied() else {
-            return;
-        };
         let Some(layout) = self.enum_layouts.get(enum_name) else {
             return;
         };
@@ -6413,7 +6480,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let Ok(w0_ptr) =
             self.builder
-                .build_struct_gep(layout.llvm_type, slot.ptr, 1, "boxfld.suppress.w0")
+                .build_struct_gep(layout.llvm_type, slot_ptr, 1, "boxfld.suppress.w0")
         else {
             return;
         };
@@ -6446,12 +6513,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.position_at_end(do_bb);
         for field_pat in fields {
-            // A `field: _` sub-pattern consumes nothing — the box keeps
-            // that field.
-            if matches!(
-                field_pat.pattern.as_ref().map(|p| &p.kind),
-                Some(PatternKind::Wildcard)
-            ) {
+            // Disarm exactly the fields the pattern BINDS — those now have a
+            // leaf binding that owns and frees them. Everything else stays
+            // owned by the box: a `field: _` sub-pattern, a field omitted
+            // behind `..`, and (B-2026-08-04-6) a field the pattern only
+            // TESTS, like `Full { name: "x", buf }`. The old check was
+            // `Wildcard`-only, so a literal-test field was disarmed and then
+            // leaked — nobody owned it.
+            let binds = match &field_pat.pattern {
+                // Shorthand `Full { name }` binds by the field's own name.
+                None => true,
+                Some(sub) => Self::pattern_binds_anything(sub),
+            };
+            if !binds {
                 continue;
             }
             self.zero_struct_field_move_cap(box_ptr, &struct_name, &field_pat.name);
@@ -6955,6 +7029,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     .filter(|n| {
                         self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)
                     }),
+                // B-2026-08-04-6 — a struct DESTRUCTURE binds SOME fields and
+                // leaves the rest to nobody. The old `_ => None` arm sent the
+                // whole shape to a box-only free, so `Some(Full { name, buf: _
+                // })` stranded `buf`'s buffer (and `Full { name, .. }`, and
+                // the `Result` Err twin). Walking the whole interior instead
+                // would double-free the BOUND fields — so this arm is only
+                // half the answer: the arm loop pairs it with
+                // `suppress_freshtemp_boxed_payload_struct_destructure`, which
+                // cap-zeroes exactly the bound fields inside the box before
+                // the walk can reach them. Net effect per field: bound => the
+                // leaf binding frees it, unbound => the box does. That is the
+                // same split the NAMED scrutinee has always used; this arm and
+                // its suppressor are that path ported to the fresh temp, whose
+                // suppressor entry point requires an `Identifier` scrutinee
+                // and so had been declining silently.
+                //
+                // All-fields-bound degenerates safely: every cap is zeroed, so
+                // the walk is a no-op and the behavior matches the old
+                // box-only free exactly.
+                PatternKind::Struct { path, .. } if !scrutinee_is_borrow => {
+                    path.last().cloned().filter(|n| {
+                        self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)
+                    })
+                }
                 _ => None,
             };
             self.track_boxed_enum_var(

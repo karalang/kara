@@ -35487,6 +35487,86 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-6 — a FRESH-TEMP boxed payload destructured by a PARTIAL
+    /// struct pattern: the fields the pattern binds are freed by their
+    /// bindings, the fields it leaves out are freed by the box.
+    ///
+    /// The tracker had only two answers for a fresh temp — walk the whole
+    /// interior, or free the box alone — and a struct destructure took the
+    /// second, so `Some(Full { name, buf: _ })` left `buf`'s buffer with no
+    /// owner at all. The NAMED scrutinee had always decided this per FIELD;
+    /// its suppressor just bailed on its first line for a temp, which wanted
+    /// an `Identifier`. The tracker now walks the interior for a struct
+    /// destructure and the suppressor disarms the bound fields inside the box
+    /// first, so the two halves meet in the middle.
+    ///
+    /// The all-bound case is the one that keeps this honest in the other
+    /// direction: every cap is zeroed, the walk becomes a no-op, and the
+    /// bindings are still the sole owners — walking without the suppressor
+    /// would double-free instead.
+    ///
+    /// Every case reads the fields it binds, and the two `String`s are built
+    /// by MUTATION rather than from a literal or f-string. Both matter: an
+    /// unread field's malloc is elided outright (measured — 5 allocs vs 3),
+    /// and an elided allocation cannot leak, so a lazier fixture passes
+    /// against a completely broken fix.
+    #[test]
+    fn asan_freshtemp_boxed_payload_partial_destructure_owns_every_field() {
+        assert_clean_asan_run(
+            r#"
+struct Full { name: String, buf: Vec[i64] }
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    let mut s: String = String.new();
+    s.push_str("payload-string-data");
+    return Full { name: s, buf: b };
+}
+fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }
+fn res(i: i64) -> Result[i64, Full] { return Result.Err(mk(i)); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // `field: _` — the box keeps `buf`.
+        match opt(i) {
+            Option.Some(Full { name, buf: _ }) => { n = n + name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // `..` — same shape, other spelling.
+        match opt(i) {
+            Option.Some(Full { name, .. }) => { n = n + name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // The box keeps the STRING half instead. Symmetric with the two
+        // above; it only looked exempt while its malloc was being elided.
+        match opt(i) {
+            Option.Some(Full { name: _, buf }) => { n = n + buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // Result's Err half — the variant picks which generic arg is boxed.
+        match res(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(Full { name, buf: _ }) => { n = n + name.len(); }
+        }
+        // CONTROL, the double-free direction: all fields bound, so every cap
+        // is disarmed and the box's walk must find nothing left to free.
+        match opt(i) {
+            Option.Some(Full { name, buf }) => { n = n + name.len() + buf.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // Per iteration: 19, 19, 1, 19, 19+1 = 78. x200 = 15600.
+            &["15600"],
+            "freshtemp_boxed_payload_partial_destructure_owns_every_field",
+        );
+    }
+
     /// B-2026-08-04-2 — a boxed payload bound whole and then MOVED must leave
     /// exactly one owner of the box's interior.
     ///

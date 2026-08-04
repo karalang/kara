@@ -234,6 +234,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
         self.suppress_boxed_payload_struct_destructure(value, pattern);
+        // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split, against
+        // the box staged by `track_freshtemp_boxed_enum_scrutinee` (no named
+        // variable exists for the expr-based entry point to find). No-ops
+        // when the scrutinee is not a fresh-temp boxed one.
+        self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
         // B-2026-07-21-8: ref-chain struct clone — fire the per-field
         // cap-zeroing against the CLONE slot (the expr-based suppressors
         // bail on the borrowed root), so the clone's StructDrop frees only
@@ -516,6 +521,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
         self.suppress_boxed_payload_struct_destructure(value, pattern);
+        // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split, against
+        // the box staged by `track_freshtemp_boxed_enum_scrutinee` (no named
+        // variable exists for the expr-based entry point to find). No-ops
+        // when the scrutinee is not a fresh-temp boxed one.
+        self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
         self.compile_block(body)?;
         let body_has_terminator = self
             .builder
@@ -964,6 +974,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
         self.suppress_boxed_payload_struct_destructure(value, pattern);
+        // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split, against
+        // the box staged by `track_freshtemp_boxed_enum_scrutinee` (no named
+        // variable exists for the expr-based entry point to find). No-ops
+        // when the scrutinee is not a fresh-temp boxed one.
+        self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
         // B-2026-07-21-8: ref-chain struct clone — per-field cap-zeroing
         // against the CLONE slot on the match edge (see the if-let site);
         // the else edge diverges with the clone's StructDrop firing
