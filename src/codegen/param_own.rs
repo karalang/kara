@@ -596,12 +596,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// half of a `result_field_struct_enum_payload_ok` field deep-COPYABLE, so
     /// `field_copy_supported`'s `Result` arm can admit it (making the owning
     /// struct callee-owned and its `OptionInline` drop safe)? The shape gate
-    /// already restricted each heap half to a non-shared struct/enum; this adds
-    /// the copy-depth == drop-depth requirement — a struct half must be
-    /// recursively copy-supported (it recurses via
-    /// `deep_copy_struct_heap_fields_in_place`), an enum half rides the same
-    /// `deep_copy_enum_heap_payload_in_place` machinery a DIRECT non-shared enum
-    /// field already trusts.
+    /// already restricted each heap half to a non-shared struct/enum or (since
+    /// B-2026-08-03-11) a direct String/Vec; this adds the copy-depth ==
+    /// drop-depth requirement — a struct half must be recursively
+    /// copy-supported (it recurses via `deep_copy_struct_heap_fields_in_place`),
+    /// an enum half rides the same `deep_copy_enum_heap_payload_in_place`
+    /// machinery a DIRECT non-shared enum field already trusts, and a direct
+    /// String/Vec half is copied by the same overlay dance the all-direct class
+    /// uses, whose own gate already vetted it.
     fn result_payload_struct_enum_copyable(
         &self,
         field_te: &TypeExpr,
@@ -632,8 +634,12 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             let ok = if self.struct_types.contains_key(head) {
                 self.aggregate_param_copy_supported_struct(head, stack)
+            } else if self.enum_layouts.contains_key(head) {
+                !self.enum_layouts[head].is_shared
             } else {
-                self.enum_layouts.get(head).map(|l| !l.is_shared) == Some(true)
+                // The direct String/Vec half the shape gate admits alongside a
+                // struct/enum one — the overlay copy handles it (B-2026-08-03-11).
+                true
             };
             if !ok {
                 return false;
@@ -1653,8 +1659,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let ok_tag = layout.tags.get("Ok").copied().unwrap_or(0);
         let err_tag = layout.tags.get("Err").copied().unwrap_or(1);
         let i64_t = self.context.i64_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let vec_ty = self.vec_struct_type();
         let fn_val = self.current_fn.unwrap();
         let tag_ptr = self
             .builder
@@ -1697,55 +1701,79 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(is_half, copy_bb, next_bb)
                 .unwrap();
             self.builder.position_at_end(copy_bb);
-            let data_w = self.load_enum_word(result_ty, slot, 1, "p14r.data");
-            let len_w = self.load_enum_word(result_ty, slot, 2, "p14r.len");
-            let cap_w = self.load_enum_word(result_ty, slot, 3, "p14r.cap");
-            let data_p = self
-                .builder
-                .build_int_to_ptr(data_w, ptr_ty, "p14r.data.p")
-                .unwrap();
-            let mut sv = vec_ty.get_undef();
-            sv = self
-                .builder
-                .build_insert_value(sv, data_p, 0, "p14r.sv.d")
-                .unwrap()
-                .into_struct_value();
-            sv = self
-                .builder
-                .build_insert_value(sv, len_w, 1, "p14r.sv.l")
-                .unwrap()
-                .into_struct_value();
-            sv = self
-                .builder
-                .build_insert_value(sv, cap_w, 2, "p14r.sv.c")
-                .unwrap()
-                .into_struct_value();
-            let copied = self
-                .emit_vecstr_defensive_copy(sv.into(), elem_ty, deep_elem_te.as_ref())
-                .into_struct_value();
-            let cd = self
-                .builder
-                .build_extract_value(copied, 0, "p14r.cd")
-                .unwrap()
-                .into_pointer_value();
-            let cl = self
-                .builder
-                .build_extract_value(copied, 1, "p14r.cl")
-                .unwrap();
-            let cc = self
-                .builder
-                .build_extract_value(copied, 2, "p14r.cc")
-                .unwrap();
-            let cd_w = self
-                .builder
-                .build_ptr_to_int(cd, i64_t, "p14r.cd.w")
-                .unwrap();
-            self.store_enum_word(result_ty, slot, 1, cd_w.into());
-            self.store_enum_word(result_ty, slot, 2, cl);
-            self.store_enum_word(result_ty, slot, 3, cc);
+            self.emit_result_half_overlay_copy(result_ty, slot, elem_ty, deep_elem_te.as_ref());
             self.builder.build_unconditional_branch(next_bb).unwrap();
             self.builder.position_at_end(next_bb);
         }
+    }
+
+    /// The `{ptr,len,cap}` overlay copy for ONE already-selected `Result` half:
+    /// rebuild a vec-struct value from payload words 1..3, hand it to
+    /// `emit_vecstr_defensive_copy`, and store the duplicate back over the same
+    /// three words. The caller owns the tag test and the surrounding blocks —
+    /// the builder must already be positioned inside the taken-arm block.
+    ///
+    /// Extracted (B-2026-08-03-11) so the two entry-copy helpers that need it —
+    /// [`Self::deep_copy_result_inline_heap_halves_in_place`] for the
+    /// all-direct-halves class and
+    /// [`Self::deep_copy_result_struct_enum_payload_in_place`] for the class
+    /// that mixes a direct half with a struct/enum one — cannot drift apart.
+    fn emit_result_half_overlay_copy(
+        &mut self,
+        result_ty: inkwell::types::StructType<'ctx>,
+        slot: PointerValue<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        deep_elem_te: Option<&TypeExpr>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let data_w = self.load_enum_word(result_ty, slot, 1, "p14r.data");
+        let len_w = self.load_enum_word(result_ty, slot, 2, "p14r.len");
+        let cap_w = self.load_enum_word(result_ty, slot, 3, "p14r.cap");
+        let data_p = self
+            .builder
+            .build_int_to_ptr(data_w, ptr_ty, "p14r.data.p")
+            .unwrap();
+        let mut sv = vec_ty.get_undef();
+        sv = self
+            .builder
+            .build_insert_value(sv, data_p, 0, "p14r.sv.d")
+            .unwrap()
+            .into_struct_value();
+        sv = self
+            .builder
+            .build_insert_value(sv, len_w, 1, "p14r.sv.l")
+            .unwrap()
+            .into_struct_value();
+        sv = self
+            .builder
+            .build_insert_value(sv, cap_w, 2, "p14r.sv.c")
+            .unwrap()
+            .into_struct_value();
+        let copied = self
+            .emit_vecstr_defensive_copy(sv.into(), elem_ty, deep_elem_te)
+            .into_struct_value();
+        let cd = self
+            .builder
+            .build_extract_value(copied, 0, "p14r.cd")
+            .unwrap()
+            .into_pointer_value();
+        let cl = self
+            .builder
+            .build_extract_value(copied, 1, "p14r.cl")
+            .unwrap();
+        let cc = self
+            .builder
+            .build_extract_value(copied, 2, "p14r.cc")
+            .unwrap();
+        let cd_w = self
+            .builder
+            .build_ptr_to_int(cd, i64_t, "p14r.cd.w")
+            .unwrap();
+        self.store_enum_word(result_ty, slot, 1, cd_w.into());
+        self.store_enum_word(result_ty, slot, 2, cl);
+        self.store_enum_word(result_ty, slot, 3, cc);
     }
 
     /// B-2026-07-04-7 — deep-copy an `Option[<non-shared struct/enum>]` FIELD's
@@ -1958,9 +1986,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
 
         for (half_tag, half, label) in [(ok_tag, ok_te, "ok"), (err_tag, err_te, "err")] {
-            // Only a non-shared struct/enum half gets an arm; a scalar or
-            // heapless half copies nothing (the caller's gate already rejected
-            // any other heap-owning shape, so nothing is silently skipped).
+            // Per-half plan. A heapless half copies nothing. A heap half is
+            // either a non-shared struct/enum (the boxed/inline dance below) or
+            // — B-2026-08-03-11, the mixed class — a direct `String`/`Vec`,
+            // which reuses the same `{ptr,len,cap}` overlay copy the
+            // all-direct-halves helper emits. The caller's gate already rejected
+            // every other heap-owning shape, so nothing is silently skipped.
+            if !self.te_owns_heap_below_buffer(&half) {
+                continue;
+            }
             let payload_name = match &half.kind {
                 TypeKind::Path(hp) => hp.segments.first().cloned(),
                 _ => None,
@@ -1977,12 +2011,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(&payload_name)
                 .filter(|l| !l.is_shared)
                 .cloned();
-            if !is_struct && enum_layout.is_none() {
-                continue;
-            }
-            if !self.te_owns_heap_below_buffer(&half) {
-                continue;
-            }
+            // Element type for a direct String/Vec half; `None` marks the
+            // struct/enum half that takes the boxed-or-inline path.
+            let overlay: Option<(BasicTypeEnum<'ctx>, Option<TypeExpr>)> =
+                if is_struct || enum_layout.is_some() {
+                    None
+                } else if self.is_string_type_expr(&half) {
+                    Some((self.context.i8_type().into(), None))
+                } else if let Some(et) = self.extract_vec_elem_type(&half) {
+                    let inner = crate::codegen::helpers::vec_inner_type_expr(&half)
+                        .filter(Self::elem_te_needs_direct_recursive_drain);
+                    Some((et, inner))
+                } else {
+                    continue;
+                };
 
             let copy_bb = self
                 .context
@@ -2003,6 +2045,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(is_half, copy_bb, next_bb)
                 .unwrap();
             self.builder.position_at_end(copy_bb);
+
+            if let Some((elem_ty, deep_elem_te)) = overlay {
+                // Direct String/Vec half of a MIXED Result (B-2026-08-03-11) —
+                // the payload's `{ptr,len,cap}` overlays words 1..3 and its free
+                // is `emit_result_drop_fn`'s overlay arm, so the copy is the
+                // same word dance the all-direct class uses.
+                self.emit_result_half_overlay_copy(
+                    result_ty,
+                    field_ptr,
+                    elem_ty,
+                    deep_elem_te.as_ref(),
+                );
+                self.builder.build_unconditional_branch(next_bb).unwrap();
+                self.builder.position_at_end(next_bb);
+                continue;
+            }
 
             let payload_llty = self.llvm_type_for_type_expr(&half);
             let payload_words = Self::llvm_type_word_count(payload_llty);

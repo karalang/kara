@@ -82938,6 +82938,79 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_mixed_halves_result_struct_field_freed() {
+        // B-2026-08-03-11 — the hole BETWEEN the two Result field-drop gates.
+        // Leg B of B-2026-08-03-3 armed the free for a Result whose heap-owning
+        // halves are all structs/enums, and kept that gate structurally
+        // disjoint from the older direct-String/Vec-halves gate so each class
+        // binds to exactly one entry-copy helper. A field typed
+        // `Result[Res, String]` has one heap half of EACH kind, so both gates
+        // rejected it and the struct payload's buffer was orphaned.
+        //
+        // Both free sides already dispatched per half (`emit_result_drop_fn`
+        // branches on Ok and Err independently; `track_inline_result_payload_var`
+        // pairs the overlay elems with the struct drops), so the fix is the
+        // admit gate plus a per-half entry copy: the struct/enum half keeps the
+        // boxed-or-inline dance at the Result area's `> 5`, and the direct half
+        // routes to the same `{ptr,len,cap}` overlay copy the all-direct class
+        // uses, now factored into `emit_result_half_overlay_copy` so the two
+        // cannot drift.
+        //
+        // `swapped-sides` is the half-order control — the same mix with the Vec
+        // on Ok and the struct on Err — because the admit is per half, not per
+        // position.
+        //
+        // This is a COMPANION guard, not the row's oracle: it is green before
+        // the fix too, because a pure leak changes no output. Its job is the
+        // other direction — arming a free is what turns every position that
+        // already consumes the value into a double-free or double-fire
+        // candidate (the lesson B-2026-08-03-3 records three times over), so
+        // these six positions pin that arming this class did not do that.
+        // `asan_mixed_halves_result_struct_field_freed` is the leak oracle and
+        // is stash-proven RED (123 bytes in 6 allocations under LSan).
+        let out = run_program(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+struct Hm { r: Result[Res, String], t: i64 }
+struct Hv { r: Result[Vec[String], Res], t: i64 }
+fn take(h: Hm) -> i64 { h.t }
+fn main() {
+    println("ok-struct:");
+    { let h = Hm { r: Result.Ok(Res { id: 1, name: f"aaaa{1}" }), t: 10 }; println(h.t); }
+    println("err-string:");
+    { let h = Hm { r: Result.Err(f"bbbbbb{2}"), t: 20 }; println(h.t); }
+    println("byvalue-ok-struct:");
+    { let h = Hm { r: Result.Ok(Res { id: 3, name: f"ccc{3}" }), t: 30 }; println(take(h)); }
+    println("moveout-ok-struct:");
+    { let h = Hm { r: Result.Ok(Res { id: 4, name: f"dddd{4}" }), t: 40 }; let x = h.r; println(h.t); }
+    println("swapped-sides:");
+    {
+      let mut v: Vec[String] = Vec.new();
+      v.push(f"eeeee{5}");
+      let h = Hv { r: Result.Ok(v), t: 50 };
+      println(h.t);
+    }
+    println("swapped-sides-err:");
+    { let h = Hv { r: Result.Err(Res { id: 6, name: f"ffffff{6}" }), t: 60 }; println(h.t); }
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "ok-struct:\n10\ndrop 1 aaaa1\n\
+                 err-string:\n20\n\
+                 byvalue-ok-struct:\n30\ndrop 3 ccc3\n\
+                 moveout-ok-struct:\ndrop 4 dddd4\n40\n\
+                 swapped-sides:\n50\n\
+                 swapped-sides-err:\n60\ndrop 6 ffffff6\nend"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_struct_field_move_out_single_body_fire() {
         // B-2026-08-03-8 (bodies half) — `let x = h.f` moves ONE field out, but
         // the struct's `__karac_dropbodies_*` walk stayed fully armed and fired

@@ -36115,6 +36115,59 @@ fn main() {
     }
 
     #[test]
+    fn asan_mixed_halves_result_struct_field_freed() {
+        // B-2026-08-03-11 — the LEAK oracle for the mixed `Result[<struct>,
+        // String]` field. This one is invisible to the other two oracles by
+        // construction: the interpreter agrees with AOT on every line (nothing
+        // is printed wrong, no body double-fires), and the Drop body count is
+        // correct. Only LSan sees that the Ok payload's `name` buffer is never
+        // freed — and only on Linux, since `-fsanitize=address` runs no leak
+        // detector on macOS.
+        //
+        // `swapped-sides` puts the Vec on Ok and the struct on Err to pin that
+        // the admit is per HALF, not per position.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Hm { r: Result[Res, String], t: i64 }
+struct Hv { r: Result[Vec[String], Res], t: i64 }
+fn take(h: Hm) -> i64 { h.t }
+fn main() {
+    { let h = Hm { r: Result.Ok(Res { id: 1, name: f"aaaa{1}" }), t: 10 }; println(h.t); }
+    { let h = Hm { r: Result.Err(f"bbbbbb{2}"), t: 20 }; println(h.t); }
+    { let h = Hm { r: Result.Ok(Res { id: 3, name: f"ccc{3}" }), t: 30 }; println(take(h)); }
+    { let h = Hm { r: Result.Ok(Res { id: 4, name: f"dddd{4}" }), t: 40 }; let x = h.r; println(h.t); }
+    {
+      let mut v: Vec[String] = Vec.new();
+      v.push(f"eeeee{5}");
+      let h = Hv { r: Result.Ok(v), t: 50 };
+      println(h.t);
+    }
+    { let h = Hv { r: Result.Err(Res { id: 6, name: f"ffffff{6}" }), t: 60 }; println(h.t); }
+    println("end");
+}
+"#,
+            &[
+                "10",
+                "drop 1 aaaa1",
+                "20",
+                "30",
+                "drop 3 ccc3",
+                "drop 4 dddd4",
+                "40",
+                "50",
+                "60",
+                "drop 6 ffffff6",
+                "end",
+            ],
+            "mixed_halves_result_struct_field_freed",
+        );
+    }
+
+    #[test]
     fn asan_option_struct_field_move_out_no_double_free() {
         // B-2026-08-03-8 (memory half) — `let x = h.o` with `o: Option[Res]`
         // SEGV'd: `Res` is 4 words so the payload is BOXED, and both `x` and

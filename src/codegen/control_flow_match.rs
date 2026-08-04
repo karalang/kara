@@ -2097,15 +2097,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-08-03-3 leg B — the `Result` sibling of
     /// [`Self::option_payload_struct_or_enum_drop_ok`], and the DISJOINT
     /// twin of [`Self::result_field_direct_vecstr_halves_ok`]: at least one
-    /// half owns heap, and EVERY heap-owning half is a non-shared user
-    /// struct/enum the recursive drop family fully frees. Disjointness is
-    /// structural — this gate rejects a direct `String`/`Vec` heap half and
-    /// the `..._direct_vecstr_halves_ok` gate rejects a struct/enum heap
-    /// half — so each class keeps exactly one entry-copy helper
+    /// heap-owning half is a non-shared user struct/enum the recursive drop
+    /// family fully frees, and every OTHER heap-owning half is one of those or
+    /// a direct inline-heap `String`/`Vec`/`VecDeque`. Disjointness is
+    /// structural and rests on the struct/enum REQUIREMENT: this gate demands
+    /// at least one such half and the `..._direct_vecstr_halves_ok` gate
+    /// rejects any, so each class keeps exactly one entry-copy helper
     /// (`deep_copy_result_struct_enum_payload_in_place` here,
     /// `deep_copy_result_inline_heap_halves_in_place` there) and copy-depth
     /// stays equal to the registered free's depth. Heapless halves (scalar /
     /// unit) are fine on either side: their arm emits neither copy nor free.
+    ///
+    /// The direct-half arm is B-2026-08-03-11: with both gates originally
+    /// requiring their heap halves to be uniformly one kind, a MIXED
+    /// `Result[<struct>, String]` field fell between them and its struct half
+    /// leaked. Both free sides (`emit_result_drop_fn`, and
+    /// `track_inline_result_payload_var` via `result_inline_payload_struct_drops`)
+    /// already dispatch per half, so admitting the mix here is what makes the
+    /// two sides agree.
     pub(super) fn result_field_struct_enum_payload_ok(&self, field_te: &TypeExpr) -> bool {
         let TypeKind::Path(p) = &field_te.kind else {
             return false;
@@ -2126,17 +2135,38 @@ impl<'ctx> super::Codegen<'ctx> {
         if half_tes.len() != 2 {
             return false;
         }
-        let mut any_heap_half = false;
+        let mut any_struct_half = false;
         for half in &half_tes {
             if !self.te_owns_heap_below_buffer(half) {
                 continue;
             }
-            if !self.option_payload_struct_or_enum_drop_ok(half) {
+            if self.option_payload_struct_or_enum_drop_ok(half) {
+                any_struct_half = true;
+            } else if !self.result_half_is_direct_vecstr(half) {
                 return false;
             }
-            any_heap_half = true;
         }
-        any_heap_half
+        any_struct_half
+    }
+
+    /// Is this `Result` half a DIRECT inline-heap `String` / `Vec` / `VecDeque`
+    /// the `{ptr,len,cap}` overlay copy-and-free pair handles? Shared elements
+    /// are excluded for the same reason
+    /// [`Self::result_field_direct_vecstr_halves_ok`] excludes them: the
+    /// defensive copy emits no per-element rc-inc, so the duplicate would alias
+    /// the source's boxes.
+    fn result_half_is_direct_vecstr(&self, half: &TypeExpr) -> bool {
+        let is_vecstr = self.is_string_type_expr(half)
+            || (matches!(&half.kind, TypeKind::Path(hp)
+                    if matches!(hp.segments.last().map(|s| s.as_str()), Some("Vec") | Some("VecDeque")))
+                && self.extract_vec_elem_type(half).is_some());
+        if !is_vecstr {
+            return false;
+        }
+        !crate::codegen::helpers::vec_inner_type_expr(half).is_some_and(|inner| {
+            matches!(&inner.kind, TypeKind::Path(ip)
+                if ip.segments.last().is_some_and(|n| self.shared_types.contains_key(n.as_str())))
+        })
     }
 
     /// B-2026-07-21-16 — shared shape resolver for the OWNED-place
