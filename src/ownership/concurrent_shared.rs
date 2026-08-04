@@ -423,7 +423,13 @@ impl<'a> super::OwnershipChecker<'a> {
     /// parameter, or any `mut` field anywhere in the closure yields `None`,
     /// i.e. today's unconditional conflict.
     fn atomic_promotion_closure(&self, type_name: &str) -> Option<Vec<String>> {
-        // DEFAULT OFF (`KARAC_PAR_ATOMIC_PROMOTION=1` opts in).
+        // NOTE: the env gate lives at the ADMIT site, not here. The closure is
+        // computed unconditionally because the DIAGNOSTIC needs it too: an
+        // immutable type gets a one-keyword suggestion, a `mut`-bearing one
+        // gets the full migration. Gating the computation would make the
+        // diagnostic quality depend on an unrelated opt-in.
+        //
+        // Promotion itself is DEFAULT OFF (`KARAC_PAR_ATOMIC_PROMOTION=1`).
         //
         // Admitting this capture is not a precision fix to an over-approximating
         // gate — it CHANGES A DOCUMENTED LANGUAGE RULE. design.md § Rc vs Arc —
@@ -439,9 +445,6 @@ impl<'a> super::OwnershipChecker<'a> {
         // `KARAC_PAR_ITER_LOCAL_SHARED` did before their defaults moved: the
         // capability is available to evaluate, and nothing changes until
         // someone decides it should.
-        if std::env::var("KARAC_PAR_ATOMIC_PROMOTION").as_deref() != Ok("1") {
-            return None;
-        }
         let mut seen: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = vec![type_name.to_string()];
         while let Some(name) = queue.pop() {
@@ -1560,9 +1563,11 @@ fn detect_par_block_conflicts(
                     // reason a type with a `mut` field is not promotable here
                     // even though its header could be made safe.
                     if let Some(types) = &binding.atomic_promotion {
-                        promoted.extend(types.iter().cloned());
-                        reported.insert(name);
-                        continue;
+                        if std::env::var("KARAC_PAR_ATOMIC_PROMOTION").as_deref() == Ok("1") {
+                            promoted.extend(types.iter().cloned());
+                            reported.insert(name);
+                            continue;
+                        }
                     }
                     let err = build_concurrent_struct_error(
                         &name,
@@ -1624,6 +1629,38 @@ fn build_concurrent_struct_error(
         fl = first_use_span.line,
         fc = first_use_span.column,
     );
+    // B-2026-08-01-33 — an IMMUTABLE type gets a one-keyword answer, not the
+    // full migration. `par struct` with immutable fields shares lock-free
+    // across tasks with no annotation at the use site, so telling such an
+    // author to "wrap each mut field in Mutex[T]" is advice for a program they
+    // did not write: there are no mut fields to wrap, and the migration is a
+    // single keyword `karac fix` already applies.
+    //
+    // This distinction is why the entry that filed this diagnostic was itself
+    // written believing the cheap answer did not exist, and had to be corrected
+    // in place. The diagnostic taught that belief; conflating the two cases is
+    // the defect.
+    if tracked.kind == BindingKind::Shared && tracked.atomic_promotion.is_some() {
+        let suggestion = format!(
+            concat!(
+                "`{ty}` has no `mut` fields, so it is already safe to read from several ",
+                "tasks at once — rename `shared struct {ty}` to `par struct {ty}` and ",
+                "nothing else changes. A `par` type's immutable fields are freely readable ",
+                "across tasks: no `Mutex[T]`, no `Atomic[T]`, no annotation at the use ",
+                "site. The only cost is that the type's reference counting becomes atomic. ",
+                "`karac fix` applies this rename for you.",
+            ),
+            ty = tracked.type_name,
+        );
+        return OwnershipError {
+            message,
+            span: second_use_span,
+            kind: kind_variant,
+            suggestion: Some(suggestion),
+            replacement: None,
+            consume_span: Some(first_use_span),
+        };
+    }
     let suggestion = match tracked.kind {
         BindingKind::Shared => format!(
             "convert `{ty}` to `par struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `shared struct {ty}` to `par struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. call sites that previously relied on implicit `Rc`-clone now produce `Arc`-clone semantics\nThe machine-applicable `fix_diff` covers steps 1 and 2 (keyword rewrite, `mut ` stripping, and per-field `Mutex[T]` wrap); steps 3 and 4 remain the human review step. Or run `karac migrate shared-to-par {ty}` for a preemptive workspace rewrite.",

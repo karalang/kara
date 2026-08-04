@@ -1541,10 +1541,21 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             } else {
                 "warning[ownership]"
             };
-            out.push(format!(
+            // An ownership error's `suggestion` had never reached the terminal:
+            // this loop printed only `message`, while the sibling notes loop
+            // below prints `help:`. So every carefully-written migration
+            // suggestion — including E_CONCURRENT_SHARED_STRUCT's, which is the
+            // one place the `par struct` answer is spelled out — was visible
+            // only to a reader of the compiler source. Print it, in the same
+            // `help:` shape the notes loop uses.
+            let mut block = format!(
                 "{}: {}:{}:{}: {}",
                 label, filename, err.span.line, err.span.column, err.message
-            ));
+            );
+            if let Some(ref sugg) = err.suggestion {
+                write!(block, "\n  help: {sugg}").unwrap();
+            }
+            out.push(block);
         }
         // RC-fallback (and other ownership) notes must reach the terminal too.
         // The ownership pass records every RC insertion as a `RcFallbackNote`

@@ -9677,3 +9677,70 @@ fn local_owned_param_callee_still_reports_the_move() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+/// B-2026-08-01-33 — the diagnostic must tell an IMMUTABLE type's author the
+/// cheap answer, not the heavy one.
+///
+/// `par struct` with immutable fields shares lock-free across tasks with no
+/// annotation, and `karac fix` performs the whole migration as a one-keyword
+/// rename. Telling such an author to "wrap each mut field in `Mutex[T]`" is
+/// advice for a program they did not write — there are no mut fields.
+///
+/// This is not hypothetical: the ledger entry that filed this diagnostic was
+/// itself written believing the cheap answer did not exist, and had to be
+/// corrected in place. The diagnostic is what taught that belief.
+#[test]
+fn immutable_shared_struct_conflict_suggests_the_one_keyword_migration() {
+    let errors = ownership_errors(
+        "shared struct Node { val: i64, kids: Vec[Node] }\n\
+         fn total(n: Node) -> i64 { n.val }\n\
+         fn main() {\n\
+             let root = Node { val: 10, kids: Vec.new() };\n\
+             par {\n\
+                 total(root);\n\
+                 total(root);\n\
+             }\n\
+         }",
+    );
+    let hit = errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected E_CONCURRENT_SHARED_STRUCT");
+    let sugg = hit.suggestion.as_ref().expect("suggestion must be present");
+    assert!(
+        sugg.contains("no `mut` fields") && sugg.contains("par struct Node"),
+        "an immutable type should be told the rename is sufficient; got: {sugg}"
+    );
+    assert!(
+        !sugg.contains("wrap each bare `mut` field"),
+        "an immutable type has no mut fields to wrap — that advice is for a \
+         different program; got: {sugg}"
+    );
+}
+
+/// The complement: a type WITH a `mut` field genuinely does need the
+/// structural migration, so it must keep getting it. A fix that gave every
+/// type the one-keyword advice would be actively wrong here.
+#[test]
+fn mut_bearing_shared_struct_conflict_keeps_the_full_migration_advice() {
+    let errors = ownership_errors(
+        "shared struct Node { val: i64, mut kids: Vec[Node] }\n\
+         fn total(n: Node) -> i64 { n.val }\n\
+         fn main() {\n\
+             let root = Node { val: 10, kids: Vec.new() };\n\
+             par {\n\
+                 total(root);\n\
+                 total(root);\n\
+             }\n\
+         }",
+    );
+    let hit = errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected E_CONCURRENT_SHARED_STRUCT");
+    let sugg = hit.suggestion.as_ref().expect("suggestion must be present");
+    assert!(
+        sugg.contains("wrap each bare `mut` field"),
+        "a mut-bearing type still needs the structural migration; got: {sugg}"
+    );
+}
