@@ -35626,6 +35626,102 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-11 leg (b) — a fresh-temp `Result` arm that BINDS a struct
+    /// payload without consuming it owns that payload exactly once.
+    ///
+    /// The arm's wrapper skip in `compile_match` comes from B-2026-07-12-2 gap
+    /// 2 and rests on "a struct-wrapper binding registers no cleanup of its
+    /// own", so a borrow-only read needs the source's inline-payload drop left
+    /// armed or the buffer leaks. B-2026-07-10-3 later falsified that premise
+    /// by tracking an inline `Option`/`Result` struct payload so its inner
+    /// `String`/`Vec` fields DO get freed — two owners, one buffer, `free():
+    /// double free detected`.
+    ///
+    /// The last three shapes are the immunities, and the CONSUME one is the
+    /// blast-radius guard: it is gap 2's own recover-CONSUME case, where the
+    /// source must still suppress. Under LSan they also catch the opposite
+    /// failure — suppressing the source with no second owner leaks instead.
+    ///
+    /// Two details fight the OPTIMIZER rather than the compiler, and dropping
+    /// either makes this vacuous at `-O2`. The seed is `env.args().len()`, not
+    /// a literal: a constant-seeded loop const-folds to its final total, and
+    /// the whole 1200-payload body then allocates NOTHING (measured: 1 alloc).
+    /// And each arm reads its buffer's BYTES via `contains`, because a payload
+    /// touched only through `.len()` is a provably dead allocation that LLVM
+    /// deletes outright — the `.len()`-only draft of this fixture still ran
+    /// clean against the unfixed compiler. With both, it allocates ~3.2k
+    /// buffers and aborts without the fix.
+    #[test]
+    fn asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once() {
+        assert_clean_asan_run(
+            r#"
+struct One { msg: String }
+struct Two { code: i64, msg: String }
+fn s_of(tag: String, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(tag);
+    s.push_str(f"-payload-{i}");
+    return s;
+}
+fn digits(i: i64) -> String {
+    let mut d: String = String.new();
+    d.push_str(f"{i}");
+    return d;
+}
+fn g1(i: i64) -> Result[i64, One] { return Result.Err(One { msg: s_of("one", i) }); }
+fn g2(i: i64) -> Result[i64, Two] { return Result.Err(Two { code: i, msg: s_of("two", i) }); }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut n = 0i64;
+    let mut i = base;
+    while i < base + 200i64 {
+        // Bound and never read.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { n = n + 1i64; }
+        }
+        // Bound and READ — borrow-only, which is what the skip keyed on.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len(); } }
+        }
+        // Two-field payload, still inside Result's 5-word inline area.
+        match g2(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len() + e.code; } }
+        }
+        // IMMUNITY: a wildcard binds nothing, so nothing ever competed.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(_) => { n = n + 2i64; }
+        }
+        // IMMUNITY: a named scrutinee takes the ordinary binding path.
+        let r: Result[i64, One] = g1(i);
+        match r {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len(); } }
+        }
+        // IMMUNITY / blast radius: gap 2's recover-CONSUME — the arm moves the
+        // field out, and the source must still suppress.
+        match g1(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { let m: String = e.msg; if m.contains(digits(i)) { n = n + m.len(); } }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // base is 1 (argv is the binary alone), so i runs 1..=200. Per
+            // iteration: 1 + 2 for the two scalar arms, four buffer reads of
+            // 12+digits(i) each, plus `code` = i from the two-field arm — that
+            // is 51 + 4*digits(i) + i. Summed over 1..=200: 10200 + 1968 +
+            // 20100 = 32268.
+            &["32268"],
+            "freshtemp_result_arm_binding_a_struct_payload_owns_it_once",
+        );
+    }
+
     /// B-2026-08-04-6 — a FRESH-TEMP boxed payload destructured by a PARTIAL
     /// struct pattern: the fields the pattern binds are freed by their
     /// bindings, the fields it leaves out are freed by the box.

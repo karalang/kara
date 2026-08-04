@@ -29459,6 +29459,86 @@ fn test_result_struct_payload_field_freed_and_single_body() {
 }
 
 #[test]
+fn test_freshtemp_result_arm_binding_a_struct_payload_owns_it_once() {
+    // B-2026-08-04-11 leg (b) — the ORACLE half. The interpreter has always
+    // given the arm's struct-payload binding sole ownership of the buffer;
+    // codegen ALSO left the source's inline-payload drop armed whenever the
+    // arm merely bound or read the payload instead of consuming it, so the
+    // overlay free and the binding's `__karac_drop_<S>` both fired and the
+    // program aborted with `free(): double free detected`.
+    //
+    // Keep in step with the codegen twin
+    // `e2e_freshtemp_result_arm_binding_a_struct_payload_owns_it_once`. The
+    // one deliberate difference is the seed: the codegen fixture takes it from
+    // `env.args().len()` so the payloads survive `-O2` const-folding, and 1 is
+    // what that yields there (the harness execs with no extra argv). Here it
+    // is spelled as the literal 1 — there is no optimizer to defeat, and
+    // `env.args()` inside an in-process interpreter test would report the TEST
+    // binary's argv, which varies with the filter. Every printed value is
+    // therefore byte-identical to the codegen twin's.
+    assert_eq!(
+        run("struct One { msg: String }\n\
+             struct Two { code: i64, msg: String }\n\
+             fn s_of(tag: String, i: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(tag);\n\
+             s.push_str(f\"-payload-{i}\");\n\
+             return s;\n\
+             }\n\
+             fn digits(i: i64) -> String {\n\
+             let mut d: String = String.new();\n\
+             d.push_str(f\"{i}\");\n\
+             return d;\n\
+             }\n\
+             fn g1(i: i64) -> Result[i64, One] { return Result.Err(One { msg: s_of(\"one\", i) }); }\n\
+             fn g2(i: i64) -> Result[i64, Two] { return Result.Err(Two { code: i, msg: s_of(\"two\", i) }); }\n\
+             fn main() {\n\
+             let n: i64 = 1i64;\n\
+             match g1(n) {\n\
+             Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             Result.Err(e) => { println(\"a:unused\"); }\n\
+             }\n\
+             match g1(n + 10i64) {\n\
+             Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             Result.Err(e) => {\n\
+             if e.msg.contains(digits(n + 10i64)) { println(f\"b:{e.msg.len()}\"); }\n\
+             else { println(\"b:BAD\"); }\n\
+             }\n\
+             }\n\
+             match g2(n + 100i64) {\n\
+             Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             Result.Err(e) => {\n\
+             if e.msg.contains(digits(n + 100i64)) { println(f\"c:{e.code}:{e.msg.len()}\"); }\n\
+             else { println(\"c:BAD\"); }\n\
+             }\n\
+             }\n\
+             match g1(n + 1000i64) {\n\
+             Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             Result.Err(_) => { println(\"d:wild\"); }\n\
+             }\n\
+             let r: Result[i64, One] = g1(n + 10000i64);\n\
+             match r {\n\
+             Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             Result.Err(e) => {\n\
+             if e.msg.contains(digits(n + 10000i64)) { println(f\"e:{e.msg.len()}\"); }\n\
+             else { println(\"e:BAD\"); }\n\
+             }\n\
+             }\n\
+             match g1(n + 100000i64) {\n\
+             Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             Result.Err(e) => {\n\
+             let m: String = e.msg;\n\
+             if m.contains(digits(n + 100000i64)) { println(f\"f:{m.len()}\"); }\n\
+             else { println(\"f:BAD\"); }\n\
+             }\n\
+             }\n\
+             println(\"end\");\n\
+             }\n"),
+        "a:unused\nb:14\nc:101:15\nd:wild\ne:17\nf:18\nend\n"
+    );
+}
+
+#[test]
 fn test_question_reconstructs_wide_and_boxed_ok_payloads() {
     // B-2026-08-04-9 — the ORACLE half. The interpreter has always unwrapped
     // `?` at the payload's real width; codegen rebuilt from at most three

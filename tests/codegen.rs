@@ -5933,6 +5933,111 @@ fn main() {
         assert_eq!(out, "a:wide-err-3:1\nb:mid-err-4:4\nc:mid-err-5:5\n");
     }
 
+    /// B-2026-08-04-11 leg (b) — a fresh-temp `Result` arm that BINDS a struct
+    /// payload without consuming it must not leave the source's payload drop
+    /// armed: the binding already owns the buffer.
+    ///
+    /// `match g(i) { Err(e) => println("bound") }` ABORTED with `free(): double
+    /// free detected`. The arm's wrapper skip in `compile_match` dates from
+    /// B-2026-07-12-2 gap 2 and rests on "a struct-wrapper binding registers no
+    /// cleanup of its own", so a borrow-only read needs the source to stay
+    /// armed or the payload leaks. B-2026-07-10-3 then falsified that premise
+    /// by tracking an inline `Option`/`Result` struct payload so its inner
+    /// `String`/`Vec` fields DO get freed — leaving two owners of one buffer.
+    ///
+    /// Three things about this fixture are load-bearing against the OPTIMIZER
+    /// rather than against the compiler, and dropping any of them turns the
+    /// whole test vacuous at the default `-O2` — which is precisely how this
+    /// defect stayed hidden. An f-string-built payload field of a call whose
+    /// argument is a constant folds away, so nothing is ever allocated and the
+    /// second free has nothing to hit; leg (a)'s `d:unused` arm is exactly that
+    /// shape and passed throughout. And a payload read only through `.len()`
+    /// is a provably DEAD allocation, so LLVM deletes the malloc outright: the
+    /// first draft of this test, `.len()`-only with a `String.new()`+`push_str`
+    /// payload, still passed against the unfixed compiler.
+    ///
+    /// So: the payload is built with `String.new()` + `push_str`, the seed is
+    /// `env.args().len()` rather than a literal (the harness execs with no
+    /// extra argv, so it is a stable 1 while staying opaque to the optimizer),
+    /// and every arm reads its buffer's BYTES via `contains` against a
+    /// runtime-derived needle before reporting the length. Each length is
+    /// distinct from every other arm's, and a corrupted buffer prints `BAD`,
+    /// so an emptied or cross-wired payload fails the assert rather than
+    /// reading as a pass. `run_program` builds at `-O2`, and the fixture aborts
+    /// against the unfixed compiler there.
+    ///
+    /// Arms (a)-(c) are the defect: bound-and-unused, bound-and-read, and the
+    /// same through a two-field payload. Arms (d)-(f) are the immunities that
+    /// localize it and must stay clean — a wildcard binds nothing, a named
+    /// scrutinee takes the ordinary binding path, and a consuming arm moves the
+    /// field out. (f) is also the guard on the fix's blast radius: it is the
+    /// gap-2 recover-CONSUME shape, and the source must still suppress there.
+    #[test]
+    fn e2e_freshtemp_result_arm_binding_a_struct_payload_owns_it_once() {
+        let Some(out) = run_program(
+            "struct One { msg: String }\n\
+             struct Two { code: i64, msg: String }\n\
+             fn s_of(tag: String, i: i64) -> String {\n\
+             \x20   let mut s: String = String.new();\n\
+             \x20   s.push_str(tag);\n\
+             \x20   s.push_str(f\"-payload-{i}\");\n\
+             \x20   return s;\n\
+             }\n\
+             fn digits(i: i64) -> String {\n\
+             \x20   let mut d: String = String.new();\n\
+             \x20   d.push_str(f\"{i}\");\n\
+             \x20   return d;\n\
+             }\n\
+             fn g1(i: i64) -> Result[i64, One] { return Result.Err(One { msg: s_of(\"one\", i) }); }\n\
+             fn g2(i: i64) -> Result[i64, Two] { return Result.Err(Two { code: i, msg: s_of(\"two\", i) }); }\n\
+             fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   match g1(n) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => { println(\"a:unused\"); }\n\
+             \x20   }\n\
+             \x20   match g1(n + 10i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => {\n\
+             \x20           if e.msg.contains(digits(n + 10i64)) { println(f\"b:{e.msg.len()}\"); }\n\
+             \x20           else { println(\"b:BAD\"); }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   match g2(n + 100i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => {\n\
+             \x20           if e.msg.contains(digits(n + 100i64)) { println(f\"c:{e.code}:{e.msg.len()}\"); }\n\
+             \x20           else { println(\"c:BAD\"); }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   match g1(n + 1000i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(_) => { println(\"d:wild\"); }\n\
+             \x20   }\n\
+             \x20   let r: Result[i64, One] = g1(n + 10000i64);\n\
+             \x20   match r {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => {\n\
+             \x20           if e.msg.contains(digits(n + 10000i64)) { println(f\"e:{e.msg.len()}\"); }\n\
+             \x20           else { println(\"e:BAD\"); }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   match g1(n + 100000i64) {\n\
+             \x20       Result.Ok(v) => { println(f\"ok{v}\"); }\n\
+             \x20       Result.Err(e) => {\n\
+             \x20           let m: String = e.msg;\n\
+             \x20           if m.contains(digits(n + 100000i64)) { println(f\"f:{m.len()}\"); }\n\
+             \x20           else { println(\"f:BAD\"); }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a:unused\nb:14\nc:101:15\nd:wild\ne:17\nf:18\nend\n");
+    }
+
     /// B-2026-08-04-11 leg (a) — an f-string INTERPOLATION of a heap field
     /// consumes it, exactly as passing that field by value to a free fn does.
     ///

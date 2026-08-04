@@ -594,7 +594,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                 &arm.body,
                                 arm.guard.as_ref(),
                             );
-                        if !(borrow_only && wrapper) || heap_field_moved_to_free_fn {
+                        // B-2026-08-04-11 leg (b): the wrapper skip's premise —
+                        // "a struct-wrapper binding registers no cleanup of its
+                        // own" — was falsified by B-2026-07-10-3, which started
+                        // tracking an INLINE struct payload so its inner heap
+                        // fields get freed. When the bind site took ownership
+                        // the source must ALWAYS suppress, borrow-only or not,
+                        // else the overlay free and the binding's
+                        // `__karac_drop_<S>` both fire on the same buffer.
+                        let binding_owns_payload =
+                            self.inline_result_payload_binding_registers_own_drop(&arm.pattern);
+                        if !(borrow_only && wrapper)
+                            || heap_field_moved_to_free_fn
+                            || binding_owns_payload
+                        {
                             self.suppress_inline_result_payload_cleanup_at(slot, &arm.pattern);
                         }
                     }
@@ -7291,6 +7304,61 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             false
+        })
+    }
+
+    /// Does the `Ok(_)`/`Err(_)` struct-wrapper payload binding of a fresh-temp
+    /// inline `Result` arm register a DROP OF ITS OWN?
+    ///
+    /// B-2026-08-04-11 leg (b). The wrapper skip in `compile_match` rests on the
+    /// premise recorded in
+    /// [`Self::inline_result_payload_binding_is_struct_wrapper`]'s doc — "a
+    /// struct-wrapper binding registers no cleanup of its own" — so on a
+    /// borrow-only read the source must stay armed or the payload leaks. That
+    /// premise was true when B-2026-07-12-2 gap 2 wrote it, and B-2026-07-10-3
+    /// then falsified it: `bind_pattern_values` now tracks an INLINE
+    /// `Option`/`Result` struct payload (`is_inline_optres_struct_payload`)
+    /// precisely so its inner `String`/`Vec` fields get freed. Both owners then
+    /// free the same buffer — the source's `FreeInlineResultPayload` overlay in
+    /// the arm's own block AND the binding's `__karac_drop_<S>` — which aborts
+    /// with `free(): double free detected`.
+    ///
+    /// This mirrors that tracking predicate exactly so the gate can suppress the
+    /// source whenever the binding took ownership, and only then: the skip still
+    /// applies to a payload the bind site declines to track (not copy-supported,
+    /// wider than the inline area and therefore owned by the box drop, or a
+    /// `shared enum` view), which is the recover-READ leak the skip exists for.
+    pub(super) fn inline_result_payload_binding_registers_own_drop(
+        &self,
+        pattern: &Pattern,
+    ) -> bool {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return false;
+        };
+        if self.pattern_binding_scrutinee_is_shared_enum {
+            return false;
+        }
+        patterns.iter().any(|p| {
+            if !matches!(&p.kind, PatternKind::Binding(_)) {
+                return false;
+            }
+            let key = (p.span.offset, p.span.length);
+            let Some(tn) = self.pattern_binding_types.get(&key) else {
+                return false;
+            };
+            let tn = tn.as_str();
+            if !self.struct_types.contains_key(tn) || self.shared_types.contains_key(tn) {
+                return false;
+            }
+            // The by-name pair the bind site tracks unconditionally.
+            if matches!(tn, "Response" | "HttpError") {
+                return true;
+            }
+            self.aggregate_param_copy_supported_struct(tn, &mut Vec::new())
+                && self.struct_types.get(tn).is_some_and(|st| {
+                    Self::llvm_type_word_count((*st).into())
+                        <= self.pattern_binding_scrutinee_optres_area
+                })
         })
     }
 
