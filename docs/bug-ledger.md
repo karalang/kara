@@ -94,10 +94,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 212 | 0 |
 | leak | 130 | 0 |
-| double-free | 93 | 0 |
+| double-free | 94 | 0 |
 | codegen-gap | 88 | 0 |
+| run-vs-build | 76 | 0 |
 | missing-feature | 75 | 1 |
-| run-vs-build | 75 | 0 |
 | false-positive | 56 | 1 |
 | perf | 44 | 1 |
 | crash | 39 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 656 | 1 |
+| codegen | 658 | 1 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 2 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **909 surfaced · 4 open · 897 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **911 surfaced · 4 open · 899 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **909 surfaced 
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
 | B-2026-08-04-18 | 2026-08-04 | ownership | low | Moving a heap value OUT of an aggregate element and then assigning it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) warns `value 't' moved here, used again here` -- the reassignment re-initializes the element, so the later use is sound; the partial move is tracked against the whole aggregate | src/ownership.rs, docs/bug-ledger.jsonl B-2026-08-04-16 / B-2026-08-02-10 |
 
-### Fixed (897)
+### Fixed (899)
 
-<details><summary>897 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>899 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1060,6 +1060,8 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-14 | interp | medium | The interpreter silently DROPPED an out-of-range index-assign: `v[100] = 7` on a 2-element Vec produced no error, no growth, and no store — while AOT… | a4ca760 |
 | B-2026-08-04-15 | autopar+codegen | high | AUTO-PAR SILENTLY DROPS STORES through a tuple-element receiver: `t.0.push(x)` recorded NO write in the dependency walk, so two pushes to the same Ve… | 567d5aa |
 | B-2026-08-04-16 | codegen+ownership | high | Moving a Vec OUT of a tuple element, mutating it, and moving it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) aborts with `free(): double free detect… | e986284 (src/codegen/stmts.rs tuple-assign arm; src/codegen/expr_ops.rs tuple_index_elem_type_expr). Pins codegen.rs::e2e_named_source_moved_into_a_tuple_element_is_disarmed, memory_sanitizer.rs::asan_named_source_moved_into_a_tuple_element_is_disarmed (floored at 500 allocations against ~1.8k), interpreter.rs::test_named_source_moved_into_a_tuple_element_is_disarmed. Both codegen tests are stash-proven RED against the unfixed compiler (the E2E aborts to empty output, the ASAN case reports a memory error); the interpreter twin passes both ways, as the oracle should. Verified across 16 probe shapes -- both element positions, Vec / String / Vec[String] elements, both-Vec tuples, fresh-temp vs named sources, and the struct-field control -- all clean on both backends with matching alloc/free counts. cargo test --features llvm: 12974 passed, 0 failed. |
+| B-2026-08-04-19 | codegen | high | Double-free (masked at -O2, hard at -O0/JIT): an owned struct/enum binding moved by an ASSIGNMENT — `o.h = h` into a heap-owning user-struct field, o… | 06bf3145 |
+| B-2026-08-04-20 | codegen | medium | The `KARAC_TEST_JIT=1` codegen parity leg did not set KARAC_PROGRAM_ARGS, so `env.args().len()` returned 2 (the `karac_jit_runner` argv `[runner, <ir… | 39b0c294 |
 
 </details>
 
