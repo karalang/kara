@@ -113,6 +113,14 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              or globally via `[lints].allow_unstable_api = true` in `kara.toml`.",
     },
     LintInfo {
+        name: "map_value_clone_reinsert",
+        default_level: LintLevel::Warn,
+        description: "A map's container VALUE is extended by clone-modify-reinsert, which \
+             copies the whole value on every append and makes building the map O(k\u{b2}) in \
+             occurrences per key. `entry(k).or_insert(..)` returns a `mut ref` into the \
+             map's own slot and appends in place. B-2026-08-03-9.",
+    },
+    LintInfo {
         name: "rc_fallback",
         default_level: LintLevel::Warn,
         description: "An owned binding fell back to RC because a closure or borrow conflict made stack ownership infeasible.",

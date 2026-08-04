@@ -1086,6 +1086,23 @@ impl Pipeline {
             self.lint_overrides.clone(),
             profile_config,
         ));
+        // B-2026-08-03-9 — `map_value_clone_reinsert`. Emitted into
+        // `typed.warnings` rather than through a bespoke lint channel so it
+        // rides plumbing that already exists: the JSON collector renders
+        // `warnings` (with `lint_name` and `fix_it`), and `cmd_fix` applies
+        // their fix-its. The lint needs the original source text, since both
+        // its same-expression checks and its rewrite reproduce the author's
+        // own spelling by span.
+        let source = read_source(&self.filename);
+        if let Some(typed) = self.typed.as_mut() {
+            let extra = crate::map_entry_lint::check_map_value_clone_reinsert(
+                &self.parsed.program,
+                typed,
+                &source,
+                &self.lint_overrides,
+            );
+            typed.warnings.extend(extra);
+        }
     }
 
     /// Apply the operator-lowering pass. Runs after typecheck (uses inferred
@@ -11029,6 +11046,20 @@ fn cmd_fix(filename: &str, dry_run: bool) {
             // `#[non_exhaustive]` cross-package wildcard) use FixIt{span,
             // replacement}; convert to the TextEdit offset/length form.
             edits.extend(t.errors.iter().filter_map(|e| {
+                e.fix_it.as_ref().map(|f| crate::resolver::TextEdit {
+                    offset: f.span.offset,
+                    length: f.span.length,
+                    replacement: f.replacement.clone(),
+                })
+            }));
+            // WARNINGS carry fix-its too, and until B-2026-08-03-9's
+            // `map_value_clone_reinsert` there was no producer, so this channel
+            // went unread — a warning could advertise a machine-applicable fix
+            // in `--output=json` that `karac fix` then declined to apply. A
+            // warning's fix is by definition optional-but-safe (the code
+            // already compiles and is correct), which is exactly what `fix` is
+            // for.
+            edits.extend(t.warnings.iter().filter_map(|e| {
                 e.fix_it.as_ref().map(|f| crate::resolver::TextEdit {
                     offset: f.span.offset,
                     length: f.span.length,

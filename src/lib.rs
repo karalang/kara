@@ -81,6 +81,7 @@ pub mod pubgrub_solve;
 // modules for the wasm32 surface.
 pub mod cross_task_safe;
 pub mod deque_head;
+pub mod map_entry_lint;
 pub mod module;
 pub mod monomorphization;
 pub mod must_use_lint;
