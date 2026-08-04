@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 39 | 0 |
 | soundness | 36 | 0 |
 | diagnostics | 35 | 0 |
-| other | 14 | 0 |
+| other | 14 | 1 |
 | use-after-free | 12 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 116 | 0 |
 | ownership | 38 | 2 |
 | autopar | 32 | 1 |
-| other | 24 | 0 |
+| other | 24 | 1 |
 | cli | 24 | 0 |
 | runtime | 19 | 0 |
 | resolver | 18 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **908 surfaced · 3 open · 897 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **908 surfaced · 4 open · 896 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-04-8 | 2026-08-04 | codegen | medium | Bounds-check elimination fails for the CONVERGING two-pointer loop `while lo <= hi { v[base+lo] ... v[base+hi] }` when the index carries a base offset — the flat-2D / row-major scan shape. Isolated on kata #246 (strobogrammatic two-pointer over a flat Vec[u8] corpus of N*LEN bytes): kara keeps 2 per-iteration checks that clang -O3 does not, costing 1.28x on the kata and 1.93x on a work-identical minimal probe. Neither ingredient alone breaks BCE — base+ascending, base+descending, converging-without-base, and even both-ends-from-ONE-ascending-IV all elide cleanly; only the combination of a base offset with a converging two-IV guard defeats it. | — |
 | B-2026-08-04-16 | 2026-08-04 | codegen+ownership | high | Moving a Vec OUT of a tuple element, mutating it, and moving it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) aborts with `free(): double free detected in tcache 2` under both AOT and the JIT; the interpreter runs it. The struct-field analogue (`let mut e = h.items; ...; h.items = e;`) is correct, so this is again the TUPLE spelling of a walk that handles the field spelling. Independent of auto-par (`KARAC_NO_AUTOPAR=1` reproduces it) and independent of B-2026-08-04-15, which is fixed | — |
+| B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
 
-### Fixed (897)
+### Fixed (896)
 
-<details><summary>897 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>896 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1058,7 +1059,6 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-13 | codegen | high | The descending-loop bounds-check skip (B-2026-07-17-1) reads the facts it rests on with `stmt_writes_ident`, which sees only TOP-LEVEL assignment tar… | 484c2c9 |
 | B-2026-08-04-14 | interp | medium | The interpreter silently DROPPED an out-of-range index-assign: `v[100] = 7` on a 2-element Vec produced no error, no growth, and no store — while AOT… | a4ca760 |
 | B-2026-08-04-15 | autopar+codegen | high | AUTO-PAR SILENTLY DROPS STORES through a tuple-element receiver: `t.0.push(x)` recorded NO write in the dependency walk, so two pushes to the same Ve… | 567d5aa |
-| B-2026-08-04-17 | other | low | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM d… | 49e126a (tests/memory_sanitizer.rs). Adds assert_clean_asan_run_min_allocs + asan_malloc_calls; run_under_asan_opts now returns stderr and takes a count_allocs flag, with both existing wrappers dropping the extra field so no caller changed. Adopted by asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once at a floor of 1000 against ~3.2k intended allocations. cargo test --features llvm --test memory_sanitizer: 928 passed, 0 failed. |
 
 </details>
 
