@@ -110,6 +110,51 @@ Each stage is independently useful and independently testable.
    site. #133 needs this too (`Node.neighbors` is `mut`), but it is separable
    from stage 2 and much smaller.
 
+## Stage 1 build log, and a correction to the staging above
+
+**Landed so far (inert):** `TypeKind::Frozen` with all 16 exhaustive-match sites
+handled; `frozen T` parsed as a *contextual* keyword (so no program using the
+name breaks); accepted only in a parameter's top-level type and rejected
+elsewhere; verified that `E_CONCURRENT_SHARED_STRUCT` still fires on a
+multi-branch capture of a `frozen` binding.
+
+**Two things learned by building it, both of which change what stage 2 should
+do.**
+
+**1. Per-site transparency is the wrong shape; normalize once.** Teaching
+downstream phases to see through `Frozen` was tried first and found three
+separate rounds of `TypeKind::Ref | MutRef` unwrap sites — `call_dispatch`,
+`functions`, `mono`, then the param type-name registry — with no reason to think
+the next round was the last. Each is a place a later phase could disagree about
+what `frozen` means. Stage 1's contract is that `frozen T` **is** `T`, and the
+honest implementation of an identity is one erasure at the point of
+construction, which cannot disagree with itself.
+
+**2. THE ESCAPE CHECKER CANNOT BE BUILT ON WHAT STAGE 1 SHIPPED, and the
+staging above reads as though it can.** Stage 1 erases the mode at parse time,
+so by the time any checking phase runs there is nothing left to check.
+Un-erasing is a *prerequisite* for the escape checker, not a follow-on. The
+architecture that resolves it:
+
+* the parser **retains** `Frozen`;
+* resolver / typechecker / ownership **see** it — they must, in order to check
+  it;
+* a single normalization pass strips it **after** ownership and **before**
+  codegen.
+
+That last step is what keeps it tractable: codegen never learns the mode exists,
+so none of the unwrap sites from finding (1) need to change, and it matches the
+codegen-containment invariant in CLAUDE.md (analysis phases talk to codegen
+through plain-data hints, not new types). Because stage 1 restricts `frozen` to
+parameter positions, the strip pass only walks function and impl-method params
+— bounded, not a full-program type walk. Widening the accepted positions in
+stage 2 widens that pass in step, which is a reason to keep the restriction
+until each position has a checker behind it.
+
+So the revised stage 1 remainder is: **un-erase + strip pass → escape checker →
+freeze-site immutability check → par admission**, in that order, with admission
+still last for the reason already given.
+
 ## Risks, stated plainly
 
 - **Non-counting handles are a new unsafety surface.** If escape checking has a
