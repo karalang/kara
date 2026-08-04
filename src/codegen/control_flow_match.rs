@@ -310,6 +310,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(found) => Some(found),
                 None => self.freshtemp_payload_bodies_action(scrutinee, freshtemp_boxed_slot),
             };
+        // B-2026-08-04-2 — the scrutinee's slot, tracked separately from the
+        // bodies action above because THIS class is pure memory: a boxed
+        // payload's heap fields double-free when the binding moves whether or
+        // not the payload declares `impl Drop`, so the gate must not require a
+        // Drop-derived walker to exist.
+        let saved_optres_slot = self.pattern_binding_scrutinee_optres_slot;
+        self.pattern_binding_scrutinee_optres_slot =
+            self.scrutinee_optres_slot(scrutinee, freshtemp_boxed_slot);
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -709,6 +717,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // tail-return is the canonical Option-unwrap shape
                 // `match opt { Some(v) => v, None => default() }`.
                 self.suppress_source_vec_cleanup_for_arg(&arm.body);
+                // B-2026-08-04-2 — the arm binding itself escaping as the
+                // match's VALUE (`let r2 = match o { Some(r) => r, .. }`) is a
+                // move like any other, but this tail position is not on
+                // `suppress_inline_option_result_binding_move`'s roster, so the
+                // payload-view neutralizer needs its own call here.
+                self.suppress_boxed_payload_view_move(&arm.body);
+                // …and the payload's BODIES walk with it. Every other move
+                // position reaches `disarm_container_bodies_move_sources` (let
+                // RHS, aggregate literal) or `disarm_container_bodies_for_arg`
+                // (container push); the match tail reaches neither, so without
+                // this the destination binding's body and the source's
+                // re-homed walk both fired — two bodies for one value, the
+                // second over the moved-from slot.
+                if let ExprKind::Identifier(nm) = &arm.body.kind {
+                    let nm = nm.clone();
+                    self.suppress_container_elem_bodies_for_var(&nm);
+                }
                 // Move-aware, Map/Set variant: `match opt { Some(m) => m }`
                 // returns the bound Map/Set by identity into the match result
                 // (the caller now owns the handle). Retract the binding's
@@ -808,6 +833,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
         self.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
         self.pattern_binding_scrutinee_payload_bodies_src = saved_bodies_src;
+        self.pattern_binding_scrutinee_optres_slot = saved_optres_slot;
         self.match_scrutinee_enum_hint = saved_scrut_enum_hint;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of
@@ -6028,6 +6054,58 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.suppress_container_elem_bodies_for_var(&name);
+    }
+
+    /// B-2026-08-04-2 — a whole-payload match binding taken out of a
+    /// heap-BOXED `Option`/`Result` is MOVING on: hand the box's interior to
+    /// the destination by clearing the source `BoxedEnumDrop`'s
+    /// `inner_drop_fn`, leaving it a BOX-ONLY free.
+    ///
+    /// The binding is an unboxed COPY of the box's `{ptr,len,cap}` words, so
+    /// after the move the destination and the box both believe they own those
+    /// buffers and both free them — `let w = W { r: r }`, `let x = r`,
+    /// `v.push(r)`, and an arm returning the binding as the match's value all
+    /// abort under glibc. Dropping the inner walk makes the destination the
+    /// sole owner while the box allocation itself is still reclaimed.
+    ///
+    /// Retracting the WALK rather than cap-zeroing the box's words is
+    /// load-bearing, and the cap-zero was tried first: the box's words are also
+    /// what the re-homed payload-BODIES walk reads (B-2026-08-02-25 /
+    /// B-2026-08-04-1 point it at the source slot precisely so a mutating Drop
+    /// body lands on the storage the later free sees). Zeroing them made the
+    /// body print an empty string — `zero_struct_move_caps` clears `len`
+    /// alongside `cap` for this shape — turning a double-free into a silent
+    /// wrong-value. Clearing the action's fn pointer changes no data, so the
+    /// body still reads the live payload.
+    ///
+    /// Static, like every compile-time retraction here: a move inside a
+    /// conditional disarms on all paths, which can only under-free — the safe
+    /// side. A no-op for any name not recorded as a boxed-payload view.
+    pub(super) fn suppress_boxed_payload_view_move(&mut self, value: &Expr) {
+        let ExprKind::Identifier(name) = &value.kind else {
+            return;
+        };
+        let Some(slot) = self
+            .boxed_optres_payload_view_vars
+            .get(name.as_str())
+            .copied()
+        else {
+            return;
+        };
+        for frame in self.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::BoxedEnumDrop {
+                    enum_slot,
+                    inner_drop_fn,
+                    ..
+                } = action
+                {
+                    if *enum_slot == slot {
+                        *inner_drop_fn = None;
+                    }
+                }
+            }
+        }
     }
 
     /// `Option[Map]`/`Option[Set]` sibling of

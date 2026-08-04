@@ -34,6 +34,7 @@ pub(super) type ScrutineeShapeFlags<'ctx> = (
     bool,
     bool,
     Option<(PointerValue<'ctx>, inkwell::values::FunctionValue<'ctx>)>,
+    Option<PointerValue<'ctx>>,
 );
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -570,6 +571,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.pattern_binding_scrutinee_is_fresh_owning_temp,
             self.pattern_binding_scrutinee_is_owned_param,
             self.pattern_binding_scrutinee_payload_bodies_src,
+            self.pattern_binding_scrutinee_optres_slot,
         );
         self.pattern_binding_scrutinee_is_fresh_owning_temp =
             self.scrutinee_expr_is_owning_fresh_temp(scrutinee);
@@ -587,6 +589,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(found) => Some(found),
                 None => self.freshtemp_payload_bodies_action(scrutinee, freshtemp_boxed_slot),
             };
+        // B-2026-08-04-2 — see `compile_match`'s twin.
+        self.pattern_binding_scrutinee_optres_slot =
+            self.scrutinee_optres_slot(scrutinee, freshtemp_boxed_slot);
         let en = self.variant_pattern_enum_name(pattern);
         self.pattern_binding_scrutinee_is_option_result =
             matches!(en.as_deref(), Some("Option") | Some("Result"));
@@ -609,6 +614,31 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_scrutinee_is_fresh_owning_temp = saved.3;
         self.pattern_binding_scrutinee_is_owned_param = saved.4;
         self.pattern_binding_scrutinee_payload_bodies_src = saved.5;
+        self.pattern_binding_scrutinee_optres_slot = saved.6;
+    }
+
+    /// B-2026-08-04-2 — the scrutinee's `Option`/`Result` slot: a named
+    /// binding's own slot, else the staged fresh-temp alloca. Unlike
+    /// `scrutinee_armed_payload_bodies_action` this does NOT require the
+    /// payload to run a user Drop — the double-free it guards is pure memory,
+    /// so a payload with a plain `String` field and no `impl Drop` is in scope
+    /// too. Restricted to the scrutinee spellings whose slot is a stable
+    /// alloca; a borrow-returning call has no owned slot to neutralize and is
+    /// filtered at the bind site by `pattern_binding_is_borrow`.
+    pub(super) fn scrutinee_optres_slot(
+        &self,
+        e: &Expr,
+        freshtemp_boxed_slot: Option<PointerValue<'ctx>>,
+    ) -> Option<PointerValue<'ctx>> {
+        let name = match &e.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return freshtemp_boxed_slot,
+        };
+        self.variables
+            .get(name)
+            .map(|s| s.ptr)
+            .or(freshtemp_boxed_slot)
     }
 
     /// B-2026-08-02-25 (match-arm leg) — the armed `__karac_dropelems_opt_*` /

@@ -2431,6 +2431,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // into this shared-struct field — see the non-shared peer
                     // below for the rationale.
                     self.suppress_inline_option_result_binding_move(&field_init.value);
+                    // B-2026-08-04-2 — see the shared-struct branch above.
+                    self.suppress_boxed_payload_view_move(&field_init.value);
+                    // B-2026-08-04-2 — a boxed payload VIEW moved into this
+                    // field: the field now owns the box's interior, so the
+                    // box's inner walk must release it.
+                    self.suppress_boxed_payload_view_move(&field_init.value);
                     // Map/Set sibling of the Vec suppression: a `Map`/`Set`
                     // local moved into this field hands the handle to the
                     // struct, so drop the source's scope-exit `FreeMapHandle`
@@ -2592,6 +2598,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // boxed `Block` at the builder's scope exit while the returned
                 // node still references it → UAF (selfhost slice 3c-iv).
                 self.suppress_inline_option_result_binding_move(&field_init.value);
+                // B-2026-08-04-2 — see the shared-struct branch above.
+                self.suppress_boxed_payload_view_move(&field_init.value);
                 // Map/Set sibling of the Vec suppression (see the shared-struct
                 // branch above): a moved-in `Map`/`Set` local's source free is
                 // dropped so the struct's owner is the sole freer.

@@ -5618,6 +5618,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// NAMED in the literal are disarmed — the literal's own value belongs
     /// to the container, whose element walk runs its bodies.
     pub(super) fn disarm_container_bodies_for_arg(&mut self, e: &Expr) {
+        // B-2026-08-04-2 — a boxed `Option`/`Result` payload VIEW pushed into a
+        // container hands the box's interior to the element, so the box's
+        // inner walk has to stop owning it. Dispatched from here because this
+        // is already the container-consuming-arg hook; the memory half and the
+        // bodies half of the same move belong at the same point.
+        self.suppress_boxed_payload_view_move(e);
         match &e.kind {
             ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
             ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),

@@ -80,6 +80,10 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     inline_option_map_payload_vars: bool,
     inline_option_agg_payload_vars: bool,
     boxed_enum_payload_vars: bool,
+    /// B-2026-08-04-2 — the boxed-payload VIEW record, snapshotted with the
+    /// rest of the per-arm var environment so one arm's view cannot leak into
+    /// a sibling arm (or outlive the match) and neutralize the wrong box.
+    boxed_optres_payload_view_vars: Option<inkwell::values::PointerValue<'ctx>>,
     rc_fallback_heap_types: Option<StructType<'ctx>>,
 }
 
@@ -118,6 +122,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inline_option_map_payload_vars: self.inline_option_map_payload_vars.remove(name),
             inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.remove(name),
             boxed_enum_payload_vars: self.boxed_enum_payload_vars.remove(name),
+            boxed_optres_payload_view_vars: self.boxed_optres_payload_view_vars.remove(name),
             rc_fallback_heap_types: self.rc_fallback_heap_types.remove(name),
         }
     }
@@ -212,6 +217,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if snap.inline_option_agg_payload_vars {
             self.inline_option_agg_payload_vars.insert(key.clone());
         }
+        if let Some(v) = snap.boxed_optres_payload_view_vars {
+            self.boxed_optres_payload_view_vars.insert(key.clone(), v);
+        }
         if snap.boxed_enum_payload_vars {
             self.boxed_enum_payload_vars.insert(key.clone());
         }
@@ -291,6 +299,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     inline_option_map_payload_vars: HashSet<String>,
     inline_option_agg_payload_vars: HashSet<String>,
     boxed_enum_payload_vars: HashSet<String>,
+    boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
     rc_fallback_heap_types: HashMap<String, StructType<'ctx>>,
 }
 
@@ -332,6 +341,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inline_option_map_payload_vars: self.inline_option_map_payload_vars.clone(),
             inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.clone(),
             boxed_enum_payload_vars: self.boxed_enum_payload_vars.clone(),
+            boxed_optres_payload_view_vars: self.boxed_optres_payload_view_vars.clone(),
             rc_fallback_heap_types: self.rc_fallback_heap_types.clone(),
         }
     }
@@ -373,6 +383,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.inline_option_map_payload_vars = snap.inline_option_map_payload_vars;
         self.inline_option_agg_payload_vars = snap.inline_option_agg_payload_vars;
         self.boxed_enum_payload_vars = snap.boxed_enum_payload_vars;
+        self.boxed_optres_payload_view_vars = snap.boxed_optres_payload_view_vars;
         self.rc_fallback_heap_types = snap.rc_fallback_heap_types;
     }
 }

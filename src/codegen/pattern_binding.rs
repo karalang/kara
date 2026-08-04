@@ -942,6 +942,38 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && self
                                     .current_variant_payload_bindings
                                     .contains(name.as_str());
+                            // B-2026-08-04-2 — record the binding as a VIEW of
+                            // the box so each MOVE site can neutralize the box's
+                            // inner walk. Deliberately a WIDER gate than the
+                            // bodies registration below: that one needs a
+                            // Drop-derived walker, while this class is pure
+                            // memory — `struct Res { id: i64, name: String }`
+                            // with no `impl Drop` double-frees `name` just the
+                            // same once the binding moves and the destination
+                            // takes ownership. Borrow scrutinees are excluded
+                            // because their box interior ALIASES the container's
+                            // storage (`m.get(k)` hands back a fresh box over the
+                            // bucket's words), so zeroing its caps would strand
+                            // the container's buffers rather than transfer them.
+                            if self.pattern_binding_scrutinee_is_option_result
+                                && !self.pattern_binding_scrutinee_is_shared_enum
+                                && !self.pattern_binding_is_borrow
+                                && self.struct_types.contains_key(tn)
+                                && !self.shared_types.contains_key(tn)
+                                && self.pattern_binding_scrutinee_optres_area > 0
+                                && self.struct_types.get(tn).is_some_and(|st| {
+                                    Self::llvm_type_word_count((*st).into())
+                                        > self.pattern_binding_scrutinee_optres_area
+                                })
+                                && self
+                                    .current_variant_payload_bindings
+                                    .contains(name.as_str())
+                            {
+                                if let Some(slot) = self.pattern_binding_scrutinee_optres_slot {
+                                    self.boxed_optres_payload_view_vars
+                                        .insert(name.clone(), slot);
+                                }
+                            }
                             if is_boxed_optres_drop_payload {
                                 if let Some((src_ptr, src_fn)) = rehome_src {
                                     let name_owned = name.clone();

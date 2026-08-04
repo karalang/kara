@@ -2553,6 +2553,29 @@ pub(super) struct Codegen<'ctx> {
     /// drop frees it a second time.
     pub(crate) pattern_binding_scrutinee_payload_bodies_src:
         Option<(inkwell::values::PointerValue<'ctx>, FunctionValue<'ctx>)>,
+    /// B-2026-08-04-2 — the scrutinee's `Option`/`Result` SLOT while binding a
+    /// pattern: the named binding's own slot, or the staged
+    /// `__freshtemp_boxed_scrut` alloca. Sibling of
+    /// `pattern_binding_scrutinee_payload_bodies_src`, but tracked separately
+    /// because that one exists only when the payload runs a user Drop, and this
+    /// class is about MEMORY: a boxed payload's heap fields double-free when the
+    /// binding moves, Drop impl or not.
+    pub(crate) pattern_binding_scrutinee_optres_slot: Option<inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-08-04-2 — whole-payload match bindings that are VIEWS of a
+    /// heap-BOXED `Option`/`Result` payload: `name -> scrutinee slot`.
+    ///
+    /// The binding is an unboxed COPY of the box's `{ptr,len,cap}` words and
+    /// registers no memory drop of its own — by design, since the box drop's
+    /// inner walk owns the interior (that is what keeps `if let Some(r) =
+    /// v.pop()` from double-freeing). But when the binding then MOVES — into a
+    /// struct literal, out as the match's tail value, into `let x = r`, into a
+    /// container — the destination takes ownership of exactly those buffers and
+    /// frees them too. Recording the view lets each move site neutralize the
+    /// box's inner walk, leaving the destination the sole owner.
+    ///
+    /// Keyed by binding name and snapshotted with the rest of the per-arm var
+    /// environment, so an arm's view cannot leak into a sibling arm.
+    pub(crate) boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
     /// B-2026-08-01-15 — locals that are whole-move REBINDS of an owned
     /// param (`let h2 = h;`), transitively. A destructure or match on one
     /// is a param-view bind exactly like the direct param case
@@ -7718,6 +7741,8 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_scrutinee_is_fresh_owning_temp: false,
             pattern_binding_scrutinee_is_owned_param: false,
             pattern_binding_scrutinee_payload_bodies_src: None,
+            pattern_binding_scrutinee_optres_slot: None,
+            boxed_optres_payload_view_vars: HashMap::new(),
             param_view_locals: HashSet::new(),
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,

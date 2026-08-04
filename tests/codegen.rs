@@ -5752,6 +5752,132 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-2 — a boxed `Option`/`Result` payload bound whole and then
+    /// MOVED hands the box's interior to the destination.
+    ///
+    /// The binding is an unboxed COPY of the box's `{ptr,len,cap}` words and
+    /// registers no memory drop — the box drop's inner walk owns the interior,
+    /// which is what keeps `if let Some(r) = v.pop()` from double-freeing. But
+    /// once the binding moves on, the destination registers its own drop over
+    /// the same buffers and both free them. All four destinations below aborted
+    /// under glibc; the fix clears the source `BoxedEnumDrop`'s `inner_drop_fn`
+    /// at each move site, leaving a box-only free.
+    ///
+    /// A `Drop` impl is NOT what makes this fire — the earlier reading of this
+    /// class as Drop-dependent was a dead-allocation artifact. Without a live
+    /// read of the moved payload's heap field the buffer is elided and every
+    /// case looks clean; `println(w.r.name)` and friends are load-bearing here,
+    /// and the same program with no `impl Drop` but the same reads aborts
+    /// identically. The bodies are here to pin the fire COUNT alongside.
+    #[test]
+    fn e2e_boxed_optres_payload_view_move_transfers_box_interior() {
+        const PRE: &str = "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) { println(f\"D{self.id}[{self.name}]\"); }\n\
+             }\n\
+             struct W { r: Res }\n\
+             fn mko(i: i64) -> Option[Res] {\n\
+             \x20   return Option.Some(Res { id: i, name: f\"pay{i}\" });\n\
+             }\n\
+             fn eat(r: Res) -> i64 { return r.name.len(); }\n";
+
+        // The four move destinations, plus the fresh-temp spelling of the
+        // first — a temp's box is staged in `__freshtemp_boxed_scrut` rather
+        // than a named slot, and the neutralizer has to find it either way.
+        if let Some(out) = run_program(&format!(
+            "{PRE}fn main() {{\n\
+             \x20   {{\n\
+             \x20       let o: Option[Res] = Option.Some(Res {{ id: 1, name: f\"pay{{1}}\" }});\n\
+             \x20       match o {{\n\
+             \x20           Option.Some(r) => {{ let w = W {{ r: r }}; println(w.r.name); }}\n\
+             \x20           Option.None => {{ println(\"none\"); }}\n\
+             \x20       }}\n\
+             \x20       println(\"a-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Option[Res] = Option.Some(Res {{ id: 2, name: f\"pay{{2}}\" }});\n\
+             \x20       let r2 = match o {{\n\
+             \x20           Option.Some(r) => r,\n\
+             \x20           Option.None => Res {{ id: 0, name: f\"z{{0}}\" }},\n\
+             \x20       }};\n\
+             \x20       println(r2.name);\n\
+             \x20       println(\"b-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Option[Res] = Option.Some(Res {{ id: 3, name: f\"pay{{3}}\" }});\n\
+             \x20       match o {{\n\
+             \x20           Option.Some(r) => {{ let x = r; println(x.name); }}\n\
+             \x20           Option.None => {{ println(\"none\"); }}\n\
+             \x20       }}\n\
+             \x20       println(\"c-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       let o: Option[Res] = Option.Some(Res {{ id: 4, name: f\"pay{{4}}\" }});\n\
+             \x20       let mut v: Vec[Res] = Vec.new();\n\
+             \x20       match o {{\n\
+             \x20           Option.Some(r) => {{ v.push(r); }}\n\
+             \x20           Option.None => {{ println(\"none\"); }}\n\
+             \x20       }}\n\
+             \x20       println(v[0].name);\n\
+             \x20       println(\"d-end\");\n\
+             \x20   }}\n\
+             \x20   {{\n\
+             \x20       match mko(7i64) {{\n\
+             \x20           Option.Some(r) => {{ let w = W {{ r: r }}; println(w.r.name); }}\n\
+             \x20           Option.None => {{ println(\"none\"); }}\n\
+             \x20       }}\n\
+             \x20       println(\"e-end\");\n\
+             \x20   }}\n\
+             \x20   println(\"end\");\n\
+             }}\n"
+        )) {
+            assert_eq!(
+                out,
+                "pay1\nD1[pay1]\na-end\n\
+                 pay2\nD2[pay2]\nb-end\n\
+                 pay3\nD3[pay3]\nc-end\n\
+                 pay4\nD4[pay4]\nd-end\n\
+                 pay7\nD7[pay7]\ne-end\n\
+                 end\n"
+            );
+        }
+
+        // CONTROL: a by-value fn arg is an entry COPY, not a move. The callee
+        // deep-copies and frees its own; the box keeps the interior and the
+        // caller's fire keeps the body. Neutralizing here instead LEAKED the
+        // box's copy (9 bytes under valgrind) — which is how this control
+        // earned its place: the first cut dispatched the neutralizer from
+        // `suppress_inline_option_result_binding_move`, whose roster includes
+        // call args.
+        if let Some(out) = run_program(&format!(
+            "{PRE}fn main() {{\n\
+             \x20   let o: Option[Res] = Option.Some(Res {{ id: 5, name: f\"pay{{5}}\" }});\n\
+             \x20   match o {{\n\
+             \x20       Option.Some(r) => {{ println(eat(r)); }}\n\
+             \x20       Option.None => {{ println(\"none\"); }}\n\
+             \x20   }}\n\
+             \x20   println(\"e-end\");\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "4\nD5[pay5]\ne-end\n");
+        }
+
+        // CONTROL: not moved at all — the box owns the interior and frees it,
+        // exactly as before this leg.
+        if let Some(out) = run_program(&format!(
+            "{PRE}fn main() {{\n\
+             \x20   let o: Option[Res] = Option.Some(Res {{ id: 6, name: f\"pay{{6}}\" }});\n\
+             \x20   match o {{\n\
+             \x20       Option.Some(r) => {{ println(r.name); }}\n\
+             \x20       Option.None => {{ println(\"none\"); }}\n\
+             \x20   }}\n\
+             \x20   println(\"f-end\");\n\
+             }}\n"
+        )) {
+            assert_eq!(out, "pay6\nD6[pay6]\nf-end\n");
+        }
+    }
+
     /// B-2026-08-03-5 — a user type whose name collides with a generic enum's
     /// PARAMETER name must not gain a phantom Drop walker.
     ///

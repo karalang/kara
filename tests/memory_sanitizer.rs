@@ -35337,6 +35337,83 @@ fn main() {
         );
     }
 
+    /// B-2026-08-04-2 — a boxed payload bound whole and then MOVED must leave
+    /// exactly one owner of the box's interior.
+    ///
+    /// Four destinations, all of which aborted under glibc before the fix
+    /// because the destination's drop and the box's inner walk freed the same
+    /// buffers: a struct literal, the match's own tail value, a plain `let`
+    /// rebind, and a container push. Plus the two controls in the other
+    /// direction, which is where this pin earns its keep — the neutralizer must
+    /// NOT fire for a by-value fn arg (an entry copy, not a move: firing there
+    /// leaked the box's copy) and must not fire when nothing moved at all.
+    ///
+    /// Reading `.name` in every case is load-bearing: with the buffer dead the
+    /// allocation is elided and all six cases pass vacuously, which is exactly
+    /// why the class was first mis-read as depending on `impl Drop`.
+    #[test]
+    fn asan_boxed_optres_payload_view_move_has_one_owner() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+struct W { r: Res }
+fn mko(i: i64) -> Option[Res] { return Option.Some(Res { id: i, name: "payload-string-data" }); }
+fn eat(r: Res) -> i64 { return r.name.len(); }
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        // moved into a struct literal
+        match mko(i) {
+            Option.Some(r) => { let w = W { r: r }; n = n + w.r.name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // escapes as the match's tail value
+        let o2: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        let r2 = match o2 {
+            Option.Some(r) => r,
+            Option.None => Res { id: 0, name: "z" },
+        };
+        n = n + r2.name.len();
+        // rebound by a plain let
+        let o3: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        match o3 {
+            Option.Some(r) => { let x = r; n = n + x.name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        // pushed into a container
+        let o4: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        let mut v: Vec[Res] = Vec.new();
+        match o4 {
+            Option.Some(r) => { v.push(r); }
+            Option.None => { n = n + 100i64; }
+        }
+        n = n + v[0].name.len();
+        // CONTROL: by-value fn arg — an entry copy, so the box keeps the
+        // interior. Neutralizing here leaked it.
+        let o5: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        match o5 {
+            Option.Some(r) => { n = n + eat(r); }
+            Option.None => { n = n + 100i64; }
+        }
+        // CONTROL: not moved.
+        let o6: Option[Res] = Option.Some(Res { id: i, name: "payload-string-data" });
+        match o6 {
+            Option.Some(r) => { n = n + r.name.len(); }
+            Option.None => { n = n + 100i64; }
+        }
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            // 6 reads of a 19-char name per iteration x 200 = 22800.
+            &["22800"],
+            "boxed_optres_payload_view_move_has_one_owner",
+        );
+    }
+
     // B-2026-07-30-11 (Map-values leg) — value bodies for let-bound Maps,
     // plus the remove-tombstone skip, the insert-of-binding full disarm, and
     // the whole-map rebind disarm. Same unsafe-direction guard as the other

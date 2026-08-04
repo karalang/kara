@@ -2432,6 +2432,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`self.id` reads 0). Interp twin:
                 // `record_container_bodies_move_sources`.
                 self.disarm_container_bodies_move_sources(value);
+                // B-2026-08-04-2 — a boxed `Option`/`Result` payload binding
+                // whole-moved by a plain `let x = r;` hands the box's interior
+                // to `x`, which registers its own drop. Neutralize the box's
+                // inner walk here: the let RHS is the one move position not on
+                // `suppress_inline_option_result_binding_move`'s roster (that
+                // one covers args, aggregate-literal fields and container
+                // pushes) and not the match tail either.
+                self.suppress_boxed_payload_view_move(value);
                 // B-2026-07-31-20 — a `with_provider(...)` RHS has no callee
                 // fn whose declared return type the derivations below could
                 // consult, so an unannotated heap-typed binding
