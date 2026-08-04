@@ -2811,11 +2811,36 @@ impl<'a> Interpreter<'a> {
         };
         let (target_value, label) = target;
 
+        // An out-of-range index is a runtime ERROR, not a no-op (B-2026-08-04-14).
+        // These two arms used to guard the store with a bare `if i < len` and
+        // fall off the end when it failed, so `v[100] = 7` on a 2-element Vec
+        // left no trace: no error, no growth, the write simply vanished. AOT
+        // and the JIT both panic (`vec index out of bounds`), so the
+        // interpreter was the one backend that let a memory-safety violation
+        // pass — and being the reference oracle, its silence read as
+        // "this program is fine". The message and span mirror the READ path in
+        // `eval_expr.rs` (which was checked all along), so the two directions
+        // report identically. Negative indices arrive here already wrapped by
+        // `i as usize`, so they fail the same comparison and are reported the
+        // same way the read path reports them.
         match target_value {
             Value::Array(rc) => {
-                let mut guard = try_write_or_panic(&rc, &label);
-                if i < guard.len() {
-                    guard[i] = val;
+                // Report outside the guard's scope — `record_runtime_error`
+                // takes `&mut self` and the write lock borrows `rc`.
+                let oob_len = {
+                    let mut guard = try_write_or_panic(&rc, &label);
+                    if i < guard.len() {
+                        guard[i] = val;
+                        None
+                    } else {
+                        Some(guard.len())
+                    }
+                };
+                if let Some(len) = oob_len {
+                    self.record_runtime_error(
+                        format!("index {} out of bounds (len {})", i, len),
+                        &index.span,
+                    );
                 }
             }
             Value::Slice {
@@ -2824,9 +2849,14 @@ impl<'a> Interpreter<'a> {
                 len,
                 ..
             } => {
-                let mut guard = try_write_or_panic(&storage, &label);
                 if i < len {
+                    let mut guard = try_write_or_panic(&storage, &label);
                     guard[start + i] = val;
+                } else {
+                    self.record_runtime_error(
+                        format!("index {} out of bounds (len {})", i, len),
+                        &index.span,
+                    );
                 }
             }
             _ => {}

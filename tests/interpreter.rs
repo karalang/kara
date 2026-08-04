@@ -3219,6 +3219,46 @@ fn test_index_out_of_bounds_records_runtime_error() {
 }
 
 #[test]
+fn index_assign_out_of_bounds_records_a_runtime_error_like_the_read_does() {
+    // B-2026-08-04-14. The READ above was checked from the start; the STORE
+    // guarded itself with a bare `if i < len` and fell off the end when that
+    // failed, so an out-of-range write left no trace at all — no error, no
+    // growth, the store simply vanished. AOT and the JIT both panic on it, so
+    // the interpreter was the one backend that let a memory-safety violation
+    // through while reporting success.
+    for (label, program) in [
+        (
+            "past the end",
+            "fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1); v[100] = 7; }",
+        ),
+        // Just-past-the-end is the case an off-by-one produces, and the one a
+        // `> len` spot check would miss.
+        (
+            "one past the end",
+            "fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1); v[1] = 7; }",
+        ),
+        (
+            "negative",
+            "fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1); v[-1] = 7; }",
+        ),
+    ] {
+        let errors = runtime_errors(program);
+        assert!(
+            errors.iter().any(|e| e.message.contains("out of bounds")),
+            "[{label}] an out-of-range index-assign must record a runtime error, got {errors:?}"
+        );
+    }
+    // Control: an in-range store still lands and reports nothing, so the
+    // assertions above are about the range check and not about stores at large.
+    let errors =
+        runtime_errors("fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1); v[0] = 7; }");
+    assert!(
+        errors.is_empty(),
+        "an in-range index-assign must stay silent, got {errors:?}"
+    );
+}
+
+#[test]
 fn test_todo_records_runtime_error() {
     let errors = runtime_errors(r#"fn main() { todo("finish this"); }"#);
     assert!(
