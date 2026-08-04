@@ -837,6 +837,11 @@ pub struct OwnershipCheckResult {
     /// construction sites unchanged — only the two new
     /// concurrent-struct kinds need to participate.
     pub error_fix_diffs: HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// B-2026-08-01-33 mechanism 2 — `shared` type names the concurrent-shared
+    /// pass promoted to ATOMIC refcounting in order to admit a multi-branch
+    /// `par {}` capture. Codegen must emit the atomic path for EVERY refcount
+    /// op on these types; see `OwnershipChecker::atomic_promoted_types`.
+    pub atomic_promoted_types: std::collections::HashSet<String>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -1023,6 +1028,14 @@ pub struct OwnershipChecker<'a> {
     /// `ConcurrentPlainStruct` diagnostics; other passes leave it empty.
     /// Surfaced to consumers via `OwnershipCheckResult.error_fix_diffs`.
     pub(crate) error_fix_diffs: HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// B-2026-08-01-33 mechanism 2 — `shared` type names promoted to ATOMIC
+    /// refcounting so a multi-branch `par {}` capture could be admitted. Every
+    /// refcount op on one of these types must take the atomic path, wherever
+    /// it is emitted: an interior handle materialized by a traversal, a retain
+    /// inside a callee, or a drop-walk's inner dec. Codegen ORs this into
+    /// `heap_type_uses_atomic_rc`, which is the single funnel all four
+    /// refcount dispatchers share.
+    pub(crate) atomic_promoted_types: std::collections::HashSet<String>,
     /// Type name of each binding in scope for the current function.
     /// Used so RC trigger sites can look up `@no_rc` on the type.
     pub(crate) binding_type_names: HashMap<String, String>,
@@ -1260,6 +1273,7 @@ impl<'a> OwnershipChecker<'a> {
             headerless_types: HashMap::new(),
             headerless_reshaper_dummies: HashMap::new(),
             error_fix_diffs: HashMap::new(),
+            atomic_promoted_types: std::collections::HashSet::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
             immutable_lets: HashMap::new(),
@@ -1402,6 +1416,7 @@ impl<'a> OwnershipChecker<'a> {
             headerless_types: self.headerless_types,
             headerless_reshaper_dummies: self.headerless_reshaper_dummies,
             error_fix_diffs: self.error_fix_diffs,
+            atomic_promoted_types: self.atomic_promoted_types,
         }
     }
 

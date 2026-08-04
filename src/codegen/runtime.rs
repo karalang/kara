@@ -1151,6 +1151,34 @@ impl<'ctx> super::Codegen<'ctx> {
             .any(|info| info.is_par && info.heap_type == heap_type)
     }
 
+    /// The single funnel deciding atomic vs plain refcounting for a heap type.
+    ///
+    /// Atomic when the type is `par` (always Arc, by definition), OR when the
+    /// ownership pass PROMOTED it — B-2026-08-01-33 mechanism 2. A promoted
+    /// type is one reachable from a binding captured by two or more branches of
+    /// the same `par {}`, where the whole reachable type set is free of `mut`
+    /// fields; the pass admits that capture precisely BECAUSE codegen honours
+    /// the promotion here.
+    ///
+    /// Routing the promotion through the heap type — rather than through
+    /// `is_arc_binding`, which is keyed per binding-name per function — is what
+    /// makes it cover the sites that matter. A branch traversing the structure
+    /// retains interior handles inside callees, under names this function never
+    /// sees; those inc/dec calls reach the same four dispatchers with the same
+    /// heap type, so they pick up the atomic path for free. Promoting only the
+    /// captured root would leave exactly those interior refcounts non-atomic,
+    /// which is B-2026-07-28-13's race.
+    pub(super) fn heap_type_uses_atomic_rc(&self, heap_type: StructType<'ctx>) -> bool {
+        if self.heap_type_is_par(heap_type) {
+            return true;
+        }
+        self.atomic_promoted_types.iter().any(|name| {
+            self.shared_types
+                .get(name)
+                .is_some_and(|info| info.heap_type == heap_type)
+        })
+    }
+
     /// Dispatch an inc on a refcount keyed purely on the heap type: atomic
     /// (`emit_arc_inc`) when `heap_type` is a `par` type, plain otherwise. Use
     /// at sites that hold a heap pointer but no source binding name (e.g. an
@@ -1179,7 +1207,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.heap_type_is_headerless(heap_type) {
             return;
         }
-        if self.heap_type_is_par(heap_type) {
+        if self.heap_type_uses_atomic_rc(heap_type) {
             self.emit_arc_inc(heap_type, ptr);
         } else {
             self.emit_rc_inc(heap_type, ptr);
@@ -1200,7 +1228,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.heap_type_is_headerless(heap_type) {
             return;
         }
-        if self.heap_type_is_par(heap_type) {
+        if self.heap_type_uses_atomic_rc(heap_type) {
             self.emit_arc_dec(heap_type, ptr);
         } else {
             self.emit_rc_dec(heap_type, ptr);
@@ -1220,7 +1248,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.heap_type_is_headerless(heap_type) {
             return;
         }
-        if self.heap_type_is_par(heap_type) || self.is_arc_binding(name) {
+        if self.heap_type_uses_atomic_rc(heap_type) || self.is_arc_binding(name) {
             self.emit_arc_inc(heap_type, ptr);
         } else {
             self.emit_rc_inc(heap_type, ptr);
@@ -1238,7 +1266,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.heap_type_is_headerless(heap_type) {
             return;
         }
-        if self.heap_type_is_par(heap_type) || self.is_arc_binding(name) {
+        if self.heap_type_uses_atomic_rc(heap_type) || self.is_arc_binding(name) {
             self.emit_arc_dec(heap_type, ptr);
         } else {
             self.emit_rc_dec(heap_type, ptr);

@@ -152,6 +152,21 @@ struct TrackedBinding {
     /// atomicity, and `E_CONCURRENT_PLAIN_STRUCT` fires for an unrelated
     /// reason (the `par struct` migration is structural, not RC-driven).
     readonly_scalar_fields: HashSet<String>,
+    /// B-2026-08-01-33 mechanism 2 — when `Some`, the set of `shared` type
+    /// names transitively reachable from `type_name` (itself included), ALL of
+    /// which are free of `mut` fields. Such a value is deeply immutable, so
+    /// promoting every one of those types to ATOMIC refcounting makes it safe
+    /// to reach from sibling branches: the header races vanish (that is what
+    /// the promotion buys) and there is no payload to race in the first place
+    /// (that is what the immutability buys).
+    ///
+    /// `None` — the common case — when any reachable type has a `mut` field.
+    /// Atomic RC would fix only the HEADER; a `mut` payload written from two
+    /// branches is still a data race, which is precisely why `par struct`
+    /// forces `Atomic[T]` / `Mutex[T]` on its mutable fields. Distinguishing a
+    /// write to a branch-LOCAL instance from one to the shared value needs
+    /// instance-level escape analysis (mechanism 1), not a type-level check.
+    atomic_promotion: Option<Vec<String>>,
 }
 
 /// One branch's reference to a tracked binding, tagged with whether it can
@@ -205,6 +220,10 @@ impl<'a> super::OwnershipChecker<'a> {
         let items: Vec<Item> = self.program.items.clone();
         let mut errors: Vec<OwnershipError> = Vec::new();
         let mut fix_diffs: HashMap<SpanKey, Vec<TextEdit>> = HashMap::new();
+        // B-2026-08-01-33 mechanism 2 — `shared` types this pass promoted to
+        // ATOMIC refcounting so a multi-branch capture could be admitted.
+        // Consumed by codegen's `heap_type_uses_atomic_rc`.
+        let mut promoted: HashSet<String> = HashSet::new();
         let closure_captures = &self.closure_captures;
         let classifier = MethodMutClassifier {
             method_callee_types: &self.typecheck_result.method_callee_types,
@@ -226,6 +245,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             &classifier,
                             &mut errors,
                             &mut fix_diffs,
+                            &mut promoted,
                         );
                     }
                 }
@@ -249,6 +269,7 @@ impl<'a> super::OwnershipChecker<'a> {
                                     &classifier,
                                     &mut errors,
                                     &mut fix_diffs,
+                                    &mut promoted,
                                 );
                             }
                         }
@@ -259,6 +280,7 @@ impl<'a> super::OwnershipChecker<'a> {
         }
         self.errors.extend(errors);
         self.error_fix_diffs.extend(fix_diffs);
+        self.atomic_promoted_types.extend(promoted);
     }
 
     /// Collect bindings (parameters + let-introduced) whose surface
@@ -278,13 +300,16 @@ impl<'a> super::OwnershipChecker<'a> {
             let Some(head) = type_expr_head_name(&p.ty) else {
                 continue;
             };
-            if let Some((kind, readonly_scalar_fields)) = self.classify_tracked_binding(&head) {
+            if let Some((kind, readonly_scalar_fields, atomic_promotion)) =
+                self.classify_tracked_binding(&head)
+            {
                 tracked.insert(
                     name.to_string(),
                     TrackedBinding {
                         type_name: head,
                         kind,
                         readonly_scalar_fields,
+                        atomic_promotion,
                     },
                 );
             }
@@ -382,6 +407,100 @@ impl<'a> super::OwnershipChecker<'a> {
             .collect()
     }
 
+    /// B-2026-08-01-33 mechanism 2 — the set of `shared` types transitively
+    /// reachable from `type_name` when EVERY one of them is free of `mut`
+    /// fields; `None` otherwise.
+    ///
+    /// Promoting that whole set to atomic refcounting is what makes a
+    /// multi-branch capture safe, and it has to be the whole set, not just the
+    /// root: a branch traversing the structure retains the interior handles it
+    /// walks, and those are ordinary `shared` values whose inc/dec would stay
+    /// non-atomic if only the root were promoted. That is B-2026-07-28-13's
+    /// race, and it is why the closure below follows fields rather than
+    /// stopping at the named type.
+    ///
+    /// Fail-closed at every step: an unresolvable type name, a generic
+    /// parameter, or any `mut` field anywhere in the closure yields `None`,
+    /// i.e. today's unconditional conflict.
+    fn atomic_promotion_closure(&self, type_name: &str) -> Option<Vec<String>> {
+        // DEFAULT OFF (`KARAC_PAR_ATOMIC_PROMOTION=1` opts in).
+        //
+        // Admitting this capture is not a precision fix to an over-approximating
+        // gate — it CHANGES A DOCUMENTED LANGUAGE RULE. design.md § Rc vs Arc —
+        // Two-Phase Algorithm states that a `shared struct` reachable from more
+        // than one concurrent branch is a compile error, and six tests encode
+        // that rule directly. The mechanism below is implemented and verified
+        // (every refcount op on a promoted type censuses atomic, on all four
+        // par branches of the probe, including one building a fresh local
+        // instance), but flipping it on by default is a spec decision for the
+        // language owner, not something a soundness argument alone settles.
+        //
+        // So it ships inert, the way `KARAC_RC_ELIDE_REF_PARAMS` and
+        // `KARAC_PAR_ITER_LOCAL_SHARED` did before their defaults moved: the
+        // capability is available to evaluate, and nothing changes until
+        // someone decides it should.
+        if std::env::var("KARAC_PAR_ATOMIC_PROMOTION").as_deref() != Ok("1") {
+            return None;
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut queue: Vec<String> = vec![type_name.to_string()];
+        while let Some(name) = queue.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            // Only `shared` struct/enum types carry a refcount to promote. A
+            // plain aggregate reached through a field is copied by value and
+            // has no header, so it neither needs promotion nor blocks it —
+            // but its OWN fields may reach further `shared` types, so the walk
+            // continues through it.
+            if let Some(info) = self.typecheck_result.struct_info.get(&name) {
+                if !info.mut_fields.is_empty() {
+                    return None;
+                }
+                for (_, fty, _) in &info.fields {
+                    collect_named_types(fty, &mut queue);
+                }
+                continue;
+            }
+            if let Some(info) = self.typecheck_result.enum_info.get(&name) {
+                for (_, payload) in &info.variants {
+                    match payload {
+                        crate::typechecker::VariantTypeInfo::Unit => {}
+                        crate::typechecker::VariantTypeInfo::Tuple(tys) => {
+                            for t in tys {
+                                collect_named_types(t, &mut queue);
+                            }
+                        }
+                        crate::typechecker::VariantTypeInfo::Struct(fields) => {
+                            for (_, t) in fields {
+                                collect_named_types(t, &mut queue);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // Not a user aggregate — a builtin container or scalar. Its own
+            // element types were already queued by `collect_named_types`.
+        }
+        // Keep only the types that actually have a refcount to promote.
+        let promoted: Vec<String> = seen
+            .into_iter()
+            .filter(|n| {
+                self.typecheck_result
+                    .struct_info
+                    .get(n)
+                    .is_some_and(|i| i.is_shared)
+                    || self
+                        .typecheck_result
+                        .enum_info
+                        .get(n)
+                        .is_some_and(|i| i.is_shared)
+            })
+            .collect();
+        (!promoted.is_empty()).then_some(promoted)
+    }
+
     /// Pairs [`Self::classify_binding_type`] with the B-2026-08-01-33
     /// read-only projection set, so all three `TrackedBinding` construction
     /// sites derive both from one call.
@@ -415,13 +534,21 @@ impl<'a> super::OwnershipChecker<'a> {
     /// callee that stores the handle raises lifetime questions this pass does
     /// not answer. Recorded in the ledger with the measurement so the next
     /// widening starts from evidence.
-    fn classify_tracked_binding(&self, name: &str) -> Option<(BindingKind, HashSet<String>)> {
+    fn classify_tracked_binding(
+        &self,
+        name: &str,
+    ) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> {
         let kind = self.classify_binding_type(name)?;
-        let fields = match kind {
-            BindingKind::Shared => self.readonly_scalar_fields(name),
-            BindingKind::Plain => HashSet::new(),
+        let (fields, promotion) = match kind {
+            BindingKind::Shared => (
+                self.readonly_scalar_fields(name),
+                self.atomic_promotion_closure(name),
+            ),
+            // `E_CONCURRENT_PLAIN_STRUCT` fires for a structural reason, not an
+            // RC one — a plain struct has no refcount to promote.
+            BindingKind::Plain => (HashSet::new(), None),
         };
-        Some((kind, fields))
+        Some((kind, fields, promotion))
     }
 }
 
@@ -438,6 +565,7 @@ fn scan_block_for_par_conflicts(
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    promoted: &mut HashSet<String>,
 ) {
     for stmt in &block.stmts {
         scan_stmt_for_par_conflicts(
@@ -449,6 +577,7 @@ fn scan_block_for_par_conflicts(
             classifier,
             errors,
             fix_diffs,
+            promoted,
         );
     }
     if let Some(e) = &block.final_expr {
@@ -461,6 +590,7 @@ fn scan_block_for_par_conflicts(
             classifier,
             errors,
             fix_diffs,
+            promoted,
         );
     }
 }
@@ -482,7 +612,7 @@ fn collect_let_tracked_bindings(
     block: &Block,
     pattern_binding_types: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
 ) {
     for stmt in &block.stmts {
         collect_let_in_stmt(stmt, pattern_binding_types, out, classify);
@@ -496,7 +626,7 @@ fn collect_let_in_stmt(
     stmt: &Stmt,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
@@ -538,28 +668,83 @@ fn record_pattern_bindings(
     pattern: &Pattern,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
 ) {
     record_pattern_inner(pattern, pbt, out, classify);
+}
+
+/// Queue every user-aggregate name reachable from `ty`, following containers,
+/// tuples, borrows and generic args.
+///
+/// EXHAUSTIVE by construction — a `_` arm here would silently stop the walk at
+/// a type variant added later, which would drop a reachable `shared` type out
+/// of the promotion closure and leave its refcount non-atomic while its
+/// neighbours were promoted. That is a race the promotion is supposed to
+/// remove, so the match must break the build instead.
+fn collect_named_types(ty: &crate::typechecker::Type, out: &mut Vec<String>) {
+    use crate::typechecker::Type as T;
+    match ty {
+        T::Named { name, args } => {
+            out.push(name.clone());
+            for a in args {
+                collect_named_types(a, out);
+            }
+        }
+        T::Shared(name) => out.push(name.clone()),
+        T::Rc(inner) | T::Arc(inner) | T::Ref(inner) | T::MutRef(inner) => {
+            collect_named_types(inner, out)
+        }
+        T::Tuple(tys) => {
+            for t in tys {
+                collect_named_types(t, out);
+            }
+        }
+        T::Array { element, .. } | T::Vector { element, .. } | T::Slice { element, .. } => {
+            collect_named_types(element, out)
+        }
+        T::Function {
+            params,
+            return_type,
+        }
+        | T::OnceFunction {
+            params,
+            return_type,
+        } => {
+            for pth in params {
+                collect_named_types(pth, out);
+            }
+            collect_named_types(return_type, out);
+        }
+        // Scalars and markers reach nothing.
+        T::Int(_) | T::UInt(_) | T::Float(_) | T::Bool | T::Char | T::Str | T::Unit | T::Never => {}
+        other => {
+            // Anything not enumerated above is treated as opaque AND
+            // poisoning: push a name that cannot resolve so the closure's
+            // caller fails closed rather than under-approximating.
+            let _ = other;
+            out.push("__karac_unresolved_type__".to_string());
+        }
+    }
 }
 
 fn record_pattern_inner(
     pattern: &Pattern,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
 ) {
     match &pattern.kind {
         PatternKind::Binding(name) => {
             let key = SpanKey::from_span(&pattern.span);
             if let Some(head) = pbt.get(&key) {
-                if let Some((kind, readonly_scalar_fields)) = classify(head) {
+                if let Some((kind, readonly_scalar_fields, atomic_promotion)) = classify(head) {
                     out.insert(
                         name.clone(),
                         TrackedBinding {
                             type_name: head.clone(),
                             kind,
                             readonly_scalar_fields,
+                            atomic_promotion,
                         },
                     );
                 }
@@ -570,13 +755,14 @@ fn record_pattern_inner(
         } => {
             let key = SpanKey::from_span(&pattern.span);
             if let Some(head) = pbt.get(&key) {
-                if let Some((kind, readonly_scalar_fields)) = classify(head) {
+                if let Some((kind, readonly_scalar_fields, atomic_promotion)) = classify(head) {
                     out.insert(
                         name.clone(),
                         TrackedBinding {
                             type_name: head.clone(),
                             kind,
                             readonly_scalar_fields,
+                            atomic_promotion,
                         },
                     );
                 }
@@ -608,7 +794,7 @@ fn collect_let_in_expr(
     expr: &Expr,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
 ) {
     match &expr.kind {
         ExprKind::Block(b)
@@ -656,6 +842,7 @@ fn scan_stmt_for_par_conflicts(
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    promoted: &mut HashSet<String>,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
@@ -671,6 +858,7 @@ fn scan_stmt_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         StmtKind::LetElse {
@@ -685,6 +873,7 @@ fn scan_stmt_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for s in &else_block.stmts {
                 scan_stmt_for_par_conflicts(
@@ -696,6 +885,7 @@ fn scan_stmt_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = &else_block.final_expr {
@@ -708,6 +898,7 @@ fn scan_stmt_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -723,6 +914,7 @@ fn scan_stmt_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = &body.final_expr {
@@ -735,6 +927,7 @@ fn scan_stmt_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -748,6 +941,7 @@ fn scan_stmt_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             scan_expr_for_par_conflicts(
                 value,
@@ -758,6 +952,7 @@ fn scan_stmt_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         StmtKind::CompoundAssign { target, value, .. } => {
@@ -770,6 +965,7 @@ fn scan_stmt_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             scan_expr_for_par_conflicts(
                 value,
@@ -780,6 +976,7 @@ fn scan_stmt_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         StmtKind::Expr(e) => {
@@ -792,6 +989,7 @@ fn scan_stmt_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
     }
@@ -807,6 +1005,7 @@ fn scan_expr_for_par_conflicts(
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    promoted: &mut HashSet<String>,
 ) {
     match &expr.kind {
         ExprKind::Par(par_body) => {
@@ -819,6 +1018,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for stmt in &par_body.stmts {
                 scan_stmt_for_par_conflicts(
@@ -830,6 +1030,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = &par_body.final_expr {
@@ -842,6 +1043,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -862,6 +1064,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = &b.final_expr {
@@ -874,6 +1077,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -891,6 +1095,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for s in &then_block.stmts {
                 scan_stmt_for_par_conflicts(
@@ -902,6 +1107,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = &then_block.final_expr {
@@ -914,6 +1120,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(else_b) = else_branch {
@@ -926,6 +1133,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -941,6 +1149,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for s in &body.stmts {
                 scan_stmt_for_par_conflicts(
@@ -952,6 +1161,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = &body.final_expr {
@@ -964,6 +1174,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -977,6 +1188,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for s in &body.stmts {
                 scan_stmt_for_par_conflicts(
@@ -988,6 +1200,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = &body.final_expr {
@@ -1000,6 +1213,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1013,6 +1227,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for arm in arms {
                 if let Some(g) = &arm.guard {
@@ -1025,6 +1240,7 @@ fn scan_expr_for_par_conflicts(
                         classifier,
                         errors,
                         fix_diffs,
+                        promoted,
                     );
                 }
                 scan_expr_for_par_conflicts(
@@ -1036,6 +1252,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1049,6 +1266,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for a in args {
                 scan_expr_for_par_conflicts(
@@ -1060,6 +1278,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1073,6 +1292,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             for a in args {
                 scan_expr_for_par_conflicts(
@@ -1084,6 +1304,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1097,6 +1318,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         ExprKind::Index { object, index } => {
@@ -1109,6 +1331,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             scan_expr_for_par_conflicts(
                 index,
@@ -1119,6 +1342,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         ExprKind::Binary { left, right, .. } => {
@@ -1131,6 +1355,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
             scan_expr_for_par_conflicts(
                 right,
@@ -1141,6 +1366,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         ExprKind::Unary { operand, .. } => {
@@ -1153,6 +1379,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         ExprKind::Tuple(items) => {
@@ -1166,6 +1393,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1180,6 +1408,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1194,6 +1423,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1207,6 +1437,7 @@ fn scan_expr_for_par_conflicts(
                 classifier,
                 errors,
                 fix_diffs,
+                promoted,
             );
         }
         ExprKind::Range { start, end, .. } => {
@@ -1220,6 +1451,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
             if let Some(e) = end.as_deref() {
@@ -1232,6 +1464,7 @@ fn scan_expr_for_par_conflicts(
                     classifier,
                     errors,
                     fix_diffs,
+                    promoted,
                 );
             }
         }
@@ -1254,6 +1487,7 @@ fn detect_par_block_conflicts(
     classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+    promoted: &mut HashSet<String>,
 ) {
     let mut first_use: HashMap<String, (usize, Span)> = HashMap::new();
     let mut reported: HashSet<String> = HashSet::new();
@@ -1311,6 +1545,25 @@ fn detect_par_block_conflicts(
             match first_use.get(&name) {
                 Some((prev_idx, prev_span)) if *prev_idx != branch_idx => {
                     let binding = &tracked[&name];
+                    // B-2026-08-01-33 mechanism 2 — WHOLE-PROGRAM ATOMICITY
+                    // PROMOTION. When every `shared` type reachable from this
+                    // binding is free of `mut` fields, promoting all of them to
+                    // atomic refcounting makes the multi-branch capture safe,
+                    // and the conflict is suppressed rather than reported.
+                    //
+                    // Both halves are load-bearing and neither suffices alone.
+                    // The promotion removes the RC-HEADER race — including on
+                    // the interior handles a traversal materializes, which is
+                    // why the closure covers the reachable set and not just the
+                    // named type. The immutability removes the PAYLOAD race,
+                    // which atomic refcounting does nothing about; that is the
+                    // reason a type with a `mut` field is not promotable here
+                    // even though its header could be made safe.
+                    if let Some(types) = &binding.atomic_promotion {
+                        promoted.extend(types.iter().cloned());
+                        reported.insert(name);
+                        continue;
+                    }
                     let err = build_concurrent_struct_error(
                         &name,
                         binding,

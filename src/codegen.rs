@@ -3427,6 +3427,11 @@ pub(super) struct Codegen<'ctx> {
     /// behavior. Empty when codegen runs without an ownership pass
     /// (e.g. `compile_to_ir` invoked without an `OwnershipCheckResult`).
     pub(crate) par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
+    /// B-2026-08-01-33 mechanism 2 — `shared` type names the ownership pass
+    /// promoted to atomic refcounting. Read by `heap_type_uses_atomic_rc`, the
+    /// funnel all four refcount dispatchers share. Empty unless a multi-branch
+    /// capture was admitted, so nothing changes by default.
+    pub(crate) atomic_promoted_types: HashSet<String>,
     /// Per-function parallelization decisions populated from `ConcurrencyAnalysis`.
     /// Function name → `FunctionConcurrency` (parallel groups + total stmt count).
     /// Threaded in by `load_concurrency_analysis`; consumed in slice 2 by the
@@ -7848,6 +7853,7 @@ impl<'ctx> Codegen<'ctx> {
             aggregate_drop_fns: Vec::new(),
             closure_capture_paths: HashMap::new(),
             par_capture_modes: HashMap::new(),
+            atomic_promoted_types: HashSet::new(),
             concurrency_decisions: HashMap::new(),
             current_fn_name: String::new(),
             track_caller_fns: std::collections::HashSet::new(),
@@ -8016,6 +8022,10 @@ impl<'ctx> Codegen<'ctx> {
             self.arc_fallback_fns
                 .insert(fn_name.clone(), arc_set.clone());
         }
+        // B-2026-08-01-33 mechanism 2 — types promoted to atomic RC so a
+        // multi-branch `par {}` capture could be admitted.
+        self.atomic_promoted_types
+            .extend(ow.atomic_promoted_types.iter().cloned());
         // RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`): consume the ownership
         // pass's *sound* elidability set — `Ref` params that no call site
         // passes a fresh rvalue and whose function never escapes as a value
