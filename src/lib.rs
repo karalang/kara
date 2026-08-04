@@ -710,6 +710,31 @@ pub struct PlaygroundDiagnostic {
     pub column: usize,
     pub offset: usize,
     pub length: usize,
+    /// Machine-applicable edits that resolve this diagnostic, in the same
+    /// form `karac fix` applies.
+    ///
+    /// Empty for a diagnostic with no fix — most of them. A non-empty vector
+    /// is the WHOLE fix: multi-edit migrations (a rename touching use sites,
+    /// the `par struct` migration's keyword insert plus per-field `Mutex[T]`
+    /// wraps) arrive as several entries that must be applied together, which
+    /// is why this is a `Vec` rather than an `Option`. Applying a subset can
+    /// leave a half-renamed program behind.
+    pub fixes: Vec<SourceFix>,
+}
+
+/// One machine-applicable edit: replace `length` bytes at `offset` with
+/// `replacement`.
+///
+/// Byte offsets into the analyzed source, matching `PlaygroundDiagnostic`'s
+/// `offset`/`length`, so a caller with a line index can convert without
+/// re-deriving positions. `karac fix` sorts by descending offset before
+/// applying so earlier edits do not invalidate later ones; a caller applying
+/// several must do the same.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceFix {
+    pub offset: usize,
+    pub length: usize,
+    pub replacement: String,
 }
 
 /// Structured result of one playground run.
@@ -735,6 +760,17 @@ fn push_diag(
     message: String,
     span: &crate::token::Span,
 ) {
+    push_diag_fixed(out, phase, message, span, Vec::new());
+}
+
+/// [`push_diag`] with machine-applicable edits attached.
+fn push_diag_fixed(
+    out: &mut Vec<PlaygroundDiagnostic>,
+    phase: &'static str,
+    message: String,
+    span: &crate::token::Span,
+    fixes: Vec<SourceFix>,
+) {
     out.push(PlaygroundDiagnostic {
         phase,
         message,
@@ -742,7 +778,17 @@ fn push_diag(
         column: span.column,
         offset: span.offset,
         length: span.length,
+        fixes,
     });
+}
+
+/// A `resolver::TextEdit` in the public [`SourceFix`] form.
+fn fix_of(edit: &crate::resolver::TextEdit) -> SourceFix {
+    SourceFix {
+        offset: edit.offset,
+        length: edit.length,
+        replacement: edit.replacement.clone(),
+    }
 }
 
 /// Run `source` through the full check pipeline and (when possible) the
@@ -808,7 +854,15 @@ fn run_static_checks(
     let mut parsed = parse(source);
     if !parsed.errors.is_empty() {
         for e in &parsed.errors {
-            push_diag(&mut diagnostics, "parse", e.message.clone(), &e.span);
+            // Parse recovery edits are keyed by the error's span, so each
+            // error claims only its own (a stray-comma delete attaches to the
+            // comma that caused it, not to every parse error in the file).
+            let fixes = parsed
+                .fix_edits
+                .get(&crate::resolver::SpanKey::from_span(&e.span))
+                .map(|edit| vec![fix_of(edit)])
+                .unwrap_or_default();
+            push_diag_fixed(&mut diagnostics, "parse", e.message.clone(), &e.span, fixes);
         }
         return (diagnostics, None);
     }
@@ -828,26 +882,84 @@ fn run_static_checks(
     let resolved = resolve(&parsed.program);
     if !resolved.errors.is_empty() {
         for e in &resolved.errors {
-            push_diag(&mut diagnostics, "resolve", e.message.clone(), &e.span);
+            // Single-edit `replacement`, or a multi-edit envelope keyed by the
+            // diagnostic's span — a rename touching use sites cannot fit the
+            // single slot and lands ONLY in the envelope, so reading both is
+            // what keeps a fix from being applied half-way.
+            let mut fixes: Vec<SourceFix> =
+                e.replacement.as_deref().map(fix_of).into_iter().collect();
+            if let Some(diff) = resolved
+                .error_fix_diffs
+                .get(&crate::resolver::SpanKey::from_span(&e.span))
+            {
+                fixes.extend(diff.iter().map(fix_of));
+            }
+            push_diag_fixed(
+                &mut diagnostics,
+                "resolve",
+                e.message.clone(),
+                &e.span,
+                fixes,
+            );
         }
         return (diagnostics, None);
     }
 
     let typed = typecheck(&parsed.program, &resolved);
     for e in &typed.errors {
-        push_diag(&mut diagnostics, "typecheck", e.message.clone(), &e.span);
+        let fixes = e
+            .fix_it
+            .as_ref()
+            .map(|f| {
+                vec![SourceFix {
+                    offset: f.span.offset,
+                    length: f.span.length,
+                    replacement: f.replacement.clone(),
+                }]
+            })
+            .unwrap_or_default();
+        push_diag_fixed(
+            &mut diagnostics,
+            "typecheck",
+            e.message.clone(),
+            &e.span,
+            fixes,
+        );
     }
 
     lower(&mut parsed.program, &typed);
 
     let effects = effectcheck(&parsed.program);
     for e in &effects.errors {
-        push_diag(&mut diagnostics, "effect", e.message.clone(), &e.span);
+        let fixes: Vec<SourceFix> = e.replacement.as_deref().map(fix_of).into_iter().collect();
+        push_diag_fixed(
+            &mut diagnostics,
+            "effect",
+            e.message.clone(),
+            &e.span,
+            fixes,
+        );
     }
 
     let ownership = ownershipcheck(&parsed.program, &typed);
     for e in &ownership.errors {
-        push_diag(&mut diagnostics, "ownership", e.message.clone(), &e.span);
+        let mut fixes: Vec<SourceFix> = e.replacement.as_deref().map(fix_of).into_iter().collect();
+        // The `par struct` / `ConcurrentSharedStruct` migrations carry their
+        // whole fix here (keyword insert + per-mut-field `Mutex[T]` wraps),
+        // never in `replacement`.
+        if let Some(diff) = ownership
+            .error_fix_diffs
+            .get(&crate::resolver::SpanKey::from_span(&e.span))
+        {
+            fixes.extend(diff.iter().map(fix_of));
+        }
+        push_diag_fixed(
+            &mut diagnostics,
+            "ownership",
+            e.message.clone(),
+            &e.span,
+            fixes,
+        );
     }
 
     (diagnostics, Some((parsed.program, typed)))

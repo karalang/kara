@@ -24,12 +24,14 @@ use lsp_types::notification::{
     Notification as _, PublishDiagnostics,
 };
 use lsp_types::request::{
-    DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest, References, Request as _,
+    CodeActionRequest, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest, References,
+    Request as _,
 };
 use lsp_types::{
-    DocumentSymbolResponse, GotoDefinitionResponse, HoverProviderCapability, InitializeParams,
-    Location, OneOf, PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    CodeActionOptions, CodeActionProviderCapability, DocumentSymbolResponse,
+    GotoDefinitionResponse, HoverProviderCapability, InitializeParams, Location, OneOf,
+    PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    Uri,
 };
 
 type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
@@ -40,8 +42,8 @@ type LspResult = Result<(), Box<dyn Error + Sync + Send>>;
 pub fn serve(connection: Connection) -> LspResult {
     // Full-document sync (so every edit hands us the whole buffer to
     // re-analyze) drives the diagnostics loop; hover is served from the same
-    // per-document text. Further capabilities (definition, completion) are
-    // turned on as their slices land.
+    // per-document text. Further capabilities (completion, inlay hints,
+    // rename) are turned on as their slices land.
     let capabilities = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -49,6 +51,15 @@ pub fn serve(connection: Connection) -> LspResult {
         references_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        // Quick fixes. The machine-applicable edits `karac fix` applies from
+        // the CLI had no editor path at all — the compiler computed them and
+        // nothing but the terminal could act on them. Declaring the kind (not
+        // just `true`) lets a client pre-filter and drive "fix all" without a
+        // round trip.
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![lsp_types::CodeActionKind::QUICKFIX]),
+            ..Default::default()
+        })),
         ..Default::default()
     };
     let init_params = connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -212,6 +223,21 @@ fn handle_request(
                         DocumentSymbolResponse::Nested(analysis::document_symbols(text))
                     });
                     lsp_server::Response::new_ok(id, resp)
+                }
+                Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
+            }
+        }
+        CodeActionRequest::METHOD => {
+            match serde_json::from_value::<lsp_types::CodeActionParams>(params) {
+                Ok(p) => {
+                    let key = p.text_document.uri.to_string();
+                    // Keyed off `docs` like every other position request, so
+                    // actions describe the revision the editor last sent —
+                    // never a stale on-disk copy whose offsets have moved.
+                    let actions = docs
+                        .get(&key)
+                        .map(|text| analysis::code_actions(text, &p.text_document.uri, p.range));
+                    lsp_server::Response::new_ok(id, actions)
                 }
                 Err(e) => lsp_server::Response::new_err(id, INVALID_PARAMS, e.to_string()),
             }

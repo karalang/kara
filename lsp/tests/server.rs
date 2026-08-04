@@ -334,3 +334,84 @@ fn server_formats_a_document() {
     drop(client);
     assert!(server_thread.join().unwrap().is_ok());
 }
+
+/// The quick-fix path over the real protocol: capability advertised at
+/// `initialize`, request dispatched, and a workspace edit that carries the
+/// compiler's own machine-applicable replacement.
+///
+/// The unit tests in `analysis` cover the edit computation. This covers the
+/// WIRING — a wrong method constant or params shape would leave
+/// `analysis::code_actions` perfectly correct and never called, which is
+/// exactly the failure the missing handler was.
+#[test]
+fn server_offers_quick_fixes_over_the_protocol() {
+    let (server, client) = Connection::memory();
+    let server_thread = thread::spawn(move || kara_lsp::serve(server));
+
+    req(
+        &client,
+        1,
+        "initialize",
+        json!({"capabilities":{}, "processId":null}),
+    );
+    let init = recv(&client);
+    let Message::Response(Response {
+        result: Some(caps), ..
+    }) = init
+    else {
+        panic!("expected initialize response, got {init:?}");
+    };
+    // Advertised as OPTIONS naming the kind, not a bare `true`: a client that
+    // pre-filters by kind (or drives "fix all") needs the kind up front.
+    assert_eq!(
+        caps["capabilities"]["codeActionProvider"]["codeActionKinds"],
+        json!(["quickfix"]),
+        "codeActionProvider not advertised: {:?}",
+        caps["capabilities"]["codeActionProvider"]
+    );
+    notify(&client, "initialized", json!({}));
+
+    // A resolver typo — `karac fix` renders this exact fix as
+    // `` `cout` → `count` `` from the CLI.
+    let uri = "file:///fix.kara";
+    let text = "fn main() {\n    let count: i64 = 1;\n    println(cout);\n}\n";
+    did_open(&client, uri, text);
+    let diags = next_diagnostics(&client);
+    assert_eq!(diags.len(), 1, "expected one diagnostic, got {diags:?}");
+
+    req(
+        &client,
+        2,
+        "textDocument/codeAction",
+        json!({
+            "textDocument": {"uri": uri},
+            "range": diags[0]["range"],
+            "context": {"diagnostics": [diags[0]]}
+        }),
+    );
+    let resp = loop {
+        match recv(&client) {
+            Message::Response(r) if r.id == RequestId::from(2) => break r,
+            _ => continue,
+        }
+    };
+    let actions = resp.result.expect("codeAction returned no result");
+    let actions = actions.as_array().expect("expected an array of actions");
+    assert_eq!(actions.len(), 1, "expected one quick fix: {actions:?}");
+    assert_eq!(actions[0]["title"], json!("Replace `cout` with `count`"));
+    assert_eq!(actions[0]["kind"], json!("quickfix"));
+    let edits = &actions[0]["edit"]["changes"][uri];
+    assert_eq!(edits[0]["newText"], json!("count"));
+    assert_eq!(edits[0]["range"]["start"]["line"], json!(2));
+    assert_eq!(edits[0]["range"]["start"]["character"], json!(12));
+
+    req(&client, 99, "shutdown", json!(null));
+    loop {
+        match recv(&client) {
+            Message::Response(r) if r.id == RequestId::from(99) => break,
+            _ => continue,
+        }
+    }
+    notify(&client, "exit", json!(null));
+    server_thread.join().unwrap().unwrap();
+}

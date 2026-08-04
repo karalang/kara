@@ -5,9 +5,11 @@
 //! (`main.rs`) is deliberately thin over this module.
 
 use lsp_types::{
-    Diagnostic, DiagnosticSeverity, DocumentSymbol, Hover, HoverContents, MarkupContent,
-    MarkupKind, NumberOrString, Position, Range, SymbolKind, TextEdit,
+    CodeAction, CodeActionKind, CodeActionOrCommand, Diagnostic, DiagnosticSeverity,
+    DocumentSymbol, Hover, HoverContents, MarkupContent, MarkupKind, NumberOrString, Position,
+    Range, SymbolKind, TextEdit, Uri, WorkspaceEdit,
 };
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 
 /// Byte-offset → LSP [`Position`] converter for one source document.
@@ -279,6 +281,14 @@ fn symbol_kind(slug: &str) -> SymbolKind {
 /// die on one keystroke). On a panic we return no diagnostics for this pass —
 /// a stale-but-alive server beats a dead one — and log to stderr.
 pub fn diagnostics(source: &str) -> Vec<Diagnostic> {
+    analyze(source).into_iter().map(|(d, _)| d).collect()
+}
+
+/// Every diagnostic paired with the machine-applicable edits that resolve it.
+///
+/// The single analysis pass behind both [`diagnostics`] and [`code_actions`],
+/// so a quick-fix can never describe a diagnostic the editor was not shown.
+fn analyze(source: &str) -> Vec<(Diagnostic, Vec<karac::SourceFix>)> {
     let raw = match std::panic::catch_unwind(AssertUnwindSafe(|| karac::check_source(source))) {
         Ok(diags) => diags,
         Err(_) => {
@@ -289,23 +299,233 @@ pub fn diagnostics(source: &str) -> Vec<Diagnostic> {
 
     let index = LineIndex::new(source);
     raw.into_iter()
-        .map(|d| Diagnostic {
-            range: index.range(d.offset, d.length),
-            severity: Some(DiagnosticSeverity::ERROR),
-            // Carry the producing phase (parse/resolve/typecheck/effect/
-            // ownership) as the diagnostic code so an editor can group/filter
-            // by it; `source` names the producer for the "Problems" panel.
-            code: Some(NumberOrString::String(d.phase.to_string())),
-            source: Some("kara".to_string()),
-            message: d.message,
-            ..Default::default()
+        .map(|d| {
+            let diag = Diagnostic {
+                range: index.range(d.offset, d.length),
+                severity: Some(DiagnosticSeverity::ERROR),
+                // Carry the producing phase (parse/resolve/typecheck/effect/
+                // ownership) as the diagnostic code so an editor can
+                // group/filter by it; `source` names the producer for the
+                // "Problems" panel.
+                code: Some(NumberOrString::String(d.phase.to_string())),
+                source: Some("kara".to_string()),
+                message: d.message,
+                ..Default::default()
+            };
+            (diag, d.fixes)
         })
         .collect()
+}
+
+/// Quick-fix code actions for the diagnostics overlapping `range`.
+///
+/// `karac fix` has been able to apply these edits from the CLI for a long
+/// time; this is the seam that lets an editor apply the same edit in place.
+/// The fix data is the compiler's own — the machine-applicable `replacement` /
+/// `fix_it` / multi-edit envelope each phase already produces — so a quick fix
+/// here and `karac fix` on the same file make the identical change.
+///
+/// Overlap, not containment: an editor asks with the cursor's range, which is
+/// usually empty and sits somewhere inside the squiggle, so requiring the
+/// diagnostic to contain the request would offer nothing for a caret at the
+/// end of a token.
+// `WorkspaceEdit.changes` is `HashMap<Uri, Vec<TextEdit>>` in `lsp_types`, and
+// `Uri` carries an internal hash-cache cell — so the lint fires on a key type
+// the protocol picked, not one we chose. Sound here because these maps are
+// built and handed straight to serialization; nothing mutates a key while it
+// is in the map. (`main_loop` sidesteps the same lint by keying its own doc map
+// on `Uri::to_string`, which is not open to us: this map's type is fixed.)
+#[allow(clippy::mutable_key_type)]
+pub fn code_actions(source: &str, uri: &Uri, range: Range) -> Vec<CodeActionOrCommand> {
+    let index = LineIndex::new(source);
+    analyze(source)
+        .into_iter()
+        .filter(|(d, fixes)| !fixes.is_empty() && ranges_overlap(d.range, range))
+        .map(|(diag, fixes)| {
+            // A multi-edit fix is applied as ONE action: the envelope shapes
+            // (a rename touching use sites, the `par struct` migration) are
+            // only correct applied whole, and offering them piecewise would
+            // let a user leave a half-renamed program behind.
+            let edits: Vec<TextEdit> = fixes
+                .iter()
+                .map(|f| TextEdit {
+                    range: index.range(f.offset, f.length),
+                    new_text: f.replacement.clone(),
+                })
+                .collect();
+            let title = fix_title(source, &fixes);
+            let mut changes = HashMap::new();
+            changes.insert(uri.clone(), edits);
+            CodeActionOrCommand::CodeAction(CodeAction {
+                title,
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diag]),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
+                // The compiler emitted this as machine-applicable, meaning it
+                // is safe to apply unattended — which is exactly what
+                // `isPreferred` means to a client offering "fix all".
+                is_preferred: Some(true),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+/// True when two ranges share at least a point (touching counts).
+fn ranges_overlap(a: Range, b: Range) -> bool {
+    !(pos_lt(a.end, b.start) || pos_lt(b.end, a.start))
+}
+
+fn pos_lt(a: Position, b: Position) -> bool {
+    (a.line, a.character) < (b.line, b.character)
+}
+
+/// A title describing what the edit does, built from the edit itself.
+///
+/// Phases record machine-applicable edits, not prose for them, so there is no
+/// author-written title to use. Rendering the actual change beats a generic
+/// "Apply fix": the action list is what a user picks from, and `Replace `foo`
+/// with `bar`` is decidable at a glance.
+fn fix_title(source: &str, fixes: &[karac::SourceFix]) -> String {
+    if fixes.len() > 1 {
+        return format!("Apply Kāra fix ({} edits)", fixes.len());
+    }
+    let Some(fix) = fixes.first() else {
+        return "Apply Kāra fix".to_string();
+    };
+    let original = source
+        .get(fix.offset..fix.offset.saturating_add(fix.length))
+        .unwrap_or("");
+    match (original.is_empty(), fix.replacement.is_empty()) {
+        (true, false) => format!("Insert `{}`", elide(&fix.replacement)),
+        (false, true) => format!("Remove `{}`", elide(original)),
+        _ => format!(
+            "Replace `{}` with `{}`",
+            elide(original),
+            elide(&fix.replacement)
+        ),
+    }
+}
+
+/// Single-line, length-capped rendering for a title — a multi-line insertion
+/// (a generated match arm) must not turn the action list into a wall of text.
+fn elide(text: &str) -> String {
+    let flat = text.replace(['\n', '\r', '\t'], " ");
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > 40 {
+        let head: String = flat.chars().take(39).collect();
+        format!("{head}…")
+    } else {
+        flat
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_uri() -> Uri {
+        use std::str::FromStr;
+        Uri::from_str("file:///t.kara").unwrap()
+    }
+
+    fn full_range() -> Range {
+        Range::new(Position::new(0, 0), Position::new(999, 0))
+    }
+
+    /// A resolve-phase typo carries a rename edit, and it reaches the editor
+    /// as a quick fix whose edit is the compiler's own.
+    ///
+    /// This is the seam the LSP was missing: `karac fix` has always applied
+    /// this edit from the CLI (`karac fix --dry-run` prints
+    /// ``cout` → `count``), but no editor could, because the server declared
+    /// no `code_action_provider` and had no handler.
+    #[test]
+    #[allow(clippy::mutable_key_type)] // see `code_actions`
+    fn code_action_offers_the_resolver_rename_fix() {
+        let src = "fn main() {\n    let count: i64 = 1;\n    println(cout);\n}\n";
+        let actions = code_actions(src, &test_uri(), full_range());
+        assert_eq!(actions.len(), 1, "expected one quick fix: {actions:?}");
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected a CodeAction, got a Command");
+        };
+        assert_eq!(action.title, "Replace `cout` with `count`");
+        assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+        // The action must carry the diagnostic it fixes, or a client cannot
+        // associate it with the squiggle the user right-clicked.
+        let diags = action
+            .diagnostics
+            .as_ref()
+            .expect("no diagnostics attached");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("cout"), "{:?}", diags[0].message);
+
+        let changes = action
+            .edit
+            .as_ref()
+            .and_then(|e| e.changes.as_ref())
+            .expect("no workspace edit");
+        let edits = changes.get(&test_uri()).expect("no edits for the document");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, "count");
+        // `cout` sits on line 2 (0-based), starting at character 12.
+        assert_eq!(edits[0].range.start, Position::new(2, 12));
+        assert_eq!(edits[0].range.end, Position::new(2, 16));
+    }
+
+    /// A typecheck fix-it that INSERTS (zero-length span) titles as an insert
+    /// and produces an empty-range edit — the missing-match-arm shape.
+    #[test]
+    fn code_action_offers_an_insertion_fix() {
+        let src = "enum C { A, B }\nfn main() {\n    let c = C.A;\n    match c { A => { println(1); } }\n}\n";
+        let actions = code_actions(src, &test_uri(), full_range());
+        let titles: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| match a {
+                CodeActionOrCommand::CodeAction(a) => Some(a.title.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            titles.iter().any(|t| t.starts_with("Insert `")),
+            "expected an insertion quick fix, got {titles:?}"
+        );
+    }
+
+    /// Actions are filtered to the requested range. An editor asks with the
+    /// cursor's position, so a fix on another line must not be offered.
+    #[test]
+    fn code_actions_are_filtered_to_the_requested_range() {
+        let src = "fn main() {\n    let count: i64 = 1;\n    println(cout);\n}\n";
+        // Line 0 holds no diagnostic.
+        let away = Range::new(Position::new(0, 0), Position::new(0, 0));
+        assert!(
+            code_actions(src, &test_uri(), away).is_empty(),
+            "a fix on line 2 must not be offered for a cursor on line 0"
+        );
+        // An EMPTY range inside the squiggle still matches — this is the
+        // common case (a bare caret), and requiring containment would offer
+        // nothing for a cursor sitting at the end of the token.
+        let caret = Range::new(Position::new(2, 14), Position::new(2, 14));
+        assert_eq!(code_actions(src, &test_uri(), caret).len(), 1);
+    }
+
+    /// A clean program offers nothing, and a diagnostic with no fix produces
+    /// no action — the list must not fill with un-actionable entries.
+    #[test]
+    fn no_actions_without_a_machine_applicable_fix() {
+        assert!(code_actions("fn main() {}\n", &test_uri(), full_range()).is_empty());
+        // A type mismatch: a real diagnostic, but the compiler offers no edit.
+        let src = "fn main() {\n    let x: i64 = \"s\";\n    println(x);\n}\n";
+        assert!(!diagnostics(src).is_empty(), "expected a diagnostic");
+        assert!(
+            code_actions(src, &test_uri(), full_range()).is_empty(),
+            "a diagnostic with no fix must offer no action"
+        );
+    }
 
     #[test]
     fn line_index_ascii_positions() {
