@@ -138,6 +138,59 @@ enum WrapShape {
 struct TrackedBinding {
     type_name: String,
     kind: BindingKind,
+    /// B-2026-08-01-33 — the fields of `type_name` a par branch may project
+    /// WITHOUT emitting any refcount traffic: declared immutable (absent from
+    /// [`crate::typechecker::env::StructInfo::mut_fields`]) and of scalar
+    /// `Copy` type. Reading one lowers to a plain deref of the handle's
+    /// payload, so it neither touches the RC header nor copies a buffer.
+    ///
+    /// Carried on the tracked binding rather than looked up at the use site
+    /// so the per-branch identifier walk — which already threads `tracked`
+    /// through ~40 recursive call sites — needs no extra parameter.
+    ///
+    /// Empty for a `Plain` binding: this relaxation is about refcount
+    /// atomicity, and `E_CONCURRENT_PLAIN_STRUCT` fires for an unrelated
+    /// reason (the `par struct` migration is structural, not RC-driven).
+    readonly_scalar_fields: HashSet<String>,
+}
+
+/// One branch's reference to a tracked binding, tagged with whether it can
+/// emit refcount traffic — B-2026-08-01-33.
+///
+/// `material: false` marks the one shape proven not to: reading an immutable
+/// scalar field off the handle (`root.a`), which lowers to a plain payload
+/// deref. Every other reference — a bare identifier, a method receiver, a
+/// by-value pass, a closure capture, a projection of a `mut` or non-scalar
+/// field — is `material: true`.
+///
+/// The polarity is deliberate and matches `iter_local`'s: the walk only ever
+/// marks a use NON-material on positive structural evidence, from one arm it
+/// must reach explicitly. An `ExprKind` this pass does not special-case falls
+/// through to the ordinary identifier walk and lands here material, so a
+/// language addition costs a spurious error, never an admitted race.
+#[derive(Debug, Clone)]
+struct BranchUse {
+    span: Span,
+    material: bool,
+}
+
+/// Record a branch's reference to `name`, keeping the strongest classification
+/// seen: once any reference in the branch is material the binding stays
+/// material, and the reported span moves to that reference (the diagnostic
+/// should point at the use that actually races, not at a benign projection
+/// earlier in the same branch).
+fn record_use(out: &mut HashMap<String, BranchUse>, name: String, span: Span, material: bool) {
+    match out.get_mut(&name) {
+        Some(existing) => {
+            if material && !existing.material {
+                existing.material = true;
+                existing.span = span;
+            }
+        }
+        None => {
+            out.insert(name, BranchUse { span, material });
+        }
+    }
 }
 
 impl<'a> super::OwnershipChecker<'a> {
@@ -225,12 +278,13 @@ impl<'a> super::OwnershipChecker<'a> {
             let Some(head) = type_expr_head_name(&p.ty) else {
                 continue;
             };
-            if let Some(kind) = self.classify_binding_type(&head) {
+            if let Some((kind, readonly_scalar_fields)) = self.classify_tracked_binding(&head) {
                 tracked.insert(
                     name.to_string(),
                     TrackedBinding {
                         type_name: head,
                         kind,
+                        readonly_scalar_fields,
                     },
                 );
             }
@@ -239,7 +293,7 @@ impl<'a> super::OwnershipChecker<'a> {
             body,
             &self.typecheck_result.pattern_binding_types,
             &mut tracked,
-            |n| self.classify_binding_type(n),
+            |n| self.classify_tracked_binding(n),
         );
         tracked
     }
@@ -292,6 +346,82 @@ impl<'a> super::OwnershipChecker<'a> {
             }
         }
         None
+    }
+
+    /// B-2026-08-01-33 — the fields of `type_name` whose read from a par
+    /// branch is provably free of refcount traffic. Populates
+    /// [`TrackedBinding::readonly_scalar_fields`]; see
+    /// [`Self::classify_tracked_binding`] for the safety argument.
+    ///
+    /// Two structural conditions, both fail-closed (an unknown type, an enum,
+    /// or a field this pass cannot resolve yields the empty set, i.e. today's
+    /// unconditional conflict):
+    ///
+    /// 1. **Immutable** — the field is absent from `StructInfo::mut_fields`,
+    ///    which for a `shared` struct is exactly the set assignable through a
+    ///    handle (declared `mut`, or an interior-mutable `Atomic[T]` /
+    ///    `Mutex[T]`). An immutable field cannot be written by ANY branch, so
+    ///    admitting concurrent readers cannot introduce a payload race and the
+    ///    walk needs no write-position tracking. This is the same guarantee
+    ///    `par struct` gives ("immutable fields are freely readable across
+    ///    tasks") applied to the `shared` tier.
+    /// 2. **Scalar** — `is_copy_type_basic`, deliberately NARROWER than
+    ///    `is_copy_type`: no `ref`/tuple/array/SIMD arms. Reading a scalar
+    ///    copies a register; a compound field would raise buffer-aliasing
+    ///    questions this entry has not measured.
+    fn readonly_scalar_fields(&self, type_name: &str) -> HashSet<String> {
+        let Some(info) = self.typecheck_result.struct_info.get(type_name) else {
+            return HashSet::new();
+        };
+        info.fields
+            .iter()
+            .filter(|(fname, fty, _)| {
+                !info.mut_fields.contains(fname) && super::is_copy_type_basic(fty)
+            })
+            .map(|(fname, _, _)| fname.clone())
+            .collect()
+    }
+
+    /// Pairs [`Self::classify_binding_type`] with the B-2026-08-01-33
+    /// read-only projection set, so all three `TrackedBinding` construction
+    /// sites derive both from one call.
+    ///
+    /// WHY A `shared` BINDING MAY BE READ FROM SIBLING BRANCHES AT ALL, which
+    /// the unconditional gate this refines did not distinguish. Measured on
+    /// x86-64 by disassembling `__par_branch_0_0` for three programs differing
+    /// only in how the branch touches a captured `shared struct` binding:
+    ///
+    /// ```text
+    ///   branch body                        atomic rc ops   PLAIN (racy) rc ops
+    ///   root.a  (immutable i64 field)            2                  0
+    ///   take(root)      (root by value)          3                  0
+    ///   take(root.inner)  (nested handle)        3                  1
+    /// ```
+    ///
+    /// The first two are `lock incq` / `lock decq` throughout — the
+    /// `ParCaptureMode::SharedRc` prologue pair, plus (for the by-value case)
+    /// the `arc_values` promotion that `classify_par_capture_modes` applies to
+    /// the captured binding. Only materializing a NESTED handle emits an
+    /// unlocked `decq`, which is B-2026-07-28-13's race and must keep failing.
+    ///
+    /// So only condition 1 of the entry's three candidate mechanisms is
+    /// exercised here, in its degenerate form: rather than ELIDING refcount
+    /// traffic, this admits exactly the shapes that provably emit none. The
+    /// gate is not loosened for anything that does.
+    ///
+    /// Deliberately NOT admitted, though it measured clean above: passing the
+    /// root by value (`take(root)`). One disassembly of one shape is not
+    /// enough to relax a gate whose failure mode is a SIGSEGV — a consuming
+    /// callee that stores the handle raises lifetime questions this pass does
+    /// not answer. Recorded in the ledger with the measurement so the next
+    /// widening starts from evidence.
+    fn classify_tracked_binding(&self, name: &str) -> Option<(BindingKind, HashSet<String>)> {
+        let kind = self.classify_binding_type(name)?;
+        let fields = match kind {
+            BindingKind::Shared => self.readonly_scalar_fields(name),
+            BindingKind::Plain => HashSet::new(),
+        };
+        Some((kind, fields))
     }
 }
 
@@ -352,7 +482,7 @@ fn collect_let_tracked_bindings(
     block: &Block,
     pattern_binding_types: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<BindingKind> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
 ) {
     for stmt in &block.stmts {
         collect_let_in_stmt(stmt, pattern_binding_types, out, classify);
@@ -366,7 +496,7 @@ fn collect_let_in_stmt(
     stmt: &Stmt,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<BindingKind> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
@@ -408,7 +538,7 @@ fn record_pattern_bindings(
     pattern: &Pattern,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<BindingKind> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
 ) {
     record_pattern_inner(pattern, pbt, out, classify);
 }
@@ -417,18 +547,19 @@ fn record_pattern_inner(
     pattern: &Pattern,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<BindingKind> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
 ) {
     match &pattern.kind {
         PatternKind::Binding(name) => {
             let key = SpanKey::from_span(&pattern.span);
             if let Some(head) = pbt.get(&key) {
-                if let Some(kind) = classify(head) {
+                if let Some((kind, readonly_scalar_fields)) = classify(head) {
                     out.insert(
                         name.clone(),
                         TrackedBinding {
                             type_name: head.clone(),
                             kind,
+                            readonly_scalar_fields,
                         },
                     );
                 }
@@ -439,12 +570,13 @@ fn record_pattern_inner(
         } => {
             let key = SpanKey::from_span(&pattern.span);
             if let Some(head) = pbt.get(&key) {
-                if let Some(kind) = classify(head) {
+                if let Some((kind, readonly_scalar_fields)) = classify(head) {
                     out.insert(
                         name.clone(),
                         TrackedBinding {
                             type_name: head.clone(),
                             kind,
+                            readonly_scalar_fields,
                         },
                     );
                 }
@@ -476,7 +608,7 @@ fn collect_let_in_expr(
     expr: &Expr,
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
-    classify: impl Fn(&str) -> Option<BindingKind> + Copy,
+    classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>)> + Copy,
 ) {
     match &expr.kind {
         ExprKind::Block(b)
@@ -1126,17 +1258,54 @@ fn detect_par_block_conflicts(
     let mut first_use: HashMap<String, (usize, Span)> = HashMap::new();
     let mut reported: HashSet<String> = HashSet::new();
 
-    for (branch_idx, stmt) in par_body.stmts.iter().enumerate() {
-        let mut uses: HashMap<String, Span> = HashMap::new();
-        collect_identifier_uses_in_stmt(
-            stmt,
-            tracked,
-            closure_captures,
-            closure_bindings,
-            &mut uses,
-        );
-        for (name, use_span) in uses {
+    // Pass 1 — per-branch uses. Collected up front because the
+    // B-2026-08-01-33 suppression is a property of the WHOLE par block (does
+    // any branch materialize this binding?), which the original single-pass
+    // detector could not see: it fired on reaching the second branch, before
+    // later branches had been walked.
+    let per_branch: Vec<HashMap<String, BranchUse>> = par_body
+        .stmts
+        .iter()
+        .map(|stmt| {
+            let mut uses: HashMap<String, BranchUse> = HashMap::new();
+            collect_identifier_uses_in_stmt(
+                stmt,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                &mut uses,
+            );
+            uses
+        })
+        .collect();
+
+    // Pass 2 — B-2026-08-01-33. A binding every branch merely PROJECTS an
+    // immutable scalar field from emits no refcount traffic anywhere in the
+    // block, so there is nothing for the branches to race on and the conflict
+    // is suppressed.
+    //
+    // The quantifier is "no branch materializes", not "at most one does". A
+    // single materializing branch is enough to disqualify the whole block:
+    // `ParCaptureMode::SharedRc` gives every capturing branch an ATOMIC
+    // prologue inc, so one branch performing a plain rc op concurrently with
+    // another's atomic one is mixed-atomicity access to a single word — a
+    // race in its own right, whatever the counts work out to.
+    let materialized_anywhere: HashSet<&str> = per_branch
+        .iter()
+        .flat_map(|uses| {
+            uses.iter()
+                .filter(|(_, u)| u.material)
+                .map(|(n, _)| n.as_str())
+        })
+        .collect();
+
+    for (branch_idx, uses) in per_branch.iter().enumerate() {
+        for (name, use_entry) in uses {
+            let (name, use_span) = (name.clone(), use_entry.span.clone());
             if reported.contains(&name) {
+                continue;
+            }
+            if !materialized_anywhere.contains(name.as_str()) {
                 continue;
             }
             match first_use.get(&name) {
@@ -3449,7 +3618,7 @@ fn collect_identifier_uses_in_stmt(
     tracked: &HashMap<String, TrackedBinding>,
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
-    out: &mut HashMap<String, Span>,
+    out: &mut HashMap<String, BranchUse>,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
@@ -3557,13 +3726,13 @@ fn collect_identifier_uses_in_expr(
     tracked: &HashMap<String, TrackedBinding>,
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
-    out: &mut HashMap<String, Span>,
+    out: &mut HashMap<String, BranchUse>,
 ) {
     match &expr.kind {
         ExprKind::Identifier(name) => {
             // Direct tracked-binding reference.
             if tracked.contains_key(name) {
-                out.entry(name.clone()).or_insert_with(|| expr.span.clone());
+                record_use(out, name.clone(), expr.span.clone(), true);
             }
             // Indirect reference via a let-bound closure that captures
             // tracked bindings — `let f = || use(c);` followed by a
@@ -3574,7 +3743,7 @@ fn collect_identifier_uses_in_expr(
             // the per-branch identifier walk.
             for cap in expand_through_closure_bindings(name, closure_bindings) {
                 if tracked.contains_key(&cap) {
-                    out.entry(cap).or_insert_with(|| expr.span.clone());
+                    record_use(out, cap, expr.span.clone(), true);
                 }
             }
         }
@@ -3591,12 +3760,11 @@ fn collect_identifier_uses_in_expr(
             if let Some(captures) = closure_captures.get(&key) {
                 for (cap_name, _) in captures {
                     if tracked.contains_key(cap_name) {
-                        out.entry(cap_name.clone())
-                            .or_insert_with(|| expr.span.clone());
+                        record_use(out, cap_name.clone(), expr.span.clone(), true);
                     }
                     for chained in expand_through_closure_bindings(cap_name, closure_bindings) {
                         if tracked.contains_key(&chained) {
-                            out.entry(chained).or_insert_with(|| expr.span.clone());
+                            record_use(out, chained, expr.span.clone(), true);
                         }
                     }
                 }
@@ -3800,7 +3968,35 @@ fn collect_identifier_uses_in_expr(
                 );
             }
         }
-        ExprKind::FieldAccess { object, .. } => {
+        ExprKind::FieldAccess { object, field } => {
+            // B-2026-08-01-33 — the one arm that can mark a use NON-material.
+            // `<tracked shared binding>.<immutable scalar field>` reads the
+            // handle's payload with a plain deref: no rc inc/dec, no buffer
+            // copy (measured — see `classify_tracked_binding`). Recording it
+            // here and NOT descending is what keeps the bare `Identifier`
+            // underneath from registering a material use.
+            //
+            // The field must be BOTH immutable and scalar, so this can admit
+            // neither a nested-handle materialization (a `shared`-typed field
+            // is not scalar) nor a write. Writes are covered from both sides,
+            // which is why this arm needs no write-position tracking:
+            //   * `root.a = 9` with `a` DECLARED MUT — `a` is in
+            //     `mut_fields`, so it is absent from the readonly set and
+            //     falls through to the material walk below, which fires.
+            //   * `root.a = 9` with `a` IMMUTABLE — this arm does mark it
+            //     non-material, but the program is already dead: the
+            //     typechecker rejects it upstream with "shared struct field
+            //     'Node.a' is not declared mut" (verified). No suppression
+            //     here can make such a program compile.
+            if let ExprKind::Identifier(base) = &object.kind {
+                if tracked
+                    .get(base)
+                    .is_some_and(|b| b.readonly_scalar_fields.contains(field))
+                {
+                    record_use(out, base.clone(), expr.span.clone(), false);
+                    return;
+                }
+            }
             collect_identifier_uses_in_expr(
                 object,
                 tracked,

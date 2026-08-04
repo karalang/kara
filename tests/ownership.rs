@@ -6798,14 +6798,25 @@ fn test_concurrent_shared_struct_fires_via_field_access() {
     // binding inside each branch — including field-access shapes like
     // `tree.left`. Pins that we don't only catch identifier-passed-
     // to-fn forms.
+    //
+    // B-2026-08-01-33 RE-TARGETED the example, not the property. This test
+    // guards "a field-access reference counts, not just a bare identifier",
+    // and it still does — but its original example projected an IMMUTABLE
+    // SCALAR field (`root.val`, `val: i64`), which is now admitted because
+    // that shape provably emits no refcount traffic (measured: 0 plain rc ops
+    // in the branch). The example moves to the shape the test's own comment
+    // names — `tree.left`, a NESTED SHARED HANDLE — which is the case that
+    // really does race (measured: 1 plain, unlocked `decq`) and still fires
+    // through the same field-access path.
     let errors = ownership_errors(
         "shared struct Node { val: i64 }\n\
-         fn read(n: i64) -> i64 { n }\n\
+         shared struct Tree { left: Node }\n\
+         fn read(n: Node) -> i64 { n.val }\n\
          fn main() {\n\
-             let root = Node { val: 7 };\n\
+             let tree = Tree { left: Node { val: 7 } };\n\
              par {\n\
-                 read(root.val);\n\
-                 read(root.val);\n\
+                 read(tree.left);\n\
+                 read(tree.left);\n\
              }\n\
          }",
     );
@@ -6813,9 +6824,189 @@ fn test_concurrent_shared_struct_fires_via_field_access() {
         errors.iter().any(|e| matches!(
             &e.kind,
             OwnershipErrorKind::ConcurrentSharedStruct { type_name, binding }
-                if type_name == "Node" && binding == "root"
+                if type_name == "Tree" && binding == "tree"
         )),
         "field-access in two branches should still fire E_CONCURRENT_SHARED_STRUCT"
+    );
+}
+
+/// B-2026-08-01-33 — the relaxation this entry bought, and the boundary
+/// around it.
+///
+/// Reading an IMMUTABLE SCALAR field off a captured `shared` binding lowers
+/// to a plain payload deref: the branch's only refcount traffic is the
+/// `ParCaptureMode::SharedRc` prologue's ATOMIC inc/dec pair. Measured by
+/// disassembling `__par_branch_0_0` — 2 `lock`-prefixed ops, 0 plain ones —
+/// so sibling branches doing this have nothing to race on.
+///
+/// This is also the shape AUTO-PAR has always admitted (`ps[j].v` through a
+/// `Vec[shared]` parallelizes, byte-identical report to a plain-struct
+/// control), so before this the two parallel surfaces disagreed on one
+/// safety question.
+#[test]
+fn test_concurrent_shared_struct_admits_immutable_scalar_projection() {
+    let result = ownership_ok(
+        "shared struct Node { a: i64, b: i64 }\n\
+         fn read(n: i64) -> i64 { n }\n\
+         fn main() {\n\
+             let root = Node { a: 2, b: 3 };\n\
+             par {\n\
+                 read(root.a);\n\
+                 read(root.b);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "an immutable scalar projection emits no refcount traffic and must be \
+         admitted from sibling branches; got: {:?}",
+        result.errors
+    );
+}
+
+/// Companion to the admit test — each of these MUST keep firing, and each
+/// fails for a different reason. A relaxation that broke any of them would
+/// reintroduce B-2026-07-28-13's SIGSEGV or a payload race.
+#[test]
+fn test_concurrent_shared_struct_still_fires_for_materializing_uses() {
+    // (a) NESTED HANDLE materialized — the measured race: one plain,
+    // unlocked `decq` on the interior node's refcount.
+    let nested = ownership_errors(
+        "shared struct Inner { v: i64 }\n\
+         shared struct Outer { inner: Inner }\n\
+         fn take(i: Inner) -> i64 { i.v }\n\
+         fn main() {\n\
+             let root = Outer { inner: Inner { v: 4 } };\n\
+             par {\n\
+                 take(root.inner);\n\
+                 take(root.inner);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        nested
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "materializing a NESTED shared handle races on its non-atomic refcount; \
+         got: {nested:?}"
+    );
+
+    // (b) ROOT passed by value. This one measured CLEAN (the `arc_values`
+    // promotion makes the captured binding's ops atomic), but is deliberately
+    // not admitted — one disassembly of one shape is not enough to relax a
+    // gate whose failure mode is a SIGSEGV, and a consuming callee that
+    // stores the handle raises lifetime questions this pass cannot answer.
+    // If a later slice admits it, this assertion is the one to revisit.
+    let by_value = ownership_errors(
+        "shared struct Node { a: i64 }\n\
+         fn take(n: Node) -> i64 { n.a }\n\
+         fn main() {\n\
+             let root = Node { a: 2 };\n\
+             par {\n\
+                 take(root);\n\
+                 take(root);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        by_value
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "passing the root by value stays rejected pending evidence; got: {by_value:?}"
+    );
+
+    // (c) A `mut` field. Immutability is what makes concurrent readers safe
+    // without write-position tracking — a writable field could be assigned
+    // from a sibling branch, which is a PAYLOAD race, not an RC one.
+    let mut_field = ownership_errors(
+        "shared struct Node { mut a: i64, b: i64 }\n\
+         fn read(n: i64) -> i64 { n }\n\
+         fn main() {\n\
+             let root = Node { a: 2, b: 3 };\n\
+             par {\n\
+                 root.a = 9;\n\
+                 read(root.b);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        mut_field
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "a write through a mut field must still fire; got: {mut_field:?}"
+    );
+
+    // (d) Method receiver — materializes the handle to dispatch.
+    let method = ownership_errors(
+        "shared struct Node { a: i64 }\n\
+         impl Node { fn get(ref self) -> i64 { self.a } }\n\
+         fn main() {\n\
+             let root = Node { a: 2 };\n\
+             par {\n\
+                 root.get();\n\
+                 root.get();\n\
+             }\n\
+         }",
+    );
+    assert!(
+        method
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "a method receiver must still fire; got: {method:?}"
+    );
+
+    // (e) A NON-SCALAR immutable field. Reading a `String` out raises
+    // buffer-aliasing questions the scalar case does not, so the admit set is
+    // `is_copy_type_basic`, not `is_copy_type`.
+    let non_scalar = ownership_errors(
+        "shared struct Node { name: String, a: i64 }\n\
+         fn read(s: String) -> i64 { s.len() as i64 }\n\
+         fn main() {\n\
+             let root = Node { name: \"x\", a: 1 };\n\
+             par {\n\
+                 read(root.name);\n\
+                 read(root.name);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        non_scalar
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "a non-scalar field projection is not in the admitted set; got: {non_scalar:?}"
+    );
+}
+
+/// The quantifier is "NO branch materializes", not "at most one does".
+///
+/// `ParCaptureMode::SharedRc` gives every capturing branch an ATOMIC prologue
+/// inc, so one branch performing a plain rc op concurrently with another's
+/// atomic one is mixed-atomicity access to a single refcount word — undefined
+/// regardless of how the counts balance. A suppression keyed on "fewer than
+/// two materializing branches" would wrongly admit this.
+#[test]
+fn test_concurrent_shared_struct_mixed_projection_and_materialization_fires() {
+    let errors = ownership_errors(
+        "shared struct Node { a: i64 }\n\
+         fn read(n: i64) -> i64 { n }\n\
+         fn take(n: Node) -> i64 { n.a }\n\
+         fn main() {\n\
+             let root = Node { a: 2 };\n\
+             par {\n\
+                 read(root.a);\n\
+                 take(root);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "one safe projection does not license a sibling branch's materialization; \
+         got: {errors:?}"
     );
 }
 
