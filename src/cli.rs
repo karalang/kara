@@ -918,6 +918,14 @@ fn read_source(filename: &str) -> String {
 
 struct Pipeline {
     filename: String,
+    /// The exact text `parse` consumed, when there was one. Span-driven lints
+    /// need the author's own spelling, and `filename` is NOT always a readable
+    /// path — project mode labels its hand-built super-program with the
+    /// package NAME and has no single source text at all. Re-reading
+    /// `filename` from disk instead is what broke every project build
+    /// (B-2026-08-04-7). `None` means "no single source": source-text lints
+    /// skip rather than slice into a stand-in string.
+    source: Option<String>,
     parsed: ParseResult,
     resolved: Option<ResolveResult>,
     typed: Option<TypeCheckResult>,
@@ -975,6 +983,7 @@ impl Pipeline {
         let parsed = crate::parse(source);
         Pipeline {
             filename: filename.to_string(),
+            source: Some(source.to_string()),
             parsed,
             resolved: None,
             typed: None,
@@ -1093,8 +1102,16 @@ impl Pipeline {
         // their fix-its. The lint needs the original source text, since both
         // its same-expression checks and its rewrite reproduce the author's
         // own spelling by span.
-        let source = read_source(&self.filename);
-        if let Some(typed) = self.typed.as_mut() {
+        //
+        // Read from the text `new` was handed, NOT from `filename` on disk
+        // (B-2026-08-04-7): project mode labels its super-program with the
+        // package NAME, so re-reading hit `read_source`'s `process::exit(1)`
+        // and every `karac build` in a project died with
+        // `error: cannot read '<package>'` before codegen. Project mode has no
+        // single source text, so the lint sits out there rather than reading
+        // spans against a stand-in — project-wide coverage needs the
+        // per-module texts and is a follow-up.
+        if let (Some(source), Some(typed)) = (self.source.clone(), self.typed.as_mut()) {
             let extra = crate::map_entry_lint::check_map_value_clone_reinsert(
                 &self.parsed.program,
                 typed,
@@ -8170,6 +8187,10 @@ fn run_multi_file_codegen(
     };
     let mut pipeline = Pipeline {
         filename: mf.name.clone(),
+        // No single source text: `parsed` is a super-program stitched from
+        // every module. `filename` is the package NAME, not a path, so it must
+        // never be read from disk (B-2026-08-04-7).
+        source: None,
         parsed,
         resolved: None,
         typed: None,
