@@ -4,8 +4,15 @@
 #   - workflow_dispatch, `tag` input empty: dry-run the whole pipeline
 #     (build + clean-runner smoke) without publishing anything — the way
 #     to iterate on it.
-#   - workflow_dispatch with a `tag` input (e.g. v0.1.0-dev): same
-#     pipeline, then a DRAFT release for that tag at the built commit.
+#   - workflow_dispatch with a `tag` input: same pipeline, then a DRAFT
+#     release for that tag at the built commit.
+#     TAG SCHEME (owner-set, 2026-08-04): dev previews are
+#     `v<base>-dev.<commit-count>` — e.g. v0.1.0-dev.5139 — matching the
+#     binaries' own `--version` stamp (`0.1.0-dev.5139+g<sha>`), so the
+#     tag names the exact build it contains and every release is a NEW
+#     tag (published tags are immutable; never re-point one at a fix).
+#     Pass `auto` to compute it from the checkout (the normal path);
+#     only the first preview, plain v0.1.0-dev, predates the scheme.
 #     The tag itself is created by GitHub when the draft is published —
 #     so the tag can never exist without smoke-passed binaries behind
 #     it. This is also the only release path from a cloud session: the
@@ -37,7 +44,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Draft a release for this tag (e.g. v0.1.0-dev); empty = dry-run"
+        description: "Draft a release: 'auto' = v<base>-dev.<commit-count> (the standard scheme), or an explicit tag; empty = dry-run"
         required: false
         default: ""
   push:
@@ -184,11 +191,29 @@ jobs:
     needs: smoke
     runs-on: ubuntu-24.04
     steps:
+      # Full-depth checkout: `auto` needs the same commit count the
+      # version stamp uses (build.rs: rev-list --count HEAD). Must run
+      # BEFORE the artifact download — checkout cleans the workspace.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download all bundles
         uses: actions/download-artifact@v4
         with:
           pattern: karac-*
           merge-multiple: true
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          if [ "$TAG" = "auto" ]; then
+            BASE="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+            TAG="v${BASE}-dev.$(git rev-list --count HEAD)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "resolved release tag: $TAG"
 
       - name: Create draft release
         uses: softprops/action-gh-release@v2
@@ -198,9 +223,9 @@ jobs:
           # On dispatch, the tag doesn't exist yet: GitHub creates it at
           # target_commitish when the draft is PUBLISHED. On tag push,
           # the existing tag wins and target_commitish is ignored.
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ inputs.tag || github.ref_name }} (dev preview)
+          name: ${{ steps.tag.outputs.tag }} (dev preview)
           body: |
             Pre-v1 development preview of the Kāra compiler. Expect
             breakage; report issues with the exact `karac --version`
