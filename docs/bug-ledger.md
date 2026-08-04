@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 212 | 0 |
 | leak | 130 | 0 |
-| double-free | 93 | 2 |
+| double-free | 93 | 1 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 75 | 1 |
 | run-vs-build | 75 | 0 |
@@ -103,20 +103,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 39 | 0 |
 | soundness | 36 | 0 |
 | diagnostics | 35 | 0 |
-| other | 13 | 0 |
+| other | 14 | 1 |
 | use-after-free | 12 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 656 | 3 |
+| codegen | 656 | 2 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 38 | 2 |
 | autopar | 32 | 1 |
+| other | 24 | 1 |
 | cli | 24 | 0 |
-| other | 23 | 0 |
 | runtime | 19 | 0 |
 | resolver | 18 | 0 |
 | parser | 10 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **907 surfaced · 4 open · 895 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **908 surfaced · 4 open · 896 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -132,12 +132,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **907 surfaced 
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-04-8 | 2026-08-04 | codegen | medium | Bounds-check elimination fails for the CONVERGING two-pointer loop `while lo <= hi { v[base+lo] ... v[base+hi] }` when the index carries a base offset — the flat-2D / row-major scan shape. Isolated on kata #246 (strobogrammatic two-pointer over a flat Vec[u8] corpus of N*LEN bytes): kara keeps 2 per-iteration checks that clang -O3 does not, costing 1.28x on the kata and 1.93x on a work-identical minimal probe. Neither ingredient alone breaks BCE — base+ascending, base+descending, converging-without-base, and even both-ends-from-ONE-ascending-IV all elide cleanly; only the combination of a base offset with a converging two-IV guard defeats it. | — |
-| B-2026-08-04-11 | 2026-08-04 | codegen | high | `match <fresh Result temp> { Err(e) => .. }` ABORTS with `free(): double free detected` when the arm BINDS a struct payload whose heap was moved in from a LOCAL (`let s = ..; return E { msg: s }`) -- building the same field inline in the literal is clean, as are Option, a named scrutinee, and a wildcard arm | src/codegen/control_flow_match.rs (track_freshtemp_inline_result_scrutinee) |
 | B-2026-08-04-16 | 2026-08-04 | codegen+ownership | high | Moving a Vec OUT of a tuple element, mutating it, and moving it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) aborts with `free(): double free detected in tcache 2` under both AOT and the JIT; the interpreter runs it. The struct-field analogue (`let mut e = h.items; ...; h.items = e;`) is correct, so this is again the TUPLE spelling of a walk that handles the field spelling. Independent of auto-par (`KARAC_NO_AUTOPAR=1` reproduces it) and independent of B-2026-08-04-15, which is fixed | — |
+| B-2026-08-04-17 | 2026-08-04 | other | low | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/codegen.rs, tests/memory_sanitizer.rs (assert_clean_asan_run), docs/bug-ledger.jsonl B-2026-08-04-11 |
 
-### Fixed (895)
+### Fixed (896)
 
-<details><summary>895 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>896 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1054,6 +1054,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-7 | cli | high | EVERY project-mode `karac build` fails immediately: it opens the PACKAGE NAME as a source path (`error: cannot read 'solo'`), so a manifest-driven bu… | 4c52d82 (src/cli.rs; no new test -- the 36 pre-existing `tests/cli.rs` cases were the RED signal and are the pin: 524 passed / 36 failed before, 560 passed / 0 failed after) |
 | B-2026-08-04-9 | codegen | high | `?` on an Option/Result whose payload is heap-BOXED unwraps the BOX POINTER as if it were the payload's first word -- the value comes out empty or ga… | 60087fc (src/codegen/exprs.rs, src/codegen/control_flow_match.rs for the helper's visibility; pins codegen.rs::e2e_question_reconstructs_wide_and_boxed_ok_payloads, its interpreter oracle interpreter.rs::test_question_reconstructs_wide_and_boxed_ok_payloads, and memory_sanitizer.rs::asan_question_deboxed_ok_payload_frees_the_box -- the first two stash-proven RED on the exact garbage output, the third at 12,800 bytes under LeakSanitizer) |
 | B-2026-08-04-10 | codegen | medium | `let <StructPattern> = <expr>?;` -- a struct destructure written DIRECTLY on a `?` whose payload is heap-boxed -- leaks the payload's heap fields; ro… | a82b4ff (src/codegen/stmts.rs; pins the extended memory_sanitizer.rs::asan_question_deboxed_ok_payload_frees_the_box, stash-proven RED against this commit's change alone at 6,400 bytes under LeakSanitizer) |
+| B-2026-08-04-11 | codegen | high | `match <fresh Result temp> { Err(e) => . | 563eb8b (src/codegen/control_flow_match.rs; leg (a) was 375dd77). Pins codegen.rs::e2e_freshtemp_result_arm_binding_a_struct_payload_owns_it_once, memory_sanitizer.rs::asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once, interpreter.rs::test_freshtemp_result_arm_binding_a_struct_payload_owns_it_once. All three are stash-proven RED (abort, exit 134) and carry the wildcard / named-scrutinee / recover-CONSUME immunities as controls. cargo test --features llvm: 12968 passed, 0 failed. |
 | B-2026-08-04-12 | codegen | high | `?` PROPAGATING an Err whose payload is a struct wider than THREE words silently drops every word past the third -- the Err mirror of B-2026-08-04-9'… | e6a2eca (src/codegen/exprs.rs; pins codegen.rs::e2e_question_propagates_a_wide_inline_err_payload_whole, stash-proven RED on the exact wrong field value, with a BOXED 6-word control and a no-`?` control) |
 | B-2026-08-04-13 | codegen | high | The descending-loop bounds-check skip (B-2026-07-17-1) reads the facts it rests on with `stmt_writes_ident`, which sees only TOP-LEVEL assignment tar… | 484c2c9 |
 | B-2026-08-04-14 | interp | medium | The interpreter silently DROPPED an out-of-range index-assign: `v[100] = 7` on a 2-element Vec produced no error, no growth, and no store — while AOT… | a4ca760 |
