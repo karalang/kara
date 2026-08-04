@@ -9460,6 +9460,79 @@ fn main() {
             assert_eq!(out.trim(), "50\n50\n50", "got {out:?}");
         }
     }
+
+    /// B-2026-08-04-15 — a mutating method on a TUPLE-ELEMENT receiver
+    /// (`t.0.push(x)`) recorded NO write in the auto-par dependency walk, so
+    /// two pushes to the same Vec looked mutually independent and were grouped
+    /// as "no data or effect dependencies" along with the read after them. The
+    /// stores were silently lost: `t.0.len()` returned 0 after two pushes.
+    ///
+    /// `collect_assign_target_defines` walked `FieldAccess` and `Index` to the
+    /// place root but let `TupleIndex` fall through its `_ => {}`, so the
+    /// `MethodCall` arm recursed onto `t.0` and recorded nothing.
+    ///
+    /// THIS TEST MUST LIVE HERE, NOT IN `tests/codegen.rs`. That harness passes
+    /// `None` for the concurrency analysis, so nothing it runs is auto-parallel
+    /// — B-2026-08-02-10's `e2e_tuple_elem_method_receivers` covers this exact
+    /// source there and passed throughout, while `karac build` on the same file
+    /// aborted. Only `par_codegen`'s harness threads `Some(&analysis)` the way
+    /// the CLI does, which is what makes this a regression test rather than a
+    /// second copy of a passing one.
+    #[test]
+    fn e2e_tuple_element_method_receiver_is_a_write_for_autopar() {
+        // MINIMAL SOURCE, deliberately. The first draft of this test appended a
+        // struct-field "control" (`h.items.push` twice) to the same `main`, and
+        // it PASSED against the unfixed compiler: the extra statements changed
+        // the grouping enough to hide the miscompile. A regression test that
+        // does not fail on the bug is worse than no test, so the control moved
+        // to its own program below and this one stays at exactly the shape that
+        // breaks. Verified in both directions — with the `TupleIndex` arm
+        // reverted, this assert fires.
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let mut t: (Vec[i64], i64) = (v, 3);
+    t.0.push(10);
+    t.0.push(20);
+    println(f"len {t.0.len()} v0 {t.0[0]} v1 {t.0[1]}");
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "len 2 v0 10 v1 20\nend\n",
+                "a mutating method on a tuple-element receiver must record a \
+                 write, so auto-par cannot reorder it against a sibling \
+                 mutation or a later read; got {out:?}"
+            );
+        }
+    }
+
+    /// The struct-field spelling of the program above — the arm that was
+    /// already present. It passes with or without the `TupleIndex` fix, which
+    /// is exactly its job: it pins that the sibling path stays correct, and it
+    /// lives in its own program so it cannot perturb the grouping of the case
+    /// that actually regressed.
+    #[test]
+    fn e2e_struct_field_method_receiver_is_a_write_for_autopar() {
+        let out = run_program(
+            r#"
+struct H { items: Vec[i64] }
+fn main() {
+    let mut h = H { items: Vec.new() };
+    h.items.push(30);
+    h.items.push(40);
+    println(f"len {h.items.len()} v0 {h.items[0]} v1 {h.items[1]}");
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "len 2 v0 30 v1 40\nend\n", "got {out:?}");
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
@@ -9542,6 +9615,41 @@ fn main() {
             "no karac_map_free* CALL in the module: the in-group Map's \
              FreeMapHandle transfer was lost at the branch write-back \
              (B-2026-07-31-40 regressed)"
+        );
+    }
+
+    /// The analysis-level twin of the E2E above: pin that the two pushes are
+    /// NOT collected into one parallel group. The E2E asserts the observable
+    /// output, which is what actually matters, but it would also pass if the
+    /// grouping survived and codegen happened to serialize the branches for an
+    /// unrelated reason. This asserts the decision itself.
+    #[test]
+    fn autopar_does_not_group_two_mutations_of_one_tuple_element() {
+        let src = r#"
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let mut t: (Vec[i64], i64) = (v, 3);
+    t.0.push(10);
+    t.0.push(20);
+    println(f"{t.0.len()}");
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+        let main_fn = analysis
+            .function_decisions
+            .get("main")
+            .expect("main in function_decisions");
+        assert!(
+            main_fn.parallel_groups.is_empty(),
+            "two pushes to the same tuple-element Vec (and the read after them) \
+             must not be grouped as independent; got {:?}",
+            main_fn.parallel_groups
         );
     }
 }

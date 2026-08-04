@@ -5005,11 +5005,28 @@ impl<'a> ConcurrencyChecker<'a> {
             ExprKind::SelfValue => {
                 defines.insert("self".to_string());
             }
-            ExprKind::FieldAccess { object, .. } => {
-                // a.field = ... defines the root variable
-                self.collect_assign_target_defines(object, defines);
-            }
-            ExprKind::Index { object, .. } => {
+            // Every PLACE-PROJECTION form recurses to its object: the write
+            // lands on the root binding regardless of how the place was spelled.
+            // `TupleIndex` was missing here until B-2026-08-04-15, and its
+            // absence was a MISCOMPILE, not a missed optimization: for
+            // `t.0.push(x)` the `MethodCall` arm below recursed onto the
+            // receiver `t.0`, which fell through to `_ => {}` and recorded NO
+            // write. Two pushes to the same tuple-element Vec then looked
+            // mutually independent, auto-par grouped them (and the read after
+            // them) as "no data or effect dependencies", and the program
+            // silently lost its stores. The `FieldAccess` sibling was present,
+            // which is why `h.items.push(x)` was always correct and only the
+            // tuple spelling broke.
+            //
+            // KEEP THIS ARM COMPLETE. The canonical list of place-projection
+            // forms is `place_root` (this file); anything it walks through must
+            // be walked through here too, or a write through that spelling goes
+            // unrecorded. The arms below (`Deref`, `MethodCall`) extend past
+            // `place_root` deliberately — a write can also be rooted through
+            // them — so the two are not interchangeable, only overlapping.
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::Index { object, .. }
+            | ExprKind::TupleIndex { object, .. } => {
                 self.collect_assign_target_defines(object, defines);
             }
             ExprKind::Unary {
@@ -5038,9 +5055,19 @@ impl<'a> ConcurrencyChecker<'a> {
         }
     }
 
+    /// Reads performed BY the target place itself — the index expressions a
+    /// place walks through (`a[i].f = …` reads `i`), not the assigned-to root.
+    ///
+    /// `TupleIndex` recurses here for the same reason it does in
+    /// `collect_assign_target_defines` (B-2026-08-04-15): a tuple projection is
+    /// a place-projection form, so a target spelled through one must keep
+    /// walking to reach the `Index` arms that contribute reads. A tuple index
+    /// is a compile-time literal and contributes no read of its own, so this
+    /// arm only restores the traversal — but stopping here made
+    /// `t.0[i] = v` miss the read of `i`.
     fn collect_assign_target_reads(&self, expr: &Expr, reads: &mut HashSet<String>) {
         match &expr.kind {
-            ExprKind::FieldAccess { object, .. } => {
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
                 self.collect_assign_target_reads(object, reads);
             }
             ExprKind::Index { object, index } => {
