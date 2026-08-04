@@ -68,7 +68,32 @@ mod memory_sanitizer_tests {
     /// abort-time, not steady-state leaks, and would spuriously flip the
     /// process exit code from `emit_panic`'s 1 to LSan's 23.
     fn run_under_asan(src: &str, label: &str) -> Option<(String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, true)
+        run_under_asan_opts(src, label, true, false).map(|(out, _err, st)| (out, st))
+    }
+
+    /// Like [`run_under_asan`] but turns on ASAN's exit-time allocation stats
+    /// and returns stderr alongside stdout, so the caller can assert the
+    /// program actually allocated. See
+    /// [`assert_clean_asan_run_min_allocs`] for why that matters.
+    fn run_under_asan_counting(
+        src: &str,
+        label: &str,
+    ) -> Option<(String, String, std::process::ExitStatus)> {
+        run_under_asan_opts(src, label, true, true)
+    }
+
+    /// Pull ASAN's exit-time malloc count out of a `print_stats=1` stderr dump.
+    /// The line reads `Stats: 0M malloced (0M for red zones) by 9 calls`.
+    /// `None` when the runtime printed no such line (an ASAN build without
+    /// stats support), which callers treat as "cannot measure" rather than
+    /// "measured zero".
+    fn asan_malloc_calls(stderr: &str) -> Option<u64> {
+        stderr
+            .lines()
+            .find(|l| l.contains("malloced") && l.contains(" by "))
+            .and_then(|l| l.rsplit_once(" by "))
+            .and_then(|(_, tail)| tail.split_whitespace().next())
+            .and_then(|n| n.parse::<u64>().ok())
     }
 
     /// Variant of [`run_under_asan`] that disables LeakSanitizer for the run.
@@ -84,14 +109,15 @@ mod memory_sanitizer_tests {
         src: &str,
         label: &str,
     ) -> Option<(String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, false)
+        run_under_asan_opts(src, label, false, false).map(|(out, _err, st)| (out, st))
     }
 
     fn run_under_asan_opts(
         src: &str,
         label: &str,
         detect_leaks: bool,
-    ) -> Option<(String, std::process::ExitStatus)> {
+        count_allocs: bool,
+    ) -> Option<(String, String, std::process::ExitStatus)> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -171,6 +197,16 @@ mod memory_sanitizer_tests {
         } else {
             "detect_leaks=0:abort_on_error=0:exitcode=23"
         };
+        // `print_stats=1:atexit=1` makes the ASAN runtime dump its allocation
+        // totals to stderr at exit. Verified not to mask anything: a leaky
+        // program still exits 23 with `ERROR: LeakSanitizer`, and a double free
+        // still exits 23 with `ERROR: AddressSanitizer: attempting double-free`.
+        // Off unless asked for, so the ordinary cases keep their quiet stderr.
+        let asan_options = if count_allocs {
+            format!("{asan_options}:print_stats=1:atexit=1")
+        } else {
+            asan_options.to_string()
+        };
         let output = Command::new(&exe_path)
             .env("ASAN_OPTIONS", asan_options)
             .output();
@@ -181,11 +217,11 @@ mod memory_sanitizer_tests {
         match output {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 if !out.status.success() {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
                     eprintln!("[{label}] binary exited non-zero:\n{stderr}");
                 }
-                Some((stdout, out.status))
+                Some((stdout, stderr, out.status))
             }
             Err(e) => {
                 eprintln!("[{label}] failed to run binary: {e}");
@@ -338,6 +374,72 @@ mod memory_sanitizer_tests {
             got, expected_stdout,
             "[{label}] unexpected stdout (ASAN passed, but output mismatched)"
         );
+    }
+
+    /// [`assert_clean_asan_run`] plus a floor on how many allocations the
+    /// program actually performed. B-2026-08-04-17.
+    ///
+    /// A clean ASAN run only means nothing went wrong with the memory the
+    /// program touched — it says nothing about whether the program touched the
+    /// memory the fixture was written to exercise, and at `-O2` the answer is
+    /// often no. Two ways a heap fixture silently stops allocating: content the
+    /// optimizer can fold (a constant-seeded loop folds to its final total; an
+    /// f-string built from a literal becomes a static), and a buffer whose
+    /// bytes are never read (touched only through `.len()`), which is a
+    /// provably dead allocation LLVM deletes outright. Measured on one program
+    /// shape with ~1200 intended payload allocations: 1 alloc const-seeded, 6
+    /// with an opaque seed but `.len()`-only reads, 3206 with an opaque seed
+    /// and a byte-level read. The first two pass against a compiler that
+    /// aborts on the third.
+    ///
+    /// So: seed from `env.args().len()` (a stable 1 here — the binary is
+    /// exec'd with no extra argv — while staying opaque to the optimizer),
+    /// read the payload's bytes rather than just its length, and set
+    /// `min_allocs` to a floor comfortably under the intended count but far
+    /// above what a folded-away version would reach.
+    ///
+    /// Skips the check, rather than failing, when the ASAN runtime prints no
+    /// stats line — that is "cannot measure", not "measured zero".
+    fn assert_clean_asan_run_min_allocs(
+        src: &str,
+        expected_stdout: &[&str],
+        label: &str,
+        min_allocs: u64,
+    ) {
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, stderr, status)) = run_under_asan_counting(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}). \
+             See stderr above — look for `ERROR: LeakSanitizer`, \
+             `ERROR: AddressSanitizer: heap-use-after-free`, or `double-free`.",
+            status.code()
+        );
+        let got: Vec<&str> = stdout.trim().lines().collect();
+        assert_eq!(
+            got, expected_stdout,
+            "[{label}] unexpected stdout (ASAN passed, but output mismatched)"
+        );
+        match asan_malloc_calls(&stderr) {
+            Some(n) => assert!(
+                n >= min_allocs,
+                "[{label}] VACUOUS FIXTURE: the program performed {n} allocations, \
+                 below the floor of {min_allocs}. A clean ASAN run over allocations \
+                 that never happened proves nothing. The optimizer has most likely \
+                 folded the payload away or deleted it as dead — check that the seed \
+                 is runtime-opaque and that the buffer's BYTES are read, not just \
+                 its length."
+            ),
+            None => eprintln!(
+                "[{label}] ASAN printed no allocation stats — min_allocs={min_allocs} unchecked"
+            ),
+        }
     }
 
     // ── Vec[Tensor] element ownership (B-2026-07-17-1) ───────────
@@ -35650,10 +35752,11 @@ fn main() {
     /// touched only through `.len()` is a provably dead allocation that LLVM
     /// deletes outright — the `.len()`-only draft of this fixture still ran
     /// clean against the unfixed compiler. With both, it allocates ~3.2k
-    /// buffers and aborts without the fix.
+    /// buffers and aborts without the fix. The `min_allocs` floor below is
+    /// what keeps that true: it fails loudly if either property is ever lost.
     #[test]
     fn asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once() {
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 struct One { msg: String }
 struct Two { code: i64, msg: String }
@@ -35719,6 +35822,11 @@ fn main() {
             // 20100 = 32268.
             &["32268"],
             "freshtemp_result_arm_binding_a_struct_payload_owns_it_once",
+            // ~3.2k buffers are intended (6 payloads x 200 iterations, plus the
+            // needles). The floor sits far below that so ordinary allocator
+            // variation never trips it, and far above the 1-to-6 a folded-away
+            // or dead-stripped version reaches.
+            1000,
         );
     }
 
