@@ -1274,8 +1274,34 @@ fn place_root(e: &Expr) -> Option<&str> {
 }
 
 /// Whether `stmt` writes `iv` (assign target, compound-assign target, shadow,
-/// or mut-marked arg). Fails open (true) on unanalyzed shapes.
+/// or mut-marked arg), **including a write buried in a nested block**. Fails
+/// open (true) on unanalyzed shapes.
+///
+/// The nested pre-check is load-bearing, not belt-and-braces (B-2026-08-04-13).
+/// The structural match below inspects top-level targets and statement VALUES
+/// only; it descends into inner blocks through `expr_writes_ident`, which sees
+/// each nested statement's value but never its assignment TARGET. So
+/// `if c { k = 100 }` read as "does not write `k`". Every caller uses this
+/// answer to freeze a fact about `iv` across a region — a fill counter's
+/// zero-ness (`counter_is_zero_before`), a fill bound's invariance
+/// (`bound_invariant_in_block`), the +1-only stepping of a fill counter
+/// (`writes_ident_other_than_plus_one_step`), an enclosing counter's guard
+/// bound (`analyze_enclosing_body`), an index's init value
+/// (`sole_scalar_init`) — and a missed write silently invalidates that fact,
+/// which here means eliding a bounds check that was load-bearing. Three of
+/// those five call sites were demonstrated to elide a real check and corrupt
+/// the heap. `region_bindings` is this module's exhaustive, nesting-aware
+/// collector (see its section comment, which names this exact gap); consulting
+/// its assignment-target roots closes the class at the single point all five
+/// callers share. Only `assigned` is consulted, not `rebound`: a nested `let`
+/// shadows an inner name without writing the outer `iv`.
 fn stmt_writes_ident(stmt: &Stmt, iv: &str) -> bool {
+    if region_bindings(std::slice::from_ref(stmt), &None)
+        .assigned
+        .contains(iv)
+    {
+        return true;
+    }
     match &stmt.kind {
         StmtKind::Let { pattern, value, .. } => {
             pattern_binds(pattern, iv) || expr_writes_ident(value, iv)
@@ -2948,5 +2974,103 @@ mod tests {
             v\n\
         }\n";
         assert!(desc_skips(src).is_empty());
+    }
+
+    // ── Nested writes to the values the proof freezes (B-2026-08-04-13) ──
+    //
+    // Each fact the descending skip rests on is read off a region scan:
+    // the fill counter starts at 0, the fill bound is invariant, the
+    // enclosing counter still satisfies its guard, the index's init is the
+    // one written before the loop. `stmt_writes_ident` answered all four and
+    // saw only TOP-LEVEL assignment targets, so burying the write one block
+    // deep (`if c { i = 50 }`) left every fact reading "unchanged" while the
+    // program changed it. The skip then elided a load-bearing check and the
+    // store ran past the end of the buffer — measured as glibc heap
+    // corruption, not a clean panic. The three cases below are the same
+    // program with the write at the three different levers.
+
+    /// The shared base for the nested-write cases. Each slot is empty in the
+    /// control and holds one nested write in a negative, so those tests differ
+    /// from a FIRING program only in the nesting — not in some extra statement
+    /// that trips an unrelated gate.
+    fn nested_write_case(pre_fill: &str, enc_head: &str, post_init: &str) -> String {
+        format!(
+            "fn f(n: i64) -> Vec[i64] {{\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             let mut j = 0i64;\n\
+             let flag = 1i64;\n\
+             {pre_fill}\
+             while j <= n {{ v.push(1i64); j = j + 1i64; }}\n\
+             let mut i = 2i64;\n\
+             while i <= n {{\n\
+               {enc_head}\
+               let mut k = i - 1i64;\n\
+               {post_init}\
+               while k >= 1i64 {{ v[k] = v[k] + v[k - 1i64]; k = k - 1i64; }}\n\
+               i = i + 1i64;\n\
+             }}\n\
+             v\n\
+            }}\n"
+        )
+    }
+
+    /// Control: with every slot empty the skip DOES fire, so the three
+    /// negatives below are pinned to the nested write itself.
+    #[test]
+    fn desc_fires_on_the_base_of_the_nested_write_cases() {
+        assert_eq!(
+            desc_skips(&nested_write_case("", "", "")),
+            vec![("k".to_string(), vec!["v".to_string()])]
+        );
+    }
+
+    /// Negative: the ENCLOSING COUNTER is rewritten in a nested block before
+    /// the inner loop, so `i <= u_max` is false where the proof substitutes
+    /// it. The top-level twin of this is `desc_no_fire_when_counter_rewritten`,
+    /// which passed all along — only the nested spelling escaped.
+    #[test]
+    fn desc_no_fire_when_counter_rewritten_in_a_nested_block() {
+        let src = nested_write_case("", "if flag == 1i64 { i = 50i64; }\n", "");
+        assert!(desc_skips(&src).is_empty());
+    }
+
+    /// Negative: the INDEX'S INIT is rewritten in a nested block between its
+    /// `let` and the inner loop, so `sole_scalar_init` reports a value `k` no
+    /// longer holds and `k <= k_init` bounds the wrong number.
+    #[test]
+    fn desc_no_fire_when_index_init_rewritten_in_a_nested_block() {
+        let src = nested_write_case("", "", "if flag == 1i64 { k = 50i64; }\n");
+        assert!(desc_skips(&src).is_empty());
+    }
+
+    /// Negative: the FILL COUNTER is preset in a nested block, so the fill runs
+    /// fewer iterations than its bound and the length pin overstates
+    /// `v.len()`. This one corrupts through the pin rather than the index: the
+    /// skip's arithmetic is right, its premise is not.
+    #[test]
+    fn desc_no_fire_when_fill_counter_preset_in_a_nested_block() {
+        let src = nested_write_case("if flag == 1i64 { j = 5i64; }\n", "", "");
+        assert!(desc_skips(&src).is_empty());
+    }
+
+    /// The same fill-counter preset seen through the ASCENDING pin path, which
+    /// shares `counter_is_zero_before` — the gate is one function, so both
+    /// consumers must fail closed on it.
+    #[test]
+    fn no_fire_when_fill_counter_preset_in_a_nested_block() {
+        let with_preset = "fn f(cols: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            let flag = 1i64;\n\
+            if flag == 1i64 { j = 5i64; }\n\
+            while j < cols { dp.push(1i64); j = j + 1i64; }\n\
+            let mut c = 0i64;\n\
+            while c < cols { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(!pins_vec(with_preset, "dp"));
+        // Control: the identical program without the nested preset pins, so
+        // the assertion above is about the preset and not the added `flag`.
+        let without_preset = with_preset.replace("if flag == 1i64 { j = 5i64; }\n", "");
+        assert!(pins_vec(&without_preset, "dp"));
     }
 }

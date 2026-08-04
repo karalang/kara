@@ -33736,6 +33736,98 @@ fn get_row(row_index: i64) -> Vec[i64] {
     }
 
     #[test]
+    fn test_e2e_descending_skip_keeps_the_check_when_a_nested_block_moves_the_goalposts() {
+        // B-2026-08-04-13. The descending-loop BCE skip freezes four facts by
+        // scanning a region: the fill counter starts at 0, the enclosing
+        // counter still satisfies its guard at the inner loop, and the index's
+        // init is the value written before it. `stmt_writes_ident` answered all
+        // of them looking only at TOP-LEVEL assignment targets, so a write one
+        // block deep left every fact reading "unchanged" while the program
+        // changed it — and the skip then dropped a check that was carrying
+        // real weight.
+        //
+        // This is an E2E and not an IR assertion on purpose: the failure is a
+        // *store* past the end of the buffer, and what that looks like is
+        // allocator-dependent (the three cases below produced a silent exit 0,
+        // `munmap_chunk(): invalid pointer`, and a glibc malloc assertion).
+        // Asserting the clean panic is the only stable oracle; any of those
+        // corruption modes fails it.
+        //
+        // `k` starts at `i + 9` and walks down, on a Vec filled to 10 — in
+        // range for the control, and pushed out of it by each lever: the first
+        // two raise `k` itself, the third shrinks the buffer under it.
+        let case_src = |pre_fill: &str, enc_head: &str, post_init: &str| {
+            format!(
+                r#"
+fn main() {{
+    let mut v: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    let flag = 1i64;
+    {pre_fill}
+    while j < 10i64 {{ v.push(0i64); j = j + 1i64; }}
+    let mut i = 0i64;
+    while i <= 0i64 {{
+        {enc_head}
+        let mut k = i + 9i64;
+        {post_init}
+        while k >= 0i64 {{ v[k] = 7i64; k = k - 1i64; }}
+        i = i + 1i64;
+    }}
+    println(f"len={{v.len()}}");
+}}
+"#
+            )
+        };
+
+        // Control first: with no nested write every index is in range, so the
+        // program completes. This is what makes the three assertions below
+        // about the nested write and not about a program that was always OOB.
+        if let Some(c) = run_program_capturing(&case_src("", "", "")) {
+            assert!(
+                c.stdout.contains("len=10"),
+                "control must run clean, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+
+        let cases = [
+            (
+                "enclosing counter rewritten in a nested block",
+                "",
+                "if flag == 1i64 { i = 50i64; }",
+                "",
+            ),
+            (
+                "index init rewritten in a nested block",
+                "",
+                "",
+                "if flag == 1i64 { k = 50i64; }",
+            ),
+            // Here the index arithmetic is sound and the PREMISE is not: the
+            // fill runs 5 iterations instead of 10, so the length pin claims a
+            // buffer twice the size of the real one.
+            (
+                "fill counter preset in a nested block",
+                "if flag == 1i64 { j = 5i64; }",
+                "",
+                "",
+            ),
+        ];
+        for (label, pre_fill, enc_head, post_init) in cases {
+            if let Some(c) = run_program_capturing(&case_src(pre_fill, enc_head, post_init)) {
+                assert!(
+                    c.stdout.contains("vec index out of bounds"),
+                    "[{label}] an out-of-range store must panic, not be elided; \
+                     got stdout={:?} stderr={:?}",
+                    c.stdout,
+                    c.stderr
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_ir_array_index_store() {
         let ir = ir_for(
             r#"
