@@ -98,6 +98,20 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
     }
 }
 
+/// Is this expectation solid enough to seed a generic call from? It must carry
+/// no inference metavar AND no un-instantiated type parameter.
+///
+/// The `TypeParam` half is what `contains_type_var` alone misses: an
+/// unannotated generic struct literal checks its field against the DECLARED
+/// slot (`Option[T]` with a bare `T`), not against a metavar, so a metavar-only
+/// guard let seeding fire and bind the constructor's payload to the parameter's
+/// own name — after which `T` could not be inferred at all
+/// (`let b = Boxed { v: Some("x".to_string()) }`). Reuses the existing
+/// `contains_type_param` from the types module. B-2026-08-05-25.
+fn expectation_is_concrete(t: &Type) -> bool {
+    !contains_type_var(t) && !contains_type_param(t)
+}
+
 /// Does this type still carry an unsolved inference metavar? Gates
 /// expected-return seeding: a fully concrete return has nothing to seed, and
 /// unifying it against a mismatched expectation could bind ids inside the
@@ -995,11 +1009,36 @@ impl<'a> super::TypeChecker<'a> {
         // bare `ExprKind::Call` gate, `let b = Bag { items: [..] }` (unannotated,
         // so the expectation is an unsolved metavar) had that metavar bound by
         // the first inner call instead, and `T` then failed to infer.
-        let seedable_call = matches!(
-            &expr.kind,
-            ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Path { .. })
-        );
-        if seedable_call && *expected != Type::Error && !contains_type_var(expected) {
+        // Which callees may seed their generic params from the expectation.
+        //
+        // A PATH callee (`Box.new(..)`, `Tensor.from(..)`, `Option.Some(..)`) —
+        // the associated-function shape the seeding was written for
+        // (B-2026-08-05-19). A broader gate leaks the expectation into a nested
+        // call inside an argument, which is why this is not simply "any call".
+        //
+        // B-2026-08-05-25 — plus the BARE enum constructors. Seeding fired for
+        // `Option.Some(0 - 1)` and not for `Some(0 - 1)`, so two spellings of
+        // the same construction disagreed: the qualified form adopted `i32`, the
+        // bare form kept the literal's `i64` and was rejected. `Some(-1)` worked
+        // in both because the payload-adoption block below admits an unsuffixed
+        // literal directly; `0 - 1` is arithmetic over literals and only seeding
+        // reaches it. These three names are constructors rather than arbitrary
+        // calls, so admitting them does not reopen the nested-call leak, and the
+        // `!contains_type_var` guard still keeps an unsolved expectation from
+        // being bound by an inner call. The case the payload-adoption comment
+        // warns about — `return Some(i)` with `i: i64` into an `Option[u64]` —
+        // is unaffected, because seeding binds the RETURN type and the payload
+        // is then an ordinary scalar assignment where numeric coercion stays
+        // permissive; verified against both spellings.
+        let seedable_call = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { .. } => true,
+                ExprKind::Identifier(n) => matches!(n.as_str(), "Some" | "Ok" | "Err"),
+                _ => false,
+            },
+            _ => false,
+        };
+        if seedable_call && *expected != Type::Error && expectation_is_concrete(expected) {
             self.pending_expected_call_return = Some(expected.clone());
         }
         let actual = self.infer_expr(expr);

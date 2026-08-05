@@ -34992,6 +34992,49 @@ fn user_generic_numeric_arg_width_mismatch_rejected() {
     .is_empty());
 }
 
+/// B-2026-08-05-25 — a constant integer EXPRESSION payload adopts its expected
+/// type in an enum constructor, not just a bare literal.
+///
+/// `Some(-1)` was accepted and `Some(0 - 1)` rejected as `i64`, which is an
+/// arbitrary line from the outside: both are compile-time constants and both
+/// are natural spellings. The cause was an asymmetry introduced by
+/// B-2026-08-05-19's expected-type seeding, which fired only for a PATH callee
+/// — so `Option.Some(0 - 1)` adopted and bare `Some(0 - 1)` did not, making two
+/// spellings of one construction disagree.
+///
+/// The bare constructors now seed too. The guard that keeps this from leaking
+/// the expectation into a nested call is `expectation_is_concrete`, and it has
+/// to reject an un-instantiated `TypeParam` as well as a metavar: an
+/// unannotated generic struct literal checks its field against the DECLARED
+/// slot (`Option[T]`), and a metavar-only guard let seeding bind the payload to
+/// the parameter's own name — after which `T` could not be inferred at all.
+#[test]
+fn enum_constructor_constant_expression_payload_adopts_expected_type() {
+    typecheck_ok("fn main() { let a: Option[i32] = Some(0 - 1); println(a.is_some()); }");
+    typecheck_ok("fn main() { let a: Option[i32] = Some(2 * 3); println(a.is_some()); }");
+    typecheck_ok("fn main() { let a: Result[i32, i32] = Err(0 - 1); println(a.is_ok()); }");
+    typecheck_ok("fn main() { let a: Result[i32, i32] = Ok(1 + 2); println(a.is_ok()); }");
+    // Both spellings must agree — the asymmetry is the bug.
+    typecheck_ok("fn main() { let a: Option[i32] = Option.Some(0 - 1); println(a.is_some()); }");
+    // The plain literal forms keep working.
+    typecheck_ok("fn main() { let a: Option[i32] = Some(-1); println(a.is_some()); }");
+    typecheck_ok("fn main() { let a: Option[i32] = Some(1); println(a.is_some()); }");
+    // The case the payload-adoption comment warns a blanket push would break:
+    // a VARIABLE payload stays in synthesis mode and is unaffected.
+    typecheck_ok(
+        "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
+             for i in 0..items.len() { if items[i] == target { return Some(i); } } \
+             None \
+         }",
+    );
+    // An unannotated generic struct literal must still infer its parameter —
+    // the shape a metavar-only guard broke.
+    typecheck_ok(
+        "struct Boxed[T] { v: Option[T] }\n\
+         fn main() { let b = Boxed { v: Some(\"x\".to_string()) }; match b.v { Some(_s) => {}, None => {} } }",
+    );
+}
+
 #[test]
 fn generic_numeric_arg_same_layout_and_literals_still_accepted() {
     // i64 -> u64: same eight bytes, only the interpretation differs. This is
