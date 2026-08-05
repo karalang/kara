@@ -159,13 +159,32 @@ mod memory_sanitizer_tests {
         let obj_path = format!("/tmp/karac_asan_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_asan_{}_{}", std::process::id(), id);
 
+        // B-2026-08-05-35 — a CODEGEN failure is a hard FAILURE, not a skip.
+        //
+        // The soft-skip below exists for MISSING INFRASTRUCTURE — no runtime
+        // archive, no `cc` with `-fsanitize=address` — where the harness cannot
+        // say anything about the program. A codegen failure is the opposite: the
+        // toolchain is present and the compiler rejected the program under test.
+        // Skipping there reported `ok` for a fixture that never ran, so a memory
+        // test written for a not-yet-compiling shape could never be shown RED,
+        // and a future regression that broke COMPILATION rather than ownership
+        // would turn its test green.
+        //
+        // Same discrimination `common::link_or_skip` already applies to an
+        // undefined-symbol link failure (CLAUDE.md): a signal that always means a
+        // real defect panics with an actionable message instead of skipping.
         if let Err(e) = compile_to_object(&parsed.program, &obj_path, Some(&ownership), None) {
-            eprintln!("[{label}] compile_to_object failed: {e}");
-            return None;
+            panic!(
+                "[{label}] CODEGEN FAILED — this is a real failure, not missing setup.\n                   {e}\n                   The program under test does not compile, so this fixture asserts nothing. \
+                 Either fix the codegen gap, or mark the test `#[ignore = \"<gap>\"]` so it \
+                 is visibly deferred rather than silently green."
+            );
         }
         if !Path::new(&obj_path).exists() {
-            eprintln!("[{label}] object file missing after compile_to_object");
-            return None;
+            panic!(
+                "[{label}] object file missing after a SUCCESSFUL compile_to_object — \
+                    the emit silently produced nothing"
+            );
         }
         if let Err(e) =
             link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
@@ -314,8 +333,13 @@ mod memory_sanitizer_tests {
             Some(&ownership),
             Some(&analysis),
         ) {
-            eprintln!("[{label}] compile_to_object failed: {e}");
-            return None;
+            // B-2026-08-05-35 — see the primary helper: a codegen failure is the
+            // defect under test, not absent setup.
+            panic!(
+                "[{label}] CODEGEN FAILED — this is a real failure, not missing setup.\n  \
+                 {e}\n  \
+                 Either fix the codegen gap, or mark the test `#[ignore = \"<gap>\"]`."
+            );
         }
         if let Err(e) =
             link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
@@ -3924,6 +3948,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — no codegen handler for `len` on an iter-chain element binding. Silently SKIPPED until the harness learned to fail on a codegen error."]
     fn asan_iter_chain_any_all_short_circuit_no_leak() {
         // B-2026-07-11-19 — `any`/`all` short-circuit terminals over a chain whose
         // `map` produces HEAP Strings. When the predicate decides early the loop
@@ -13816,13 +13841,32 @@ fn main() {
         let obj_path = format!("/tmp/karac_asan_ow_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_asan_ow_{}_{}", std::process::id(), id);
 
+        // B-2026-08-05-35 — a CODEGEN failure is a hard FAILURE, not a skip.
+        //
+        // The soft-skip below exists for MISSING INFRASTRUCTURE — no runtime
+        // archive, no `cc` with `-fsanitize=address` — where the harness cannot
+        // say anything about the program. A codegen failure is the opposite: the
+        // toolchain is present and the compiler rejected the program under test.
+        // Skipping there reported `ok` for a fixture that never ran, so a memory
+        // test written for a not-yet-compiling shape could never be shown RED,
+        // and a future regression that broke COMPILATION rather than ownership
+        // would turn its test green.
+        //
+        // Same discrimination `common::link_or_skip` already applies to an
+        // undefined-symbol link failure (CLAUDE.md): a signal that always means a
+        // real defect panics with an actionable message instead of skipping.
         if let Err(e) = compile_to_object(&parsed.program, &obj_path, Some(&ownership), None) {
-            eprintln!("[{label}] compile_to_object failed: {e}");
-            return None;
+            panic!(
+                "[{label}] CODEGEN FAILED — this is a real failure, not missing setup.\n                   {e}\n                   The program under test does not compile, so this fixture asserts nothing. \
+                 Either fix the codegen gap, or mark the test `#[ignore = \"<gap>\"]` so it \
+                 is visibly deferred rather than silently green."
+            );
         }
         if !Path::new(&obj_path).exists() {
-            eprintln!("[{label}] object file missing after compile_to_object");
-            return None;
+            panic!(
+                "[{label}] object file missing after a SUCCESSFUL compile_to_object — \
+                    the emit silently produced nothing"
+            );
         }
         if let Err(e) =
             link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
@@ -14011,8 +14055,7 @@ fn main() {
             return None;
         }
         if !Path::new(&obj_path).exists() {
-            eprintln!("[{label}] object file missing after compile_to_object");
-            return None;
+            panic!("[{label}] object file missing after a SUCCESSFUL compile_to_object");
         }
         if let Err(e) =
             link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
@@ -14632,6 +14675,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — chained field receivers (`a.b.c…`) are deferred to v1.x. Silently SKIPPED until the harness learned to fail on a codegen error."]
     fn asan_byvalue_aggregate_param_transferred_out_no_double_free() {
         // #14 (phase-12 self-hosting): an owned by-value aggregate (struct OR
         // enum) param moved into a call that transfers it OUT (into the callee's
@@ -23521,6 +23565,7 @@ fn main() {
     /// on the published control block trips ASAN, a skipped parent free is a
     /// LeakSanitizer report on Linux.
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — codegen \"Index operator applied to non-array type\". Silently SKIPPED (reported ok) until the harness learned to fail on a codegen error; ignored so the gap is visible rather than green."]
     fn asan_b32_auto_par_column_slot_published_handle_clean() {
         let label = "auto_par_column_slot_published_handle";
         if !asan_available() {
@@ -30737,6 +30782,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — no codegen handler for `len` on a generic slice element binding. Silently SKIPPED until the harness learned to fail on a codegen error."]
     fn asan_generic_slice_elem_string_return_no_leak() {
         // B-2026-07-03-22: a generic `-> T` whose `T` binds from a `Slice[T]`
         // param element (`gsum[T](s: Slice[T]) -> T { s[0] }`) called with a
@@ -30875,6 +30921,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — no codegen handler for `argmax` on a non-identifier receiver. Silently SKIPPED until the harness learned to fail on a codegen error."]
     fn asan_column_tensor_argmin_freed_no_leak() {
         // S6c: `Column.argmin`/`argmax` and `Tensor.argmin`/`argmax` return a
         // POD `Option[i64]` (no heap), but the receiver columns / tensors own
@@ -31373,6 +31420,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — chained field receivers (`a.b.c…`) are deferred to v1.x. Silently SKIPPED until the harness learned to fail on a codegen error."]
     fn asan_forloop_struct_element_nested_and_option_field_no_double_free() {
         // B-2026-07-04-17 variants named in the ledger: a NESTED heap struct
         // field and an `Option[String]` field. Moving such an element to a new
@@ -33762,6 +33810,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — chained field receivers (`a.b.c…`) are deferred to v1.x. Silently SKIPPED until the harness learned to fail on a codegen error."]
     fn asan_generic_wrapper_nested_struct_field_no_leak() {
         // B-2026-07-15-11 (nested leg) — a non-generic `Outer { inner:
         // Box[String] }` and a generic `Gen[U] { inner: Box[U] }` recurse the
@@ -37177,6 +37226,7 @@ fn main() {
     /// allocation is elided and all six cases pass vacuously, which is exactly
     /// why the class was first mis-read as depending on `impl Drop`.
     #[test]
+    #[ignore = "B-2026-08-05-35 sweep: does not compile — chained field receivers (`a.b.c…`) are deferred to v1.x. Silently SKIPPED until the harness learned to fail on a codegen error."]
     fn asan_boxed_optres_payload_view_move_has_one_owner() {
         assert_clean_asan_run(
             r#"
