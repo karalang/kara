@@ -13579,8 +13579,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // dangle). `free_str_vec_buffer_if_heap`'s `cap > 0` guard no-ops on a
         // borrowed (cap == 0) view. B-2026-07-16-21.
         if let Ok(rv) = &result {
+            // B-2026-08-05-27 — the surface-concat receiver, admitted here for
+            // the same reason it was admitted on the len-family gate and on the
+            // argument side before that: a concat the `String.add` desugar
+            // skipped stays an `ExprKind::Binary`, which
+            // `expr_yields_fresh_owned_temp` matches Call/MethodCall only and so
+            // declines. `("p:".to_string() + s).starts_with(…)` therefore freed
+            // nothing and leaked the concat once per evaluation — 8200 B over
+            // 200 iterations on a DEFAULT -O2 build, since `starts_with` reads
+            // the BYTES and the buffer is not dead.
+            //
+            // The Call-receiver twin (`mk().starts_with(…)`) was already clean,
+            // which is what localized this to the predicate rather than to the
+            // free itself: the machinery below is correct, it was just never
+            // reached for a Binary receiver. The result-aliasing analysis that
+            // follows is unchanged and still decides whether the free is safe —
+            // `starts_with` returns a bool, so it is receiver-independent.
             if self.expr_yields_fresh_owned_temp(object)
                 || self.expr_is_fresh_owned_string_slice(object)
+                || self.expr_is_fresh_owned_string_concat(object, val.get_type())
             {
                 let result_is_heap_struct = self.llvm_ty_is_vec_struct(rv.get_type());
                 // A heap-struct result is receiver-independent only for methods

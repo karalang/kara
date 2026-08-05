@@ -11194,6 +11194,59 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-27 — the BYTE-READING half of the surface-concat receiver.
+    /// `("p:".to_string() + s).starts_with(..)` leaked the concat once per
+    /// evaluation: the fresh-temp receiver materialization gate
+    /// (`try_compile_string_recv_temp_method`) is built on
+    /// `expr_yields_fresh_owned_temp`, which matches Call/MethodCall only, so a
+    /// concat the `String.add` desugar skipped was declined. The Call-receiver
+    /// twin (`mk().starts_with(..)`) was already clean, which localized it to
+    /// the predicate rather than to the free.
+    ///
+    /// UNLIKE the sibling above, this one is a DEFAULT-BUILD leak and pins at
+    /// -O2: measured 8200 B over 200 iterations against the unfixed compiler,
+    /// identical at -O0. The sibling consumes its concat through `.len()`,
+    /// which touches the length word and never the bytes, so at -O2 the buffer
+    /// is a dead allocation LLVM deletes (B-2026-08-04-17) and the same class
+    /// reads clean there. `starts_with`/`contains` read the BYTES, so the
+    /// allocation is live and the leak is visible on the surface users build.
+    ///
+    /// Written to B-2026-08-04-17's three rules — `env.args().len()` seed,
+    /// runtime-derived payload content, byte-level read — and floored, so a
+    /// regression to zero allocations fails loudly instead of passing.
+    #[test]
+    fn asan_surface_concat_byte_read_receiver_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let mut v: Vec[String] = Vec.new();
+    let mut b: String = String.new();
+    b.push_str("elem-");
+    b.push_str(n.to_string());
+    b.push_str("-padding-to-force-heap");
+    v.push(b);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 200 {
+        match v.first() {
+            Some(s) => {
+                if ("p:".to_string() + s).starts_with("p:elem") { acc = acc + 1; }
+                if ("q:".to_string() + s).contains("elem") { acc = acc + 1; }
+            }
+            None => { }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["400"],
+            "surface_concat_byte_read_receiver",
+            100,
+        );
+    }
+
     #[test]
     fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free
