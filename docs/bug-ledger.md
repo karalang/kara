@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 214 | 0 |
+| miscompile | 215 | 1 |
 | leak | 132 | 0 |
 | double-free | 96 | 1 |
 | codegen-gap | 89 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 668 | 2 |
+| codegen | 669 | 3 |
 | interp | 123 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **927 surfaced · 6 open · 913 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **928 surfaced · 7 open · 913 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **927 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-12 | 2026-08-05 | parser | low | the `ref` at a call site diagnostic tells the author to remove one token but carries no machine-applicable replacement, so `karac fix` leaves it | the `ref` is not written at call sites parse diagnostic and its `replacement` field; compare against the `&&`/`!` operator diagnostics in the same pass, which do carry one. |
 | B-2026-08-05-15 | 2026-08-05 | codegen | medium | taking a free function as a VALUE (`let f = g;`) and calling it through the binding fails to build when any parameter is a `ref Vec[T]` -- the indirect call passes the Vec BY VALUE into a signature that expects a pointer, so LLVM module verification rejects it; `karac check` passes and the interpreter runs it correctly, and the same program with only scalar parameters builds fine | — |
+| B-2026-08-05-16 | 2026-08-05 | codegen | medium | NONDETERMINISTIC SEGV at -O0: a bare variant-name pattern whose name is shared by two enums resolves against the UNORDERED enum_layouts map, so per-process HashMap seed decides the payload word offsets -- a payload word is then dereferenced as a pointer. Carried until now as a 'known flaky' test, which is what kept it parked | docs/implementation_checklist/phase-7-codegen.md |
 
 ### Fixed (913)
 
