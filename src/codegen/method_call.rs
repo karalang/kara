@@ -13526,7 +13526,43 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|k| k.rsplit_once('.'))
             .map(|(t, _)| t == "String")
             .unwrap_or(false)
-            || self.string_typed_exprs.contains(&span_key);
+            || self.string_typed_exprs.contains(&span_key)
+            // Third signal, and the one that carries a CHAIN. Both of the
+            // above are span-keyed, and the parser gives a MethodCall its
+            // RECEIVER's span — so in `(…).to_uppercase().len()` the inner
+            // and outer calls share one key and the outer wins both tables:
+            // `method_callee_types` resolves to `String.len` (which the
+            // `m == method` filter then rejects, yielding `None`) and
+            // `expr_types` records the outer `i64`, evicting the inner
+            // `String`. Measured, not inferred: the same receiver reports
+            // `key=Some("String.to_uppercase") is_str=true` standalone and
+            // `key=None is_str=false` under a chain, at the identical span.
+            // That is B-2026-08-05-28 — not the missing dispatcher arm the
+            // row diagnosed (the arm is right below, and it is why the
+            // STANDALONE form has always worked).
+            //
+            // The method name is span-free evidence. Restricted to methods
+            // that exist ONLY on String, so a Vec receiver can never take
+            // this path: `sorted`, `contains`, `len` and friends are shared
+            // and are deliberately absent. A non-String receiver here would
+            // already have failed the typechecker, which is what makes the
+            // name sufficient.
+            || matches!(
+                method,
+                "to_uppercase"
+                    | "to_lowercase"
+                    | "trim"
+                    | "trim_start"
+                    | "trim_end"
+                    | "starts_with"
+                    | "ends_with"
+                    | "replace"
+                    | "replacen"
+                    | "repeat"
+                    | "split"
+                    | "split_whitespace"
+                    | "lines"
+            );
         if !recv_is_string {
             return Ok(None);
         }

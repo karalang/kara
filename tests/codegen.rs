@@ -29742,6 +29742,69 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_xform_on_a_nonident_receiver_inside_a_chain() {
+        // B-2026-08-05-28. `(<non-ident>).to_uppercase()` alone always
+        // compiled; putting its result in RECEIVER position did not, because
+        // the parser gives a MethodCall its receiver's span, so the outer
+        // call's `i64` evicted the inner `String` from the span tables the
+        // non-identifier String dispatch keys on. The xform's dispatcher arm
+        // was there the whole time — the receiver just stopped looking like a
+        // String. Covers the Binary, MethodCall and f-string receiver roots
+        // together, since one span-free signal fixes all three.
+        let concat = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"Hi\".to_string());\n\
+                 match v.first() {\n\
+                     Some(s) => { println((\"p:\".to_string() + s).to_uppercase().len()); }\n\
+                     None => { }\n\
+                 }\n\
+             }",
+        );
+        assert_eq!(concat, Some("4\n".to_string()));
+
+        let fstring = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"Hi\".to_string());\n\
+                 match v.first() {\n\
+                     Some(s) => { println(f\"p:{s}\".trim().len()); }\n\
+                     None => { }\n\
+                 }\n\
+             }",
+        );
+        assert_eq!(fstring, Some("4\n".to_string()));
+
+        // Identifier ROOT but a MethodCall receiver for the second xform —
+        // the shape the row's "non-identifier receiver" framing missed.
+        let chained = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"Hi\".to_string());\n\
+                 match v.first() {\n\
+                     Some(s) => { println(s.to_uppercase().to_lowercase()); }\n\
+                     None => { }\n\
+                 }\n\
+             }",
+        );
+        assert_eq!(chained, Some("hi\n".to_string()));
+
+        // `split` is in the same family and was failing the same way; its
+        // result is a Vec, so it also exercises the non-String result path.
+        let split = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"a:b\".to_string());\n\
+                 match v.first() {\n\
+                     Some(s) => { println((\"p:\".to_string() + s).split(\":\").len()); }\n\
+                     None => { }\n\
+                 }\n\
+             }",
+        );
+        assert_eq!(split, Some("3\n".to_string()));
+    }
+
+    #[test]
     fn e2e_fn_value_with_a_ref_vec_param_builds_and_reads() {
         // B-2026-08-05-15: `let f = g` where `g` takes `ref Vec[u8]`. The
         // indirect call used to push the `{ptr, i64, i64}` Vec triple into the
