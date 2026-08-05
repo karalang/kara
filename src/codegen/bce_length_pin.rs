@@ -1869,11 +1869,91 @@ fn filled_vec_binding(stmt: &Stmt) -> Option<(String, &Expr)> {
 /// needs to pin a returned Vec), so this relaxation is local to the
 /// descending analysis.
 fn vec_len_stable_after(stmts: &[Stmt], final_expr: &Option<Box<Expr>>, v: &str) -> bool {
-    stmts.iter().all(|s| stmt_vec_readonly(s, v))
+    stmts.iter().all(|s| stmt_vec_len_stable(s, v))
         && match final_expr.as_deref() {
             None => true,
-            Some(e) => is_ident_expr(e, v) || expr_vec_readonly(e, v),
+            Some(e) => is_ident_expr(e, v) || expr_vec_len_stable(e, v),
         }
+}
+
+/// `stmt_vec_readonly`'s twin over the relaxed expression rule below.
+fn stmt_vec_len_stable(stmt: &Stmt, v: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::Let { value, .. } => expr_vec_len_stable(value, v),
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            expr_vec_len_stable(target, v) && expr_vec_len_stable(value, v)
+        }
+        StmtKind::Expr(e) => expr_vec_len_stable(e, v),
+        StmtKind::LetUninit { name, .. } => name != v,
+        // Unanalyzed statement kinds — fail closed.
+        _ => false,
+    }
+}
+
+/// Relaxed twin of `expr_vec_readonly` for the length LOWER-bound path: same
+/// rules, plus `v` may be passed as an **unmarked argument to a FREE-FUNCTION
+/// call**. That one relaxation is what lets the pin survive the overwhelmingly
+/// common shape of handing a buffer to a helper that walks it — without it,
+/// a single `is_strobogrammatic(corpus, base, len)` in the program disqualifies
+/// every index site in the function (measured on kata #246: adding one
+/// read-only `ref Vec[u8]` call to an otherwise-firing probe put both bounds
+/// checks back).
+///
+/// **Soundness — why an unmarked free-function argument cannot change the
+/// length.** design.md Feature 4 Part 1½: a free-function call writes `mut` on
+/// any argument whose place-expression root is a fresh owned binding when the
+/// callee's parameter is `mut ref T` / `mut Slice[T]`. Every `v` this path pins
+/// is introduced by a `let v = Vec.new()/with_capacity()/filled()` in the same
+/// function (see `empty_vec_binding` / `filled_vec_binding`), so it is exactly
+/// such an owned binding and never a `mut ref` binding being forwarded — the
+/// one case the spec lets through unmarked. So:
+///   - callee takes `mut ref Vec` / `mut Slice` ⇒ the marker is mandatory here,
+///     and we refuse marked arguments, so this case never reaches us;
+///   - callee takes `ref Vec` ⇒ an immutable borrow cannot resize;
+///   - callee takes `Vec` by value ⇒ the call MOVES `v`, and any later `v[..]`
+///     would be a use-after-move the ownership checker already rejects, so in
+///     any program that compiles there is no subsequent index site to protect.
+///
+/// **METHOD-call arguments are deliberately NOT relaxed.** Method calls never
+/// write the `mut` marker (design.md, same section), so an unmarked argument to
+/// a method proves nothing about the parameter's mode — the reasoning above
+/// collapses entirely. `other.absorb(v)` must keep disqualifying.
+fn expr_vec_len_stable(e: &Expr, v: &str) -> bool {
+    match &e.kind {
+        ExprKind::Identifier(n) => n != v,
+        ExprKind::Index { object, index } => {
+            let base_ok = match &object.kind {
+                ExprKind::Identifier(n) if n == v => true,
+                _ => expr_vec_len_stable(object, v),
+            };
+            base_ok && expr_vec_len_stable(index, v)
+        }
+        // Free-function call: an unmarked bare `v` argument is length-stable.
+        ExprKind::Call { callee, args } => {
+            expr_vec_len_stable(callee, v)
+                && args.iter().all(|a| {
+                    if !a.mut_marker && is_ident_expr(&a.value, v) {
+                        return true;
+                    }
+                    expr_vec_len_stable(&a.value, v)
+                })
+        }
+        // `v.len()` / `v.is_empty()` — read-only receiver methods. Arguments
+        // are scanned with the STRICT rule (no marker is written for them).
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            let recv_is_v = matches!(&object.kind, ExprKind::Identifier(n) if n == v);
+            if recv_is_v && is_read_only_vec_method(method) && args.is_empty() {
+                return true;
+            }
+            expr_vec_len_stable(object, v) && args.iter().all(|a| expr_vec_readonly(&a.value, v))
+        }
+        _ => expr_children_all(e, |c| expr_vec_len_stable(c, v)),
+    }
 }
 
 /// One recognised counted fill for the lower-bound map (all four shapes).
@@ -3412,6 +3492,13 @@ mod tests {
     /// sorted `Vec<(base_var, idx_vars, vec_vars)>`.
     fn conv_skips(src: &str) -> Vec<(String, Vec<String>, Vec<String>)> {
         let parsed = crate::parse(src);
+        // A mutated source that does not PARSE yields no skips, which would
+        // make every negative below a vacuous pass. Fail loudly instead.
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
         let body = parsed
             .program
             .items
@@ -3478,6 +3565,11 @@ mod tests {
     /// The single skip's `lower_proven` flag, or `None` if nothing fired.
     fn conv_lower(src: &str) -> Option<bool> {
         let parsed = crate::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
         let body = parsed
             .program
             .items
@@ -3518,6 +3610,40 @@ mod tests {
         // negative even though the upper bound still holds.
         let src = mutate("let mut i = 0i64;", "let mut i = -4i64;");
         assert_eq!(conv_lower(&src), Some(false));
+    }
+
+    #[test]
+    fn fires_when_the_vec_is_passed_to_a_free_function_unmarked() {
+        // The #246 shape: the buffer is also handed to a helper that walks it.
+        // An unmarked free-function argument cannot be `mut ref` (the marker
+        // would be mandatory), so the length is still pinned.
+        let src = mutate(
+            "acc\n}",
+            "acc + peek(v)\n}\nfn peek(c: ref Vec[u8]) -> i64 { return c.len() as i64; }",
+        );
+        assert_eq!(conv_skips(&src).len(), 1);
+    }
+
+    #[test]
+    fn no_fire_when_the_vec_is_passed_mut_marked() {
+        // `mut v` says the callee takes `mut ref Vec` and may resize it.
+        let src = mutate(
+            "acc\n}",
+            "acc + grow(mut v)\n}\nfn grow(c: mut ref Vec[u8]) -> i64 { c.push(1u8); return 0i64; }",
+        );
+        assert!(conv_skips(&src).is_empty());
+    }
+
+    #[test]
+    fn no_fire_when_the_vec_is_a_method_argument() {
+        // Method calls never write the `mut` marker, so an unmarked method
+        // argument proves nothing about the parameter's mode.
+        let src = mutate("acc\n}", "acc + sink.absorb(v)\n}");
+        let src = src.replace(
+            "let mut acc = 0i64;",
+            "let mut acc = 0i64;\nlet mut sink: Vec[u8] = Vec.new();",
+        );
+        assert!(conv_skips(&src).is_empty());
     }
 
     #[test]
