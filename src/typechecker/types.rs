@@ -1201,42 +1201,6 @@ pub(super) fn projection_unresolvable_with(a: &Type, b: &Type) -> bool {
     }
 }
 
-/// Generic containers whose ARGUMENT decides the physical layout of a buffer or
-/// payload the callee will index or reinterpret. These are the shapes where a
-/// numeric-width mismatch is a miscompile rather than a coercion, so their
-/// arguments are held invariant across numeric layouts. B-2026-08-05-19.
-fn layout_bearing_generic(name: &str) -> bool {
-    // Everything EXCEPT a small denylist. Inverted from an allowlist once
-    // expected-type seeding (B-2026-08-05-19) made user generics work:
-    // `Box[i32]` and `Box[i64]` differ in layout exactly as `Vec` does, and the
-    // reported hole explicitly included a user generic struct
-    // (`Holder[u16] <- Holder[i64]`), so an allowlist could never close it.
-    //
-    // `Tensor` is excluded because its element type is not reliably inferred
-    // today: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]`
-    // and `k: f32` infers `Tensor[f64, ..]` for the product, so enforcing
-    // invariance here rejects a tested, correct program. That is a latent
-    // element-inference gap in tensor arithmetic, not a variance question —
-    // filed separately rather than papered over by leaving all user generics
-    // permissive.
-    !matches!(name, "Tensor")
-}
-
-/// [`generic_arg_compatible`] without the numeric-layout invariance — the
-/// pre-B-2026-08-05-19 behaviour, kept for user generics pending expected-type
-/// seeding of generic calls.
-fn generic_arg_compatible_permissive_numeric(
-    variance: crate::ast::Variance,
-    a: &Type,
-    b: &Type,
-) -> bool {
-    match variance {
-        crate::ast::Variance::Covariant => types_compatible(a, b),
-        crate::ast::Variance::Contravariant => types_compatible(b, a),
-        crate::ast::Variance::Invariant => types_compatible(a, b) && types_compatible(b, a),
-    }
-}
-
 /// The physical storage identity of a numeric type: `(is_float, bit width)`.
 /// `None` for anything non-numeric.
 ///
@@ -1500,22 +1464,18 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                         let slot = variances
                             .and_then(|v| v.get(i).copied())
                             .unwrap_or(crate::ast::Variance::Invariant);
-                        if layout_bearing_generic(a_name) {
-                            generic_arg_compatible(slot, a, b)
-                        } else {
-                            // A USER generic (`Box[T]`, `Holder[T]`) keeps the
-                            // pre-existing permissive numeric behaviour for now.
-                            // Enforcing invariance here is correct in principle —
-                            // `Box[i32]` and `Box[i64]` do differ in layout — but
-                            // it rejects `let b: Box[i32] = Box.new(5)`, where the
-                            // literal `5` seeds `T = i64` through generic
-                            // inference and never sees the annotation. Fixing that
-                            // needs expected-type SEEDING of a generic call's type
-                            // params, which is a separate change; until then the
-                            // narrower rule closes the reported hole without
-                            // breaking working code. B-2026-08-05-19.
-                            generic_arg_compatible_permissive_numeric(slot, a, b)
-                        }
+                        // EVERY generic, with no carve-out. `Box[i32]` and
+                        // `Box[i64]` differ in layout exactly as `Vec` does, and
+                        // the reported hole explicitly included a user generic
+                        // struct (`Holder[u16] <- Holder[i64]`), so an allowlist
+                        // could never have closed it. The two exemptions this
+                        // arm used to carry are both gone: user generics work
+                        // now that a generic call seeds its params from the
+                        // expected type (B-2026-08-05-19), and `Tensor` works
+                        // now that `Tensor.from` adopts its element type from
+                        // the expectation instead of from its first literal leaf
+                        // (B-2026-08-05-26).
+                        generic_arg_compatible(slot, a, b)
                     })
         }
         // `ref T` target is covariant; `mut ref T` is invariant in `T`

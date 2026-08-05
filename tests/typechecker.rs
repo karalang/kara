@@ -29209,6 +29209,46 @@ fn test_shape_param_arithmetic_deferred() {
     );
 }
 
+/// B-2026-08-05-26 — `Tensor.from` adopts its element type from the EXPECTED
+/// type instead of from its first literal leaf.
+///
+/// Unsuffixed float literals default to `f64`, so
+/// `let x: Tensor[f32, [3]] = Tensor.from([1.0, 2.0, 3.0])` inferred
+/// `Tensor[f64, [3]]` and never consulted the annotation. That was invisible
+/// only while generic args were permissive about numeric width, and became a
+/// hard rejection once B-2026-08-05-19 made them layout-invariant — which is
+/// why `Tensor` had to be excluded from that rule until this was fixed.
+///
+/// Writing `1.0f32` always worked, which is the tell that this is literal
+/// adoption rather than tensor arithmetic: the element-wise binop propagates
+/// the tensor's own element type correctly and was never involved.
+#[test]
+fn tensor_from_adopts_expected_element_type() {
+    typecheck_ok(
+        "fn main() { let x: Tensor[f32, [3]] = Tensor.from([1.0, 2.0, 3.0]); println(x.sum()); }",
+    );
+    // The shape this originally surfaced through — an annotated body binding
+    // inside a shape-generic fn, whose argument comes from an inferred literal.
+    typecheck_ok(
+        "fn scale[D](a: ref Tensor[f32, [D]], k: f32) -> f32 {\n\
+             let p: Tensor[f32, [D]] = a * k;\n\
+             p.sum()\n\
+         }\n\
+         fn main() {\n\
+             let x: Tensor[f32, [3]] = Tensor.from([1.0, 2.0, 3.0]);\n\
+             let s: f32 = scale(x, 2.0);\n\
+             println(s);\n\
+         }",
+    );
+    // With no expectation to adopt, the first leaf still drives inference.
+    typecheck_ok("fn main() { let x = Tensor.from([1.0, 2.0]); println(x.sum()); }");
+    // A leaf that genuinely disagrees with the expectation still errors.
+    assert!(!typecheck_errors(
+        "fn main() { let x: Tensor[f32, [2]] = Tensor.from([1.0, \"no\"]); println(x.sum()); }"
+    )
+    .is_empty());
+}
+
 #[test]
 fn test_tensor_body_annotation_generic_shape_param_ok() {
     // B-2026-07-13-5 leg B: a BODY type annotation may mention the enclosing

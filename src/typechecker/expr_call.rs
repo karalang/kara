@@ -1707,10 +1707,47 @@ impl<'a> super::TypeChecker<'a> {
         }
         // `leaves` is non-empty by construction — empty levels error in
         // the walk above.
-        let elem_ty = self.infer_expr(leaves[0]);
-        for leaf in &leaves[1..] {
-            self.check_expr(leaf, &elem_ty);
-        }
+        // B-2026-08-05-26 — adopt the element type from the EXPECTATION when
+        // there is one. Unsuffixed float literals default to `f64`, so
+        // `let x: Tensor[f32, [3]] = Tensor.from([1.0, 2.0, 3.0])` inferred
+        // `Tensor[f64, [3]]` purely from the first leaf and never consulted the
+        // annotation — which was invisible only because generic args used to be
+        // permissive about numeric width, and became a hard rejection once
+        // B-2026-08-05-19 made them layout-invariant. Writing `1.0f32` always
+        // worked, which is the tell that this is literal adoption and not
+        // tensor arithmetic (the binop propagates the tensor's own element type
+        // correctly — the original diagnosis on this row blamed the wrong site).
+        //
+        // The expectation is published by `check_expr` for a path-callee call,
+        // which `Tensor.from` is. Peeked rather than taken: this intercept
+        // returns before the generic-call path that would consume it.
+        let expected_elem = self
+            .pending_expected_call_return
+            .as_ref()
+            .and_then(|t| match t {
+                Type::Named { name, args } if name == "Tensor" && args.len() == 2 => {
+                    Some(args[0].clone())
+                }
+                _ => None,
+            })
+            .filter(|e| matches!(e, Type::Int(_) | Type::UInt(_) | Type::Float(_)));
+        let elem_ty = match expected_elem {
+            Some(e) => {
+                // Every leaf is CHECKED against the expected element, so each
+                // literal adopts it and a genuinely wrong leaf still errors.
+                for leaf in &leaves {
+                    self.check_expr(leaf, &e);
+                }
+                e
+            }
+            None => {
+                let inferred = self.infer_expr(leaves[0]);
+                for leaf in &leaves[1..] {
+                    self.check_expr(leaf, &inferred);
+                }
+                inferred
+            }
+        };
         let ty = Type::Named {
             name: "Tensor".to_string(),
             args: vec![
