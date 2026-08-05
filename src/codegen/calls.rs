@@ -3061,9 +3061,54 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_to_ptr(w0, ptr_ty, "enumbox.uw.p")
                 .unwrap();
-            self.builder
+            let loaded = self
+                .builder
                 .build_load(inner_ll, box_ptr, "enumbox.uw.ld")
-                .unwrap()
+                .unwrap();
+            // B-2026-08-05-7 (vec_get leg): the BOX itself leaked. A payload
+            // wider than the enum's area is heap-boxed by
+            // `coerce_to_payload_words`, and every consumer is supposed to
+            // recompute the same predicate and "load / free" it — but this
+            // site only ever loaded. Neither owner freed it: a fresh-temp
+            // receiver (`people.get(i).unwrap()`) has no scope-exit drop at
+            // all, and a LET-BOUND receiver's drop — which does carry a
+            // box-free arm (clone_drop.rs `ok.box.free`) — is disarmed a few
+            // lines below by `suppress_inline_option_result_binding_move`,
+            // precisely because `unwrap` consumes the receiver. So the box
+            // outlived both paths: 32 bytes per `Vec[Struct].get(i).unwrap()`,
+            // scaling one-per-call.
+            //
+            // Freeing the box does NOT touch the payload's own heap: `loaded`
+            // is a shallow copy of `T`, so a `String` field still points at the
+            // container's buffer (which the container keeps owning — that is
+            // the borrow-alias contract `is_borrowed_vec_get_unwrap_struct`
+            // relies on). Only the 32-byte envelope dies here.
+            //
+            // Null-guarded like the drop path: the suppression above zeroes a
+            // tracked binding's slot, so a second consumer of the same slot
+            // reads a null box pointer rather than a stale one.
+            let is_null = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    box_ptr,
+                    ptr_ty.const_null(),
+                    "enumbox.uw.isnull",
+                )
+                .unwrap();
+            let fn_val = self.current_fn.unwrap();
+            let free_bb = self.context.append_basic_block(fn_val, "enumbox.uw.free");
+            let cont_bb = self.context.append_basic_block(fn_val, "enumbox.uw.cont");
+            self.builder
+                .build_conditional_branch(is_null, cont_bb, free_bb)
+                .unwrap();
+            self.builder.position_at_end(free_bb);
+            self.builder
+                .build_call(self.free_fn, &[box_ptr.into()], "")
+                .unwrap();
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+            self.builder.position_at_end(cont_bb);
+            loaded
         } else {
             self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
         };
