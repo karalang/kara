@@ -7684,6 +7684,54 @@ fn main() { let xs = build(); let mut t = 0; for a in xs { t = t + use_a(a); } p
         );
     }
 
+    /// B-2026-08-05-7 (destructure leg): destructuring a struct field typed
+    /// `Option[<transparent single-heap-field wrapper>]` registered TWO
+    /// scope-exit frees for one payload, and both fired — double-free.
+    ///
+    /// `Inner { s: String }` lays out bit-identically to a bare `String`, so
+    /// `inline_heap_payload_elem`'s transparent-wrapper arm makes
+    /// `destructure_field_needs_cleanup` true and the destructure chain gives the
+    /// leaf an inline-Option free; `option_field_agg_drop_ok` then independently
+    /// claims the same field as a struct/enum payload and armed a second free on
+    /// the same binding. Its comment asserted the branches could not overlap
+    /// ("no `Option` arm above"), which held for every payload EXCEPT the
+    /// transparent one.
+    ///
+    /// The sibling fixture above is the same shape with a two-field `Inner`,
+    /// which is not layout-transparent and was therefore always clean — that
+    /// near-miss is why the pair is worth keeping side by side.
+    ///
+    /// NOTE: this pins at -O0 only. At -O2 the second free is unreachable
+    /// because the optimizer deletes the allocation it would have hit, so no
+    /// -O2 assertion can catch a regression here; the -O0 sweep is the gate.
+    #[test]
+    fn asan_destructured_option_transparent_wrapper_single_free() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Inner { s: String }
+struct A { value: Option[Inner] }
+fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn build(n: i64) -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < n + 49 { v.push(A { value: Some(Inner { s: f"payload-{i}-ssssssssssssssssssssssssssssss" }) }); i = i + 1; }
+    v
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let xs = build(base);
+    let mut t = 0;
+    for a in xs { t = t + use_a(a); }
+    println(t);
+}
+"#,
+            &["50"],
+            "destructured_option_transparent_wrapper_single_free",
+            // 50 runtime-derived payloads plus Vec growth.
+            50,
+        );
+    }
+
     /// B-2026-07-03-31 (FIXED, Phase 1 of the caller-retains model): binding the
     /// `Some` payload out of an `Option[<agg>]` destructure leaf and using it
     /// ONLY as a borrow — `Some(v) => ident_len(v)`, where `ident_len`

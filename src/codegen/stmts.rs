@@ -8334,9 +8334,15 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(name) = bound_name {
                 // Dispatch always (so `field.method()` compiles for any RHS).
                 self.register_var_from_type_expr(&name, &field_te);
+                // B-2026-08-05-7: tracks whether the chain below already gave
+                // this leaf a cleanup, so the `option_field_agg_drop_ok` branch
+                // further down does not register a SECOND one for the same
+                // payload. See the comment there.
+                let mut leaf_cleanup_registered = false;
                 if fresh && self.destructure_field_needs_cleanup(&field_te) {
                     if let Some(slot) = self.variables.get(&name).copied() {
                         self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
+                        leaf_cleanup_registered = true;
                     }
                 } else if let Some(src_ptr) = callee_owned_src {
                     // Callee-owned place source (see `callee_owned_src` above):
@@ -8372,6 +8378,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if transferable {
                         if let Some(slot) = self.variables.get(&name).copied() {
                             self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
+                            leaf_cleanup_registered = true;
                         }
                         self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
                     }
@@ -8399,7 +8406,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // has no `Option` arm), so no double registration. Runs for both
                 // the fresh and callee-owned sources — the field's own `Option`
                 // drop is orthogonal to the source's `StructDrop` (which skips it).
-                if self.option_field_agg_drop_ok(&field_te) && !view_src {
+                // B-2026-08-05-7: `!leaf_cleanup_registered` is load-bearing.
+                // The comment below claims this branch is "independent of the
+                // branches above (whose `track_owned_destructure_field_cleanup`
+                // has no `Option` arm), so no double registration". That is FALSE
+                // for an `Option[<transparent single-heap-field wrapper>]` —
+                // `Option[Inner]` where `Inner { s: String }`. Such a payload
+                // lays out bit-identically to the bare heap value, so
+                // `inline_heap_payload_elem`'s transparent-wrapper arm makes
+                // `destructure_field_needs_cleanup` TRUE and the chain above DOES
+                // give the leaf an inline-Option free — while
+                // `option_field_agg_drop_ok` independently claims the same field
+                // as a struct/enum payload and armed a SECOND free on the same
+                // binding. Both fired at scope exit: double-free.
+                //
+                // It only bit the transparent shape. A two-field
+                // `Inner { s: String, n: i64 }` is not layout-transparent, so the
+                // chain above declines it (`needs_cleanup` false) and this branch
+                // is the sole owner — which is why the equivalent fixture with an
+                // extra field was always clean and this one was not.
+                if self.option_field_agg_drop_ok(&field_te) && !view_src && !leaf_cleanup_registered
+                {
                     let source_owned = fresh
                         || matches!(&value.kind, ExprKind::Identifier(n)
                             if !self.ref_params.contains_key(n.as_str()));
