@@ -32874,6 +32874,56 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-7: `Option.ok_or(e)` evaluates `e` EAGERLY and then selects
+    /// between `Ok(payload)` and `Err(e)`. A fresh heap `e` that the statement
+    /// machinery temp-tracks was therefore owned twice — the tracked temp's
+    /// scope-exit free and the Result's Err-payload free hit one buffer, so
+    /// every `None` iteration double-freed (SIGABRT). The mirror-image hole sat
+    /// on the `Some` path, where `e` is discarded and nothing freed it at all.
+    ///
+    /// This aborted on a DEFAULT -O2 build, not just at -O0: the sibling fixture
+    /// above only looked clean because it reads the Err payload through `.len()`
+    /// alone, which lets LLVM delete the allocation and with it the second free.
+    /// So this fixture reads the payload's BYTES (`starts_with`) and seeds from
+    /// `env.args().len()`, keeping the buffer genuinely live.
+    ///
+    /// Both directions are pinned: a double-free if the Err payload is ever
+    /// owned twice again, and a leak if the `Some`-path free goes missing.
+    #[test]
+    fn asan_ok_or_fresh_err_payload_owned_exactly_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn main() {
+    let base: i64 = env.args().len();
+    let mut i: i64 = 0;
+    let mut errs: i64 = 0;
+    let mut hits: i64 = 0;
+    while i < base + 59 {
+        let o: Option[i64] = if i % 2 == 0 { Some(i * 10) } else { None };
+        let r: Result[i64, String] = o.ok_or(f"absent-{i}-padded-well-past-inline-width");
+        match r {
+            Ok(v) => { errs = errs + v; },
+            Err(e) => {
+                if e.starts_with("absent") { hits = hits + 1; }
+                errs = errs + e.len();
+            },
+        }
+        i = i + 1;
+    }
+    println(errs);
+    println(hits);
+}
+"#,
+            // base=1 -> 60 iterations, 30 Some / 30 None. The 30 None arms each
+            // add a ~38-char payload length and one hit.
+            &["9865", "30"],
+            "ok_or_fresh_err_payload_owned_exactly_once",
+            // One f-string payload per iteration, every iteration — well above
+            // the 3 an allocation-free run reports.
+            40,
+        );
+    }
+
     #[test]
     fn asan_nested_struct_field_move_out_no_double_free() {
         // B-2026-07-15-22: `let bound = o.inner` moving a struct-typed heap-bearing

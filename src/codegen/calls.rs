@@ -2366,7 +2366,68 @@ impl<'ctx> super::Codegen<'ctx> {
                     let err_arg = args.first().ok_or_else(|| {
                         "codegen: Option.ok_or expects 1 argument, found 0".to_string()
                     })?;
+                    // B-2026-08-05-7: `e` is evaluated EAGERLY (before the
+                    // select), and on the `Some` path it is DISCARDED while the
+                    // Ok payload wins — the same present-discards-the-default
+                    // shape `unwrap_or` has. Two things follow, and neither was
+                    // handled: a fresh heap `e` that the statement machinery
+                    // temp-tracks is ALSO packed into the Result's Err slots, so
+                    // the tracked temp's scope-exit free and the Result payload's
+                    // free hit one buffer (double-free, SIGABRT, on every
+                    // `None`); and on the `Some` path nothing freed it at all.
+                    // Snapshot the cleanup frame so the temp's registration can
+                    // be located and removed below, exactly as the `unwrap_or`
+                    // f-string leg does (B-2026-07-16-23 leg 3).
+                    let cleanup_snap = self
+                        .scope_cleanup_actions
+                        .last()
+                        .map(|f| f.len())
+                        .unwrap_or(0);
                     let e_val = self.compile_expr(&err_arg.value)?;
+                    // A moved owned binding (`ok_or(msg)`) is consumed here: zero
+                    // its slot cap so the binding's own scope-exit free no-ops,
+                    // leaving `e_val`'s loaded cap>0 copy as the single owner —
+                    // freed either by the present-path free below or, on `None`,
+                    // by whoever owns the resulting Result. Mirrors `unwrap_or`
+                    // leg 1.
+                    let e_is_moved_heap_ident = matches!(
+                        &err_arg.value.kind,
+                        ExprKind::Identifier(n)
+                            if self.vec_elem_types.contains_key(n.as_str())
+                                && self.variables.get(n.as_str()).is_some_and(|s| matches!(
+                                    s.ty,
+                                    BasicTypeEnum::StructType(held) if held == self.vec_struct_type()
+                                ))
+                    );
+                    if e_is_moved_heap_ident {
+                        self.suppress_source_vec_cleanup_for_arg(&err_arg.value);
+                    }
+                    // A temp-tracked fresh heap `e` (f-string / collection
+                    // literal) armed a scope-exit `FreeVecBuffer` during the
+                    // compile above. That buffer now belongs to the Result's Err
+                    // payload, so drop the registration — the present-path free
+                    // below covers the `Some` case instead.
+                    let e_is_tracked_temp = matches!(
+                        &err_arg.value.kind,
+                        ExprKind::InterpolatedStringLit(_)
+                            | ExprKind::ArrayLiteral(_)
+                            | ExprKind::PrefixCollectionLiteral { .. }
+                            | ExprKind::RepeatLiteral { .. }
+                    );
+                    if e_is_tracked_temp {
+                        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                            let mut i = frame.len();
+                            while i > cleanup_snap {
+                                i -= 1;
+                                if matches!(
+                                    frame[i],
+                                    crate::codegen::state::CleanupAction::FreeVecBuffer { .. }
+                                ) {
+                                    frame.remove(i);
+                                }
+                            }
+                        }
+                    }
                     let result_ty = self
                         .enum_layouts
                         .get("Result")
@@ -2420,6 +2481,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         .builder
                         .build_select(is_present, ok_bv, err_bv, "okor.sel")
                         .unwrap();
+                    // B-2026-08-05-7 (second half): on the `Some` path the Ok
+                    // payload wins and `e` is dropped on the floor, so free it
+                    // there. `None` leaves it owned by the Result's Err slots,
+                    // freed once by whoever consumes that Result. Gated to the
+                    // same proven-fresh-owned shapes `unwrap_or`'s present-path
+                    // free uses, so a BORROWED `e` is never freed (and
+                    // `free_str_vec_buffer_if_heap`'s cap>0 guard no-ops on a
+                    // scalar or a borrowed view regardless).
+                    //
+                    // A branch rather than a flag: the value is only conditionally
+                    // dead, and the select above cannot express a side effect.
+                    if self.expr_yields_fresh_owned_temp(&err_arg.value)
+                        || self.expr_is_fresh_owned_string_slice(&err_arg.value)
+                        || e_is_moved_heap_ident
+                        || e_is_tracked_temp
+                    {
+                        let fn_val = self.current_fn.unwrap();
+                        let free_bb = self.context.append_basic_block(fn_val, "okor.free_e");
+                        let cont_bb = self.context.append_basic_block(fn_val, "okor.cont");
+                        self.builder
+                            .build_conditional_branch(is_present, free_bb, cont_bb)
+                            .unwrap();
+                        self.builder.position_at_end(free_bb);
+                        self.free_str_vec_buffer_if_heap(e_val);
+                        self.builder.build_unconditional_branch(cont_bb).unwrap();
+                        self.builder.position_at_end(cont_bb);
+                    }
                     return Ok(Some(sel));
                 }
                 "flatten" => {
