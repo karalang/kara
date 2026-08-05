@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 56 | 0 |
 | perf | 48 | 2 |
 | crash | 39 | 0 |
+| diagnostics | 38 | 0 |
 | soundness | 37 | 1 |
-| diagnostics | 37 | 0 |
 | other | 14 | 1 |
 | use-after-free | 12 | 0 |
 
@@ -115,8 +115,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 118 | 2 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
+| other | 26 | 2 |
 | cli | 26 | 1 |
-| other | 25 | 2 |
 | runtime | 20 | 0 |
 | resolver | 18 | 0 |
 | parser | 11 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **934 surfaced · 11 open · 915 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **935 surfaced · 11 open · 916 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -142,9 +142,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **934 surfaced 
 | B-2026-08-05-21 | 2026-08-05 | codegen | medium | The INTEGER-OVERFLOW check on an index add `v[base + i]` is still emitted after BCE has PROVEN `0 <= base + i < v.len()` -- a fact that already entails the add cannot overflow. The check sits on the loop-carried critical path, so on kata #246 it, not bounds checking, is the entire residual 1.23x vs C: removing the bounds checks moved the kata only 3%, while adding an equivalent overflow check to the C mirror lands C exactly on Kara's time. Writing the same loop over a `Slice` row-view reaches full C parity today (35.07 vs 35.16 ms), because the row view removes the add entirely. | src/codegen/bce_interproc.rs + bce_length_pin.rs (the proven-in-bounds fact); the overflow-check emitter for integer `+` on an index expression |
 | B-2026-08-05-22 | 2026-08-05 | codegen | medium | Destructuring an `Option[<aggregate>]` field out of a FRESH-TEMP struct source leaks the payload; the source is the axis, not the payload kind -- and the passing struct sibling only passed because it never ran that path | docs/implementation_checklist/phase-7-codegen.md |
 
-### Fixed (915)
+### Fixed (916)
 
-<details><summary>915 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>916 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1085,6 +1085,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-12 | parser | low | the `ref` at a call site diagnostic tells the author to remove one token but carries no machine-applicable replacement, so `karac fix` leaves it | 9b17779 |
 | B-2026-08-05-13 | autopar | medium | `karac query concurrency` reports `fanned_out: true` for a disjoint-write loop that runs SINGLE-THREADED when the accumulator is a `mut ref` parameter | 286afea |
 | B-2026-08-05-15 | codegen | medium | taking a free function as a VALUE (`let f = g;`) and calling it through the binding fails to build when any parameter is a `ref Vec[T]` -- the indire… | 72f9f49 |
+| B-2026-08-05-23 | other | medium | the JIT/selfhost oracles report a module that NEVER RAN as an output mismatch: run_ir discarded karac_jit_runner's stderr, so an unresolved external… | 9e25bfaa |
 
 </details>
 
