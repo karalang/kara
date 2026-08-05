@@ -4738,6 +4738,34 @@ impl<'ctx> super::Codegen<'ctx> {
                                         );
                                     }
                                 }
+                                // B-2026-08-05-20 — a whole-value binding-to-
+                                // binding move (`let b2 = body;`) of a
+                                // boxed-payload Option/Result left BOTH names
+                                // owning the same box: the loop above registers
+                                // the destination's `BoxedEnumDrop`, and the
+                                // source already had one from its own `let`, so
+                                // scope exit freed the box twice. Deterministic
+                                // SIGSEGV at -O0/-O1 and a glibc `double free
+                                // detected in tcache 2` abort at -O2/-O3, i.e.
+                                // on a DEFAULT `karac build`.
+                                //
+                                // The suppressor that zeroes the source's box
+                                // word already exists and is applied at every
+                                // OTHER move site — call arguments, struct
+                                // literal field inits, method receivers,
+                                // channel sends. A plain `let` initializer was
+                                // simply not among its call sites. This is the
+                                // boxed-enum peer of the container-bodies
+                                // retraction this same arm already performs
+                                // (see its comment: "or the body fires twice").
+                                //
+                                // Runs AFTER the destination is registered and
+                                // after the value has been stored into `slot`,
+                                // so the store lands on a source whose bytes
+                                // have already been copied out. Self-gated on
+                                // `boxed_enum_payload_vars` membership, so a
+                                // non-boxed initializer is untouched.
+                                self.suppress_inline_option_result_binding_move(value);
                             }
                         }
                     }

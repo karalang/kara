@@ -13964,6 +13964,58 @@ fn main() {
     }
 
     #[test]
+    fn asan_whole_value_move_of_boxed_option_frees_the_box_once() {
+        // B-2026-08-05-20: `let b2 = body;` — a plain binding-to-binding move
+        // of an Option whose payload is heap-BOXED (Wide is 4 words, wider than
+        // the 3-word inline payload area) — left BOTH names owning the box, so
+        // scope exit freed it twice.
+        //
+        // This was NOT an -O0 curiosity: it SIGSEGV'd at -O0/-O1 and aborted
+        // with glibc `double free detected in tcache 2` at -O2/-O3, i.e. on a
+        // default `karac build`. The row was filed believing -O2 was clean;
+        // that reading came from a reduction whose payload is read only through
+        // `.len()`, which is B-2026-08-04-17's dead-payload masking.
+        //
+        // The payload here is therefore consumed BYTE BY BYTE, not through
+        // `.len()`, so the allocation cannot be deleted and the fixture cannot
+        // pass vacuously against a compiler that still aborts.
+        assert_clean_asan_run(
+            r#"
+struct Wide { tag: i64, payload: String }
+
+fn mk_wide() -> Wide {
+    Wide { tag: 7, payload: "boxed-option-payload-string-long-enough-aaaa".to_string() }
+}
+
+fn byte_sum(s: String) -> i64 {
+    let bs = s.bytes();
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < bs.len() { n = n + (bs[i] as i64); i = i + 1i64; }
+    return n;
+}
+
+fn read2() -> i64 {
+    let mut body: Option[Wide] = None;
+    body = Some(mk_wide());
+    let b2 = body;
+    match b2 { Some(w) => { w.tag + byte_sum(w.payload) } None => 0 }
+}
+
+fn main() {
+    let mut acc = 0i64;
+    let mut i = 0;
+    while i < 50 { acc = acc + read2(); i = i + 1; }
+    println(f"{acc}");
+}
+"#,
+            // 50 iterations of (tag 7 + the payload's byte sum 4340).
+            &["217350"],
+            "whole_value_move_boxed_option",
+        );
+    }
+
+    #[test]
     fn test_proven_index_add_overflow_elision_stays_in_bounds() {
         // B-2026-08-05-21: the index adds in this shape now emit a PLAIN add —
         // the overflow trap is elided because BCE proved the sum in bounds. So
