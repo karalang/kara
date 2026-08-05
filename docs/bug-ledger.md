@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 132 | 0 |
 | double-free | 96 | 1 |
 | codegen-gap | 89 | 0 |
-| run-vs-build | 78 | 0 |
+| run-vs-build | 79 | 1 |
 | missing-feature | 76 | 1 |
 | false-positive | 56 | 0 |
-| perf | 47 | 2 |
+| perf | 47 | 1 |
 | crash | 39 | 0 |
 | diagnostics | 37 | 1 |
 | soundness | 36 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 667 | 2 |
+| codegen | 668 | 2 |
 | interp | 123 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **926 surfaced · 6 open · 912 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **927 surfaced · 6 open · 913 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -133,13 +133,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **926 surfaced 
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
 | B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED perf regression bounded to 2026-07-28..07-30: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 codegen is ruled out by byte-identical binaries | none yet — needs a matched karac+archive bisect across 2026-07-28..07-30 |
-| B-2026-08-05-6 | 2026-08-05 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo <= hi { v[base+lo] .. v[base+hi] } }`. The bound holds only ACROSS the call boundary (every caller passes `base = k*len` with `k < n`, and `v.len() == n*len`), and every BCE analysis in bce_length_pin.rs is per-function by construction, so no local fact exists to prove. Carries the whole of kata #246's residual 1.28x vs equal-safety C. Survives INLINING (measured), and LLVM's IRCE does not reach it either (measured, byte-identical assembly). Split off B-2026-08-04-8, whose intra-function shape is fixed. | — |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-12 | 2026-08-05 | parser | low | the `ref` at a call site diagnostic tells the author to remove one token but carries no machine-applicable replacement, so `karac fix` leaves it | the `ref` is not written at call sites parse diagnostic and its `replacement` field; compare against the `&&`/`!` operator diagnostics in the same pass, which do carry one. |
+| B-2026-08-05-15 | 2026-08-05 | codegen | medium | taking a free function as a VALUE (`let f = g;`) and calling it through the binding fails to build when any parameter is a `ref Vec[T]` -- the indirect call passes the Vec BY VALUE into a signature that expects a pointer, so LLVM module verification rejects it; `karac check` passes and the interpreter runs it correctly, and the same program with only scalar parameters builds fine | — |
 
-### Fixed (912)
+### Fixed (913)
 
-<details><summary>912 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>913 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1072,6 +1072,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-3 | codegen | medium | `Option[(Vec[T], ...)]` leaks the tuple payload's heap element when the Some arm binds and reads it -- 32 bytes definitely lost; the struct payload t… | f0aadd9 |
 | B-2026-08-05-4 | runtime | high | PERF-REGRESSION introduced by B-2026-07-31-21's fix (75a3a928): a remove-heavy Map runs 1.76x slower because the same-width compacting rehash re-fire… | 73237002 + 45398dd9 |
 | B-2026-08-05-14 | codegen | medium | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on macOS/arm64 for EVERY corpus entry: the self-hosted emitter hardcodes a Linux… | 06a3f683 |
+| B-2026-08-05-6 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo… | c87f488 |
 | B-2026-08-05-8 | codegen | medium | `s.contains(other)` on a String bound out of a `Result[String, E]` Ok arm fails to COMPILE -- "Binary op Eq: right operand has non-comparable type {… | b7a0a1d |
 | B-2026-08-05-9 | codegen | high | `unwrap_or` with a FRESH F-STRING default leaks on a DEFAULT -O2 build -- 133 leaked allocations in an existing fixture -- while the byte-identical p… | 94ec3a9 |
 | B-2026-08-05-10 | codegen | high | A `ref`-borrowed `shared` handle captured into a `par` branch reads as ZERO under codegen — silent wrong answer, interpreter disagrees | 93b1a81 |
