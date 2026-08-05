@@ -13982,6 +13982,146 @@ fn target_attr_single_file_inactive_reference_diagnostic() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+// ── B-2026-08-05-29: a single-target check SAYS what it skipped ──
+//
+// `filter_inactive_items` strips a `#[target(T)]` item before any pass runs,
+// so on a non-T check its body is not examined at all. Nothing used to record
+// that: `check` printed "All checks passed" and `--output=json` an empty
+// `diagnostics` array, over source it had never looked at. That is how
+// B-2026-08-05-24's fixture — two plain type errors in a
+// `#[target(wasm_browser)]` fn — lived in `main`.
+//
+// The capability to check it always existed (`--targets=`, and
+// `[build].targets` in the manifest); what was missing was any hint that you
+// needed it. These pin the hint, not the capability.
+
+fn target_skip_fixture(dir: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-{}-{}-{}",
+        dir,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("gated.kara");
+    // The gated body is BLATANTLY ill-typed on any target: `a` is i32 bound to
+    // a String, then returned from an `-> i32`. Nothing target-specific about
+    // it, which is the point — it is not that the check is lenient here, it is
+    // that the check never runs.
+    std::fs::write(
+        &path,
+        "#[target(wasm_browser)]\npub fn gated(a: i32) -> i32 {\n\
+         \x20   let s: String = a;\n    return s;\n}\n\nfn main() {}\n",
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn single_target_check_notes_the_items_it_skipped() {
+    let path = target_skip_fixture("target-skip-note");
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Still a pass — gating an item away is correct, so this is a note and
+    // the exit status must not change.
+    assert!(
+        out.status.success() && stderr.contains("All checks passed."),
+        "gating an item away must stay a PASS, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("1 item NOT checked")
+            && stderr.contains("gated")
+            && stderr.contains("wasm_browser"),
+        "expected the skip note naming the item and its gate, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--targets=all"),
+        "the note must point at the flag that checks the skipped body, got: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn single_target_check_json_reports_skipped_items() {
+    let path = target_skip_fixture("target-skip-json");
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The Mend loop reads this stream; an empty `diagnostics` must no longer
+    // be indistinguishable from "nothing was skipped".
+    assert!(
+        stdout.contains("\"target_skipped\":[{\"name\":\"gated\",\"gated_for\":\"wasm_browser\"}]"),
+        "expected target_skipped to name the gated item, got: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn ungated_check_reports_no_skips() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-target-skip-none-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("plain.kara");
+    std::fs::write(&path, "fn main() { println(\"hi\"); }\n").unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("NOT checked"),
+        "a file with nothing gated must not carry the note, got: {stderr}"
+    );
+
+    let json = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&json.stdout).contains("\"target_skipped\":[]"),
+        "target_skipped must be present and empty, not absent"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn multi_target_check_omits_the_skip_note() {
+    // The `--targets=` matrix checks the gated body under its own target, so
+    // the note would be noise there — and worse, would fire on the pass that
+    // did NOT check it while a sibling pass did.
+    let path = target_skip_fixture("target-skip-matrix");
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--targets=all"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("NOT checked"),
+        "the matrix path must not carry the single-target note, got: {stderr}"
+    );
+    // And it must actually CATCH the error the single-target pass skipped.
+    assert!(
+        !out.status.success() && stderr.contains("expected 'String', found 'i32'"),
+        "--targets=all must typecheck the gated body, got: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
 // ── Phase-10: effect-driven target gate (check path) ────────────
 // `karac run` deliberately skips effect checking (lenient script
 // path — typecheck is warnings-only there too); the gate fires on

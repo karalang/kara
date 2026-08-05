@@ -918,6 +918,16 @@ fn read_source(filename: &str) -> String {
 
 struct Pipeline {
     filename: String,
+    /// Items `target::filter_inactive_items` stripped because their
+    /// `#[target(...)]` spec excludes the target of THIS pass — name →
+    /// rendered spec. Kept so a single-target check can say so
+    /// (B-2026-08-05-29): a stripped body is never parsed into any pass, so
+    /// `check` reports "All checks passed" over source it did not examine,
+    /// and the author has no way to tell that from source it did. The
+    /// resolver gets the same map for its reference-site "not available on
+    /// target X" diagnostic; this copy exists because that one only fires
+    /// when something CALLS the gated item.
+    target_skipped: std::collections::HashMap<String, String>,
     /// The exact text `parse` consumed, when there was one. Span-driven lints
     /// need the author's own spelling, and `filename` is NOT always a readable
     /// path — project mode labels its hand-built super-program with the
@@ -983,6 +993,7 @@ impl Pipeline {
         let parsed = crate::parse(source);
         Pipeline {
             filename: filename.to_string(),
+            target_skipped: std::collections::HashMap::new(),
             source: Some(source.to_string()),
             parsed,
             resolved: None,
@@ -1028,6 +1039,11 @@ impl Pipeline {
             &mut self.parsed.program,
             crate::target::active_target(),
         );
+        // Keep a copy for the check reporter (B-2026-08-05-29). The resolver
+        // consumes the map for reference-site diagnostics, which only fire
+        // when something CALLS a stripped item; nothing otherwise records
+        // that a body went unexamined.
+        self.target_skipped = target_tombstones.clone();
         // `desugar_program` also runs the pre-resolve `#[proto_schema]`
         // expansion (protobuf slice 3); its diagnostics (malformed `.proto`,
         // unsupported field types) join the comptime-error channel so they
@@ -4161,16 +4177,78 @@ fn render_missing_track_caller_lint_diag(
     }
 }
 
+/// Render the `#[target(...)]`-stripped items of a SINGLE-target check as a
+/// note (B-2026-08-05-29).
+///
+/// A stripped item is removed before any pass runs, so its body is not
+/// checked leniently — it is not checked at all, and `check` then prints "All
+/// checks passed" over source it never examined. That is how a fixture with
+/// two plain type errors lived in `main` (B-2026-08-05-24): nothing in the
+/// default single-target output distinguished "checked and clean" from "not
+/// looked at".
+///
+/// Single-target only. The `--targets=` / `[build].targets` matrix already
+/// checks each declared target under its own filtering, so the same note
+/// there would fire once per pass for items the OTHER pass just checked.
+///
+/// Deliberately a note, not a warning: gating an item away is correct
+/// behaviour, and the author of a native-only build has no reason to be
+/// nagged. What was missing is the fact, plus the flag that acts on it.
+fn target_skip_note(pipeline: &Pipeline) -> Option<String> {
+    if pipeline.target_skipped.is_empty() {
+        return None;
+    }
+    let mut items: Vec<_> = pipeline
+        .target_skipped
+        .iter()
+        .map(|(name, spec)| format!("{name} ({spec})"))
+        .collect();
+    items.sort();
+    let n = items.len();
+    let plural = if n == 1 { "" } else { "s" };
+    Some(format!(
+        "note: {n} item{plural} NOT checked — gated away from target '{}': {}\n      \
+         Their bodies are stripped before any pass runs, so nothing above covers them. \
+         Check them with `--targets=all` (or declare `[build] targets` in kara.toml).",
+        crate::target::active_target(),
+        items.join(", "),
+    ))
+}
+
+/// `target_skipped` as a JSON array of `{name, gated_for}` (B-2026-08-05-29).
+///
+/// This is the field the Mend loop actually needs. `--output=json` is the
+/// documented front door of that loop, and without this an empty
+/// `"diagnostics":[]` is indistinguishable between "the file is clean" and
+/// "some of the file was never looked at". Sorted by name so the output is
+/// deterministic across runs.
+fn target_skipped_json(pipeline: &Pipeline) -> String {
+    let mut rows: Vec<(&String, &String)> = pipeline.target_skipped.iter().collect();
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+    let parts: Vec<String> = rows
+        .iter()
+        .map(|(name, spec)| {
+            format!(
+                "{{\"name\":{},\"gated_for\":{}}}",
+                json_string(name),
+                json_string(spec)
+            )
+        })
+        .collect();
+    format!("[{}]", parts.join(","))
+}
+
 fn emit_json_output(pipeline: &Pipeline) {
     let diags = collect_diagnostics(pipeline);
     let effects = program_effects_json(pipeline);
     let pub_effects = public_function_effects_json(pipeline);
     let mrg = mutual_recursion_groups_json(pipeline);
     println!(
-        "{{\"program_effects\":{},\"public_function_effects\":{},\"mutual_recursion_groups\":{},\"diagnostics\":{}}}",
+        "{{\"program_effects\":{},\"public_function_effects\":{},\"mutual_recursion_groups\":{},\"target_skipped\":{},\"diagnostics\":{}}}",
         effects,
         pub_effects,
         mrg,
+        target_skipped_json(pipeline),
         diags.to_json_array()
     );
 }
@@ -5619,6 +5697,11 @@ fn cmd_check(
                 OutputMode::Text => {
                     print_text_diagnostics(&pipeline);
                     let total = pipeline.total_errors();
+                    // Before the verdict, not after: "All checks passed" is
+                    // exactly the line the note qualifies (B-2026-08-05-29).
+                    if let Some(note) = target_skip_note(&pipeline) {
+                        eprintln!("\n{note}");
+                    }
                     if total > 0 {
                         eprintln!("\n{total} error(s) found.");
                         process::exit(1);
@@ -8361,6 +8444,7 @@ fn run_multi_file_codegen(
     };
     let mut pipeline = Pipeline {
         filename: mf.name.clone(),
+        target_skipped: std::collections::HashMap::new(),
         // No single source text: `parsed` is a super-program stitched from
         // every module. `filename` is the package NAME, not a path, so it must
         // never be read from disk (B-2026-08-04-7).
