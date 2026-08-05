@@ -267,7 +267,17 @@ pub(crate) fn loop_reductions_json(
         .map(|r| {
             // A `seq` entry is the single-threaded push->in-place-store
             // rewrite: no dispatch exists, so no gate applies.
-            let (lowering, fanned_out, gate, reason) = if r.seq {
+            let (lowering, fanned_out, gate, reason) = if !crate::par_cost::auto_par_enabled() {
+                // B-2026-08-05-13 — same reason as the disjoint-write path:
+                // `KARAC_AUTO_PAR=0` means no dispatch is emitted, so the cost
+                // verdict would describe a binary that does not exist.
+                (
+                    "sequential",
+                    false,
+                    "declined_auto_par_disabled",
+                    "auto-par disabled by KARAC_AUTO_PAR=0",
+                )
+            } else if r.seq {
                 ("sequential_tabulate", false, "n/a", "lowered inline, single-threaded")
             } else {
                 match func.and_then(|f| reduction_loop_verdict(f, program, r)) {
@@ -369,7 +379,13 @@ pub(crate) fn disjoint_write_loops_json(
                 .collect();
             // A declined proof never reaches the cost model, so it reports
             // `n/a` rather than a gate name it did not run.
-            let (fanned_out, cost_gate) = if !d.proven() {
+            let (fanned_out, cost_gate) = if !crate::par_cost::auto_par_enabled() {
+                // B-2026-08-05-13 — `KARAC_AUTO_PAR=0` disables every auto-par
+                // lowering, so no dispatch is emitted no matter what the proof
+                // and cost model say. Reporting the cost verdict here would
+                // describe a binary that does not exist.
+                (false, "declined_auto_par_disabled")
+            } else if !d.proven() {
                 (false, "n/a")
             } else {
                 match func.and_then(|f| disjoint_loop_verdict(f, program, d)) {

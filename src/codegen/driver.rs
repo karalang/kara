@@ -2108,7 +2108,9 @@ pub(super) fn read_runtime_debug_metadata_env() -> bool {
 /// `Codegen::auto_par_disabled` field is `!return_value` so the
 /// compile-time check reads naturally as `if self.auto_par_disabled`.
 pub(super) fn read_auto_par_env() -> bool {
-    !matches!(std::env::var("KARAC_AUTO_PAR"), Ok(v) if v == "0")
+    // Delegates so codegen and `karac query concurrency` cannot disagree about
+    // whether auto-par is on at all (B-2026-08-05-13).
+    crate::par_cost::auto_par_enabled()
 }
 
 /// Read the `KARAC_STRIP_CONTRACTS` env var to decide whether contract

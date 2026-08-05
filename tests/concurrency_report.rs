@@ -126,6 +126,70 @@ fn test_build_without_concurrency_report_flag_prints_nothing() {
 /// line here keeps the opportunities the report exists to show from being
 /// buried under per-loop decline records.
 #[test]
+fn test_auto_par_disabled_is_reflected_in_fanned_out() {
+    // B-2026-08-05-13 — `KARAC_AUTO_PAR=0` disables every auto-par lowering,
+    // so codegen emits no dispatch. The query used to report `fanned_out: true`
+    // anyway, because it ran the proof and the cost model but not the env gate
+    // codegen checks first — describing a binary that does not exist.
+    //
+    // Both callers now read `par_cost::auto_par_enabled()`, so they cannot
+    // disagree. This asserts BOTH directions: without the var the loop still
+    // reports fanned out, so the test cannot pass by reporting `false`
+    // unconditionally.
+    const SRC: &str = "\n\
+fn work(k: i64) -> i64 {\n\
+    let mut acc: i64 = 0;\n\
+    let mut t: i64 = 0;\n\
+    while t < 500 { acc = acc + k * 7 + t; t = t + 1; }\n\
+    acc\n\
+}\n\
+fn fill(out: mut ref Vec[i64]) {\n\
+    for i in 0..4096 { out[i] = work(i); }\n\
+}\n\
+fn main() {\n\
+    let mut a: Vec[i64] = Vec.filled(4096, 0);\n\
+    fill(mut a);\n\
+    println(f\"{a[10]}\");\n\
+}\n";
+
+    let dir = std::env::temp_dir().join("karac_auto_par_disabled_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("ap.kara");
+    std::fs::write(&path, SRC).unwrap();
+
+    let run = |disabled: bool| -> String {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
+        cmd.args(["query", "concurrency", path.to_str().unwrap()]);
+        if disabled {
+            cmd.env("KARAC_AUTO_PAR", "0");
+        } else {
+            cmd.env_remove("KARAC_AUTO_PAR");
+        }
+        let out = cmd.output().expect("karac query concurrency");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+
+    let on = run(false);
+    assert!(
+        on.contains("\"fanned_out\":true"),
+        "with auto-par ON this loop must report fanned out, else the disabled \
+         case below proves nothing; got:\n{on}"
+    );
+
+    let off = run(true);
+    assert!(
+        !off.contains("\"fanned_out\":true"),
+        "with KARAC_AUTO_PAR=0 nothing is dispatched, so no loop may report \
+         fanned_out: true; got:\n{off}"
+    );
+    assert!(
+        off.contains("declined_auto_par_disabled"),
+        "the disabled case must name the gate that declined it, not report a \
+         cost-model verdict it never reached; got:\n{off}"
+    );
+}
+
+#[test]
 fn test_declined_disjoint_write_loop_is_visible_in_the_report() {
     const BODY: &str = "\n\
 fn main() {\n\

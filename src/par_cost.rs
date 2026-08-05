@@ -44,6 +44,21 @@
 //! `KARAC_PROOF_DEBUG=1` (in `index_disjoint.rs`) is its counterpart for the
 //! disjointness proof that runs one phase earlier.
 
+/// Is auto-par codegen enabled at all? `KARAC_AUTO_PAR=0` disables every
+/// auto-par lowering.
+///
+/// Lives here for the same reason the cost gates do: BOTH codegen and the
+/// query must get the same answer. `codegen::driver::read_auto_par_env`
+/// delegates to this, so there is one definition.
+///
+/// B-2026-08-05-13 — the query used to miss this. With `KARAC_AUTO_PAR=0`,
+/// codegen emitted no dispatch while `karac query concurrency` still reported
+/// `fanned_out: true`, so the field described a binary that did not exist.
+/// That is the same defect class B-2026-07-29-29 filed and this module was
+/// built to end; the env gate simply was not part of the extraction.
+pub fn auto_par_enabled() -> bool {
+    !matches!(std::env::var("KARAC_AUTO_PAR"), Ok(v) if v == "0")
+}
 use crate::ast::{
     BinOp, Block, CompoundOp, Expr, ExprKind, Function, Item, PatternKind, Program, Stmt, StmtKind,
 };
