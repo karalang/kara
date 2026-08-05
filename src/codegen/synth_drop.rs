@@ -3103,6 +3103,51 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-05-22 — companion to [`Self::type_expr_has_drop_heap`] for the
+    /// one caller that must NOT inherit its `Option`/`Result` carve-out.
+    ///
+    /// That predicate answers "does a synthesized drop have to free this?" and
+    /// deliberately returns `false` for `Option`/`Result`, on the stated ground
+    /// that "their inline payloads are freed by the let-binding machinery". True
+    /// for a binding. **A fresh-temp call ARGUMENT has no binding**, so for
+    /// `use_a(mk())` nothing freed the payload: `aggregate_has_heap_field` is
+    /// LLVM-type-driven and an `Option` field lowers to erased `i64` payload
+    /// words (or a box pointer), never a `{ptr,len,cap}`, so it is blind here in
+    /// exactly the way the enum-leaf case already documents — and the
+    /// source-level fallback then asked `type_expr_has_drop_heap`, which says
+    /// no. A struct whose heap lives ONLY behind `Option` fields therefore
+    /// registered no caller-temp cleanup at all.
+    ///
+    /// Measured: `struct A { value: Option[String] }` and
+    /// `A { value: Option[Inner] }` both leaked one payload per call, while
+    /// adding any plain `String` field made them clean — that field is
+    /// LLVM-visible, so the temp got its drop for an unrelated reason and the
+    /// `Option` payload rode along. The same near-miss is why b27's struct
+    /// fixture passed while its enum sibling failed: only the sibling ran the
+    /// fresh-temp path.
+    ///
+    /// Reports true only when the payload is something a drop would actually
+    /// free, so `Option[i64]` stays false and no spurious cleanup is registered.
+    pub(super) fn option_field_te_has_drop_heap(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if !matches!(
+            p.segments.last().map(|s| s.as_str()),
+            Some("Option") | Some("Result")
+        ) {
+            return false;
+        }
+        p.generic_args.as_ref().is_some_and(|args| {
+            args.iter().any(|g| match g {
+                GenericArg::Type(t) => {
+                    self.type_expr_has_drop_heap(t) || self.option_payload_struct_or_enum_drop_ok(t)
+                }
+                _ => false,
+            })
+        })
+    }
+
     /// Copy-side companion to [`Self::type_expr_has_drop_heap`] for its
     /// deliberate `Option`/`Result` blind spot: true when `te` owns heap
     /// through an `Option[<heap payload>]` leaf (directly, through a tuple

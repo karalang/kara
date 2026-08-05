@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 215 | 1 |
-| leak | 133 | 1 |
+| leak | 133 | 0 |
 | double-free | 97 | 2 |
 | codegen-gap | 89 | 0 |
 | run-vs-build | 80 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 673 | 6 |
+| codegen | 673 | 5 |
 | interp | 123 | 0 |
 | typecheck | 118 | 2 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **935 surfaced · 10 open · 917 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **935 surfaced · 9 open · 918 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,11 +139,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **935 surfaced 
 | B-2026-08-05-19 | 2026-08-05 | typecheck+codegen | high | generic args are NOT invariant across numeric element types: `Vec[i64]` is silently accepted where `Vec[u16]` is declared, and AOT then reinterprets the buffer — wrong values, out-of-bounds reads, and a run-vs-build divergence | src/typechecker/types.rs::types_compatible (note the TypeParam blanket arm ~line 1273); src/typechecker.rs::is_subtype_with_projections / check_assignable. Repro files as in detail. |
 | B-2026-08-05-20 | 2026-08-05 | codegen | high | A whole-value binding-to-binding move of a BOXED-payload `Option` (`let b2 = body;`) double-frees at -O0 -- deterministic, no destructure involved, and it SURVIVES B-2026-08-05-7's leak-B fix | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-21 | 2026-08-05 | codegen | medium | The INTEGER-OVERFLOW check on an index add `v[base + i]` is still emitted after BCE has PROVEN `0 <= base + i < v.len()` -- a fact that already entails the add cannot overflow. The check sits on the loop-carried critical path, so on kata #246 it, not bounds checking, is the entire residual 1.23x vs C: removing the bounds checks moved the kata only 3%, while adding an equivalent overflow check to the C mirror lands C exactly on Kara's time. Writing the same loop over a `Slice` row-view reaches full C parity today (35.07 vs 35.16 ms), because the row view removes the add entirely. | src/codegen/bce_interproc.rs + bce_length_pin.rs (the proven-in-bounds fact); the overflow-check emitter for integer `+` on an index expression |
-| B-2026-08-05-22 | 2026-08-05 | codegen | medium | Destructuring an `Option[<aggregate>]` field out of a FRESH-TEMP struct source leaks the payload; the source is the axis, not the payload kind -- and the passing struct sibling only passed because it never ran that path | docs/implementation_checklist/phase-7-codegen.md |
 
-### Fixed (917)
+### Fixed (918)
 
-<details><summary>917 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>918 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1085,6 +1084,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-13 | autopar | medium | `karac query concurrency` reports `fanned_out: true` for a disjoint-write loop that runs SINGLE-THREADED when the accumulator is a `mut ref` parameter | 286afea |
 | B-2026-08-05-15 | codegen | medium | taking a free function as a VALUE (`let f = g;`) and calling it through the binding fails to build when any parameter is a `ref Vec[T]` -- the indire… | 72f9f49 |
 | B-2026-08-05-17 | cli | medium | `karac build` does not enforce EFFECT errors that `karac check` reports — a program `check` rejects with 1 error builds and runs; type errors ARE enf… | 0bfde1c |
+| B-2026-08-05-22 | codegen | high | A fresh-temp aggregate ARGUMENT whose heap lives only behind `Option` fields registered no caller-side cleanup and leaked one payload per call -- 749… | this commit |
 | B-2026-08-05-23 | other | medium | the JIT/selfhost oracles report a module that NEVER RAN as an output mismatch: run_ir discarded karac_jit_runner's stderr, so an unresolved external… | 9e25bfaa |
 
 </details>

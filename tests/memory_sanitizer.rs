@@ -7806,6 +7806,60 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-22 — a fresh-temp aggregate ARGUMENT whose heap lives only
+    /// behind `Option` fields registered no caller-side cleanup, leaking one
+    /// payload per call. `use_a(mk())` where `A { value: Option[Inner] }`.
+    ///
+    /// Both ownership signals were blind to it. `aggregate_has_heap_field`
+    /// walks the LLVM type, where an `Option` is erased `i64` payload words and
+    /// never a `{ptr,len,cap}` — the same blindness the enum-leaf case already
+    /// documents. The source-level fallback then asked `type_expr_has_drop_heap`,
+    /// which returns false for `Option`/`Result` by design, because "their inline
+    /// payloads are freed by the let-binding machinery" — and a temp ARGUMENT has
+    /// no binding. `option_field_te_has_drop_heap` closes exactly that gap.
+    ///
+    /// UNLIKE its b27 neighbours this is a DEFAULT-BUILD leak, not an -O0 one:
+    /// measured 7492 B in 200 allocations at `-O2` against the unfixed compiler,
+    /// identical at -O0. The b27 pair masked at -O2 only because `Some(_)` never
+    /// reads the payload (B-2026-08-04-17's discard family); this fixture reads
+    /// it, so the allocation is live and the leak is visible on the surface a
+    /// user actually builds.
+    ///
+    /// Written to B-2026-08-04-17's three rules so it cannot go vacuous: the
+    /// seed is `env.args().len()` (opaque — 1 under both the harness and a bare
+    /// run), the payload CONTENT is runtime-derived rather than const-foldable,
+    /// and `starts_with` reads its BYTES without consuming it. Floored so a
+    /// future regression to zero allocations fails loudly instead of passing.
+    #[test]
+    fn asan_fresh_temp_arg_option_only_heap_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Inner { s: String }
+struct A { value: Option[Inner] }
+fn mk(k: i64) -> A {
+    let mut b: String = String.new();
+    b.push_str("payload-");
+    b.push_str(k.to_string());
+    b.push_str("-tail-padding-to-force-heap");
+    A { value: Some(Inner { s: b }) }
+}
+fn use_a(a: A) -> i64 {
+    match a.value { Some(w) => { if w.s.starts_with("payload") { 1 } else { 2 } } None => 0 }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut t = 0;
+    let mut i = 0;
+    while i < 200 { t = t + use_a(mk(i + n)); i = i + 1; }
+    println(t);
+}
+"#,
+            &["200"],
+            "fresh_temp_arg_option_only_heap",
+            100,
+        );
+    }
+
     /// B-2026-08-05-7 (destructure leg): destructuring a struct field typed
     /// `Option[<transparent single-heap-field wrapper>]` registered TWO
     /// scope-exit frees for one payload, and both fired — double-free.

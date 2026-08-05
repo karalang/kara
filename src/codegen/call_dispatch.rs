@@ -2387,12 +2387,36 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `fn_return_type_names` — so this caller temp is an
                         // INDEPENDENT buffer and freeing it cannot touch the
                         // callee's copy.
+                        // B-2026-08-05-22 — `option_field_te_has_drop_heap` joins
+                        // the source-level fallback because BOTH signals above are
+                        // blind to a field whose heap sits behind an `Option`:
+                        // `aggregate_has_heap_field` walks the LLVM type, where an
+                        // `Option` is erased `i64` payload words (the same blindness
+                        // the enum-leaf case documents), and `type_expr_has_drop_heap`
+                        // returns false for `Option`/`Result` by design, because
+                        // "their inline payloads are freed by the let-binding
+                        // machinery" — which a fresh-temp ARGUMENT does not have.
+                        // So `use_a(mk())` where `A { value: Option[String] }`
+                        // registered nothing and leaked one payload per call, while
+                        // the same struct plus any plain `String` field was clean
+                        // (that field is LLVM-visible, and the Option payload rode
+                        // along on its drop).
+                        //
+                        // Stays under the existing `copy_supported` gate, so the
+                        // ownership argument is unchanged: the callee entry-copies a
+                        // copy-supported struct, making this caller temp an
+                        // INDEPENDENT buffer that nothing else frees.
                         let needs_memory_drop = self.aggregate_has_heap_field(agg_ty)
                             || (self.aggregate_param_copy_supported_struct(
                                 &ret_ty_name,
                                 &mut Vec::new(),
                             ) && self.struct_field_type_exprs.get(&ret_ty_name).is_some_and(
-                                |ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)),
+                                |ftes| {
+                                    ftes.iter().any(|f| {
+                                        self.type_expr_has_drop_heap(f)
+                                            || self.option_field_te_has_drop_heap(f)
+                                    })
+                                },
                             ));
                         if needs_memory_drop || bodies_fn.is_some() {
                             let slot =
