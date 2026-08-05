@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 132 | 2 |
 | double-free | 96 | 1 |
 | codegen-gap | 88 | 0 |
-| run-vs-build | 77 | 1 |
+| run-vs-build | 78 | 1 |
 | missing-feature | 76 | 1 |
 | false-positive | 56 | 0 |
 | perf | 47 | 3 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 666 | 6 |
-| interp | 122 | 0 |
+| interp | 123 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 1 |
 | autopar | 32 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **922 surfaced · 10 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **923 surfaced · 10 open · 905 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -141,9 +141,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **922 surfaced 
 | B-2026-08-05-9 | 2026-08-05 | codegen | high | `unwrap_or` with a FRESH F-STRING default leaks on a DEFAULT -O2 build -- 133 leaked allocations in an existing fixture -- while the byte-identical program with a literal `"...".to_string()` default is clean, because the literal default const-folds away and the f-string one does not | — |
 | B-2026-08-05-10 | 2026-08-05 | codegen | high | A `ref`-borrowed `shared` handle captured into a `par` branch reads as ZERO under codegen — silent wrong answer, interpreter disagrees | — |
 
-### Fixed (904)
+### Fixed (905)
 
-<details><summary>904 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>905 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1073,6 +1073,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-21 | cli | medium | `karac fmt` silently deleted every declaration modifier it had no printer for (`unsafe fn`, `comptime fn`, `comptime` param prefix) | c35df3a |
 | B-2026-08-05-1 | codegen | high | Passing a TUPLE ELEMENT to a `ref` parameter (`peek(t.0)` where `fn peek(v: ref Vec[i64])`) double-frees the element buffer under AOT; the struct-fie… | 99d27f7 (src/codegen/call_dispatch.rs — a TupleIndex arm in the ref-argument path, sibling to B-2026-07-12-1's FieldAccess arm). ONE arm closes both rows. Pins codegen.rs::e2e_tuple_element_borrowed_in_place_for_ref_params, memory_sanitizer.rs::asan_tuple_element_borrowed_in_place_for_ref_params (floored at 300 against ~800 allocations), interpreter.rs::test_tuple_element_borrowed_in_place_for_ref_params. Both codegen tests are stash-proven RED against the unfixed compiler (E2E panics with `vec index out of bounds`, ASAN reports a memory error); the interpreter twin passes both ways. cargo test --features llvm: 12980 passed, 0 failed. |
 | B-2026-08-05-2 | codegen | high | A `mut ref` parameter given a TUPLE ELEMENT (`bump(mut t.0)`) does not mutate the element under AOT -- the program then PANICS reading the index the… | 99d27f7 (src/codegen/call_dispatch.rs — a TupleIndex arm in the ref-argument path, sibling to B-2026-07-12-1's FieldAccess arm). ONE arm closes both rows. Pins codegen.rs::e2e_tuple_element_borrowed_in_place_for_ref_params, memory_sanitizer.rs::asan_tuple_element_borrowed_in_place_for_ref_params (floored at 300 against ~800 allocations), interpreter.rs::test_tuple_element_borrowed_in_place_for_ref_params. Both codegen tests are stash-proven RED against the unfixed compiler (E2E panics with `vec index out of bounds`, ASAN reports a memory error); the interpreter twin passes both ways. cargo test --features llvm: 12980 passed, 0 failed. |
+| B-2026-08-05-11 | interp | medium | `File.read` / `BufReader.read` reject a fixed `Array[u8, N]` buffer that AOT accepts — the blessed `let mut buf: Array[u8, N]; f.read(mut buf)` idiom… | FIXED 1caca04. `File.read` and `BufReader.read` in the interpreter now match `Value::Array` alongside `Value::Slice`, taking the whole array as the buffer window (start 0, len = array len). This mirrors the deliberate permissiveness `File.write` already had. AOT was already correct and is untouched. |
 
 </details>
 
