@@ -2762,6 +2762,56 @@ impl<'ctx> super::Codegen<'ctx> {
 
             // Absent: fall through to the default.
             self.builder.position_at_end(absent_bb);
+            // B-2026-08-05-9: on a RESULT receiver this path DISCARDS the `Err`
+            // payload — the default becomes the result and nothing else ever
+            // sees `E`. The present path frees its discarded value (the
+            // default, above); this path had no counterpart, so a heap `E`
+            // (`Result[_, String]`, `Result[_, Vec[_]]`) leaked once per
+            // Err-tagged call — unbounded in a loop, and invisible whenever the
+            // optimizer could delete the allocation outright (which is why the
+            // fixture that named this shape stayed green: its literal
+            // `"…".to_string()` default let LLVM fold the whole thing away).
+            // Free it here, mirroring the present path.
+            //
+            // No double-free: `suppress_inline_option_result_binding_move`
+            // below zeroes a LET-BOUND receiver's inline payload cap, so its
+            // scope-exit `FreeInlineOptionPayload` no-ops, and a fresh-temp
+            // receiver has no other owner. `free_str_vec_buffer_if_heap`'s
+            // `cap > 0` guard additionally no-ops on a borrowed view.
+            //
+            // Restricted to a DIRECT (unboxed) String/Vec `E`: a wide `E` is
+            // reached through a box pointer in `w0` and needs the deboxing the
+            // present path does, plus a free of the box itself — left alone
+            // rather than half-handled, so an aggregate `E` with heap fields
+            // still leaks (narrower than the shape reported, and untested).
+            if let Some(err_te) = self.method_unwrap_err_types.get(&key).cloned() {
+                let err_ll = self.llvm_type_for_type_expr(&err_te);
+                let area = (recv_struct.get_type().count_fields() as usize).saturating_sub(1);
+                let direct_heap = matches!(
+                    err_ll,
+                    BasicTypeEnum::StructType(st) if st == self.vec_struct_type()
+                ) && Self::llvm_type_word_count(err_ll) <= area;
+                if direct_heap {
+                    let ew0 = self
+                        .builder
+                        .build_extract_value(recv_struct, 1, "uo.err.w0")
+                        .map_err(|e| format!("codegen: extract unwrap_or err w0: {:?}", e))?
+                        .into_int_value();
+                    let ew1 = self
+                        .builder
+                        .build_extract_value(recv_struct, 2, "uo.err.w1")
+                        .map_err(|e| format!("codegen: extract unwrap_or err w1: {:?}", e))?
+                        .into_int_value();
+                    let ew2 = self
+                        .builder
+                        .build_extract_value(recv_struct, 3, "uo.err.w2")
+                        .map_err(|e| format!("codegen: extract unwrap_or err w2: {:?}", e))?
+                        .into_int_value();
+                    let err_val = self.rebuild_value_from_payload_words(err_ll, ew0, ew1, ew2)?;
+                    self.free_str_vec_buffer_if_heap(err_val);
+                }
+            }
+            let absent_end = self.builder.get_insert_block().unwrap();
             self.builder.build_unconditional_branch(merge_bb).unwrap();
 
             // Merge: select present vs default.
@@ -2770,7 +2820,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_phi(inner_ll, "uo.val")
                 .map_err(|e| format!("codegen: unwrap_or phi: {:?}", e))?;
-            phi.add_incoming(&[(&present_val, present_end), (&default_val, absent_bb)]);
+            // `absent_end`, not `absent_bb`: the Err-payload free above emits a
+            // `cap > 0` guard, which SPLITS the absent block — the edge into
+            // the merge leaves from whatever block the free left us in. Using
+            // `absent_bb` here makes the phi name a block that no longer
+            // branches to the merge, which the LLVM verifier rejects.
+            phi.add_incoming(&[(&present_val, present_end), (&default_val, absent_end)]);
             // B-2026-07-17-4: like `unwrap`/`expect` (B-2026-07-10-2, below),
             // `unwrap_or` CONSUMES the receiver — the present branch's
             // reconstituted payload is a SHALLOW alias of the receiver's

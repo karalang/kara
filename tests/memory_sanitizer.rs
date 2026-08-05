@@ -33932,6 +33932,55 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-9: `Result[T, E].unwrap_or(d)` DISCARDS the `Err` payload on
+    /// the absent path, and codegen emitted no free for it — the present path
+    /// freed its discarded value (the eagerly-evaluated default, B-2026-07-16-22)
+    /// but the absent path had no counterpart. A heap `E` therefore leaked once
+    /// per Err-tagged call, unbounded in a loop.
+    ///
+    /// Why the sibling fixture above missed it for so long, which is the part
+    /// worth keeping: its `unwrap_or` defaults are literal `"…".to_string()`,
+    /// which LLVM constant-folds and deletes outright — with no default
+    /// allocation surviving, the shape never exercised the branch. Swapping just
+    /// those two literals for f-strings made it leak 133 allocations at the
+    /// DEFAULT -O2. So this fixture keeps BOTH payloads runtime-derived: the
+    /// `Err` value that leaks and the default that reaches the absent path. A
+    /// literal anywhere in that chain re-hides the bug.
+    ///
+    /// Directions pinned: a leak if the absent-path free goes missing again, and
+    /// a double-free (SIGABRT) if it is ever emitted twice — once here and once
+    /// via a receiver's scope-exit payload cleanup.
+    #[test]
+    fn asan_unwrap_or_result_discarded_err_payload_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn res(i: i64) -> Result[String, String] {
+    if i % 3 == 0 { Ok("ok-value".to_string()) } else { Err(f"err-{i}") }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < base + 199 {
+        let b = res(i).unwrap_or(f"res-default-{i}");
+        total = total + (b.len() as i64);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            // base=1 -> 200 iterations: 67 Ok ("ok-value", 8) = 536, plus 133
+            // absent iterations taking f"res-default-{i}" = 1923. Total 2459.
+            &["2459"],
+            "unwrap_or_result_discarded_err_payload_no_leak",
+            // ~400 real allocations (a receiver payload and a default per
+            // iteration). The floor sits far above the 3 an allocation-free run
+            // reports, so a future fold-away regression fails loudly instead of
+            // passing vacuously.
+            200,
+        );
+    }
+
     #[test]
     fn asan_string_replace_fresh_temp_args_no_leak() {
         // B-2026-07-16-24: `String.replace(from, to)` never freed its fresh-owned

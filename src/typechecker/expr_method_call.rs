@@ -2282,6 +2282,25 @@ impl<'a> super::TypeChecker<'a> {
                     let te = Self::type_to_type_expr(&resolved);
                     self.method_unwrap_inner_types
                         .insert(SpanKey::for_method_call(span, args_close_span), te);
+                    // `Result[T, E].unwrap_or(d)` DISCARDS the `Err` payload on
+                    // the absent path — the default becomes the result and `E`
+                    // is dropped on the floor. A heap `E` (`Result[_, String]`)
+                    // therefore needs a free emitted there, and codegen can only
+                    // reconstruct it from the payload words if it knows `E`.
+                    // Record it in the sibling table. (The closure combinators
+                    // `unwrap_or_else`/`map_or_else`/`or_else` populate the same
+                    // table further down for a different reason — they FEED `e`
+                    // to the absent closure rather than discarding it.)
+                    // B-2026-08-05-9.
+                    if method == "unwrap_or" && name == "Result" {
+                        if let Some(e_ty) = args.get(1).cloned() {
+                            let e_resolved = resolve_type_var_top(&e_ty, &self.env.substitutions);
+                            self.method_unwrap_err_types.insert(
+                                SpanKey::for_method_call(span, args_close_span),
+                                Self::type_to_type_expr(&e_resolved),
+                            );
+                        }
+                    }
                     // Surface a proper return type so the binding gets the
                     // right Type rather than falling through to the
                     // prelude-permissive `Type::Error`. Without this,
