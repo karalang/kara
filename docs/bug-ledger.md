@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 214 | 0 |
-| leak | 132 | 2 |
+| leak | 132 | 1 |
 | double-free | 96 | 1 |
 | codegen-gap | 88 | 0 |
 | run-vs-build | 78 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 666 | 5 |
+| codegen | 666 | 4 |
 | interp | 123 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **923 surfaced · 9 open · 906 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **923 surfaced · 8 open · 907 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,11 +138,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **923 surfaced 
 | B-2026-08-05-6 | 2026-08-05 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo <= hi { v[base+lo] .. v[base+hi] } }`. The bound holds only ACROSS the call boundary (every caller passes `base = k*len` with `k < n`, and `v.len() == n*len`), and every BCE analysis in bce_length_pin.rs is per-function by construction, so no local fact exists to prove. Carries the whole of kata #246's residual 1.28x vs equal-safety C. Survives INLINING (measured), and LLVM's IRCE does not reach it either (measured, byte-identical assembly). Split off B-2026-08-04-8, whose intra-function shape is fixed. | — |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-8 | 2026-08-05 | codegen | medium | `s.contains(other)` on a String bound out of a `Result[String, E]` Ok arm fails to COMPILE -- "Binary op Eq: right operand has non-comparable type { ptr, i64, i64 }" -- while `karac check` passes and the interpreter runs it correctly; the same call on a TUPLE-element String payload compiles fine | src/codegen (String `contains` lowering for a direct Result/Option payload binding) |
-| B-2026-08-05-9 | 2026-08-05 | codegen | high | `unwrap_or` with a FRESH F-STRING default leaks on a DEFAULT -O2 build -- 133 leaked allocations in an existing fixture -- while the byte-identical program with a literal `"...".to_string()` default is clean, because the literal default const-folds away and the f-string one does not | — |
 
-### Fixed (906)
+### Fixed (907)
 
-<details><summary>906 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>907 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1072,6 +1071,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-21 | cli | medium | `karac fmt` silently deleted every declaration modifier it had no printer for (`unsafe fn`, `comptime fn`, `comptime` param prefix) | c35df3a |
 | B-2026-08-05-1 | codegen | high | Passing a TUPLE ELEMENT to a `ref` parameter (`peek(t.0)` where `fn peek(v: ref Vec[i64])`) double-frees the element buffer under AOT; the struct-fie… | 99d27f7 (src/codegen/call_dispatch.rs — a TupleIndex arm in the ref-argument path, sibling to B-2026-07-12-1's FieldAccess arm). ONE arm closes both rows. Pins codegen.rs::e2e_tuple_element_borrowed_in_place_for_ref_params, memory_sanitizer.rs::asan_tuple_element_borrowed_in_place_for_ref_params (floored at 300 against ~800 allocations), interpreter.rs::test_tuple_element_borrowed_in_place_for_ref_params. Both codegen tests are stash-proven RED against the unfixed compiler (E2E panics with `vec index out of bounds`, ASAN reports a memory error); the interpreter twin passes both ways. cargo test --features llvm: 12980 passed, 0 failed. |
 | B-2026-08-05-2 | codegen | high | A `mut ref` parameter given a TUPLE ELEMENT (`bump(mut t.0)`) does not mutate the element under AOT -- the program then PANICS reading the index the… | 99d27f7 (src/codegen/call_dispatch.rs — a TupleIndex arm in the ref-argument path, sibling to B-2026-07-12-1's FieldAccess arm). ONE arm closes both rows. Pins codegen.rs::e2e_tuple_element_borrowed_in_place_for_ref_params, memory_sanitizer.rs::asan_tuple_element_borrowed_in_place_for_ref_params (floored at 300 against ~800 allocations), interpreter.rs::test_tuple_element_borrowed_in_place_for_ref_params. Both codegen tests are stash-proven RED against the unfixed compiler (E2E panics with `vec index out of bounds`, ASAN reports a memory error); the interpreter twin passes both ways. cargo test --features llvm: 12980 passed, 0 failed. |
+| B-2026-08-05-9 | codegen | high | `unwrap_or` with a FRESH F-STRING default leaks on a DEFAULT -O2 build -- 133 leaked allocations in an existing fixture -- while the byte-identical p… | 94ec3a9 |
 | B-2026-08-05-10 | codegen | high | A `ref`-borrowed `shared` handle captured into a `par` branch reads as ZERO under codegen — silent wrong answer, interpreter disagrees | 93b1a81 |
 | B-2026-08-05-11 | interp | medium | `File.read` / `BufReader.read` reject a fixed `Array[u8, N]` buffer that AOT accepts — the blessed `let mut buf: Array[u8, N]; f.read(mut buf)` idiom… | FIXED 1caca04. `File.read` and `BufReader.read` in the interpreter now match `Value::Array` alongside `Value::Slice`, taking the whole array as the buffer window (start 0, len = array len). This mirrors the deliberate permissiveness `File.write` already had. AOT was already correct and is untouched. |
 
