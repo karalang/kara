@@ -334,12 +334,29 @@ impl KaracMap {
     /// The same-width branch requires HEADROOM, not merely "the live set
     /// fits": compacting to a table that is still near the ¾ trigger would
     /// re-fire it after a handful of inserts, degenerating to an O(len)
-    /// rehash per insert right at the boundary. Same-width only when the
-    /// live count is at or below ~⅜ of capacity (half the trigger), so a
-    /// compaction buys at least ~⅜·capacity further operations — the same
-    /// amortization doubling provides, without the growth.
+    /// rehash per insert right at the boundary.
+    ///
+    /// B-2026-08-05-4 — the band that headroom argument picked was ⅜, and ⅜
+    /// is too tight. Write the steady state out: a churning table compacted
+    /// at width `C` with live `L` accepts `0.75·C − L` more tombstones before
+    /// the trigger re-fires, and each compaction costs `C` bucket scans plus
+    /// `L` key re-hashes (the per-key `hash_fn` call `rehash_from` cannot
+    /// skip). At the ⅜ edge that is `L / (0.75·C − L)` = **1.00 key re-hashes
+    /// per operation** — the entire live set re-hashed once per op, amortized.
+    /// That is not amortization at all, and it is what the original comment
+    /// got wrong in claiming the band bought "the same amortization doubling
+    /// provides": doubling pays `2C + L` once and then the WIDER table makes
+    /// the next trigger geometrically rarer, where same-width compaction
+    /// re-fires at the same cadence forever.
+    ///
+    /// Halving the band to ³⁄₁₆ drops that to 0.33 key re-hashes per op — 3×
+    /// less — for one doubling of steady-state width (≈5.3·live instead of
+    /// ≈2.67·live), which measured +8% peak RSS on a 1024-live sliding window,
+    /// nowhere near the unbounded growth B-2026-07-31-21 fixed. ³⁄₃₂ would buy
+    /// only 0.33 → 0.14 for another doubling of width, and measured slower —
+    /// the wider table stops being cache-resident. ³⁄₁₆ is the knee.
     fn next_capacity(&self) -> usize {
-        if (self.len + 1) * 8 <= self.capacity * 3 {
+        if (self.len + 1) * 16 <= self.capacity * 3 {
             self.capacity
         } else {
             self.capacity * 2
@@ -1433,14 +1450,23 @@ mod tests {
             }
             let m = &*(map as *const KaracMap);
             assert_eq!(m.len, window as usize, "live size must stay the window");
-            // The live set is 1024; the same-width compaction keeps live
-            // <= 3/8 of capacity, so the steady-state width is <= 8192
-            // buckets (1025 * 8 / 3 = 2733 -> next power of two above any
-            // transient is comfortably under 8192). Unconditional doubling
-            // reaches 65536+ within these 200k ops.
-            assert!(
-                m.capacity <= 8192,
-                "capacity {} grew with total removals, not live size",
+            // The live set is 1024 and same-width compaction keeps live at or
+            // under 3/16 of capacity (B-2026-08-05-4), so the steady state is
+            // EXACTLY 8192 buckets: 1025 * 16 / 3 = 5467, and the next power
+            // of two above that is 8192.
+            //
+            // Pinned as equality, not a bound, because the two ways this can
+            // break fail in opposite directions and both matter. Unconditional
+            // doubling (the B-2026-07-31-21 ratchet) reaches 65536+ within
+            // these 200k ops and trips the upper side. Narrowing the band back
+            // to 3/8 settles at 4096 and trips the lower side -- that one is
+            // not a memory bug, it is the amortization regression: at the 3/8
+            // edge a churning table re-hashes its whole live set once per
+            // operation, which is what widening the band bought out.
+            assert_eq!(
+                m.capacity, 8192,
+                "steady-state width moved: capacity {} means the same-width \
+                 band is no longer 3/16 of a 1024-live table",
                 m.capacity
             );
             // Correctness after many same-width compactions: every live key
