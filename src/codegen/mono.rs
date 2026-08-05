@@ -2060,6 +2060,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.ref_params.insert(param_name.clone(), inner_ty);
                 self.signature_ref_params.insert(param_name.clone());
             }
+            // B-2026-08-05-7 — the monomorph's own copy of the owned-param box
+            // drop. This is THE site that matters for the reported shape: the
+            // erasure that causes the boxing lives in the generic declaration
+            // (`o: Opt[T]`), so the boxed value is nearly always a temp handed
+            // straight into a generic callee (`get(Opt.Yes(f"…"), d)`) with no
+            // binding anywhere to hang a drop on. `compile_function`'s sibling
+            // registration never runs for a mono body — mono has its own param
+            // loop — so without this the envelope leaked once per call.
+            //
+            // Resolve through the active subst first: the declared `Opt[T]` is
+            // the erased form, and the predicate must see `Opt[String]` to know
+            // it boxes. BOX-ONLY, as at the other two sites.
+            if !self.ref_params.contains_key(&param_name) {
+                let mono_ty = self.subst_monomorph_type_params(&param.ty);
+                for (enum_name, variant) in self.user_enum_boxed_payload_variants(&mono_ty) {
+                    self.track_boxed_enum_var_with_inner_drop(
+                        &param_name,
+                        alloca,
+                        &enum_name,
+                        &variant,
+                        None,
+                    );
+                }
+            }
             // Track declared type name for struct/enum field resolution.
             // B-2026-07-03-11: if the declared type is a generic type parameter
             // bound in this monomorph (`x: X`), register the CONCRETE type name

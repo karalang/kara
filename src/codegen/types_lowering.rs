@@ -3145,6 +3145,87 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// USER-enum sibling of [`Self::boxed_enum_payload_variants`], which matches
+    /// on the enum NAME and therefore only ever knew the seeded `Option`
+    /// (area 3) and `Result` (area 5) — every user enum fell to its
+    /// `_ => return vec![]` and got no box drop queued at all.
+    ///
+    /// That was invisible for a CONCRETE user enum, whose payload area is sized
+    /// to its widest variant so nothing is ever boxed (measured: a non-generic
+    /// enum with a 6-word struct payload allocates no box). It bites only the
+    /// GENERIC case: `enum Opt[T] { Yes(T), No }` lays `T` out ERASED at one
+    /// word, so a `Opt[String]` monomorph packs a 3-word payload into a 1-word
+    /// area and `coerce_to_payload_words` heap-boxes it — leaking 24 bytes per
+    /// construction with nobody to free the envelope. A scalar monomorph
+    /// (`Opt[i64]`) fits and is likewise clean. B-2026-08-05-7.
+    ///
+    /// Returns `(enum_name, variant_name, ())` per boxing variant. Deliberately
+    /// carries NO inner drop: the free this drives is BOX-ONLY. A match arm that
+    /// binds the payload owns the interior, and running a struct walk here would
+    /// free fields the binding also frees — the interior's ownership is decided
+    /// by the existing arm-consumption machinery and is untouched by this. An
+    /// UNBOUND interior still leaks exactly as it did before; this closes the
+    /// envelope leak only, which is what was measured.
+    pub(super) fn user_enum_boxed_payload_variants(&self, te: &TypeExpr) -> Vec<(String, String)> {
+        let TypeKind::Path(p) = &te.kind else {
+            return vec![];
+        };
+        let Some(enum_name) = p.segments.last().map(|s| s.as_str()) else {
+            return vec![];
+        };
+        // The seeded pair keeps its own hardcoded-area path.
+        if matches!(enum_name, "Option" | "Result") {
+            return vec![];
+        }
+        // A shared enum's payload is an RC pointer — one word, never boxed, and
+        // its lifetime is the refcount's business.
+        if self.shared_types.contains_key(enum_name) {
+            return vec![];
+        }
+        let Some(layout) = self.enum_layouts.get(enum_name) else {
+            return vec![];
+        };
+        if layout.is_shared {
+            return vec![];
+        }
+        let area = (layout.llvm_type.count_fields() as usize).saturating_sub(1);
+        // Only a generic instantiation can outgrow its own area (see above), so
+        // a bare non-generic path is left alone rather than re-checked.
+        let args: Vec<TypeExpr> = match &p.generic_args {
+            Some(a) => a
+                .iter()
+                .filter_map(|g| match g {
+                    GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect(),
+            None => return vec![],
+        };
+        if args.is_empty() {
+            return vec![];
+        }
+        let params = self.enum_generic_param_names(enum_name);
+        if params.is_empty() {
+            return vec![];
+        }
+        let subst: HashMap<String, TypeExpr> = params.into_iter().zip(args).collect();
+        let mut out = Vec::new();
+        for (_tag, vname, tys) in self.enum_variant_field_type_exprs(enum_name) {
+            // Single-payload variants only. A multi-field variant packs its
+            // fields across the area rather than boxing one value, and getting
+            // that wrong frees a pointer that was never a box.
+            if tys.len() != 1 {
+                continue;
+            }
+            let concrete = Self::subst_type_params(&tys[0], &subst);
+            let ll = self.llvm_type_for_type_expr(&concrete);
+            if Self::llvm_type_word_count(ll) > area {
+                out.push((enum_name.to_string(), vname));
+            }
+        }
+        out
+    }
+
     /// Recover the source `TypeExpr` of an *untyped* `let`'s RHS when it is a
     /// direct call to a known free function, so the oversized-payload box drop
     /// (`boxed_enum_payload_variants` + `track_boxed_enum_var`) can run without

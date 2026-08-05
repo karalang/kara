@@ -1909,6 +1909,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     self.track_rc_result_var(&param_name, alloca, &param.ty);
                 }
+                // B-2026-08-05-7 — an OWNED param of a generic user enum whose
+                // monomorph heap-boxes its payload. The let-site sibling in
+                // stmts.rs covers `let o: Opt[String] = …`; this covers the far
+                // commoner shape, where the enum is built as a TEMP at the call
+                // site and handed straight to a by-value param
+                // (`get(Opt.Yes(f"…"), d)`) so no binding ever exists to hang a
+                // drop on. The callee's entry-copied param is the box's only
+                // owner, and nothing freed it: 24 bytes per call.
+                //
+                // Owned params only — a `ref` binding's slot holds a pointer to
+                // the caller's value and the caller still owns the box. BOX-ONLY,
+                // for the same reason as the let-site: the payload interior is
+                // the match arm's business.
+                //
+                // The declared param type is `Opt[T]` with a BARE `T`, which is
+                // exactly the erasure that causes the boxing — so resolve it
+                // through the active monomorph subst first, or the predicate
+                // measures the erased one-word `T` and never reports a box.
+                if !self.ref_params.contains_key(&param_name) {
+                    let mono_ty = self.subst_monomorph_type_params(&param.ty);
+                    for (enum_name, variant) in self.user_enum_boxed_payload_variants(&mono_ty) {
+                        self.track_boxed_enum_var_with_inner_drop(
+                            &param_name,
+                            alloca,
+                            &enum_name,
+                            &variant,
+                            None,
+                        );
+                    }
+                }
                 // RC-fallback boxing for non-shared, non-Vec parameters flagged by the
                 // ownership checker. The param value is boxed in {i64 rc, T} on the heap
                 // so multiple "consumers" each get a copy of T and the heap object is freed

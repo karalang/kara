@@ -4742,6 +4742,44 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-08-05-7 — the USER-enum sibling of the boxed-payload
+                // registration above. `boxed_enum_payload_variants` matches on
+                // the enum NAME and knows only the seeded `Option`/`Result`, so
+                // a generic user enum whose monomorph outgrows its erased
+                // payload area got NO box drop at all and leaked the envelope
+                // once per construction (`enum Opt[T] { Yes(T), No }` at
+                // T=String: 24 bytes each). See
+                // `user_enum_boxed_payload_variants` for why only the generic
+                // case can reach here.
+                //
+                // BOX-ONLY (`None` inner drop) on purpose: the payload interior
+                // belongs to whatever the match arm does with it, and running a
+                // struct walk here would free fields a binding also frees.
+                if shared_option_info.is_none() {
+                    if let PatternKind::Binding(var_name) = &pattern.kind {
+                        let te_opt: Option<TypeExpr> = ty.clone().or_else(|| {
+                            self.enum_inst_type_exprs
+                                .get(&(value.span.offset, value.span.length))
+                                .cloned()
+                        });
+                        if let Some(te) = te_opt {
+                            // Resolve through the active monomorph subst: inside
+                            // a generic fn the annotation may itself be `Opt[T]`.
+                            let te = self.subst_monomorph_type_params(&te);
+                            let boxed = self.user_enum_boxed_payload_variants(&te);
+                            if let Some(slot) = (!boxed.is_empty())
+                                .then(|| self.variables.get(var_name.as_str()).copied())
+                                .flatten()
+                            {
+                                for (enum_name, variant) in boxed {
+                                    self.track_boxed_enum_var_with_inner_drop(
+                                        var_name, slot.ptr, &enum_name, &variant, None,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 // B-2026-07-12-24: `Result[shared T, E]` scope-exit rc release.
                 // The Option path above (`track_rc_option_var` → RcDecOption)
                 // has no Result sibling, so a `Result[shared]` value that owns a

@@ -2244,6 +2244,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-7 (generic-enum box leg): a generic USER enum whose
+    /// monomorph binds `T` wider than the declaration-time payload area leaked
+    /// the heap box, once per construction.
+    ///
+    /// `enum Opt[T] { Yes(T), No }` lays `T` out ERASED at one word, so an
+    /// `Opt[String]` monomorph packs a 3-word payload into a 1-word area and
+    /// `coerce_to_payload_words` heap-boxes it. Nothing freed that envelope:
+    /// `boxed_enum_payload_variants`, which drives the box-drop registration,
+    /// matches on the enum NAME and knew only the seeded `Option`/`Result`, so
+    /// every user enum fell through to "no box drop at all".
+    ///
+    /// It is specific to the generic case, and the sibling fixtures prove the
+    /// controls: a CONCRETE user enum sizes its area to its widest variant so
+    /// nothing boxes, and a scalar monomorph fits the erased area. Both were
+    /// always clean.
+    ///
+    /// Covers all three sites a box can be owned from, which is what the fix
+    /// needed: the monomorph's own by-value PARAM (the shape that actually
+    /// bites — a temp handed straight into a generic callee has no binding
+    /// anywhere to hang a drop on), and a let-bound value in the caller.
+    ///
+    /// NOTE: pins at -O0 only. At -O2 the optimizer deletes the box outright,
+    /// which is exactly why this leaked unnoticed; the -O0 sweep is the gate.
+    #[test]
+    fn asan_generic_enum_wide_monomorph_box_freed() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < base + 39i64 {
+        let a: String = get(Opt.Yes(f"yes{i}"), f"fb");
+        if a.starts_with("yes") { total = total + 1i64; }
+        total = total + a.len();
+        let o: Opt[String] = Opt.Yes(f"bound{i}");
+        let b: String = match o { Opt.Yes(v) => v, Opt.No => f"fb" };
+        if b.starts_with("bound") { total = total + 1i64; }
+        total = total + b.len();
+        i = i + 1i64;
+    }
+    println(total);
+}
+"#,
+            &["540"],
+            "generic_enum_wide_monomorph_box_freed",
+            40,
+        );
+    }
+
     #[test]
     fn asan_generic_enum_struct_heap_payload_bind_no_leak_or_double_free() {
         // B-2026-07-13-3, user-struct payload sibling: a generic enum's bare-`T`
