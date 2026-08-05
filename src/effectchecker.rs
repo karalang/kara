@@ -1249,6 +1249,24 @@ impl<'a> EffectChecker<'a> {
             for term in &decl.body {
                 match term {
                     EffectGroupTerm::Verb(verb) => {
+                        // B-2026-08-05-18: a RESOURCE-LESS verb (`panics`,
+                        // `blocks`, `suspends`) carries an EMPTY resource list,
+                        // so the `for` below never fires and the verb is
+                        // silently dropped. Same defect the declared-effect
+                        // path already fixed (see the `resources.is_empty()`
+                        // arm in `collect_declared_effects`); this is the
+                        // sibling site that never got it. The empty-string
+                        // resource is the canonical representation — it is what
+                        // inference produces, so the two sides compare equal.
+                        if verb.resources.is_empty() {
+                            result.add(
+                                Effect {
+                                    verb: verb.kind.clone(),
+                                    resource: String::new(),
+                                },
+                                EffectOrigin::Direct(verb.span.clone()),
+                            );
+                        }
                         for resource in &verb.resources {
                             let res_name = resource.path.join(".");
                             result.add(
@@ -1625,6 +1643,22 @@ impl<'a> EffectChecker<'a> {
         for item in &list.items {
             match item {
                 EffectItem::Verb(verb) => {
+                    // B-2026-08-05-18: a RESOURCE-LESS verb (`panics`,
+                    // `blocks`, `suspends`) has an EMPTY resource list, so the
+                    // `for` below never fires and the verb was dropped from the
+                    // slot — `Fn(..) with panics` resolved to the EMPTY set and
+                    // every effectful argument was rejected against a slot the
+                    // diagnostic then printed as `[pure]`. That made the whole
+                    // higher-order surface unusable with any callee that
+                    // panics, which is nearly all of them (indexing panics).
+                    // Same defect as the declared-effect path's
+                    // `resources.is_empty()` arm; this site never got it.
+                    if verb.resources.is_empty() {
+                        result.insert(Effect {
+                            verb: verb.kind.clone(),
+                            resource: String::new(),
+                        });
+                    }
                     for resource in &verb.resources {
                         result.insert(Effect {
                             verb: verb.kind.clone(),
@@ -2161,6 +2195,14 @@ pub(crate) fn resolve_effect_list_for_render(
     for item in &list.items {
         match item {
             EffectItem::Verb(verb) => {
+                // B-2026-08-05-18, rendering half: without this a resource-less
+                // verb is invisible in the rendered slot, so a diagnostic about
+                // a `with panics` slot printed it as empty — which is exactly
+                // what made the underlying drop look like "the clause is
+                // ignored" rather than "one verb kind is missing".
+                if verb.resources.is_empty() {
+                    effects.push(format!("{}()", verb_name(&verb.kind)));
+                }
                 for resource in &verb.resources {
                     effects.push(format!(
                         "{}({})",

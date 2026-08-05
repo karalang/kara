@@ -627,6 +627,141 @@ fn test_struct_and_const_no_effects() {
 
 // ── Effect Groups ───────────────────────────────────────────────
 
+/// B-2026-08-05-18: a RESOURCE-LESS verb (`panics`, `blocks`, `suspends`) in a
+/// `Fn(..)` slot's effect clause was dropped, because the list->set conversion
+/// looped `for resource in &verb.resources` over an EMPTY vec. The slot
+/// resolved to the empty set and every effectful argument was rejected against
+/// a slot the diagnostic then printed as `[pure]` — which made the whole
+/// higher-order surface unusable with any callee that panics, i.e. nearly all
+/// of them, since indexing panics.
+#[test]
+fn test_resource_less_verb_in_fn_slot_is_honoured() {
+    for verb in ["panics", "blocks", "suspends"] {
+        effectcheck_ok(&format!(
+            "fn act() with {verb} {{ }}\n\
+             fn apply(g: Fn() with {verb}) with {verb} {{ g(); }}\n\
+             fn main() {{ apply(act); }}"
+        ));
+    }
+}
+
+/// The mixed case is what localized the bug: the resource verb survived and the
+/// resource-less one vanished FROM THE SAME LIST, so the slot rendered as
+/// `[writes(Db)]` rather than `[pure]`.
+#[test]
+fn test_fn_slot_mixes_resource_and_resource_less_verbs() {
+    effectcheck_ok(
+        "effect resource Db;\n\
+         fn act(v: ref Vec[i64]) -> i64 with writes(Db) panics { return v[0]; }\n\
+         fn apply(g: Fn(ref Vec[i64]) -> i64 with writes(Db) panics, v: ref Vec[i64])\n\
+             -> i64 with writes(Db) panics { return g(v); }\n\
+         fn main() { let v: Vec[i64] = Vec.filled(2i64, 5i64); println(apply(act, v)); }",
+    );
+}
+
+/// The gate must not have become permissive: a panicking argument handed to a
+/// slot that does NOT declare `panics` is still an error. Without this the
+/// fix above could be satisfied by accepting everything.
+#[test]
+fn test_undeclared_resource_less_verb_in_slot_still_rejected() {
+    let parsed = parse(
+        "fn act() with panics { }\n\
+         fn apply(g: Fn()) with panics { g(); }\n\
+         fn main() { apply(act); }",
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    let result = effectcheck(&parsed.program);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
+        "a `panics` argument must still be rejected by a pure slot; errors: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A slot declaring the WRONG resource-less verb must still reject — guards
+/// against the guard being written as "any resource-less verb matches".
+#[test]
+fn test_wrong_resource_less_verb_in_slot_still_rejected() {
+    let parsed = parse(
+        "fn act() with panics { }\n\
+         fn apply(g: Fn() with blocks) with panics { g(); }\n\
+         fn main() { apply(act); }",
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    let result = effectcheck(&parsed.program);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
+        "`panics` must not satisfy a `blocks` slot; errors: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The same drop existed in effect-GROUP expansion, so `effect group g =
+/// writes(Db) + panics;` expanded without the `panics`. Fixed alongside, and
+/// reachable — the group separator is `+` (design.md § Effect Groups).
+#[test]
+fn test_resource_less_verb_survives_group_expansion() {
+    let result = effectcheck_ok(
+        "effect resource Db;\n\
+         effect group risky = writes(Db) + panics;",
+    );
+    let group = result.expanded_groups.get("risky").unwrap();
+    assert_eq!(
+        group.effects.len(),
+        2,
+        "group must expand to BOTH atoms, got: {:?}",
+        group
+            .effects
+            .iter()
+            .map(|e| format!("{:?}({})", e.effect.verb, e.effect.resource))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        group
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Panics && e.effect.resource.is_empty()),
+        "the resource-less atom must carry an EMPTY resource — that is the \
+         representation inference produces, so the two sides compare equal",
+    );
+}
+
+/// End-to-end through a slot: a group carrying a resource-less verb satisfies
+/// an argument that performs it.
+#[test]
+fn test_group_with_resource_less_verb_satisfies_a_fn_slot() {
+    effectcheck_ok(
+        "effect resource Db;\n\
+         effect group risky = writes(Db) + panics;\n\
+         fn act(v: ref Vec[i64]) -> i64 with writes(Db) panics { return v[0]; }\n\
+         fn apply(g: Fn(ref Vec[i64]) -> i64 with risky, v: ref Vec[i64])\n\
+             -> i64 with risky { return g(v); }\n\
+         fn main() { let v: Vec[i64] = Vec.filled(2i64, 5i64); println(apply(act, v)); }",
+    );
+}
+
 #[test]
 fn test_basic_group_expansion() {
     let result = effectcheck_ok(
