@@ -87,6 +87,32 @@ pub fn place_paths_disjoint(a: &PlacePath, b: &PlacePath) -> bool {
     false
 }
 
+/// Whether a rebind of the place `reassigned` re-initializes everything a
+/// consume of the place `consumed` took — true iff `reassigned` is a
+/// prefix of, or equal to, `consumed`.
+///
+/// B-2026-08-04-18. A whole-element assignment (`t.0 = e`, `h.items = e`)
+/// is a rebind of that element, so it kills a prior partial move OF that
+/// element and re-arms it for later use. But it must NOT kill a move of
+/// something WIDER: after `let a = t`, the statement `t.0 = e` writes into
+/// an aggregate that no longer owns anything, and a later `t.1` read is a
+/// genuine use-after-move. Prefix containment is exactly that distinction.
+///
+///   reassigned  consumed   covers?
+///   []          [0]        yes — rebinding the whole binding re-inits its parts
+///   [0]         [0]        yes — the element is written back wholesale
+///   [0]         [0, x]     yes — writing `t.0` re-inits `t.0.x` with it
+///   [0]         []         NO  — one element does not re-init the aggregate
+///   [0, x]      [0]        NO  — a field of the element is not the element
+///
+/// Every Reassign the classifier recorded before B-2026-08-04-18 carries
+/// the empty path, which is a prefix of everything, so their behavior is
+/// unchanged — the predicate only narrows the NEW projection reassigns.
+pub fn place_rebind_covers(reassigned: &PlacePath, consumed: &PlacePath) -> bool {
+    reassigned.len() <= consumed.len()
+        && reassigned.iter().zip(consumed.iter()).all(|(r, c)| r == c)
+}
+
 /// A use-site of a binding within a basic block.
 #[derive(Debug, Clone)]
 pub struct UseSite {

@@ -434,12 +434,28 @@ impl<'a> UseClassifier<'a> {
                 // Round 12.19: a bare-identifier LHS rebinds the variable.
                 // Tag its span with `UseKind::Reassign` so the predicate
                 // pipeline treats it as a kill of any prior consume.
-                // Field / tuple-index / slice-index targets stay on the
-                // ordinary reading path — those are partial mutations of
-                // the projection root, not rebindings of the binding.
+                //
+                // B-2026-08-04-18: a WHOLE-ELEMENT projection target
+                // (`t.0 = e`, `h.items = e`, `a.b.c = e`) is a rebind too
+                // — of that element. The original rationale for sending
+                // every projection down the reading path was that those
+                // are "partial mutations of the projection root, not
+                // rebindings" — true for `t.0.push(x)`, false for a
+                // whole-element store, which re-initializes exactly the
+                // place a prior `let e = t.0` moved out. Leaving it a
+                // Read made the canonical move-out-mutate-move-back shape
+                // warn `value 't' moved here, used again here`, which is
+                // also the shape B-2026-08-02-10's diagnostic recommends.
+                //
+                // The Reassign is recorded at the ROOT binding's span
+                // carrying its place path, so the kill is scoped: it
+                // rebinds `t.0` and nothing wider. `Index` targets are
+                // deliberately excluded (`v[i] = x` names a dynamic
+                // element and can statically kill nothing), as is any
+                // non-identifier root.
                 if let ExprKind::Identifier(_) = &target.kind {
                     self.record(&target.span, UseKind::Reassign);
-                } else {
+                } else if !self.record_projection_reassign(target) {
                     self.walk_expr(target, Mode::Reading);
                 }
             }
@@ -958,6 +974,49 @@ impl<'a> UseClassifier<'a> {
             }
             _ => self.walk_expr(expr, Mode::Reading),
         }
+    }
+
+    /// Record an assignment whose LHS is a STATIC whole-element
+    /// projection (`t.0 = e`, `h.items = e`, `a.b.c = e`) as a
+    /// `UseKind::Reassign` of that place, tagged at the ROOT binding's
+    /// span. Returns `false` — leaving the caller to keep the ordinary
+    /// reading walk — for anything not statically resolvable to one
+    /// element: an `Index` step at any depth, or a root that is not a
+    /// bare identifier.
+    ///
+    /// B-2026-08-04-18. The place travels with the marker so the
+    /// predicate can scope the kill (see
+    /// [`crate::cfg::place_rebind_covers`]); without it, `t.0 = e` would
+    /// kill a move of the WHOLE `t` and silently accept a later `t.1`
+    /// read that is a genuine use-after-move.
+    fn record_projection_reassign(&mut self, target: &Expr) -> bool {
+        let mut path = PlacePath::new();
+        let mut cur = target;
+        // Descend outermost-first, matching `walk_place`'s push order;
+        // `record_place_at_root` reverses to root→leaf.
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    path.push(PlaceSeg::Field(field.clone()));
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    path.push(PlaceSeg::TupleIndex(*index as usize));
+                    cur = object;
+                }
+                ExprKind::Identifier(_) => break,
+                // `Index` (dynamic element), `self`, a call result, a
+                // deref — none names one statically-known element of a
+                // named binding.
+                _ => return false,
+            }
+        }
+        if path.is_empty() {
+            return false;
+        }
+        self.record_place_at_root(&cur.span, &path);
+        self.record(&cur.span, UseKind::Reassign);
+        true
     }
 
     /// Record the root-relative place path (reversed to root→leaf order)
@@ -1983,20 +2042,78 @@ mod tests {
     }
 
     #[test]
-    fn field_assign_target_does_not_emit_reassign() {
-        // `s.value = 2;` is a partial mutation of the projection root,
-        // not a rebinding. The classifier must NOT emit Reassign — the
-        // LHS path stays on the ordinary reading walk.
+    fn whole_element_assign_target_records_placed_reassign() {
+        // B-2026-08-04-18 REPLACES round 12.19's
+        // `field_assign_target_does_not_emit_reassign`, which pinned the
+        // opposite. `s.value = 2` IS a rebinding — of `s.value` — and the
+        // marker now carries that place so the predicate can scope the
+        // kill to it. The place is what makes this safe: without it the
+        // marker would kill a move of the whole `s`.
         let src = "struct S { value: i64 }\n\
                    fn main() {\n\
                        let mut s = S { value: 1 };\n\
                        s.value = 2;\n\
                    }";
+        let (class, _, _) = classify_full(src);
+        let reassigns: Vec<_> = class
+            .kinds
+            .iter()
+            .filter(|(_, k)| **k == UseKind::Reassign)
+            .collect();
+        assert_eq!(
+            reassigns.len(),
+            1,
+            "whole-element field assign must emit one Reassign marker; got {:?}",
+            class.kinds
+        );
+        let (span, _) = reassigns[0];
+        assert_eq!(
+            class.consume_places.get(span),
+            Some(&vec![PlaceSeg::Field("value".to_string())]),
+            "the marker must carry the assigned element's place; places={:?}",
+            class.consume_places
+        );
+    }
+
+    #[test]
+    fn tuple_element_assign_target_records_placed_reassign() {
+        // The tuple spelling of the above — the shape B-2026-08-04-18 was
+        // reported against.
+        let src = "fn main() {\n\
+                       let mut t: (i64, i64) = (1, 2);\n\
+                       t.0 = 3;\n\
+                   }";
+        let (class, _, _) = classify_full(src);
+        let reassigns: Vec<_> = class
+            .kinds
+            .iter()
+            .filter(|(_, k)| **k == UseKind::Reassign)
+            .collect();
+        assert_eq!(reassigns.len(), 1, "got {:?}", class.kinds);
+        assert_eq!(
+            class.consume_places.get(reassigns[0].0),
+            Some(&vec![PlaceSeg::TupleIndex(0)]),
+            "places={:?}",
+            class.consume_places
+        );
+    }
+
+    #[test]
+    fn index_assign_target_emits_no_reassign() {
+        // `v[i] = x` names a DYNAMIC element, so it can statically kill
+        // nothing and must stay on the reading walk. Recording it as a
+        // Reassign — with any place — would let one element's store
+        // suppress a move-out of a different element.
+        let src = "fn main() {\n\
+                       let mut v: Vec[i64] = Vec.new();\n\
+                       v.push(1);\n\
+                       v[0] = 3;\n\
+                   }";
         let (class, _, _) = classify(src);
         let reassigns = class.values().filter(|k| **k == UseKind::Reassign).count();
         assert_eq!(
             reassigns, 0,
-            "field-assign LHS must not emit a Reassign marker; got {:?}",
+            "index-assign LHS must not emit a Reassign marker; got {:?}",
             class
         );
     }

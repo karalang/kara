@@ -27,8 +27,8 @@
 
 use crate::ast::{Function, ImplBlock, ImplItem, Item, Program};
 use crate::cfg::{
-    build_cfg_with_classification, place_paths_disjoint, BlockId, Cfg, ConsumeOrigin, UseKind,
-    UseSite,
+    build_cfg_with_classification, place_paths_disjoint, place_rebind_covers, BlockId, Cfg,
+    ConsumeOrigin, PlacePath, UseKind, UseSite,
 };
 use crate::dominator::{compute_dominators, DominatorTree};
 use crate::token::Span;
@@ -123,9 +123,15 @@ fn reassign_kills(
     ub: BlockId,
     ui: usize,
     dom: &DominatorTree,
+    consumed: &PlacePath,
 ) -> bool {
     uses.iter().any(|(rb, ri, r)| {
         r.kind == UseKind::Reassign
+            // B-2026-08-04-18: a projection reassign (`t.0 = e`) rebinds
+            // only its own element, so it kills a consume of that element
+            // or deeper — never a consume of the whole aggregate. Bare
+            // reassigns carry the empty place and still cover everything.
+            && place_rebind_covers(&r.place, consumed)
             && precedes(cb, ci, *rb, *ri, dom)
             && precedes(*rb, *ri, ub, ui, dom)
     })
@@ -162,6 +168,7 @@ fn reassign_kills_by_reachability(
     ci: usize,
     ub: BlockId,
     ui: usize,
+    consumed: &PlacePath,
 ) -> bool {
     // A `let x = …` re-declaration inside a loop re-initialises the binding
     // each iteration, so from a consume C's perspective the next iteration's
@@ -172,25 +179,31 @@ fn reassign_kills_by_reachability(
     // loop" shape (`while … { let mut row = Vec.new(); …; outer.push(row) }`)
     // spuriously RC-boxes `row`, because the loop-body `let` isn't recognised
     // as the kill that disconnects the back-edge C→U path (B-2026-07-17-…).
-    let is_rebind = |k: UseKind| matches!(k, UseKind::Reassign | UseKind::Define);
+    // B-2026-08-04-18: scoped exactly as in `reassign_kills` — a rebind
+    // only disconnects the C->U path when it re-initializes what C took.
+    // `Define` is a whole-binding `let`, so its empty place always covers.
+    let is_rebind = |u: &UseSite| {
+        matches!(u.kind, UseKind::Reassign | UseKind::Define)
+            && place_rebind_covers(&u.place, consumed)
+    };
     // A rebind in C's own block, after C, kills the value on exit.
     let cb_kills = uses
         .iter()
-        .any(|(rb, ri, r)| is_rebind(r.kind) && *rb == cb && *ri > ci);
+        .any(|(rb, ri, r)| is_rebind(r) && *rb == cb && *ri > ci);
     if cb_kills {
         return true;
     }
     // A rebind in U's own block, before U, kills the value before the read.
     let ub_kills = uses
         .iter()
-        .any(|(rb, ri, r)| is_rebind(r.kind) && *rb == ub && *ri < ui);
+        .any(|(rb, ri, r)| is_rebind(r) && *rb == ub && *ri < ui);
     if ub_kills {
         return true;
     }
     // Any OTHER block that rebinds the binding kills every path threading it.
     let forbidden: HashSet<BlockId> = uses
         .iter()
-        .filter(|(rb, _, r)| is_rebind(r.kind) && *rb != cb && *rb != ub)
+        .filter(|(rb, _, r)| is_rebind(r) && *rb != cb && *rb != ub)
         .map(|(rb, _, _)| *rb)
         .collect();
     // Nothing rebinds the value between C and U → the pure-dominance
@@ -271,7 +284,14 @@ fn first_witness(
             }
             // Reassign / Define markers are rebind signals — never the
             // U partner (a `let`/assign introduction is not a use).
-            if matches!(u.kind, UseKind::Reassign | UseKind::Define) {
+            // B-2026-08-04-18: skip it only when the rebind actually
+            // re-initializes what C took. A projection reassign that does
+            // NOT cover the consume (`let a = t; t.0 = e;` — writing into
+            // an aggregate that owns nothing) is still a real use of
+            // moved-from memory and must stay reportable.
+            if matches!(u.kind, UseKind::Reassign | UseKind::Define)
+                && place_rebind_covers(&u.place, &c.place)
+            {
                 continue;
             }
             // B-2026-07-02-25: partial moves of provably-disjoint sub-
@@ -284,13 +304,13 @@ fn first_witness(
             if dom.dominates(*cb, *ub) || dom.dominates(*ub, *cb) {
                 continue;
             }
-            if reassign_kills(uses, *cb, *ci, *ub, *ui, dom) {
+            if reassign_kills(uses, *cb, *ci, *ub, *ui, dom, &c.place) {
                 continue;
             }
             // Reachability-precise kill: suppress when every C→U path
             // threads a reassign (the loop-carried `buf` shape pure
             // dominance misses — B-2026-07-10-4).
-            if reassign_kills_by_reachability(uses, cfg, *cb, *ci, *ub, *ui) {
+            if reassign_kills_by_reachability(uses, cfg, *cb, *ci, *ub, *ui, &c.place) {
                 continue;
             }
             // B-2026-07-11-9: the terminal-`return` consume shape — e.g. the
@@ -590,7 +610,14 @@ fn first_uam_witness(
             // Reassign / Define markers are rebind signals — never the U
             // partner (a `let`/assign introduction is not a use, so it
             // must not be reported as a "used again" UAM site).
-            if matches!(u.kind, UseKind::Reassign | UseKind::Define) {
+            // B-2026-08-04-18: skip it only when the rebind actually
+            // re-initializes what C took. A projection reassign that does
+            // NOT cover the consume (`let a = t; t.0 = e;` — writing into
+            // an aggregate that owns nothing) is still a real use of
+            // moved-from memory and must stay reportable.
+            if matches!(u.kind, UseKind::Reassign | UseKind::Define)
+                && place_rebind_covers(&u.place, &c.place)
+            {
                 continue;
             }
             // B-2026-07-02-25: provably-disjoint sub-place partial moves
@@ -603,7 +630,7 @@ fn first_uam_witness(
             if !precedes(*cb, *ci, *ub, *ui, dom) {
                 continue;
             }
-            if reassign_kills(uses, *cb, *ci, *ub, *ui, dom) {
+            if reassign_kills(uses, *cb, *ci, *ub, *ui, dom, &c.place) {
                 continue;
             }
             return Some(UamWitness {
@@ -739,7 +766,11 @@ pub fn loop_of_consume_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<Str
                 // `nloop`, so the rule still fires there — the genuine RC
                 // case is preserved.
                 let has_rebind = uses.iter().any(|(rb, _, u)| {
-                    matches!(u.kind, UseKind::Reassign | UseKind::Define) && nloop.contains(rb)
+                    matches!(u.kind, UseKind::Reassign | UseKind::Define)
+                        // B-2026-08-04-18: a `t.0 = e` in the loop gives
+                        // only `t.0` a fresh value each iteration.
+                        && place_rebind_covers(&u.place, &c.place)
+                        && nloop.contains(rb)
                 });
                 !has_rebind
             });

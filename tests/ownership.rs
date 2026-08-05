@@ -9973,3 +9973,156 @@ fn frozen_freeze_site_accepts_a_deeply_immutable_shared_type() {
          fn main() { println(\"x\"); }\n",
     );
 }
+
+// ── B-2026-08-04-18: whole-element assign re-initializes the element ──
+//
+// Moving a heap value out of an aggregate element and assigning it back is
+// the canonical mutate-in-place idiom, and it is what B-2026-08-02-10's
+// diagnostic tells authors to do ("bind the element to a local first"). It
+// used to warn `value 't' moved here, used again here`, because the
+// classifier sent every projection LHS down the reading walk on the
+// rationale that projections are "partial mutations of the root, not
+// rebindings" — true for `t.0.push(x)`, false for a whole-element store.
+//
+// The design call (owner, 2026-08-04) is Rust's: assigning to a moved-from
+// element re-initializes it. These four tests are the accept side; the three
+// after them are the controls that keep the fix from being over-broad, and
+// they are the load-bearing half — the accept tests alone would pass just as
+// well against a checker that had stopped tracking aggregates entirely.
+
+#[test]
+fn tuple_element_moved_out_and_assigned_back_is_accepted() {
+    ownership_ok(
+        "fn main() {\n\
+             let mut t: (Vec[i64], i64) = (Vec.new(), 3i64);\n\
+             let mut e = t.0;\n\
+             e.push(10i64);\n\
+             t.0 = e;\n\
+             println(t.0.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn struct_field_moved_out_and_assigned_back_is_accepted() {
+    // The field spelling of the above. It warned identically before the
+    // fix, so this was never a tuple/field asymmetry — one rule, both
+    // spellings.
+    ownership_ok(
+        "struct H { items: Vec[i64], n: i64 }\n\
+         fn main() {\n\
+             let mut h = H { items: Vec.new(), n: 3i64 };\n\
+             let mut e = h.items;\n\
+             e.push(10i64);\n\
+             h.items = e;\n\
+             println(h.items.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn nested_element_moved_out_and_assigned_back_is_accepted() {
+    // A two-step projection: the marker carries the full `[inner, items]`
+    // path, so the kill still lands on exactly what was moved.
+    ownership_ok(
+        "struct Inner { items: Vec[i64] }\n\
+         struct Outer { inner: Inner }\n\
+         fn main() {\n\
+             let mut o = Outer { inner: Inner { items: Vec.new() } };\n\
+             let mut e = o.inner.items;\n\
+             e.push(10i64);\n\
+             o.inner.items = e;\n\
+             println(o.inner.items.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn sibling_element_read_after_partial_move_stays_accepted() {
+    // Control for over-reach in the other direction: element granularity
+    // was already correct for reads, and must stay so.
+    ownership_ok(
+        "fn main() {\n\
+             let mut t: (Vec[i64], i64) = (Vec.new(), 3i64);\n\
+             let mut e = t.0;\n\
+             e.push(10i64);\n\
+             println(e.len());\n\
+             println(t.1);\n\
+         }",
+    );
+}
+
+#[test]
+fn element_reread_after_move_out_without_reassign_still_errors() {
+    // No assignment anywhere, so nothing re-initializes `t.0` — the
+    // re-read is a genuine use-after-move and must keep erroring.
+    let errors = ownership_errors(
+        "fn main() {\n\
+             let mut t: (Vec[i64], i64) = (Vec.new(), 3i64);\n\
+             let mut e = t.0;\n\
+             e.push(10i64);\n\
+             println(t.0.len());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::UseAfterMove)),
+        "re-reading a moved-out element without a reassign must still be a \
+         use-after-move; got {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn element_assign_does_not_revive_a_wholly_moved_aggregate() {
+    // THE soundness control. `t` is moved WHOLE, then one element is
+    // assigned. Killing the whole-`t` consume with a `.0` reassign would
+    // silently accept the `t.1` read below — a use-after-move. The kill is
+    // scoped by place precisely to prevent this: `[0]` is not a prefix of
+    // the empty (whole-binding) path.
+    let errors = ownership_errors(
+        "fn main() {\n\
+             let mut t: (Vec[i64], i64) = (Vec.new(), 3i64);\n\
+             let a = t;\n\
+             let mut e: Vec[i64] = Vec.new();\n\
+             e.push(10i64);\n\
+             t.0 = e;\n\
+             println(t.1);\n\
+             println(a.1);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::UseAfterMove)),
+        "an element assign must not revive a wholly-moved aggregate; got {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn element_assign_into_a_wholly_moved_aggregate_is_itself_an_error() {
+    // The same shape with NO later read: the assignment writes into an
+    // aggregate that owns nothing, and is the only site left to report. It
+    // survives because a Reassign is skipped as a "used again" partner
+    // only when it actually covers the consumed place — here `[0]` does
+    // not cover the whole binding, so it stays reportable.
+    let errors = ownership_errors(
+        "fn main() {\n\
+             let mut t: (Vec[i64], i64) = (Vec.new(), 3i64);\n\
+             let a = t;\n\
+             let mut e: Vec[i64] = Vec.new();\n\
+             e.push(10i64);\n\
+             t.0 = e;\n\
+             println(a.1);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::UseAfterMove)),
+        "assigning into a wholly-moved aggregate must stay reported; got {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
