@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 76 | 1 |
 | run-vs-build | 76 | 0 |
 | false-positive | 56 | 1 |
-| perf | 46 | 3 |
+| perf | 47 | 3 |
 | crash | 39 | 0 |
 | soundness | 36 | 0 |
 | diagnostics | 35 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 661 | 1 |
+| codegen | 662 | 1 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 2 |
@@ -124,22 +124,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **917 surfaced · 6 open · 903 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **918 surfaced · 6 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
-| B-2026-08-04-8 | 2026-08-04 | codegen | medium | Bounds-check elimination fails for the CONVERGING two-pointer loop `while lo <= hi { v[base+lo] ... v[base+hi] }` when the index carries a base offset — the flat-2D / row-major scan shape. Isolated on kata #246 (strobogrammatic two-pointer over a flat Vec[u8] corpus of N*LEN bytes): kara keeps 2 per-iteration checks that clang -O3 does not, costing 1.28x on the kata and 1.93x on a work-identical minimal probe. Neither ingredient alone breaks BCE — base+ascending, base+descending, converging-without-base, and even both-ends-from-ONE-ascending-IV all elide cleanly; only the combination of a base offset with a converging two-IV guard defeats it. | — |
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
 | B-2026-08-04-18 | 2026-08-04 | ownership | low | Moving a heap value OUT of an aggregate element and then assigning it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) warns `value 't' moved here, used again here` -- the reassignment re-initializes the element, so the later use is sound; the partial move is tracked against the whole aggregate | src/use_classifier.rs:441 (Assign arm), src/rc_predicate.rs:119 (reassign_kills) |
 | B-2026-08-05-4 | 2026-08-04 | runtime | high | PERF-REGRESSION introduced by B-2026-07-31-21's fix (75a3a928): a remove-heavy Map runs 1.76x slower because the same-width compacting rehash re-fires on every eviction where the old code doubled once -- kata:146 LRU cache 231.7ms -> 422.9ms on the M5 host lane, ROOT-CAUSED by archive swap, sinks identical | runtime/src/map.rs::next_capacity (hysteresis on the same-width compaction arm) |
 | B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED perf regression bounded to 2026-07-28..07-30: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 codegen is ruled out by byte-identical binaries | none yet — needs a matched karac+archive bisect across 2026-07-28..07-30 |
+| B-2026-08-05-6 | 2026-08-05 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo <= hi { v[base+lo] .. v[base+hi] } }`. The bound holds only ACROSS the call boundary (every caller passes `base = k*len` with `k < n`, and `v.len() == n*len`), and every BCE analysis in bce_length_pin.rs is per-function by construction, so no local fact exists to prove. Carries the whole of kata #246's residual 1.28x vs equal-safety C. Survives INLINING (measured), and LLVM's IRCE does not reach it either (measured, byte-identical assembly). Split off B-2026-08-04-8, whose intra-function shape is fixed. | — |
 
-### Fixed (903)
+### Fixed (904)
 
-<details><summary>903 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>904 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1054,6 +1054,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-5 | codegen | high | ICE: destructuring a heap-BOXED Option/Result payload with a STRUCT sub-pattern (`match o { Some(Full { name, buf }) => . | 9908f6a (src/codegen/control_flow_match.rs; pins codegen.rs::e2e_boxed_optres_payload_struct_destructure_deboxes and ::e2e_struct_pattern_wins_over_a_same_named_enum_variant, both stash-proven RED with the exact `ExtractOutOfRange` ICE, their interpreter oracles interpreter.rs::test_boxed_optres_payload_struct_destructure_deboxes and ::test_struct_pattern_wins_over_a_same_named_enum_variant, and memory_sanitizer.rs::asan_boxed_optres_payload_struct_destructure_owns_the_interior_once for the ownership side the debox made reachable) |
 | B-2026-08-04-6 | codegen | medium | A FRESH-TEMP boxed Option/Result scrutinee destructured by a PARTIAL struct sub-pattern (`match mk() { Some(Full { name, buf: _ }) => . | 7ecdec0 (src/codegen/control_flow_match.rs, src/codegen/control_flow.rs; pins memory_sanitizer.rs::asan_freshtemp_boxed_payload_partial_destructure_owns_every_field, stash-proven RED under LeakSanitizer at 19,200 bytes, covering `field: _`, `..`, the String half, the `Result` Err side, and an all-fields-bound control for the double-free direction) |
 | B-2026-08-04-7 | cli | high | EVERY project-mode `karac build` fails immediately: it opens the PACKAGE NAME as a source path (`error: cannot read 'solo'`), so a manifest-driven bu… | 4c52d82 (src/cli.rs; no new test -- the 36 pre-existing `tests/cli.rs` cases were the RED signal and are the pin: 524 passed / 36 failed before, 560 passed / 0 failed after) |
+| B-2026-08-04-8 | codegen | medium | Bounds-check elimination fails for the CONVERGING two-pointer loop `while lo <= hi { v[base+lo] .. | e94e6bd9 (slice 1, intra-function converging+base skip) + 55f3d4a3 (slice 2, length pin survives passing the Vec to a free function). Residual callee-side gap split to B-2026-08-05-6. |
 | B-2026-08-04-9 | codegen | high | `?` on an Option/Result whose payload is heap-BOXED unwraps the BOX POINTER as if it were the payload's first word -- the value comes out empty or ga… | 60087fc (src/codegen/exprs.rs, src/codegen/control_flow_match.rs for the helper's visibility; pins codegen.rs::e2e_question_reconstructs_wide_and_boxed_ok_payloads, its interpreter oracle interpreter.rs::test_question_reconstructs_wide_and_boxed_ok_payloads, and memory_sanitizer.rs::asan_question_deboxed_ok_payload_frees_the_box -- the first two stash-proven RED on the exact garbage output, the third at 12,800 bytes under LeakSanitizer) |
 | B-2026-08-04-10 | codegen | medium | `let <StructPattern> = <expr>?;` -- a struct destructure written DIRECTLY on a `?` whose payload is heap-boxed -- leaks the payload's heap fields; ro… | a82b4ff (src/codegen/stmts.rs; pins the extended memory_sanitizer.rs::asan_question_deboxed_ok_payload_frees_the_box, stash-proven RED against this commit's change alone at 6,400 bytes under LeakSanitizer) |
 | B-2026-08-04-11 | codegen | high | `match <fresh Result temp> { Err(e) => . | 563eb8b (src/codegen/control_flow_match.rs; leg (a) was 375dd77). Pins codegen.rs::e2e_freshtemp_result_arm_binding_a_struct_payload_owns_it_once, memory_sanitizer.rs::asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once, interpreter.rs::test_freshtemp_result_arm_binding_a_struct_payload_owns_it_once. All three are stash-proven RED (abort, exit 134) and carry the wildcard / named-scrutinee / recover-CONSUME immunities as controls. cargo test --features llvm: 12968 passed, 0 failed. |
