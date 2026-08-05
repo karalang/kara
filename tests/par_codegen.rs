@@ -185,6 +185,50 @@ fn main() {{
         }
     }
 
+    /// B-2026-08-01-33 mechanism 3, auto-par arm — the admitted loop must
+    /// actually FAN OUT and still compute the right answer.
+    ///
+    /// The analysis-level companions live in tests/concurrency.rs; this is the
+    /// execution half. It exists because the gate deciding "safe to run in
+    /// parallel" and the code actually running in parallel are different
+    /// things, and B-2026-08-05-10 was precisely a case where the analysis was
+    /// right and the emitted code was wrong.
+    ///
+    /// `out[10]` = sum over t in 0..200 of (3*10 + t) = 200*30 + 19900 = 25900.
+    #[test]
+    fn frozen_param_loop_fans_out_and_computes_correctly() {
+        let out = run_program(
+            r#"
+shared struct S { val: i64 }
+fn heavy(s: frozen S, k: i64) -> i64 {
+    let mut acc: i64 = 0;
+    let mut t: i64 = 0;
+    while t < 200 { acc = acc + s.val * k + t; t = t + 1; }
+    acc
+}
+fn run(s: frozen S, out: mut ref Vec[i64]) {
+    for i in 0..2048 {
+        out[i] = heavy(s, i);
+    }
+}
+fn main() {
+    let s = S { val: 3 };
+    let mut out: Vec[i64] = Vec.filled(2048, 0);
+    run(s, mut out);
+    println(out[10]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "25900",
+                "the fanned-out loop must compute the same value the sequential \
+                 one does"
+            );
+        }
+    }
+
     /// B-2026-08-01-33 mechanism 3, stage 1 — `par` ADMISSION, end to end.
     ///
     /// Two branches both capture the same `frozen` handle and call through it.

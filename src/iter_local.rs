@@ -542,6 +542,75 @@ fn block_is_local(block: &Block, cx: &Ctx<'_>) -> bool {
 
 /// Root name of a place expression (`n`, `n.f`, `n[i]`, `n.f[i].g`).
 /// `None` when the place is not rooted at a plain name.
+/// Spans of every expression in `body` whose place-root is a name in
+/// `roots` — B-2026-08-01-33 mechanism 3, the auto-par arm.
+///
+/// A second whitelist for `loop_body_types_cross_task_safe`, built the same
+/// way as [`iteration_local_spans`] and consumed alongside it. The caller
+/// passes the enclosing function's `frozen` parameters; the resulting spans
+/// are exempt from the cross-task-safety gate, because a `frozen` value is
+/// deeply immutable (E0512) and emits no refcount traffic (it lowers to a
+/// borrow) — the same two facts that license admitting it into an explicit
+/// `par {}` block.
+///
+/// Rooted, not typed. Exempting by TYPE would be unsound: a body holding both
+/// a `frozen S` parameter and a freshly built local `S` would have the local
+/// exempted too, and the local's refcount traffic is exactly what races. Only
+/// places actually rooted at a listed name are whitelisted.
+///
+/// Fail-closed like its sibling: it whitelists on positive evidence only, so
+/// an expression shape [`place_root_name`] does not model is simply absent
+/// and the gate's decline stands.
+pub fn spans_rooted_at(body: &Block, roots: &HashSet<String>) -> HashSet<SpanKey> {
+    struct Collect<'r> {
+        roots: &'r HashSet<String>,
+        out: HashSet<SpanKey>,
+    }
+    impl<'e> Visit<'e> for Collect<'_> {
+        fn on_expr(&mut self, expr: &'e Expr) {
+            if place_root_name(expr).is_some_and(|r| self.roots.contains(&r)) {
+                self.out.insert(SpanKey::from_span(&expr.span));
+            }
+            visit_children(expr, self);
+        }
+        fn on_block(&mut self, block: &'e Block) {
+            // Mirrors `LocalWalker::block` — the statement forms that carry
+            // sub-expressions. Anything not listed contributes no expression
+            // to whitelist, so omitting it only shrinks the whitelist and the
+            // gate's decline stands.
+            for stmt in &block.stmts {
+                match &stmt.kind {
+                    StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                        self.on_expr(value)
+                    }
+                    StmtKind::Assign { target, value }
+                    | StmtKind::CompoundAssign { target, value, .. } => {
+                        self.on_expr(target);
+                        self.on_expr(value);
+                    }
+                    StmtKind::Expr(e) => self.on_expr(e),
+                    _ => {}
+                }
+                if let StmtKind::LetElse { else_block, .. } = &stmt.kind {
+                    self.on_block(else_block);
+                }
+            }
+            if let Some(e) = &block.final_expr {
+                self.on_expr(e);
+            }
+        }
+    }
+    let mut c = Collect {
+        roots,
+        out: HashSet::new(),
+    };
+    if roots.is_empty() {
+        return c.out;
+    }
+    c.on_block(body);
+    c.out
+}
+
 fn place_root_name(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Identifier(name) => Some(name.clone()),

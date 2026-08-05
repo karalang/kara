@@ -2193,7 +2193,10 @@ impl<'a> ConcurrencyChecker<'a> {
 
     fn recognize_reductions(&self, func: &Function) -> Vec<LoopReduction> {
         let mut out = Vec::new();
-        self.recognize_reductions_in_block(&func.body, &mut out);
+        // Threaded rather than looked up at the gate: the walk is recursive
+        // and does not carry the enclosing `Function`.
+        let frozen = self.frozen_param_names(func);
+        self.recognize_reductions_in_block(&func.body, &mut out, &frozen);
         out
     }
 
@@ -2335,7 +2338,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 decline.reason().to_string(),
             ),
             Ok(proof) => {
-                if !self.loop_body_types_cross_task_safe(body) {
+                if !self.loop_body_types_cross_task_safe(body, &self.frozen_param_names(func)) {
                     let d = DisjointDecline::NotCrossTaskSafe;
                     return mk(proof.loop_var, Some(d), Vec::new(), d.reason().to_string());
                 }
@@ -2544,7 +2547,12 @@ impl<'a> ConcurrencyChecker<'a> {
     /// runtime's fork-depth cap (`KARAC_PAR_MAX_FORK_DEPTH`) already makes
     /// inner regions run sequentially inline (see the recursion note
     /// below), so nested tags are safe.
-    fn recognize_reductions_in_block(&self, block: &Block, out: &mut Vec<LoopReduction>) {
+    fn recognize_reductions_in_block(
+        &self,
+        block: &Block,
+        out: &mut Vec<LoopReduction>,
+        frozen: &HashSet<String>,
+    ) {
         for (idx, stmt) in block.stmts.iter().enumerate() {
             let StmtKind::Expr(expr) = &stmt.kind else {
                 continue;
@@ -2555,10 +2563,10 @@ impl<'a> ConcurrencyChecker<'a> {
                     else_branch,
                     ..
                 } => {
-                    self.recognize_reductions_in_block(then_block, out);
+                    self.recognize_reductions_in_block(then_block, out, frozen);
                     if let Some(else_expr) = else_branch {
                         if let ExprKind::Block(else_block) = &else_expr.kind {
-                            self.recognize_reductions_in_block(else_block, out);
+                            self.recognize_reductions_in_block(else_block, out, frozen);
                         }
                     }
                     continue;
@@ -2578,7 +2586,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 } => (body, attributes.as_slice()),
                 _ => unreachable!("filtered above"),
             };
-            self.recognize_reductions_in_block(body, out);
+            self.recognize_reductions_in_block(body, out, frozen);
             if let Some((accumulator, op)) = self.classify_loop_body(body, attributes) {
                 // B-2026-07-16-6 soundness gate: the reduction lowering runs
                 // this body on MULTIPLE worker threads, so any value the body
@@ -2591,7 +2599,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 // must therefore satisfy the same cross-task-safe predicate an
                 // explicit `spawn` capture does; decline the reduction (the
                 // loop lowers sequentially) when it doesn't.
-                if !self.loop_body_types_cross_task_safe(body) {
+                if !self.loop_body_types_cross_task_safe(body, frozen) {
                     continue;
                 }
                 // B-2026-07-23-20 soundness gate: decline when the body passes a
@@ -2830,7 +2838,24 @@ impl<'a> ConcurrencyChecker<'a> {
     /// `concurrency_analyze` convenience entry used by analysis-only
     /// tests), recognition is left unchanged: every path that LOWERS a
     /// reduction (cli.rs `concurrencycheck`) runs the typed form.
-    fn loop_body_types_cross_task_safe(&self, body: &Block) -> bool {
+    /// Names of `func`'s `frozen` parameters — the roots
+    /// [`Self::loop_body_types_cross_task_safe`] may exempt from the
+    /// cross-task-safety gate. Stage 1 has no `freeze` expression, so a
+    /// parameter is the only way a binding becomes frozen and this is the
+    /// complete list.
+    fn frozen_param_names(&self, func: &Function) -> HashSet<String> {
+        func.params
+            .iter()
+            .filter(|p| p.is_frozen)
+            .filter_map(|p| p.name().map(str::to_string))
+            .collect()
+    }
+
+    fn loop_body_types_cross_task_safe(
+        &self,
+        body: &Block,
+        frozen_params: &HashSet<String>,
+    ) -> bool {
         let Some(tc) = self.types else {
             return true;
         };
@@ -2854,10 +2879,29 @@ impl<'a> ConcurrencyChecker<'a> {
         if std::env::var("KARAC_PAR_ITER_LOCAL_SHARED").as_deref() == Ok("0") {
             return false;
         }
+        // B-2026-08-01-33 mechanism 3, auto-par arm: a second whitelist of
+        // places rooted at a `frozen` parameter. Such a place is deeply
+        // immutable (E0512 refused the parameter otherwise) and emits no
+        // refcount traffic (`frozen T` lowers to a borrow) — the same two
+        // facts that license admitting it into an explicit `par {}` block,
+        // so the auto-par gate that models the identical hazard admits it
+        // too. Without this, the two surfaces disagree: a handle explicit
+        // `par` accepts still forces the loop sequential.
+        //
+        // Whitelisted by ROOT, never by type. A body holding both a
+        // `frozen S` parameter and a freshly built local `S` must exempt
+        // only the former; the local's refcount traffic is exactly the race
+        // this gate exists to catch.
+        let frozen = crate::iter_local::spans_rooted_at(body, frozen_params);
+        if unsafe_spans.iter().all(|key| frozen.contains(key)) {
+            return true;
+        }
         let Some(local) = crate::iter_local::iteration_local_spans(body, tc) else {
             return false;
         };
-        unsafe_spans.iter().all(|key| local.contains(key))
+        unsafe_spans
+            .iter()
+            .all(|key| local.contains(key) || frozen.contains(key))
     }
 
     /// Classify a loop body as a reduction over a single outer-scope

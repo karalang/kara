@@ -2625,6 +2625,117 @@ fn test_disjoint_write_declined_when_body_materializes_shared_handle() {
     );
 }
 
+/// B-2026-08-01-33 mechanism 3, auto-par arm — a loop body touching a `frozen`
+/// value must be ADMITTED by the cross-task-safety gate.
+///
+/// Before this, the two parallelism surfaces disagreed: explicit `par {}`
+/// admitted a `frozen` handle captured by several branches, while auto-par
+/// still declined the identical hazard and forced the loop sequential. The
+/// facts that license admission are the same on both — E0512 refused the
+/// parameter unless every reachable `shared` type is free of `mut` fields (no
+/// payload to race), and `frozen T` lowers to a borrow (no refcount traffic,
+/// hence no header to race).
+#[test]
+fn test_disjoint_write_admitted_for_frozen_param() {
+    let analysis = analyze_typed(
+        r#"
+        shared struct S { val: i64 }
+        fn heavy(s: frozen S, k: i64) -> i64 {
+            let mut acc: i64 = 0;
+            let mut t: i64 = 0;
+            while t < 200 { acc = acc + s.val * k + t; t = t + 1; }
+            acc
+        }
+        fn run(s: frozen S, out: mut ref Vec[i64]) {
+            for i in 0..2048 {
+                out[i] = heavy(s, i);
+            }
+        }
+        fn main() {
+            let s = S { val: 3 };
+            let mut out: Vec[i64] = Vec.filled(2048, 0);
+            run(s, mut out);
+            println(out[10]);
+        }
+        "#,
+    );
+    let run_fc = get_function(&analysis, "run");
+    let d = run_fc
+        .disjoint_write_loops
+        .iter()
+        .find(|d| d.loop_var == "i")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a disjoint-write candidate for loop `i`, got {:?}",
+                run_fc.disjoint_write_loops
+            )
+        });
+    assert_eq!(
+        d.decline, None,
+        "a body touching only a `frozen` value must pass the cross-task-safety \
+         gate — explicit `par` already admits the same handle"
+    );
+}
+
+/// The companion that keeps the admission honest, and the reason the whitelist
+/// is built from PLACE ROOTS rather than from types.
+///
+/// This body touches a `frozen S` parameter AND a non-frozen `S` parameter.
+/// A type-keyed exemption would clear both — the second is an ordinary
+/// refcounted handle reachable from every worker, which is exactly the race
+/// B-2026-07-16-6 documents. Only places rooted at a `frozen` name are
+/// exempt, so this must still decline.
+///
+/// Note the local-allocation case is NOT a hole and is deliberately not
+/// tested here: a `shared` value built and consumed inside one iteration is
+/// already whitelisted by `iter_local` (B-2026-07-30-1) on its own,
+/// independent evidence.
+#[test]
+fn test_disjoint_write_still_declines_for_non_frozen_sibling_of_same_type() {
+    let analysis = analyze_typed(
+        r#"
+        shared struct S { val: i64 }
+        fn heavy(s: frozen S, k: i64) -> i64 {
+            let mut acc: i64 = 0;
+            let mut t: i64 = 0;
+            while t < 200 { acc = acc + s.val * k + t; t = t + 1; }
+            acc
+        }
+        fn heavy2(s: S, k: i64) -> i64 { s.val + k }
+        fn run(s: frozen S, u: S, out: mut ref Vec[i64]) {
+            for i in 0..2048 {
+                out[i] = heavy(s, i) + heavy2(u, i);
+            }
+        }
+        fn main() {
+            let s = S { val: 3 };
+            let u = S { val: 5 };
+            let mut out: Vec[i64] = Vec.filled(2048, 0);
+            run(s, u, mut out);
+            println(out[10]);
+        }
+        "#,
+    );
+    let run_fc = get_function(&analysis, "run");
+    let d = run_fc
+        .disjoint_write_loops
+        .iter()
+        .find(|d| d.loop_var == "i")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a disjoint-write candidate for loop `i`, got {:?}",
+                run_fc.disjoint_write_loops
+            )
+        });
+    assert_eq!(
+        d.decline,
+        Some(karac::index_disjoint::DisjointDecline::NotCrossTaskSafe),
+        "a non-frozen `shared` value of the SAME type as a frozen parameter must \
+         still decline — exempting by type instead of by place root would admit \
+         a real race here"
+    );
+}
+
 #[test]
 fn test_disjoint_write_kept_for_scalar_projection_through_shared_handle() {
     // Companion: identical program except the element is projected rather
