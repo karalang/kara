@@ -34939,6 +34939,19 @@ fn generic_numeric_arg_width_mismatch_rejected() {
 /// The other half of B-2026-08-05-19: SIGNEDNESS is not a layout difference,
 /// and unsuffixed literals must still adopt their context. Narrowing the rule
 /// to "any two differing numeric types" broke all of these.
+/// B-2026-08-05-19 (seeding leg) — with user generics no longer exempt, a USER
+/// generic struct is invariant across numeric layouts too. This is the line the
+/// original row listed that the first fix could not close.
+#[test]
+fn user_generic_numeric_arg_width_mismatch_rejected() {
+    assert!(!typecheck_errors(
+        "struct Holder[T] { items: Vec[T] }\n\
+         fn f(h: ref Holder[u16]) -> i64 { h.items.len() }\n\
+         fn main() { let h: Holder[i64] = Holder { items: [1] }; println(f(h)); }"
+    )
+    .is_empty());
+}
+
 #[test]
 fn generic_numeric_arg_same_layout_and_literals_still_accepted() {
     // i64 -> u64: same eight bytes, only the interpretation differs. This is
@@ -34958,6 +34971,28 @@ fn generic_numeric_arg_same_layout_and_literals_still_accepted() {
     typecheck_ok(
         "fn first(a: Array[i32, 3]) -> i32 { a[0] }\n\
          fn main() { let _x = first(Array[10, 20, 30]); }",
+    );
+    // B-2026-08-05-19 (seeding leg): a USER generic's param seeded from the
+    // EXPECTED type rather than from the argument. `Box.new(5)` infers `T = i64`
+    // from the literal and never consults the annotation; unifying the
+    // instantiated return `Box[?T]` against `Box[i32]` first binds `?T = i32`.
+    // `T` here belongs to the IMPL, not the fn, so the fn's formal-generics list
+    // is empty — the seed gates on the return carrying a metavar instead.
+    typecheck_ok(
+        "struct Box[T: Copy] { v: T }\n\
+         impl[T: Copy] Box[T] {\n\
+             fn new(v: T) -> Box[T] { Box { v: v } }\n\
+             fn get(ref self) -> T { self.v }\n\
+         }\n\
+         fn main() { let b: Box[i32] = Box.new(5); let _x: i32 = b.get(); println(_x); }",
+    );
+    // The seed must NOT leak into a nested call inside an argument: an
+    // unannotated generic struct literal has an unsolved metavar as its
+    // expectation, and a broader gate let the first inner call bind it, after
+    // which `T` failed to infer entirely.
+    typecheck_ok(
+        "struct Bag[T] { items: Vec[T] }\n\
+         fn main() { let b = Bag { items: [\"hi\".to_string()] }; let _n: i64 = b.items.len(); }",
     );
     // Range checking is unaffected by the literal adoption.
     assert!(

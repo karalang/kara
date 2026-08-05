@@ -1644,6 +1644,14 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Err` (`E`) `TypeExpr` for the Result forms of the
     /// absent-closure combinators. See the public copy on `TypeCheckResult`.
     pub(super) method_unwrap_err_types: HashMap<SpanKey, TypeExpr>,
+    /// B-2026-08-05-19 — the EXPECTED type at a check-mode call position, handed
+    /// to `check_call_args_with_substitution_full` so a generic call can seed its
+    /// type params from the expectation before solving them from arguments.
+    /// `let b: Box[i32] = Box.new(5)` otherwise infers `T = i64` from the literal
+    /// and never consults the annotation. Set immediately before the call's
+    /// `infer_expr` and TAKEN by the first generic call that runs, so it cannot
+    /// leak into a nested call inside an argument.
+    pub(super) pending_expected_call_return: Option<Type>,
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
@@ -1916,6 +1924,7 @@ impl<'a> TypeChecker<'a> {
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
             method_unwrap_err_types: HashMap::new(),
+            pending_expected_call_return: None,
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             temp_recv_len_elem_types: HashMap::new(),

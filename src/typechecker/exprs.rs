@@ -98,6 +98,30 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
     }
 }
 
+/// Does this type still carry an unsolved inference metavar? Gates
+/// expected-return seeding: a fully concrete return has nothing to seed, and
+/// unifying it against a mismatched expectation could bind ids inside the
+/// EXPECTATION instead. B-2026-08-05-19.
+fn contains_type_var(t: &Type) -> bool {
+    match t {
+        Type::TypeVar(_) => true,
+        Type::Named { args, .. } => args.iter().any(contains_type_var),
+        Type::Ref(i) | Type::MutRef(i) => contains_type_var(i),
+        Type::Tuple(ts) => ts.iter().any(contains_type_var),
+        Type::Array { element, .. } => contains_type_var(element),
+        Type::Slice { element, .. } => contains_type_var(element),
+        Type::Function {
+            params,
+            return_type,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+        } => params.iter().any(contains_type_var) || contains_type_var(return_type),
+        _ => false,
+    }
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// `true` when `expr` is a `Coll.try_with_capacity(n)` path call — the
     /// fallible constructor whose `?`-form needs check-mode element pinning
@@ -958,7 +982,28 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-08-05-19 — publish the expectation for a generic CALL so its
+        // type params can be seeded from it before being solved from arguments.
+        // `let b: Box[i32] = Box.new(5)` infers `T = i64` from the literal
+        // otherwise, and with numeric generic args now layout-invariant that
+        // became a rejection of working code. Restricted to a call, and taken by
+        // the first generic call that runs, so a nested call inside an argument
+        // never sees it.
+        // Restricted to a PATH-callee call (`Box.new(..)`, `Type.assoc(..)`) —
+        // the associated-function shape this seeding exists for. A broader gate
+        // leaks the expectation into a nested call inside an argument: with a
+        // bare `ExprKind::Call` gate, `let b = Bag { items: [..] }` (unannotated,
+        // so the expectation is an unsolved metavar) had that metavar bound by
+        // the first inner call instead, and `T` then failed to infer.
+        let seedable_call = matches!(
+            &expr.kind,
+            ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Path { .. })
+        );
+        if seedable_call && *expected != Type::Error && !contains_type_var(expected) {
+            self.pending_expected_call_return = Some(expected.clone());
+        }
         let actual = self.infer_expr(expr);
+        self.pending_expected_call_return = None;
         // Expected-type-driven generic resolution: when a generic call's
         // return type came back as `TypeParam(T)` (the solver had no arg
         // information to fix `T`), `expected` lets us bind `T` to a concrete
@@ -1394,6 +1439,37 @@ impl<'a> super::TypeChecker<'a> {
             &mut self.env.next_type_var,
             &mut self.env.next_const_var,
         );
+
+        // B-2026-08-05-19 — seed the metavars from the EXPECTED return type
+        // BEFORE arguments are solved. Unifying the instantiated return
+        // (`Box[?T]`) against the expectation (`Box[i32]`) binds `?T = i32`, so
+        // the literal argument is then CHECKED against `i32` instead of minting
+        // `i64` and forcing `Box[i64]`. The struct-literal path already does the
+        // equivalent (`infer_struct_literal_expected`'s `seeded` arm,
+        // B-2026-07-18-17); this is its call-side twin.
+        //
+        // Runs before the explicit-generic-args block below so an EXPLICIT
+        // turbofish-equivalent still wins — it binds the same ids afterwards.
+        // Only for a genuinely generic signature, and `unify_types` is
+        // permissive on mismatch (it simply fails to bind), so an expectation
+        // that does not match the return shape leaves inference exactly as it
+        // was rather than forcing a wrong binding.
+        if let Some(expected_ret) = self.pending_expected_call_return.take() {
+            // Gate on the instantiated RETURN carrying an unsolved metavar, not
+            // on `formal_generic_params`. An `impl[T] Box[T] { fn new(..) }`
+            // declares no generics ON THE FN — `T` belongs to the impl — so the
+            // formals list is `None` there while `sub_ret` is `Box[?0]`, which
+            // is precisely the case this seeding exists for. Measured: gating on
+            // the formals list left `Box.new(5)` unseeded.
+            if contains_type_var(&sub_ret) {
+                unify_types(
+                    &sub_ret,
+                    &expected_ret,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
+            }
+        }
 
         // Const generics slice 1c: pre-bind metavars from explicit
         // call-site generic args. Walk the formal-param names and the

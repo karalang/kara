@@ -1206,10 +1206,20 @@ pub(super) fn projection_unresolvable_with(a: &Type, b: &Type) -> bool {
 /// numeric-width mismatch is a miscompile rather than a coercion, so their
 /// arguments are held invariant across numeric layouts. B-2026-08-05-19.
 fn layout_bearing_generic(name: &str) -> bool {
-    matches!(
-        name,
-        "Vec" | "VecDeque" | "Option" | "Result" | "Map" | "HashMap" | "Set" | "HashSet"
-    )
+    // Everything EXCEPT a small denylist. Inverted from an allowlist once
+    // expected-type seeding (B-2026-08-05-19) made user generics work:
+    // `Box[i32]` and `Box[i64]` differ in layout exactly as `Vec` does, and the
+    // reported hole explicitly included a user generic struct
+    // (`Holder[u16] <- Holder[i64]`), so an allowlist could never close it.
+    //
+    // `Tensor` is excluded because its element type is not reliably inferred
+    // today: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]`
+    // and `k: f32` infers `Tensor[f64, ..]` for the product, so enforcing
+    // invariance here rejects a tested, correct program. That is a latent
+    // element-inference gap in tensor arithmetic, not a variance question —
+    // filed separately rather than papered over by leaving all user generics
+    // permissive.
+    !matches!(name, "Tensor")
 }
 
 /// [`generic_arg_compatible`] without the numeric-layout invariance — the
