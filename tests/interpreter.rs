@@ -29459,6 +29459,124 @@ fn test_result_struct_payload_field_freed_and_single_body() {
 }
 
 #[test]
+fn test_optres_tuple_payload_is_owned_exactly_once() {
+    // B-2026-08-05-3 — the ORACLE half. The interpreter has always owned an
+    // `Option`/`Result` tuple payload exactly once; codegen leaked it three
+    // different ways (missing let-site registration, an ungated Result arm
+    // suppression, and an operator-desugar misread in the consumption
+    // classifier for guarded arms). Keep in step with the codegen twin
+    // `e2e_optres_tuple_payload_is_owned_exactly_once`.
+    //
+    // The seed is the literal 1 here rather than `env.args().len()`: the
+    // codegen fixture needs an opaque seed to survive -O2 folding and 1 is what
+    // that yields under its harness, while `env.args()` in an in-process
+    // interpreter test would report the TEST binary's argv.
+    assert_eq!(
+        run(
+            "struct H { a: Vec[i64], b: i64 }\n\
+             fn mkv(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }\n\
+             fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f\"pay-{k}\"); return s; }\n\
+             fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f\"{i}\"); return d; }\n\
+             fn sinkt(t: (Vec[i64], i64)) -> i64 { return t.0[0i64]; }\n\
+             fn main() {\n\
+             \x20   let base: i64 = 1i64;\n\
+             \x20   let mut acc = 0i64;\n\
+             \x20   let mut i = base;\n\
+             \x20   while i < base + 100i64 {\n\
+             \x20       // 1. Option[tuple] — the reported shape: bound and READ, never moved.\n\
+             \x20       let o1: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+             \x20       match o1 {\n\
+             \x20           Option.Some(x) => { acc = acc + x.0[0i64] + x.1; }\n\
+             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       // 2. Result[tuple] — the same shape on the other carrier.\n\
+             \x20       let r1: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       match r1 {\n\
+             \x20           Result.Ok(x) => { acc = acc + x.0[1i64]; }\n\
+             \x20           Result.Err(e) => { acc = acc + e; }\n\
+             \x20       }\n\
+             \x20       // 3. Result[tuple] never matched at all — the let-site walk alone.\n\
+             \x20       let r2: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       acc = acc + 1i64;\n\
+             \x20       // 4. GUARDED arms, both carriers — the `x.1 == 5` operator desugar.\n\
+             \x20       let o2: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+             \x20       match o2 {\n\
+             \x20           Option.Some(x) if x.1 == 5i64 => { acc = acc + x.0[0i64]; }\n\
+             \x20           _ => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       let r3: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       match r3 {\n\
+             \x20           Result.Ok(x) if x.1 == 5i64 => { acc = acc + x.0[0i64]; }\n\
+             \x20           _ => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       // 5. String element, read through its BYTES.\n\
+             \x20       let o3: Option[(String, i64)] = Option.Some((mks(i), 5i64));\n\
+             \x20       match o3 {\n\
+             \x20           Option.Some(x) => { if x.0.contains(dig(i)) { acc = acc + x.0.len(); } }\n\
+             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       // 6. Heap on the Err half.\n\
+             \x20       let r4: Result[i64, (Vec[i64], i64)] = Result.Err((mkv(i), 5i64));\n\
+             \x20       match r4 {\n\
+             \x20           Result.Ok(v) => { acc = acc + v; }\n\
+             \x20           Result.Err(e) => { acc = acc + e.0[0i64]; }\n\
+             \x20       }\n\
+             \x20       // 7. if-let, borrow-only and moving.\n\
+             \x20       let r5: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       if let Result.Ok(x) = r5 { acc = acc + x.0[0i64]; } else { acc = acc - 1i64; }\n\
+             \x20       let r6: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       let mut g: Vec[i64] = Vec.new();\n\
+             \x20       if let Result.Ok(x) = r6 { g = x.0; } else { acc = acc - 1i64; }\n\
+             \x20       acc = acc + g[0i64] + g.len();\n\
+             \x20       // 8. Moved out of the match into an owned-param callee.\n\
+             \x20       let o4: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+             \x20       match o4 {\n\
+             \x20           Option.Some(x) => { acc = acc + sinkt(x); }\n\
+             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       // 9. Element MOVED out through the match value.\n\
+             \x20       let o5: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+             \x20       let g2: Vec[i64] = match o5 { Option.Some(x) => x.0, Option.None => Vec.new() };\n\
+             \x20       acc = acc + g2[1i64];\n\
+             \x20       // --- CONTROLS: shapes that must NOT gain a second owner ---\n\
+             \x20       // C1. Tuple PATTERN destructure — the elements own themselves.\n\
+             \x20       let o6: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+             \x20       match o6 {\n\
+             \x20           Option.Some((v, k)) => { acc = acc + v[0i64] + k; }\n\
+             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       let r7: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       match r7 {\n\
+             \x20           Result.Ok((v, k)) => { acc = acc + v[0i64] + k; }\n\
+             \x20           Result.Err(e) => { acc = acc + e; }\n\
+             \x20       }\n\
+             \x20       // C2. STRUCT payloads — already registered on another channel.\n\
+             \x20       let o7: Option[H] = Option.Some(H { a: mkv(i), b: 5i64 });\n\
+             \x20       match o7 {\n\
+             \x20           Option.Some(x) => { acc = acc + x.a[0i64] + x.b; }\n\
+             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       let r8: Result[H, i64] = Result.Ok(H { a: mkv(i), b: 5i64 });\n\
+             \x20       match r8 {\n\
+             \x20           Result.Ok(x) if x.b == 5i64 => { acc = acc + x.a[0i64]; }\n\
+             \x20           _ => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       // C3. All-scalar tuple payload — must get no drop at all.\n\
+             \x20       let o8: Option[(i64, i64)] = Option.Some((i, 5i64));\n\
+             \x20       match o8 {\n\
+             \x20           Option.Some(x) => { acc = acc + x.0 + x.1; }\n\
+             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       }\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             \x20   println(f\"acc={acc}\");\n\
+             }\n"
+        ),
+        "acc=74292\n"
+    );
+}
+
+#[test]
 fn test_tuple_element_borrowed_in_place_for_ref_params() {
     // B-2026-08-05-1 and -2 — the ORACLE half. The interpreter has always
     // borrowed a tuple element in place for a `ref` / `mut ref` parameter;

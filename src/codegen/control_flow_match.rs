@@ -547,7 +547,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // payload out — its `FreeInlineOptionPayload` scope-exit
                     // free would otherwise double-free against the binding.
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
-                    self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
+                    // B-2026-08-05-3: skip disarming the source when the arm
+                    // only BORROWS a whole-TUPLE payload — that binding has no
+                    // owner of its own, so the source must free it. Mirrors the
+                    // `Option` gate below (B-2026-07-03-31); no-ops for every
+                    // non-tuple payload.
+                    if !self.arm_only_borrows_result_tuple_payload(
+                        scrutinee,
+                        &arm.pattern,
+                        &arm.body,
+                        arm.guard.as_ref(),
+                    ) {
+                        self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
+                    }
                     // B-2026-08-03-3 — the same suppression for a TUPLE-ELEMENT
                     // scrutinee (`match t.0 { Result.Err(e) => .. }`). The two
                     // above key on a BINDING in `inline_{option,result}_payload_
@@ -6042,6 +6054,105 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-05-3 — the binding names introduced by a `Result` arm that
+    /// consumes a WHOLE-TUPLE payload out of a named scrutinee, else `None`.
+    /// Every gate of `suppress_inline_result_payload_cleanup` plus the tuple
+    /// restriction, so the consumption-gated callers below can ask "would the
+    /// suppression apply, and to a tuple?" in one call.
+    ///
+    /// Restricted to a plain `Binding` the typechecker typed `Tuple`. A tuple
+    /// PATTERN (`Ok((v, k))`) is deliberately excluded: it binds the ELEMENTS,
+    /// and each heap element gets its own `track_vec_var` owner, so the source
+    /// there must suppress exactly as it does today.
+    fn result_tuple_payload_binds(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) -> Option<Vec<String>> {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return None;
+        };
+        if !self.inline_result_payload_vars.contains(name.as_str()) {
+            return None;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return None;
+        };
+        if !matches!(path.last().map(|s| s.as_str()), Some("Ok") | Some("Err")) {
+            return None;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return None;
+        }
+        let binds_a_tuple = patterns.iter().any(|p| {
+            matches!(&p.kind, PatternKind::Binding(_))
+                && self
+                    .pattern_binding_types
+                    .get(&(p.span.offset, p.span.length))
+                    .is_some_and(|t| t == "Tuple")
+        });
+        if !binds_a_tuple {
+            return None;
+        }
+        let mut binds: Vec<String> = Vec::new();
+        for pat in patterns {
+            collect_pattern_bindings(pat, &mut binds);
+        }
+        (!binds.is_empty()).then_some(binds)
+    }
+
+    /// B-2026-08-05-3 — does a `Result` arm leave its `Ok(_)`/`Err(_)`-bound
+    /// WHOLE-TUPLE payload only BORROWED? When it does, the source must keep
+    /// its `FreeInlineResultPayload` armed, so
+    /// `suppress_inline_result_payload_cleanup` must NOT fire.
+    ///
+    /// The tuple payload is the one shape with no binding-side owner: a
+    /// struct payload is `track_struct_var`'d and a direct `String`/`Vec`
+    /// payload is `track_vec_var`'d, but `bind_pattern_values` never
+    /// `track_tuple_var`s a match binding. Disarming the source for a tuple
+    /// therefore hands the buffer to nobody — `match r { Ok(x) =>
+    /// println(f"{x.0[0]}") }` over a `Result[(Vec[i64], i64), i64]` leaked
+    /// the element buffer while the `Option` carrier was clean, because
+    /// `Option`'s suppression has been consumption-gated since B-2026-07-03-31
+    /// (`arm_only_borrows_option_agg_payload`) and `Result`'s never was. This
+    /// is that missing sibling, narrowed to the tuple so the struct and
+    /// direct-heap payloads keep their unconditional suppression.
+    ///
+    /// Same conservative direction as the `Option` twin: the classifier
+    /// defaults to "consumed", so a wrong answer keeps today's suppression —
+    /// a leak, never a double-free.
+    pub(super) fn arm_only_borrows_result_tuple_payload(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) -> bool {
+        let Some(binds) = self.result_tuple_payload_binds(scrutinee, pattern) else {
+            return false;
+        };
+        binds.iter().all(|v| {
+            super::consume_class::binding_only_borrowed(v, body)
+                && guard.is_none_or(|g| super::consume_class::binding_only_borrowed(v, g))
+        })
+    }
+
+    /// Block-body sibling of [`Self::arm_only_borrows_result_tuple_payload`]
+    /// for the if-let `then_block` / while-let `body` scopes.
+    pub(super) fn block_only_borrows_result_tuple_payload(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        let Some(binds) = self.result_tuple_payload_binds(scrutinee, pattern) else {
+            return false;
+        };
+        binds
+            .iter()
+            .all(|v| super::consume_class::binding_only_borrowed_block(v, block))
+    }
+
     /// `Result[T, E]` sibling of `suppress_inline_option_payload_cleanup`.
     /// When the scrutinee is an identifier whose binding registered a
     /// `FreeInlineResultPayload` and the arm binds the `Ok`/`Err` payload
@@ -6296,6 +6407,24 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         if !patterns.iter().any(pattern_consumes_field) {
+            return None;
+        }
+        // B-2026-08-05-3 — a DESTRUCTURING sub-pattern (`Some((v, k))`) binds
+        // the payload's ELEMENTS, and `bind_pattern_values` gives each heap
+        // element its own `track_vec_var` owner. The caller-retains gate below
+        // asks whether the arm only READS the bindings, which is the wrong
+        // question once they already own their buffers: answering "borrow-only"
+        // leaves the SOURCE armed as well and both free the same pointer.
+        // Only a WHOLE-value binding — which registers no owner of its own — is
+        // eligible for the gate.
+        //
+        // Restricted to a TUPLE sub-pattern on purpose. A tuple payload only
+        // entered this channel with B-2026-08-05-3's let-site registration, so
+        // this cannot change how any pre-existing struct / enum payload behaves.
+        if patterns
+            .iter()
+            .any(|p| matches!(&p.kind, PatternKind::Tuple(_)))
+        {
             return None;
         }
         let mut binds: Vec<String> = Vec::new();

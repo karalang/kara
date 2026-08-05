@@ -5573,6 +5573,34 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.track_inline_option_payload_var(var_name, slot.ptr, &te);
                                 self.track_inline_result_payload_var(var_name, slot.ptr, &te);
                                 self.track_inline_option_map_payload_var(var_name, slot.ptr, &te);
+                                // B-2026-08-05-3 — the AGGREGATE-payload
+                                // registrar. The three above cover a direct
+                                // `{ptr,len,cap}` payload, a `Result`, and a
+                                // Map/Set payload; a payload that is itself an
+                                // aggregate (a TUPLE with a heap element, e.g.
+                                // `Option[(Vec[i64], i64)]`) matched none of
+                                // them, so NOTHING registered a scope-exit drop
+                                // and the element buffer leaked. The leak did
+                                // not need the Option to be matched at all —
+                                // an untouched binding leaks identically, which
+                                // is what places it on this let-site walk
+                                // rather than anything about arm binding.
+                                //
+                                // Restricted to a TUPLE payload on purpose. The
+                                // registrar also accepts a struct/enum payload,
+                                // but that case is ALREADY registered on
+                                // another channel at this site — calling it
+                                // unconditionally here double-registers and
+                                // turns the leak into a double free (measured:
+                                // `Option[H]` went from 8 allocs / 8 frees to
+                                // 11 / 12 and aborted). Only the tuple payload
+                                // is unowned, so only the tuple payload is
+                                // added.
+                                if self.option_payload_is_droppable_tuple(&te) {
+                                    self.track_inline_option_agg_payload_var(
+                                        var_name, slot.ptr, &te,
+                                    );
+                                }
                             }
                         }
                     }

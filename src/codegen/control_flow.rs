@@ -212,7 +212,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // this arm binds the payload out, else x's scope-exit free doubles
         // the binding's. No-op for temp / non-inline scrutinees.
         self.suppress_inline_option_payload_cleanup(value, pattern);
-        self.suppress_inline_result_payload_cleanup(value, pattern);
+        // B-2026-08-05-3: whole-TUPLE payload borrow-only gate — see
+        // `arm_only_borrows_result_tuple_payload`. No-op for every other
+        // payload shape.
+        if !self.block_only_borrows_result_tuple_payload(value, pattern, then_block) {
+            self.suppress_inline_result_payload_cleanup(value, pattern);
+        }
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
@@ -505,7 +510,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-06-10-6: variable inline-`Option` scrutinee source-cap
         // suppression (see `compile_if_let`). No-op for temp / non-inline.
         self.suppress_inline_option_payload_cleanup(value, pattern);
-        self.suppress_inline_result_payload_cleanup(value, pattern);
+        // B-2026-08-05-3: whole-TUPLE payload borrow-only gate — see
+        // `arm_only_borrows_result_tuple_payload`. No-op for every other
+        // payload shape.
+        if !self.block_only_borrows_result_tuple_payload(value, pattern, body) {
+            self.suppress_inline_result_payload_cleanup(value, pattern);
+        }
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.

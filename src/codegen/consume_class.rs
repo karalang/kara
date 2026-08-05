@@ -158,7 +158,8 @@ fn has_consuming_sink(name: &str, e: &Expr) -> bool {
         // CONSUMING construction — the safe bias, since misreading a
         // constructor as a borrow would double-free.
         ExprKind::Call { callee, args } => {
-            let is_free_fn = matches!(&callee.kind, ExprKind::Identifier(_));
+            let is_free_fn = matches!(&callee.kind, ExprKind::Identifier(_))
+                || is_lowered_primitive_operator(callee);
             if is_free_fn {
                 // Entry-copied args: a derived arg is fine; only recurse for
                 // nested sinks.
@@ -266,6 +267,50 @@ fn stmt_has_sink(name: &str, s: &Stmt) -> bool {
         StmtKind::Expr(e) => has_consuming_sink(name, e),
         _ => false,
     }
+}
+
+/// Is `callee` the synthesized `<primitive>.<op>` path that the operator
+/// LOWERING pass emits, rather than a real construction?
+///
+/// `a == b` on scalars does not stay a surface `Binary`: `lowering.rs`
+/// rewrites it to `Call { callee: Path(["i64", "eq"]), args: [a, b] }`, which
+/// the `Call` arm above reads as a path-callee construction and therefore
+/// scores every derived argument as a TRANSFER. It is not one —
+/// `assoc_call.rs`'s `is_primitive` reroute sends these straight to an LLVM
+/// binary/unary op that reads both operands and stores nothing.
+///
+/// B-2026-08-05-3 (guard leg): a guarded arm — `Some(x) if x.1 == 5i64` —
+/// was classified "consumed" purely because of that desugar, which disarmed
+/// the source's payload drop. For a struct payload that is harmless (the
+/// binding owns it); for a TUPLE payload, which has no binding-side owner, the
+/// buffer leaked. `Some(x) if n == 1i64` — a guard not mentioning `x` — was
+/// clean, which is what isolated the desugar as the cause.
+///
+/// `String` is included: its legs of the same reroute do free a FRESH-OWNED
+/// operand (`free_fresh_owned_str_arg`), but only for `Call`/`MethodCall`/
+/// fresh-slice shapes. A place expression is the only shape
+/// `value_derived_from` recognizes, and it is never one of those, so a derived
+/// operand still transfers nothing.
+fn is_lowered_primitive_operator(callee: &Expr) -> bool {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return false;
+    };
+    let [ty, op] = segments.as_slice() else {
+        return false;
+    };
+    // The receiver-type set `assoc_call.rs`'s `is_primitive` reroute accepts,
+    // plus the `F16`/`Bf16`/`F32`/`F64` total-order comparison wrappers it
+    // intercepts just above that reroute.
+    const PRIMS: &[&str] = &[
+        "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "usize", "isize",
+        "f32", "f64", "bool", "char", "String", "F16", "Bf16", "F32", "F64",
+    ];
+    // The operator method names those two sites map back to a `BinOp`/`UnaryOp`.
+    const OPS: &[&str] = &[
+        "add", "sub", "mul", "div", "rem", "eq", "ne", "lt", "le", "gt", "ge", "bitand", "bitor",
+        "bitxor", "shl", "shr", "neg", "not",
+    ];
+    PRIMS.contains(&ty.as_str()) && OPS.contains(&op.as_str())
 }
 
 /// Does `e` reference `name` at all (used for closure-capture detection)?

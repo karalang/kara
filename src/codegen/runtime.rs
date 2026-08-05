@@ -2441,6 +2441,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True iff `te` is `Option[P]` with `P` a TUPLE carrying at least one
+    /// heap element that the recursive drop family fully frees — the narrow
+    /// shape B-2026-08-05-3's let-site registration adds.
+    ///
+    /// Deliberately NOT the broader `option_payload_struct_or_enum_drop_ok`: a
+    /// struct or enum payload is already registered on another channel at that
+    /// site, so admitting it there double-registers and converts the leak into
+    /// a double free. Only the tuple payload is unowned.
+    pub(super) fn option_payload_is_droppable_tuple(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return false;
+        }
+        matches!(
+            p.generic_args.as_ref().and_then(|a| a.first()),
+            Some(GenericArg::Type(payload))
+                if matches!(payload.kind, TypeKind::Tuple(_))
+                    && self.option_payload_struct_or_enum_drop_ok(payload)
+        )
+    }
+
     /// Slice 3u: an Option/Result payload that is a NON-shared user STRUCT
     /// or value ENUM the recursive drop family fully frees. Covers BOTH
     /// widths: an inline payload's i64 words overlay w0.. layout-compatibly
@@ -2450,7 +2473,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// null-guard, inner drop, free box) owns it. Sibling of
     /// `option_payload_inline_recursive_drop_ok` (the String/Vec overlay
     /// gate); a `false` keeps the status-quo fast path.
+    ///
+    /// Also admits a TUPLE payload (B-2026-08-05-3) — see the comment inside.
     pub(super) fn option_payload_struct_or_enum_drop_ok(&self, payload_te: &TypeExpr) -> bool {
+        // B-2026-08-05-3 — a TUPLE payload (`Option[(Vec[i64], i64)]`) is the
+        // same shape as the struct payload this gate was written for, one
+        // spelling over, and fell out at the `TypeKind::Path` bind below: a
+        // tuple is `TypeKind::Tuple`, so the gate returned false and NOTHING
+        // registered a scope-exit drop. The tuple's heap element leaked (32
+        // bytes for a two-`i64` `Vec`), on BOTH carriers, whether or not the
+        // payload was ever matched — an Option that is never matched at all
+        // leaks identically, which is what shows this is the scope-exit walk
+        // rather than anything about arm binding.
+        //
+        // The machinery downstream already handles it: `emit_option_drop_fn`
+        // defers to `emit_drop_fn_for_type_expr`, which synthesizes a tuple
+        // drop (the same resolver `compile_tuple_index_store` uses on a tuple
+        // element), and `te_recursive_drop_fully_supported` already recurses
+        // through `TypeKind::Tuple`. Only this gate was missing the arm.
+        //
+        // Requires at least one non-trivially-copyable element so an all-scalar
+        // tuple (`Option[(i64, i64)]`, already clean) does not get a no-op drop
+        // registered against it.
+        if let TypeKind::Tuple(elems) = &payload_te.kind {
+            return elems
+                .iter()
+                .any(|e| !super::vec_method::is_trivially_copyable_te(e))
+                && self.te_recursive_drop_fully_supported(payload_te);
+        }
         let TypeKind::Path(p) = &payload_te.kind else {
             return false;
         };
