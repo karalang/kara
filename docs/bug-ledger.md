@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 215 | 0 |
-| leak | 135 | 0 |
+| leak | 136 | 1 |
 | double-free | 97 | 1 |
 | codegen-gap | 90 | 1 |
 | run-vs-build | 81 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 677 | 2 |
+| codegen | 678 | 3 |
 | interp | 124 | 0 |
 | typecheck | 121 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced · 6 open · 930 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **945 surfaced · 7 open · 930 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
 | B-2026-08-05-28 | 2026-08-05 | codegen | medium | The String-to-String xform methods do not COMPILE on a surface-concat receiver: `("p:".to_string() + s).to_uppercase()` / `.trim()` fail with "no handler for method on non-identifier receiver" | docs/implementation_checklist/phase-7-codegen.md |
+| B-2026-08-05-33 | 2026-08-05 | codegen | high | LAW, not one fixture: a by-value aggregate param that is CALLER-RETAINS is owned by nobody and leaks once per call on a DEFAULT -O2 build. Three predicates reach it -- generic-erased field (2400 B/40), Map-bearing field (26400 B/160), and direct `shared` field (B-2026-08-05-32, which is therefore a special case of this row, not its own bug) | docs/implementation_checklist/phase-7-codegen.md |
 
 ### Fixed (930)
 
