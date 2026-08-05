@@ -3820,7 +3820,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // method-call indices, etc. immediately default to no elision).
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, name);
 
-        let idx_raw = self.compile_expr(index)?;
+        let idx_raw = self.compile_proven_index_expr(index, lower_proven, upper_proven)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
@@ -3996,6 +3996,62 @@ impl<'ctx> super::Codegen<'ctx> {
             (ExprKind::Identifier(x), ExprKind::Identifier(y)) => Some((x.as_str(), y.as_str())),
             _ => None,
         }
+    }
+
+    /// Compile an index expression, eliding the index add's integer-overflow
+    /// trap when BCE has already proven the index in bounds (B-2026-08-05-21).
+    ///
+    /// # The proof, which is entirely borrowed
+    ///
+    /// `index_bounds_already_proven` returning `(true, true)` is codegen
+    /// asserting `0 <= idx < v.len()` on the *mathematical* value of the index
+    /// — that is precisely what licenses the caller to skip both halves of the
+    /// runtime bounds check. `v.len()` is an `i64` that counts live elements,
+    /// so `idx` lies in `[0, i64::MAX]` and the `base + i` that computed it
+    /// cannot have overflowed. So the trap is dead on exactly the paths where
+    /// the bounds check is already gone.
+    ///
+    /// This adds **no new soundness surface**: it consumes the same fact the
+    /// bounds skip consumes, and is wrong in exactly the cases where that skip
+    /// would already be an out-of-bounds access. If the underlying analysis is
+    /// ever wrong, the OOB is the bug — this elision is a symptom.
+    ///
+    /// # Why the arming is precise
+    ///
+    /// Gated on `index_sum_var_pair`, i.e. the index is literally
+    /// `<ident> + <ident>`. Two things follow, and both matter:
+    ///
+    /// * Compiling that shape emits exactly **one** `add`, so the one-shot
+    ///   latch cannot leak onto an unrelated (and unproven) add.
+    /// * The `(true, true)` can only have come from the `SumIndex` fact. The
+    ///   other path through `index_bounds_already_proven` runs through
+    ///   `index_var_and_offset_sign`, which requires one operand to be an
+    ///   integer **literal** (`idx ± k`) and so returns `None` — hence
+    ///   `(false, false)` — for two identifiers. So the proof backing this
+    ///   elision is always the sum-index one, which is exactly the
+    ///   `0 <= base + idx < len` statement the argument above needs.
+    ///
+    /// The
+    /// latch is **save/restored** rather than cleared, so an arming owned by
+    /// `accum_overflow` survives an index compile nested inside it, and is
+    /// never consumed by an index add that failed to prove its own bounds.
+    pub(super) fn compile_proven_index_expr(
+        &mut self,
+        index: &Expr,
+        lower_proven: bool,
+        upper_proven: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let arm = self.elide_proven_index_add_overflow
+            && lower_proven
+            && upper_proven
+            && Self::index_sum_var_pair(index).is_some();
+        if !arm {
+            return self.compile_expr(index);
+        }
+        let saved = std::mem::replace(&mut self.elide_next_add_overflow_check, true);
+        let out = self.compile_expr(index);
+        self.elide_next_add_overflow_check = saved;
+        out
     }
 
     /// Decompose an index expression into `(idx_var, offset_sign)` where
@@ -4345,7 +4401,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_data_ptr(var_name)
             .ok_or_else(|| format!("Undefined Vec variable '{}' in index store", var_name))?;
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
-        let idx_raw = self.compile_expr(index)?;
+        let idx_raw = self.compile_proven_index_expr(index, lower_proven, upper_proven)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
@@ -4540,7 +4596,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // Outer GEP: outer_data + oi * sizeof(Vec_struct) → pointer
         // to the inner Vec aggregate.
         let (outer_lo, outer_hi) = self.index_bounds_already_proven(outer_index, outer_name);
-        let oi = self.compile_expr(outer_index)?.into_int_value();
+        let oi = self
+            .compile_proven_index_expr(outer_index, outer_lo, outer_hi)?
+            .into_int_value();
         let outer_data_pp = self
             .builder
             .build_struct_gep(vec_ty, outer_vec_ptr, 0, "nvv.outer.data.pp")
@@ -4609,7 +4667,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
         let slice_ptr = self.get_data_ptr(var_name).unwrap();
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
-        let idx_raw = self.compile_expr(index)?;
+        let idx_raw = self.compile_proven_index_expr(index, lower_proven, upper_proven)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self
@@ -4675,7 +4733,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // index-name match in `index_bounds_already_proven` requires a
         // bare `Identifier` source-level node.
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
-        let idx_raw = self.compile_expr(index)?;
+        let idx_raw = self.compile_proven_index_expr(index, lower_proven, upper_proven)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
 
         let data_pp = self

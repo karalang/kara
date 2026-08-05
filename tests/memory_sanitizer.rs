@@ -13964,6 +13964,54 @@ fn main() {
     }
 
     #[test]
+    fn test_proven_index_add_overflow_elision_stays_in_bounds() {
+        // B-2026-08-05-21: the index adds in this shape now emit a PLAIN add —
+        // the overflow trap is elided because BCE proved the sum in bounds. So
+        // there is no longer any runtime check of any kind on `base + lo` /
+        // `base + hi`: not a bounds check (B-2026-08-04-8 removed that) and not
+        // an overflow trap. ASAN is the only backstop left.
+        //
+        // Deliberately WIDE rows (1009 x 63, an odd width and a prime row
+        // count) so `base` grows large across the scan and the elided add is
+        // exercised at many magnitudes rather than only near zero — the buffer
+        // is exactly `n * len`, so the final row's `base + hi_init` must land
+        // on the last element with no slack.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let n = 1009i64;
+    let len = 63i64;
+    let mut v: Vec[i64] = Vec.filled(n * len, 0i64);
+    let mut i = 0i64;
+    while i < n {
+        let base = i * len;
+        let mut lo = 0i64;
+        let mut hi = len - 1i64;
+        while lo <= hi {
+            v[base + lo] = v[base + lo] + 1i64;
+            v[base + hi] = v[base + hi] + 1i64;
+            lo = lo + 1i64;
+            hi = hi - 1i64;
+        }
+        i = i + 1i64;
+    }
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < n * len {
+        total = total + v[k];
+        k = k + 1i64;
+    }
+    println(f"{total}");
+}
+"#,
+            // Odd width: every cell gets +1 and the middle cell gets +1 again,
+            // so 63 + 1 = 64 per row, and 64 * 1009 = 64576.
+            &["64576"],
+            "proven_index_add_overflow_elision",
+        );
+    }
+
+    #[test]
     fn test_auto_par_returns_no_use_after_move_no_double_drop() {
         // Each `read_*` builds a fresh `Vec[i64]` of three elements;
         // the parent sums the four `.len()` values and prints `12`.

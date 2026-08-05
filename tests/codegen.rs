@@ -16164,6 +16164,81 @@ fn main() {
         }
     }
 
+    /// B-2026-08-05-21: the row-major converging scan whose index adds have
+    /// their overflow checks elided still computes the right addresses.
+    ///
+    /// Rows are ODD-width so `lo` and `hi` meet on a middle cell, and the
+    /// buffer is exactly `n * len`, so `base + hi_init` on the last row must
+    /// land on the final element — the tight case where a mis-lowered index
+    /// add (the risk of swapping a checked add for a plain one) would show as
+    /// a wrong sum rather than a crash.
+    #[test]
+    fn e2e_proven_index_add_overflow_elision_addresses_are_unchanged() {
+        let src = r#"
+fn main() {
+    let n = 7i64;
+    let len = 5i64;
+    let mut v: Vec[i64] = Vec.filled(n * len, 0i64);
+    let mut i = 0i64;
+    while i < n {
+        let base = i * len;
+        let mut lo = 0i64;
+        let mut hi = len - 1i64;
+        while lo <= hi {
+            v[base + lo] = v[base + lo] + 1i64;
+            v[base + hi] = v[base + hi] + 1i64;
+            lo = lo + 1i64;
+            hi = hi - 1i64;
+        }
+        i = i + 1i64;
+    }
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < n * len {
+        total = total + v[k];
+        k = k + 1i64;
+    }
+    println(f"{total}");
+}
+"#;
+        // Per row the pairs are (0,4), (1,3), (2,2): every cell gets +1 and the
+        // middle cell gets +1 again, so 6 per row and 6 * 7 = 42.
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    /// The gate: an index add whose bounds are NOT proven keeps its overflow
+    /// trap. `base` is `i64::MAX` here, so `base + lo` genuinely overflows —
+    /// and because `v` carries no length pin that reaches this index, the
+    /// elision must decline and the program must trap rather than compute a
+    /// wrapped address.
+    #[test]
+    fn e2e_unproven_index_add_still_traps_on_overflow() {
+        let src = r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64);
+    v.push(2i64);
+    let mut base = 9223372036854775807i64;
+    if v.len() == 0i64 { base = 0i64; }
+    let mut lo = 1i64;
+    if v.len() == 99i64 { lo = 0i64; }
+    println(f"{v[base + lo]}");
+}
+"#;
+        if let Some(cap) = run_program_capturing(src) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains("integer overflow"),
+                "expected the unproven index add to KEEP its overflow trap, \
+                 got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+        }
+    }
+
     /// `pow` traps `integer overflow` at the receiver width (same as `*`):
     /// `u8 16^2 = 256` overflows u8 → exit 1, no silent widening to i64.
     #[test]
@@ -34527,6 +34602,70 @@ fn row_scan() -> i64 {
             !ir.contains("vidx."),
             "expected the converging two-pointer loads to carry NO bounds \
              check, but found a `vidx.` block:\n{ir}"
+        );
+    }
+
+    /// The same program with `lo`'s step moved BEFORE the index, which defeats
+    /// the bounds proof. Used as the differential baseline: it has exactly the
+    /// same arithmetic, so any difference in `sadd.with.overflow` count is the
+    /// index adds and nothing else.
+    fn conv_two_pointer_unproven_src() -> String {
+        let src = CONV_TWO_POINTER_SRC.replace(
+            "acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);\n            lo = lo + 1i64;",
+            "lo = lo + 1i64;\n            acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);",
+        );
+        assert_ne!(src, CONV_TWO_POINTER_SRC, "reorder anchor did not match");
+        src
+    }
+
+    fn count_add_overflow_intrinsics(ir: &str) -> usize {
+        ir.matches("@llvm.sadd.with.overflow").count()
+    }
+
+    #[test]
+    fn test_ir_proven_index_add_skips_its_overflow_check() {
+        // B-2026-08-05-21: when BCE has proven `0 <= base + i < v.len()`, the
+        // add that computed the index provably cannot overflow, so its trap is
+        // dead and must not be emitted.
+        //
+        // Asserted as a DIFFERENTIAL against the reordered variant rather than
+        // an absolute count: both programs contain the same five adds
+        // (`acc + ..`, `base + lo`, `base + hi`, `lo + 1`, `i + 1`), and only
+        // the two index adds are provable. So the proven form must carry
+        // exactly two fewer intrinsics — an absolute count would silently pass
+        // if an unrelated add were added to or removed from the fixture.
+        let proven = count_add_overflow_intrinsics(&ir_for(CONV_TWO_POINTER_SRC));
+        let unproven = count_add_overflow_intrinsics(&ir_for(&conv_two_pointer_unproven_src()));
+        assert_eq!(
+            unproven,
+            proven + 2,
+            "expected the two proven index adds to drop their overflow checks \
+             (proven={proven}, unproven={unproven})"
+        );
+        assert!(
+            proven > 0,
+            "the unprovable adds (`lo + 1`, `i + 1`, `acc + ..`) must KEEP \
+             their checks — a zero count would mean the elision is firing far \
+             too widely, got {proven}"
+        );
+    }
+
+    #[test]
+    fn test_ir_unproven_index_add_keeps_its_overflow_check() {
+        // The gate, stated positively: with the bounds proof defeated by the
+        // reordering, BOTH the bounds check and the overflow check must
+        // survive. Pins that the elision rides on the proof rather than on the
+        // syntactic `v[a + b]` shape.
+        let ir = ir_for(&conv_two_pointer_unproven_src());
+        assert!(
+            ir.contains("vidx.ok"),
+            "expected the unproven loop to keep its bounds check, got:\n{ir}"
+        );
+        assert!(
+            count_add_overflow_intrinsics(&ir) >= 5,
+            "expected every add to keep its overflow check when nothing is \
+             proven, got {} in:\n{ir}",
+            count_add_overflow_intrinsics(&ir)
         );
     }
 

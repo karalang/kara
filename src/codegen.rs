@@ -2688,11 +2688,27 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) check_free_accum_sites: std::collections::HashSet<crate::resolver::SpanKey>,
     /// One-shot latch consumed by the `BinOp::Add` arm in `compile_binop_typed`
     /// to emit a plain `add` instead of the trapping
-    /// `llvm.sadd.with.overflow` sequence. Set immediately before compiling a
-    /// recognized accumulator RHS and taken by the first add it reaches; the
-    /// recognized RHS is exactly `<ident> + <literal>`, so there is no nested
-    /// add for the latch to leak onto.
+    /// `llvm.sadd.with.overflow` sequence.
+    ///
+    /// TWO producers arm it, each responsible for its own proof, and each
+    /// narrow enough that exactly one `add` can consume the arming:
+    ///
+    /// 1. `accum_overflow` (B-2026-07-26-1) sets it immediately before
+    ///    compiling a recognized accumulator RHS. That RHS is exactly
+    ///    `<ident> + <literal>`, so there is no nested add to leak onto.
+    /// 2. `compile_proven_index_expr` (B-2026-08-05-21) sets it around the
+    ///    index expression of a `v[base + i]` whose bounds BCE has already
+    ///    proven. That index is exactly `<ident> + <ident>`, so likewise one
+    ///    add — and that producer save/restores rather than clearing, so it
+    ///    can neither consume nor destroy an arming belonging to (1).
     pub(crate) elide_next_add_overflow_check: bool,
+    /// `KARAC_BCE_OVF_SKIP=0` disables producer (2) above — the
+    /// proven-in-bounds index-add overflow elision (B-2026-08-05-21). Escape
+    /// hatch and A/B lever, mirroring the `KARAC_BCE_*_SKIP` family. Note the
+    /// BCE kill switches disable it transitively as well: with the bounds
+    /// facts gone, `index_bounds_already_proven` stops returning the
+    /// `(true, true)` this rides on.
+    pub(crate) elide_proven_index_add_overflow: bool,
     /// Per-shared-struct lazy drop-fn cache (shared-struct name →
     /// `__karac_rc_drop_<Name>` `FunctionValue`, or `None` when the
     /// struct has no heap-owning fields and `emit_rc_dec` can fall
@@ -7781,6 +7797,8 @@ impl<'ctx> Codegen<'ctx> {
             user_drop_wrapper_fns: HashMap::new(),
             check_free_accum_sites: std::collections::HashSet::new(),
             elide_next_add_overflow_check: false,
+            elide_proven_index_add_overflow: std::env::var("KARAC_BCE_OVF_SKIP").as_deref()
+                != Ok("0"),
             rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             question_ok_payload_types: HashMap::new(),

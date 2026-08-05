@@ -6573,7 +6573,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
         let (lower_proven, upper_proven) = self.index_bounds_already_proven(base, &vec_var);
-        let idx_raw = self.compile_expr(base)?;
+        let idx_raw = self.compile_proven_index_expr(base, lower_proven, upper_proven)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
         // Base check first (whatever the BCE analysis didn't prove) — same
         // order and panic as the scalar `v[b]`.
