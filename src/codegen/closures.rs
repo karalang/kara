@@ -3198,7 +3198,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .or_else(|| inferred_param_tes.get(i).and_then(Option::as_ref));
             if let Some(te) = effective_te {
                 let te = te.clone();
-                self.register_var_from_type_expr(&param_name, &te);
+                // A `ref T` / `mut ref T` closure param's slot holds a POINTER,
+                // exactly like the function-param path in `functions.rs` —
+                // record the borrow so `load_variable` / `get_data_ptr` deref
+                // it, and register the side tables from the BORROWED-OF type.
+                // `register_var_from_type_expr` has no `Ref` arm, so handing it
+                // the borrow type registers NOTHING: B-2026-08-05-15 leg 2, a
+                // `|w: ref Vec[u8], i| w[i]` body failed to build with "Index
+                // operator applied to non-array type" because `w` never reached
+                // `vec_elem_types`, while `karac check` passed and the
+                // interpreter ran it.
+                if let Some(inner_ty) = self.inner_type_of_ref(&te) {
+                    self.ref_params.insert(param_name.clone(), inner_ty);
+                    self.signature_ref_params.insert(param_name.clone());
+                }
+                match &te.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
+                        let inner = (**inner).clone();
+                        self.register_var_from_type_expr(&param_name, &inner);
+                    }
+                    _ => self.register_var_from_type_expr(&param_name, &te),
+                }
             }
             // Owned (non-`ref`) Vec/String param → the caller-retained set, so a
             // tail return of this param deep-copies (B-2026-07-15-9). Mirrors the
@@ -3644,12 +3664,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        // Build call args: env_ptr first, then user-supplied args.
+        // Build call args: env_ptr first, then user-supplied args, each
+        // marshalled to the signature's declared param type (B-2026-08-05-15).
+        let declared = fn_type.get_param_types();
         let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
             vec![BasicMetadataValueEnum::from(env_ptr)];
-        for arg in args {
-            let val = self.compile_expr(&arg.value)?;
-            self.free_fresh_owned_heap_closure_arg(&arg.value, val);
+        for (i, arg) in args.iter().enumerate() {
+            // `declared[0]` is the env pointer, so user arg `i` is `declared[i + 1]`.
+            let val = self.compile_indirect_call_arg(arg, i, declared.get(i + 1).copied())?;
             call_args.push(BasicMetadataValueEnum::from(val));
         }
 
@@ -3664,6 +3686,80 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(basic_val.unwrap_basic())
         }
+    }
+
+    /// Marshal one argument for an indirect (closure-ABI) call so it matches
+    /// `declared`, the callee signature's own param type at that position.
+    ///
+    /// B-2026-08-05-15: this used to compile every argument by value, which is
+    /// only right for the params whose direct-call ABI is by-value. A `ref T` /
+    /// `mut ref T` param lowers to `ptr` (`llvm_type_for_type_expr`'s
+    /// `TypeKind::Ref | MutRef` arm), and both indirect signatures agree with
+    /// that — `env_first_fn_type` copies the target's own param types, and
+    /// `closure_abi_fn_type` lowers the `Fn(..)` annotation through the same
+    /// function. So the SIGNATURES were always right and only the call site was
+    /// wrong: it pushed a `{ptr, i64, i64}` Vec triple into a `ptr` slot, which
+    /// LLVM's verifier rejects outright, so `let f = takes_ref_vec; f(v, i)`
+    /// would not build while `karac check` passed and the interpreter ran it.
+    ///
+    /// The by-pointer branch mirrors the direct-call path in `call_dispatch.rs`
+    /// exactly: the address of a named binding's storage, an element borrow for
+    /// an index expression, or a materialized temp for any other rvalue.
+    ///
+    /// Deciding by the DECLARED type rather than by a semantic ref-flag is what
+    /// keeps this correct for a `shared` handle, whose param also lowers to
+    /// `ptr` but whose argument is *already* a pointer value: for those,
+    /// `ident_arg_needs_address` is false and the pointer passes straight
+    /// through, so the address of the slot (a pointer-to-pointer) is never
+    /// taken.
+    fn compile_indirect_call_arg(
+        &mut self,
+        arg: &CallArg,
+        idx: usize,
+        declared: Option<BasicMetadataTypeEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !matches!(declared, Some(BasicMetadataTypeEnum::PointerType(_))) {
+            let val = self.compile_expr(&arg.value)?;
+            self.free_fresh_owned_heap_closure_arg(&arg.value, val);
+            return Ok(val);
+        }
+        if let ExprKind::Identifier(name) = &arg.value.kind {
+            if self.ident_arg_needs_address(name) {
+                if let Some(ptr) = self.get_data_ptr(name) {
+                    return Ok(ptr.into());
+                }
+            }
+            let val = self.compile_expr(&arg.value)?;
+            self.free_fresh_owned_heap_closure_arg(&arg.value, val);
+            return Ok(val);
+        }
+        if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&arg.value)? {
+            return Ok(elem_ptr.into());
+        }
+        let val = self.compile_expr(&arg.value)?;
+        if val.is_pointer_value() {
+            self.free_fresh_owned_heap_closure_arg(&arg.value, val);
+            return Ok(val);
+        }
+        Ok(self.materialize_rvalue_for_ref_arg(val, idx))
+    }
+
+    /// Whether a named binding passed to a by-pointer (`ref`/`mut ref`) param
+    /// must be handed the ADDRESS of its storage rather than its loaded value.
+    ///
+    /// True for a binding that stores its value inline (a `Vec`/`String`/struct
+    /// alloca), and for the two indirections `get_data_ptr` already unwraps: a
+    /// `ref` param forwarding its own borrow, and an RC-promoted binding whose
+    /// data sits past the refcount header. False for a binding that already
+    /// holds a plain pointer — a `shared` handle — where taking the slot's
+    /// address would produce a pointer-to-pointer.
+    fn ident_arg_needs_address(&self, name: &str) -> bool {
+        if self.ref_params.contains_key(name) || self.rc_fallback_heap_types.contains_key(name) {
+            return true;
+        }
+        self.variables
+            .get(name)
+            .is_some_and(|slot| !slot.ty.is_pointer_type())
     }
 
     /// Caller-side cleanup of a FRESH owned heap arg (a `String.from(..)` /
@@ -3738,12 +3834,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        // Build call args: env_ptr first, then user-supplied args.
+        // Build call args: env_ptr first, then user-supplied args, each
+        // marshalled to the signature's declared param type (B-2026-08-05-15).
+        let declared = fn_type.get_param_types();
         let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
             vec![BasicMetadataValueEnum::from(env_ptr)];
-        for arg in args {
-            let val = self.compile_expr(&arg.value)?;
-            self.free_fresh_owned_heap_closure_arg(&arg.value, val);
+        for (i, arg) in args.iter().enumerate() {
+            // `declared[0]` is the env pointer, so user arg `i` is `declared[i + 1]`.
+            let val = self.compile_indirect_call_arg(arg, i, declared.get(i + 1).copied())?;
             call_args.push(BasicMetadataValueEnum::from(val));
         }
 

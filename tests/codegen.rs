@@ -29666,6 +29666,135 @@ fn main() {
         assert_eq!(float.as_deref(), Some("42\n"));
     }
 
+    #[test]
+    fn e2e_fn_value_with_a_ref_vec_param_builds_and_reads() {
+        // B-2026-08-05-15: `let f = g` where `g` takes `ref Vec[u8]`. The
+        // indirect call used to push the `{ptr, i64, i64}` Vec triple into the
+        // signature's `ptr` slot, which LLVM's verifier rejects — so this would
+        // not BUILD, while `karac check` passed and the interpreter ran it.
+        let out = run_program(
+            "fn head(v: ref Vec[u8], i: i64) -> i64 {\n\
+                 return v[i] as i64;\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[u8] = Vec.new();\n\
+                 let mut k = 0i64;\n\
+                 while k < 6i64 { v.push((k * 3i64) as u8); k = k + 1i64; }\n\
+                 let f = head;\n\
+                 let mut acc = 0i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < 6i64 { acc = acc + f(v, i); i = i + 1i64; }\n\
+                 println(acc);\n\
+             }",
+        );
+        assert_eq!(out, Some("45\n".to_string()));
+    }
+
+    #[test]
+    fn e2e_fn_value_with_a_ref_string_param() {
+        let out = run_program(
+            "fn n(s: ref String) -> i64 { return s.len(); }\n\
+             fn main() {\n\
+                 let s: String = \"hello\";\n\
+                 let f = n;\n\
+                 println(f(s));\n\
+             }",
+        );
+        assert_eq!(out, Some("5\n".to_string()));
+    }
+
+    #[test]
+    fn e2e_fn_value_with_a_mut_ref_vec_param_mutates_the_callers_vec() {
+        // The `mut ref` leg: the callee must receive the caller's buffer, not a
+        // copy of its header, or the pushes land nowhere observable.
+        let out = run_program(
+            "fn bump(v: mut ref Vec[i64], x: i64) { v.push(x); }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let f = bump;\n\
+                 let mut i = 0i64;\n\
+                 while i < 5i64 { f(mut v, i * 2i64); i = i + 1i64; }\n\
+                 let mut s = 0i64;\n\
+                 let mut j = 0i64;\n\
+                 while j < v.len() { s = s + v[j]; j = j + 1i64; }\n\
+                 println(s);\n\
+             }",
+        );
+        assert_eq!(out, Some("20\n".to_string()));
+    }
+
+    #[test]
+    fn e2e_closure_literal_with_a_ref_vec_param_indexes_it() {
+        // B-2026-08-05-15 leg 2, the CALLEE-side mirror: a closure param's side
+        // tables were registered from the BORROW type, and
+        // `register_var_from_type_expr` has no `Ref` arm — so `w` never reached
+        // `vec_elem_types` and `w[i]` failed to build with "Index operator
+        // applied to non-array type".
+        let out = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[u8] = Vec.new();\n\
+                 let mut k = 0i64;\n\
+                 while k < 4i64 { v.push((k + 1i64) as u8); k = k + 1i64; }\n\
+                 let f = |w: ref Vec[u8], i: i64| { return w[i] as i64; };\n\
+                 println(f(v, 2i64));\n\
+             }",
+        );
+        assert_eq!(out, Some("3\n".to_string()));
+    }
+
+    #[test]
+    fn e2e_fn_value_shared_param_still_receives_the_handle_not_its_slot() {
+        // The discrimination the by-pointer branch must NOT get wrong: a
+        // `shared` param also lowers to `ptr`, but its argument is ALREADY a
+        // pointer. Taking the address of the binding's slot would hand the
+        // callee a pointer-to-pointer, and `n.v` would read the stack.
+        let out = run_program(
+            "shared struct Node { v: i64 }\n\
+             fn get(n: Node) -> i64 { return n.v; }\n\
+             fn main() {\n\
+                 let n: Node = Node { v: 41i64 };\n\
+                 let f = get;\n\
+                 println(f(n) + 1i64);\n\
+             }",
+        );
+        assert_eq!(out, Some("42\n".to_string()));
+    }
+
+    #[test]
+    fn e2e_fn_value_ref_param_takes_a_fresh_rvalue_argument() {
+        // The rvalue leg of the by-pointer branch: no named binding whose
+        // address to take, so the argument is materialized into a temp. This is
+        // the ownership-sensitive path a wrong marshalling would leak or
+        // double-free. The payload's BYTES are read (`contains`) and the seed is
+        // opaque (`env.args().len()`), so the allocations are not dead and the
+        // loop really runs — B-2026-08-04-17's authoring rule.
+        let out = run_program(
+            "fn score(s: ref String, needle: ref String) -> i64 {\n\
+                 if s.contains(needle) { return s.len(); }\n\
+                 return 1i64;\n\
+             }\n\
+             fn mk(k: i64) -> String {\n\
+                 let mut s: String = String.new();\n\
+                 s.push_str(f\"payload-row-{k}-tail\");\n\
+                 return s;\n\
+             }\n\
+             fn main() {\n\
+                 let a: i64 = env.args().len();\n\
+                 let f = score;\n\
+                 let mut acc = 0i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < 20i64 {\n\
+                     let nd: String = mk(i + a);\n\
+                     acc = acc + f(mk(i + a), nd);\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 println(acc);\n\
+             }",
+        );
+        // Oracle: the interpreter's answer for the same source.
+        assert_eq!(out, Some("371\n".to_string()));
+    }
+
     /// The same bare fn passed in `Fn(...)` position at two call sites reuses a
     /// single memoized trampoline (one `define` of `__karac_fnval_doubler`),
     /// and both higher-order calls run.
