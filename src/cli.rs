@@ -1364,7 +1364,56 @@ impl Pipeline {
             || self.has_resolve_errors()
             || self.has_type_errors()
             || self.has_fatal_comptime_errors()
+            || self.has_fatal_effect_errors()
             || self.has_fatal_ownership_errors()
+    }
+
+    /// Whether any EFFECT diagnostic stops a build.
+    ///
+    /// B-2026-08-05-17: this arm did not exist, so `karac build` ran the effect
+    /// checker and then ignored every finding — a program `karac check`
+    /// rejected with `1 error(s) found` produced a binary and exited 0. Type
+    /// errors were gated on both paths, so the effect system specifically was
+    /// unenforced in the shipping artifact: a user who only ever runs `build`
+    /// got no verification of the declared-vs-inferred contract that public
+    /// signatures exist to guarantee.
+    ///
+    /// This is the same defect B-2026-07-31-29 fixed one phase over for
+    /// ownership, and the shape of the fix is deliberately identical: one
+    /// classifier, shared by every gate, so the lanes cannot drift apart again.
+    fn has_fatal_effect_errors(&self) -> bool {
+        self.effects.as_ref().is_some_and(|e| {
+            e.errors
+                .iter()
+                .any(|err| Self::is_fatal_effect_kind(&err.kind))
+        })
+    }
+
+    /// Which effect-diagnostic kinds are fatal. Two stay advisory by design,
+    /// and both are already treated that way by `cmd_run`'s gate — this is that
+    /// predicate hoisted so `build` shares it verbatim:
+    ///
+    ///   * `FfiLintHint` — declared "never a compile error" at its definition;
+    ///     rendered as `note[effect]`.
+    ///   * `TargetGateViolation` (E0411) — a target-AVAILABILITY finding, not a
+    ///     correctness bug, and it already has its own target-aware abort in the
+    ///     build path (see `wasm_wasi_build_aborts_on_target_gate_violation`,
+    ///     which asserts a wasm build stops with the targeted E0411 diagnostic).
+    ///     Routing it through this generic gate as well would make a NATIVE
+    ///     build reject the deliberate cross-target dev workflow that
+    ///     `karac run` supports by design.
+    ///
+    /// NOT aligned here, deliberately: on the native target `check` still counts
+    /// `TargetGateViolation` toward its exit code (`total_errors` filters only
+    /// `FfiLintHint`) while `run` reports it as `warning[effect]` and exits 0.
+    /// That check-vs-run split predates this fix and changing `check`'s exit
+    /// code is a separate decision — `check` being the strictest lane is the
+    /// safe direction for the Mend loop's gate. Recorded on B-2026-08-05-17.
+    fn is_fatal_effect_kind(kind: &EffectErrorKind) -> bool {
+        !matches!(
+            kind,
+            EffectErrorKind::FfiLintHint | EffectErrorKind::TargetGateViolation
+        )
     }
 
     /// Comptime fold failures are fatal: a `comptime { ... }` block that
@@ -4888,12 +4937,10 @@ fn cmd_run(
     //     stays a `warning[effect]` and executes. `build`/`check` treat it the
     //     same on native, so this is not a run/build divergence — Slice 6
     //     strips *correctness* leniency, not portability affordances.
-    let is_fatal_effect = |k: &EffectErrorKind| {
-        !matches!(
-            k,
-            EffectErrorKind::FfiLintHint | EffectErrorKind::TargetGateViolation
-        )
-    };
+    // Shared with the build gate (`Pipeline::has_fatal_effect_errors`) so the
+    // two lanes cannot drift apart — B-2026-08-05-17, and the same
+    // one-classifier discipline B-2026-07-31-29 established for ownership.
+    let is_fatal_effect = Pipeline::is_fatal_effect_kind;
     let has_type_errs = pipeline.has_type_errors();
     let has_effect_errs = pipeline
         .effects

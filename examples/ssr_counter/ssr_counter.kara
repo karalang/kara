@@ -85,7 +85,7 @@ impl DomSink {
 // the SAME component the server ran. Returns the rendered count so the
 // host can confirm the round-trip.
 #[target(wasm_browser)]
-pub fn hydrate(count: i64) -> i64 with writes(Dom) {
+pub fn hydrate(count: i64) -> i64 with writes(Dom) writes(Sink) panics {
     with_provider[Sink](DomSink {}, || {
         render_counter(count);
     });

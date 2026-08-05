@@ -13419,6 +13419,109 @@ fn main() {
 
 /// Post-Slice-6, run-leniency is stripped: `karac run` rejects the same
 /// static-contract violations `karac check` / `karac build` reject. A hard
+/// B-2026-08-05-17: `karac build` must gate on effect errors, exactly as
+/// `check` and `run` do. It ran the effect checker and then ignored every
+/// finding, so a program `check` rejected with `1 error(s) found` produced a
+/// binary and exited 0 — the effect system was unenforced in the shipping
+/// artifact for anyone who only runs `build`. Same defect B-2026-07-31-29
+/// fixed one phase over for ownership.
+#[test]
+fn build_rejects_an_effect_violation_like_check_does() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-build-effect-gate-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("effgate.kara");
+    std::fs::write(
+        &path,
+        "pub fn risky(v: ref Vec[i64]) -> i64 { return v[0]; }\n\
+         fn main() { let v: Vec[i64] = Vec.filled(2i64, 5i64); println(risky(v)); }\n",
+    )
+    .unwrap();
+    let exe = tmp.join("effgate");
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "-o", exe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "an effect violation must abort `karac build`: {stderr}",
+    );
+    assert!(
+        stderr.contains("error[effect]")
+            && stderr.contains("public function 'risky' performs effects [panics]"),
+        "build must RENDER the finding, not just exit non-zero: {stderr}",
+    );
+    assert!(
+        !exe.exists(),
+        "no artifact may be produced for a program the effect checker rejects",
+    );
+
+    // The point of the fix: `check` and `build` agree on whether the program
+    // is legal. Asserted here rather than assumed, since the two gates are
+    // separate predicates.
+    let checked = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !checked.status.success(),
+        "control: `check` must reject the same program",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The other half of the gate: a program with NO effect violation must still
+/// build. Guards against the classifier over-reaching and rejecting clean code.
+#[test]
+fn build_still_accepts_a_program_with_declared_effects() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-build-effect-clean-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("effok.kara");
+    std::fs::write(
+        &path,
+        "pub fn risky(v: ref Vec[i64]) -> i64 with panics { return v[0]; }\n\
+         pub fn safe(a: i64, b: i64) -> i64 { return a + b; }\n\
+         fn main() {\n\
+             let v: Vec[i64] = Vec.filled(2i64, 5i64);\n\
+             println(risky(v) + safe(1i64, 2i64));\n\
+         }\n",
+    )
+    .unwrap();
+    let exe = tmp.join("effok");
+
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "-o", exe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("llvm") && !out.status.success() {
+        eprintln!("skip: build_still_accepts_a_program_with_declared_effects — {stderr}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "a correctly-declared program must still build: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// effect error (E0400 here) now aborts the run with `error[effect]` on
 /// stderr instead of downgrading to `warning[effect]` and executing — the
 /// run/check *acceptance* asymmetry is gone. (Was
