@@ -186,45 +186,53 @@ fn main() {{
     }
 
     /// B-2026-08-01-33 mechanism 3, auto-par arm — the admitted loop must
-    /// actually FAN OUT and still compute the right answer.
+    /// compute the right answer when it actually runs across workers.
+    ///
+    /// The accumulator is a LOCAL, not a `mut ref` parameter, and that is
+    /// deliberate. The first version of this test used a `mut ref` parameter
+    /// and was named "fans_out"; `karac query concurrency` reported
+    /// `fanned_out: true` for it, but the binary ran single-threaded
+    /// (`user` ≈ `real`), so the test verified only the value and its name
+    /// claimed something it never exercised. That reporting discrepancy is
+    /// filed as B-2026-08-05-13; this shape is the one measured genuinely
+    /// parallel (real 0.13s / user 0.50s — 3.9x CPU on 4 cores).
     ///
     /// The analysis-level companions live in tests/concurrency.rs; this is the
-    /// execution half. It exists because the gate deciding "safe to run in
+    /// execution half, and it exists because the gate deciding "safe to run in
     /// parallel" and the code actually running in parallel are different
-    /// things, and B-2026-08-05-10 was precisely a case where the analysis was
+    /// things — B-2026-08-05-10 was precisely a case where the analysis was
     /// right and the emitted code was wrong.
     ///
-    /// `out[10]` = sum over t in 0..200 of (3*10 + t) = 200*30 + 19900 = 25900.
+    /// `out[10]` = sum over t in 0..2000 of (3*10 + t) = 2000*30 + 1999000.
     #[test]
-    fn frozen_param_loop_fans_out_and_computes_correctly() {
+    fn frozen_param_loop_computes_correctly_when_fanned_out() {
         let out = run_program(
             r#"
 shared struct S { val: i64 }
 fn heavy(s: frozen S, k: i64) -> i64 {
     let mut acc: i64 = 0;
     let mut t: i64 = 0;
-    while t < 200 { acc = acc + s.val * k + t; t = t + 1; }
+    while t < 2000 { acc = acc + s.val * k + t; t = t + 1; }
     acc
 }
-fn run(s: frozen S, out: mut ref Vec[i64]) {
+fn run(s: frozen S) -> i64 {
+    let mut out: Vec[i64] = Vec.filled(2048, 0);
     for i in 0..2048 {
         out[i] = heavy(s, i);
     }
+    out[10]
 }
 fn main() {
     let s = S { val: 3 };
-    let mut out: Vec[i64] = Vec.filled(2048, 0);
-    run(s, mut out);
-    println(out[10]);
+    println(run(s));
 }
 "#,
         );
         if let Some(out) = out {
             assert_eq!(
                 out.trim(),
-                "25900",
-                "the fanned-out loop must compute the same value the sequential \
-                 one does"
+                "2059000",
+                "the fanned-out loop must compute what the sequential one does"
             );
         }
     }

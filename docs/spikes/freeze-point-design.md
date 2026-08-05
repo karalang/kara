@@ -412,6 +412,43 @@ independent evidence (B-2026-07-30-1), not through the frozen whitelist. A hole
 test has to use a value that outlives the iteration — the first attempt at that
 test did not, and passed for the wrong reason.
 
+## Does it actually buy anything? (the measurement gating stage 2)
+
+Same program, three parameter modes, 4096 iterations x 200000 inner ops, 4
+cores, all printing the identical answer:
+
+| mode | gate | wall | cpu | |
+|---|---|---|---|---|
+| owned `S` | `not_cross_task_safe` | 0.400s | 0.396s | sequential |
+| `ref S` | `not_cross_task_safe` | 0.482s | 0.481s | sequential |
+| **`frozen S`** | **`proven`** | **0.162s** | 0.514s | **2.5x** |
+
+**2.5x wall-clock from adding one keyword**, and the cpu/wall ratio confirms
+real parallelism rather than a folding artifact.
+
+Two caveats that keep this honest:
+
+**The work had to be verified real first.** At the original size everything
+finished in ~0.05s with no separation between modes — LLVM can close-form that
+inner sum. Scaling the inner loop 10x scaled the time 10x, which is what proved
+there was work left to parallelize. A "no speedup" conclusion from the first
+run would have been an artifact.
+
+**`ref` is not faster than owned here, and that is not evidence against
+suppression.** The refcount traffic is once per call while the body runs 200000
+inner iterations, so RC cost is noise at this ratio. What this measures is
+*parallelism*; suppression's own value needs a body-to-call ratio nearer 1 and
+is not answered here.
+
+**A reporting trap found while measuring**, filed as B-2026-08-05-13: the same
+loop reports `fanned_out: true` whether the accumulator is a local (genuinely
+parallel, 3.9x cpu) or a `mut ref` parameter (single-threaded, `user` ==
+`real`). The field describes the analyzer's verdict, not the emitted code. It
+caught a test in this very work — named `..._fans_out_...` on the strength of
+that field, over a program that ran sequentially. Check with
+`bash -c 'time ./binary'` and compare `user` to `real`; `nm` cannot tell you,
+because the `karac_par_*` statics are stripped at link.
+
 ## Risks, stated plainly
 
 - **Non-counting handles are a new unsafety surface.** If escape checking has a
