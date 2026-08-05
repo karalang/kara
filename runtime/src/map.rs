@@ -9,8 +9,12 @@
 //!   `kv[capacity*(ks+vs)]`   — packed (key, val) pairs, no alignment padding
 //!
 //! Collision resolution: linear probing. Load factor ceiling 3/4; resize
-//! doubles capacity and rehashes. Deletion marks tombstones; tombstones count
-//! toward the load factor so a tombstone-heavy table still triggers a resize.
+//! doubles capacity and rehashes, or compacts at the same width when the LIVE
+//! count leaves enough headroom (see `next_capacity`). Deletion marks a
+//! tombstone only when a probe chain can still run past the bucket — when the
+//! next bucket is already EMPTY the slot is released outright instead (see
+//! `vacate`). Tombstones count toward the load factor, so a tombstone-heavy
+//! table still triggers a resize.
 //!
 //! ## The control byte (B-2026-07-26-2)
 //!
@@ -312,13 +316,75 @@ impl KaracMap {
             if drop_val {
                 self.free_stored_val(slot);
             }
-            *self.status.add(slot) = BUCKET_TOMBSTONE;
-            self.len -= 1;
-            self.tombstones += 1;
+            self.vacate(slot);
             true
         } else {
             false
         }
+    }
+
+    /// Release `slot`, whose key has just been removed: drop the live count and
+    /// leave a status byte that keeps every probe chain through this bucket
+    /// correct. The single "this bucket's key is gone" primitive — shared by
+    /// [`Self::remove`] and `karac_map_remove_old` (the one codegen actually
+    /// lowers `Map.remove` / `Set.remove` to), which otherwise open-coded the
+    /// same three lines.
+    ///
+    /// A tombstone is the CONSERVATIVE marking, not the only correct one. It
+    /// exists to keep a probe going, because a key hashed to an earlier bucket
+    /// may live further along the chain that ran through this slot. But when the
+    /// NEXT bucket is already `BUCKET_EMPTY`, no chain continues past this slot
+    /// in the first place: any probe that reached here would stop one step later
+    /// regardless. So the slot can go straight back to `BUCKET_EMPTY`, and the
+    /// tombstone that would have sat there — lengthening every probe through
+    /// this bucket for the rest of the table's life — never exists.
+    ///
+    /// B-2026-08-05-4 — the second, independent half of that fix.
+    /// [`Self::next_capacity`]'s ³⁄₁₆ band made the compacting rehash rarer and
+    /// recovered the regression on its own; this stops most of the tombstones
+    /// that drive the rehash from being created at all. The two STACK rather
+    /// than subsume each other — compaction re-hash work on the sliding-window
+    /// churn test below, over both axes:
+    ///
+    /// ```text
+    ///                     vacate off   vacate on
+    ///     ⅜  band           15.52%       7.06%
+    ///     ³⁄₁₆ band           6.29%       1.92%
+    /// ```
+    ///
+    /// On kata:146 (32M-op LRU, 1024 live, key range 4096) the wall-time goes
+    /// 238.3 ms → 223.3 ms, landing 6% BELOW the pre-regression baseline of
+    /// 237.2 ms: lookups stop walking tombstone runs, which is a win no capacity
+    /// policy can buy.
+    ///
+    /// **No backward collapse.** The same argument extends to the tombstone run
+    /// *behind* this slot — each becomes a run end with an EMPTY successor once
+    /// its successor is cleared — and that version was built and measured. It is
+    /// WORSE: 289.7 ms on kata:146, 30% slower than the one-slot rule. Two
+    /// reasons, and the second is the interesting one. The walk is a backward
+    /// dependent-load chain the prefetcher cannot follow; and clearing that
+    /// aggressively holds the table one doubling SMALLER (4096 buckets rather
+    /// than 8192 on kata:146), which makes it denser, which makes a removed
+    /// slot's successor EMPTY less often — so the rule undercuts its own
+    /// precondition and settles at MORE tombstones than the cheap version.
+    /// Cheap and local wins outright here; do not "improve" this into the walk
+    /// without re-measuring.
+    ///
+    /// Cost when the successor is not EMPTY: one status-byte load, on the cache
+    /// line the write is about to touch anyway, and a branchless select — the
+    /// test is close to a coin flip in steady state, so this deliberately does
+    /// not branch on it.
+    #[inline]
+    unsafe fn vacate(&mut self, slot: usize) {
+        let mask = self.capacity - 1;
+        self.len -= 1;
+        let run_end = *self.status.add((slot + 1) & mask) == BUCKET_EMPTY;
+        *self.status.add(slot) = if run_end {
+            BUCKET_EMPTY
+        } else {
+            BUCKET_TOMBSTONE
+        };
+        self.tombstones += usize::from(!run_end);
     }
 
     /// Pick the next table width when the load-factor trigger fires.
@@ -903,9 +969,7 @@ pub unsafe extern "C" fn karac_map_remove_old(
         if drop_key != 0 {
             m.free_stored_key(slot);
         }
-        *m.status.add(slot) = BUCKET_TOMBSTONE;
-        m.len -= 1;
-        m.tombstones += 1;
+        m.vacate(slot);
         true
     } else {
         false
@@ -1414,10 +1478,24 @@ mod tests {
     /// set. 200k ops here would have doubled past 65k buckets before the
     /// fix; the bound below fails immediately on the unconditional-doubling
     /// code.
+    ///
+    /// B-2026-08-05-4 added the SECOND assertion. That regression is not a
+    /// memory bug but an amortization one — a churning table re-firing the
+    /// same-width compacting rehash over and over — and the width assertion
+    /// above cannot see it: the steady state is 8192 buckets whether or not the
+    /// rehash storm is happening, so a test that pins only the width reports
+    /// green through the entire regression. What has to be pinned is the rehash
+    /// WORK. Counting `hash_fn` calls measures it exactly, because there are
+    /// only two sources: one per map operation (the probe) and one per key per
+    /// compaction (`rehash_from`, which cannot skip the call — buckets store no
+    /// hash). Everything above the operation count is compaction.
     #[test]
     fn churn_with_distinct_keys_keeps_capacity_bounded() {
         use std::ffi::c_void;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static HASH_CALLS: AtomicU64 = AtomicU64::new(0);
         unsafe extern "C" fn hash_i64(p: *const c_void) -> u64 {
+            HASH_CALLS.fetch_add(1, Ordering::Relaxed);
             // splitmix64 — a real mix so the probe chains look like
             // production, not sequential-cluster worst cases.
             let mut z = (*(p as *const i64) as u64).wrapping_add(0x9e3779b97f4a7c15);
@@ -1450,24 +1528,52 @@ mod tests {
             }
             let m = &*(map as *const KaracMap);
             assert_eq!(m.len, window as usize, "live size must stay the window");
-            // The live set is 1024 and same-width compaction keeps live at or
-            // under 3/16 of capacity (B-2026-08-05-4), so the steady state is
-            // EXACTLY 8192 buckets: 1025 * 16 / 3 = 5467, and the next power
+
+            // WIDTH — the live set is 1024 and same-width compaction keeps live
+            // at or under 3/16 of capacity (B-2026-08-05-4), so the steady state
+            // is EXACTLY 8192 buckets: 1025 * 16 / 3 = 5467, and the next power
             // of two above that is 8192.
             //
             // Pinned as equality, not a bound, because the two ways this can
             // break fail in opposite directions and both matter. Unconditional
-            // doubling (the B-2026-07-31-21 ratchet) reaches 65536+ within
-            // these 200k ops and trips the upper side. Narrowing the band back
-            // to 3/8 settles at 4096 and trips the lower side -- that one is
-            // not a memory bug, it is the amortization regression: at the 3/8
-            // edge a churning table re-hashes its whole live set once per
-            // operation, which is what widening the band bought out.
+            // doubling (the B-2026-07-31-21 ratchet) reaches 262144 within these
+            // 200k ops and trips the upper side. Narrowing the band back to 3/8
+            // settles at 4096 and trips the lower side.
             assert_eq!(
                 m.capacity, 8192,
                 "steady-state width moved: capacity {} means the same-width \
                  band is no longer 3/16 of a 1024-live table",
                 m.capacity
+            );
+
+            // WORK — the amortization guard, and the one that actually
+            // discriminates B-2026-08-05-4. Width alone does not: `vacate`
+            // leaves the steady state at 8192 either way, so the equality above
+            // passes with the rehash storm still present. One hash_fn call is
+            // inherent per map operation (the probe); every call beyond that is
+            // a compaction re-hashing the live set. Pinned as a ratio so it
+            // reads as what it is — rehash overhead as a fraction of the
+            // workload.
+            let ops = (total + (total - window)) as u64; // inserts + removes
+            let hashes = HASH_CALLS.load(Ordering::Relaxed);
+            let overhead = hashes.saturating_sub(ops) as f64 / ops as f64;
+            // Measured on this workload, all four combinations:
+            //     3/16 band + vacate (shipping)    1.92%
+            //     3/8  band + vacate               7.06%
+            //     3/16 band, vacate disabled       6.29%
+            //     3/8  band, vacate disabled      15.52%  <- what this bug was
+            //                                             filed against
+            // Both fixes are load-bearing: dropping either one lands above 6%.
+            // 4% is the only threshold that catches both single-fix
+            // regressions, and the workload is fully deterministic (fixed key
+            // sequence, fixed hash), so 1.92% vs 4% is a hard margin, not a
+            // statistical one.
+            assert!(
+                overhead < 0.04,
+                "compaction re-hash overhead is {:.1}% of {ops} ops \
+                 ({hashes} hash calls) — a churning table is re-hashing its \
+                 live set again",
+                overhead * 100.0
             );
             // Correctness after many same-width compactions: every live key
             // still resolves to its value.
@@ -1480,6 +1586,180 @@ mod tests {
             );
             assert!(found, "live key {probe} must still be present");
             assert_eq!(out, probe * 3);
+            super::karac_map_free(map);
+        }
+    }
+
+    /// Identity hash: key `k` starts its probe at bucket `k & (cap - 1)`, so a
+    /// test can place keys in exactly the buckets it names. Every control byte
+    /// is `0x80` for small keys (the tag lives in bits 57..63), which is fine —
+    /// `eq_fn` then does the discriminating, same as a real tag collision.
+    unsafe extern "C" fn hash_identity(p: *const c_void) -> u64 {
+        *(p as *const i64) as u64
+    }
+    unsafe extern "C" fn eq_i64_t(a: *const c_void, b: *const c_void) -> bool {
+        unsafe { *(a as *const i64) == *(b as *const i64) }
+    }
+
+    unsafe fn put(map: *mut c_void, k: i64, v: i64) {
+        super::karac_map_insert(
+            map,
+            &k as *const i64 as *const c_void,
+            &v as *const i64 as *const c_void,
+        );
+    }
+    unsafe fn del(map: *mut c_void, k: i64) -> bool {
+        let mut old: i64 = 0;
+        super::karac_map_remove_old(
+            map,
+            &k as *const i64 as *const c_void,
+            &mut old as *mut i64 as *mut c_void,
+            0,
+        )
+    }
+
+    /// B-2026-08-05-4 — `vacate` releases a bucket outright instead of
+    /// tombstoning it whenever the next bucket is already EMPTY. Both arms are
+    /// pinned here against the exact bucket layout `hash_identity` gives,
+    /// because the failure mode of getting this wrong is a lookup that misses a
+    /// PRESENT key — a silent wrong answer, not a crash.
+    #[test]
+    fn remove_releases_the_slot_when_no_chain_runs_past_it() {
+        unsafe {
+            let map = KaracMap::new(8, 8, hash_identity, eq_i64_t) as *mut c_void;
+            let m = &*(map as *const KaracMap);
+            assert_eq!(m.capacity, 16);
+
+            // Cluster in buckets 3,4,5 with bucket 6 EMPTY.
+            put(map, 3, 30);
+            put(map, 4, 40);
+            put(map, 5, 50);
+
+            // Removing the run END: bucket 6 is EMPTY, so nothing probes past
+            // bucket 5 and it goes straight back to EMPTY.
+            assert!(del(map, 5));
+            assert_eq!(*m.status.add(5), BUCKET_EMPTY, "run end must be released");
+            assert_eq!(m.tombstones, 0, "no tombstone should have been created");
+            assert!(is_occupied(*m.status.add(4)), "bucket 4 is untouched");
+
+            // Removing from the MIDDLE: bucket 5 is EMPTY again now, so this is
+            // once more a run end. Re-fill it first so bucket 4 is genuinely
+            // interior, and check the conservative arm.
+            put(map, 5, 55);
+            assert!(del(map, 4));
+            assert_eq!(
+                *m.status.add(4),
+                BUCKET_TOMBSTONE,
+                "an interior bucket must stay a tombstone — key 5 probes past it"
+            );
+            assert_eq!(m.tombstones, 1);
+            // ...and key 5, whose chain runs through the tombstone, still resolves.
+            let mut out: i64 = 0;
+            let k5: i64 = 5;
+            assert!(super::karac_map_get(
+                map,
+                &k5 as *const i64 as *const c_void,
+                &mut out as *mut i64 as *mut c_void
+            ));
+            assert_eq!(out, 55);
+
+            // Now remove the run end. Bucket 6 is EMPTY, so bucket 5 is
+            // released — but the bucket-4 tombstone behind it deliberately
+            // STAYS. Collapsing it too is correct and was measured 30% slower
+            // (see `vacate`), so the one-slot rule is the shipped behaviour and
+            // is pinned as such: a change that starts clearing bucket 4 here is
+            // a perf regression even though it is not a correctness one.
+            assert!(del(map, 5));
+            assert_eq!(*m.status.add(5), BUCKET_EMPTY);
+            assert_eq!(
+                *m.status.add(4),
+                BUCKET_TOMBSTONE,
+                "vacate must stay one-slot-local — no backward collapse walk"
+            );
+            assert_eq!(m.tombstones, 1);
+            assert!(is_occupied(*m.status.add(3)), "bucket 3 is still live");
+            assert_eq!(m.len, 1);
+            // Whatever the run behind looks like, key 3 still resolves.
+            let k3: i64 = 3;
+            assert!(super::karac_map_get(
+                map,
+                &k3 as *const i64 as *const c_void,
+                &mut out as *mut i64 as *mut c_void
+            ));
+            assert_eq!(out, 30);
+
+            super::karac_map_free(map);
+        }
+    }
+
+    /// The safety net for [`remove_releases_the_slot_when_no_chain_runs_past_it`]:
+    /// a long interleaved insert/remove/get tape cross-checked against
+    /// `std::collections::HashMap`. The hash deliberately takes only 16 distinct
+    /// values, so probe chains are long and tombstone runs are common — exactly
+    /// the shape where releasing a bucket too eagerly would truncate a chain and
+    /// lose a live key. Deterministic (fixed LCG seed), so a failure reproduces.
+    #[test]
+    fn churn_against_reference_map_never_loses_a_key() {
+        unsafe extern "C" fn hash_colliding(p: *const c_void) -> u64 {
+            (*(p as *const i64) as u64) % 16
+        }
+        use std::collections::HashMap;
+        unsafe {
+            let map = KaracMap::new(8, 8, hash_colliding, eq_i64_t) as *mut c_void;
+            let mut reference: HashMap<i64, i64> = HashMap::new();
+            let mut state: u64 = 0x243f_6a88_85a3_08d3;
+            for step in 0..200_000u32 {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let key = ((state >> 33) % 512) as i64;
+                // Skew toward removal so the table stays churn-dominated.
+                match (state >> 17) % 5 {
+                    0 | 1 => {
+                        let val = key * 7 + step as i64;
+                        put(map, key, val);
+                        reference.insert(key, val);
+                    }
+                    2 | 3 => {
+                        assert_eq!(
+                            del(map, key),
+                            reference.remove(&key).is_some(),
+                            "step {step}: remove({key}) presence disagreed"
+                        );
+                    }
+                    _ => {
+                        let mut got: i64 = i64::MIN;
+                        let hit = super::karac_map_get(
+                            map,
+                            &key as *const i64 as *const c_void,
+                            &mut got as *mut i64 as *mut c_void,
+                        );
+                        match reference.get(&key) {
+                            Some(&want) => {
+                                assert!(hit, "step {step}: live key {key} was not found");
+                                assert_eq!(got, want, "step {step}: wrong value for {key}");
+                            }
+                            None => assert!(!hit, "step {step}: absent key {key} was found"),
+                        }
+                    }
+                }
+                assert_eq!(
+                    super::karac_map_len(map) as usize,
+                    reference.len(),
+                    "step {step}: len diverged"
+                );
+            }
+            // Final full sweep: every reference key must still resolve.
+            for (&k, &want) in reference.iter() {
+                let mut got: i64 = i64::MIN;
+                let hit = super::karac_map_get(
+                    map,
+                    &k as *const i64 as *const c_void,
+                    &mut got as *mut i64 as *mut c_void,
+                );
+                assert!(hit, "final sweep: live key {k} was lost");
+                assert_eq!(got, want, "final sweep: wrong value for {k}");
+            }
             super::karac_map_free(map);
         }
     }
