@@ -5628,7 +5628,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // agrees the value is a borrow (`ref Vec[T]` — it
                     // rejects passing it as owned), so there is nothing for
                     // this scope to free.
-                    if self.expr_yields_fresh_owned_temp(object)
+                    // B-2026-08-05-7 (surface-concat leg): a string concat the
+                    // `String.add` desugar skipped stays an `ExprKind::Binary`,
+                    // which `expr_yields_fresh_owned_temp` declines — so
+                    // `("p:".to_string() + s).len()` freed nothing and leaked
+                    // the concat RESULT once per evaluation. The ARGUMENT side
+                    // already admits this shape (B-2026-07-21-12); this is the
+                    // receiver side of the same gate. Both halves of the
+                    // predicate matter — `Add` is also scalar addition, and the
+                    // vec-struct value check is what keeps `a + b` over `i64`
+                    // out of it.
+                    if (self.expr_yields_fresh_owned_temp(object)
+                        || self.expr_is_fresh_owned_string_concat(object, recv_val.get_type()))
                         && !self.expr_is_unwrap_of_borrow_accessor(object)
                     {
                         let recv_span_key = (object.span.offset, object.span.length);

@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 215 | 1 |
-| leak | 133 | 0 |
+| leak | 134 | 1 |
 | double-free | 97 | 2 |
 | codegen-gap | 89 | 0 |
 | run-vs-build | 80 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 673 | 3 |
+| codegen | 674 | 4 |
 | interp | 123 | 0 |
 | typecheck | 120 | 2 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **938 surfaced · 8 open · 922 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **939 surfaced · 9 open · 922 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **938 surfaced 
 | B-2026-08-05-20 | 2026-08-05 | codegen | high | A whole-value binding-to-binding move of a BOXED-payload `Option` (`let b2 = body;`) double-frees at -O0 -- deterministic, no destructure involved, and it SURVIVES B-2026-08-05-7's leak-B fix | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
 | B-2026-08-05-26 | 2026-08-05 | typecheck | medium | tensor arithmetic infers an f64 element for an f32 operand pair: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]` and `k: f32` types the product `Tensor[f64, ..]`, which only stayed invisible because generic args were permissive about numeric width | — |
+| B-2026-08-05-27 | 2026-08-05 | codegen | high | The surface-concat RECEIVER gap is only closed for the len-family: `("p:".to_string() + s).starts_with(..)` still leaks the concat on a DEFAULT -O2 build (8200 B / 200 allocs). The len leg's fixture reads `.len()` only, which masks the same class at -O2 | docs/implementation_checklist/phase-7-codegen.md |
 
 ### Fixed (922)
 

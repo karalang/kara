@@ -1868,13 +1868,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // args, map keys, …) free the concat result exactly like the Call
         // route. The `llvm_ty_is_vec_struct` + `cap > 0` guards in the free
         // core make a scalar/vector `+` a no-op.
-        let is_string_concat_binary = matches!(
-            &arg.kind,
-            ExprKind::Binary {
-                op: crate::ast::BinOp::Add,
-                ..
-            }
-        ) && self.llvm_ty_is_vec_struct(val.get_type());
+        let is_string_concat_binary = self.expr_is_fresh_owned_string_concat(arg, val.get_type());
         if !self.expr_yields_fresh_owned_temp(arg)
             && !self.expr_is_fresh_owned_string_slice(arg)
             && !self.expr_is_inline_temp_vec_heap_index(arg)
@@ -1883,6 +1877,43 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.free_str_vec_buffer_if_heap(val);
+    }
+
+    /// Is `e` a string concat left as a SURFACE `Binary` — i.e. one the
+    /// `String.add` desugar skipped — whose compiled value is a
+    /// `{ptr, len, cap}` buffer?
+    ///
+    /// Such a concat is exactly as fresh-owned as the desugared `Call`, but
+    /// `expr_yields_fresh_owned_temp` matches `Call`/`MethodCall` only, so
+    /// every gate built on that predicate declines it. B-2026-07-21-12 admitted
+    /// it on the ARGUMENT side ([`Self::free_fresh_owned_str_arg`]); the
+    /// RECEIVER side was left Call/MethodCall-only, so
+    /// `("p:".to_string() + s).len()` — where `s` is a match-bound Vec-accessor
+    /// payload, the operand shape that keeps the concat a surface `Binary` —
+    /// freed nothing and leaked the concat RESULT once per evaluation
+    /// (B-2026-08-05-7, 160 B x40). Binding it first (`let t = …; t.len()`) was
+    /// always clean, and so was the same inline shape over a plain `String`
+    /// operand, which desugars to a `String.add` MethodCall and so satisfies the
+    /// old gate — that near-miss pair is what localized it to the receiver.
+    ///
+    /// The value-shape half is load-bearing, not belt-and-braces: `Add` is also
+    /// scalar and vector addition, and `llvm_ty_is_vec_struct` is what keeps
+    /// this from firing on `a + b` over `i64`. Paired with the `cap > 0` guard
+    /// inside [`Self::free_str_vec_buffer_if_heap`], a borrowed (cap == 0) view
+    /// or a rodata literal stays a no-op, so admitting the shape cannot
+    /// double-free a place expression.
+    pub(super) fn expr_is_fresh_owned_string_concat(
+        &self,
+        e: &crate::ast::Expr,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) -> bool {
+        matches!(
+            &e.kind,
+            ExprKind::Binary {
+                op: crate::ast::BinOp::Add,
+                ..
+            }
+        ) && self.llvm_ty_is_vec_struct(val_ty)
     }
 
     /// Free a `{ptr, len, cap}` String/Vec buffer's heap allocation iff
