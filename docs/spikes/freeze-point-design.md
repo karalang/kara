@@ -1,7 +1,8 @@
 # Freeze points: sharing an RC value across `par` branches (B-2026-08-01-33, mechanism 3)
 
-**Status:** design call; **stage 1 COMPLETE** — surface, escape check (E0511),
-freeze-site check (E0512), RC suppression, and `par` admission have all landed.
+**Status:** design call; **stage 1 COMPLETE ON BOTH PARALLELISM SURFACES** —
+surface, escape check (E0511), freeze-site check (E0512), RC suppression,
+explicit-`par` admission, and auto-par admission have all landed.
 A `frozen` handle captured by two branches now compiles and computes correctly
 under both the interpreter and AOT. Stages 2 and 3 remain, and #133 needs both:
 `Node.neighbors` is `mut`, so the motivating program is still refused at the
@@ -377,6 +378,39 @@ assertion with an execution that checks the computed value.
 **A loud gate can hide a quiet bug behind it.** The shapes the gate refused were
 the ones anyone would have tested by hand; the shape it allowed was the one
 nobody looked at. Worth remembering when the next gate is relaxed.
+
+## Stage 1: the auto-par arm (landed), and a claim worth checking before repeating
+
+The ledger row for this bug says auto-par **silently** declines a `shared`
+value. That is **wrong**, and it was repeated downstream — including in this
+document's own build log — before anyone measured it. `karac query concurrency`
+reports the decline explicitly:
+
+```json
+{"gate": "not_cross_task_safe",
+ "reason": "the body touches a non-`par` `shared` value whose refcount is not atomic"}
+```
+
+A named gate and a specific reason, on the surface built for exactly that. A
+plain `karac build` prints nothing, but that is true of *every* auto-par decline
+— warning on each non-parallelized loop would be noise.
+
+**The real gap was a disagreement between the two surfaces.** Once explicit
+`par {}` admitted a `frozen` handle, auto-par still declined the identical
+hazard and forced the loop sequential. Same facts, same reasoning, opposite
+answers. That is now closed: a frozen-touching loop reports `gate: "proven"`,
+fans out, and computes what sequential execution computes.
+
+**Keyed on place roots, never on types** — the load-bearing detail. Exempting by
+type would have been shorter and would have opened a real race: a body holding
+both a `frozen S` parameter and an ordinary `S` parameter would have had *both*
+cleared, and the second is exactly the refcount race B-2026-07-16-6 documents.
+
+One thing that looks like a hole and is not: a `shared` value allocated and
+consumed **inside one iteration** passes the gate on `iter_local`'s own
+independent evidence (B-2026-07-30-1), not through the frozen whitelist. A hole
+test has to use a value that outlives the iteration — the first attempt at that
+test did not, and passed for the wrong reason.
 
 ## Risks, stated plainly
 
