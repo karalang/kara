@@ -1553,6 +1553,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // registration made such bodies compile; before it they errored at
         // the first collection-method touch).
         let ref_flags = self.fn_param_ref.get(&mangled).cloned().unwrap_or_default();
+        // B-2026-08-05-37 — the mutate-through subset, for the place-argument
+        // arm below. The non-generic direct-call path (call_dispatch.rs) gained
+        // the same arm; a generic callee has exactly the same ABI obligation,
+        // and without this `bump[T](mut g.v, 8i64)` silently discarded its
+        // write under AOT while the interpreter (which keys on the same flags)
+        // performed it — a run/build divergence the mono path introduces on its
+        // own.
+        let mut_ref_flags = self
+            .fn_param_mut_ref
+            .get(&mangled)
+            .cloned()
+            .unwrap_or_default();
         // By-value `Slice[T]` params: the caller must synthesize the `{ptr,i64}`
         // slice header from a Vec / Array / slice argument, exactly as the
         // non-generic direct-call path does (call_dispatch.rs). Without this the
@@ -1607,6 +1619,15 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-05-37: a `mut ref` param given a PLACE
+                    // argument must receive a pointer to the place, not to the
+                    // rvalue copy `materialize_rvalue_for_ref_arg` mints — the
+                    // callee's write would land on that copy and vanish.
+                    let mut_ref_place = if mut_ref_flags.get(i).copied().unwrap_or(false) {
+                        self.mut_ref_place_arg_ptr(&args[i].value)
+                    } else {
+                        None
+                    };
                     let ptr: BasicValueEnum<'ctx> = if let ExprKind::Identifier(var_name) =
                         &args[i].value.kind
                     {
@@ -1617,6 +1638,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&args[i].value)? {
                         elem_ptr.into()
+                    } else if let Some(place_ptr) = mut_ref_place {
+                        place_ptr.into()
                     } else {
                         self.materialize_rvalue_for_ref_arg(*v, i)
                     };
@@ -1937,6 +1960,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
             .collect();
         self.fn_param_ref.insert(mangled.to_string(), ref_flags);
+        // B-2026-08-05-37 — the mutate-through subset. Same shape as the
+        // non-generic `declare_function`; see `fn_param_mut_ref`.
+        let mut_ref_flags: Vec<bool> = func
+            .params
+            .iter()
+            .map(|p| matches!(&p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
+            .collect();
+        self.fn_param_mut_ref
+            .insert(mangled.to_string(), mut_ref_flags);
         let slice_elems: Vec<Option<BasicTypeEnum<'ctx>>> = func
             .params
             .iter()

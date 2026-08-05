@@ -1920,10 +1920,21 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
 
-                // CICO write-back: for each call arg whose value is a simple
-                // identifier and whose corresponding param is a mutate-through
-                // borrow, copy the callee's final binding for that param back
-                // to the caller's variable before the scope is popped.
+                // CICO write-back: for each call arg that denotes a PLACE and
+                // whose corresponding param is a mutate-through borrow, copy
+                // the callee's final binding for that param back into that
+                // place before the scope is popped.
+                //
+                // B-2026-08-05-37 widened this from a bare identifier to any
+                // place. A projection argument — `bump(mut g.val)`,
+                // `bump(mut g.q.v)`, `bump(mut t.0)`, `bump(mut v[0])` — used
+                // to `continue` here, so the callee's write was silently
+                // discarded: the program printed the PRE-call value with no
+                // diagnostic at any phase. Codegen answers the same question
+                // by handing the callee a pointer to the place; the
+                // interpreter has no pointers, so it stores back through
+                // `assign_to_place`, which already handles every assignable
+                // form and is the same walk `g.val = x` uses.
                 //
                 // The trigger is EITHER the call-site `mut` marker (the fresh-
                 // owned-root case) OR the callee param being declared `mut ref`
@@ -1935,7 +1946,7 @@ impl<'a> super::Interpreter<'a> {
                 // never accumulates. Keying on the param mode too restores the
                 // chain and matches codegen's full aliasing semantics.
                 let param_mut_ref = self.fn_param_mut_ref_flags(&fn_name);
-                let mut writebacks: Vec<(String, Value)> = Vec::new();
+                let mut writebacks: Vec<(Expr, Value)> = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
                     let param_is_mut_ref = param_mut_ref
                         .as_ref()
@@ -1945,14 +1956,13 @@ impl<'a> super::Interpreter<'a> {
                     if !arg.mut_marker && !param_is_mut_ref {
                         continue;
                     }
-                    let caller_var = match &arg.value.kind {
-                        ExprKind::Identifier(n) => n.clone(),
-                        _ => continue,
-                    };
+                    if !Self::place_is_writeback_safe(&arg.value) {
+                        continue;
+                    }
                     if let Some(pat) = param_patterns.get(i) {
                         if let crate::ast::PatternKind::Binding(param_name) = &pat.kind {
                             if let Some(val) = self.env.get(param_name) {
-                                writebacks.push((caller_var, val));
+                                writebacks.push((arg.value.clone(), val));
                             }
                         }
                     }
@@ -1963,8 +1973,8 @@ impl<'a> super::Interpreter<'a> {
                     self.type_subs_stack.pop();
                 }
 
-                for (caller_var, val) in writebacks {
-                    self.env.set(&caller_var, val);
+                for (place, val) in writebacks {
+                    self.assign_to_place(&place, val);
                 }
 
                 if let Some(msg) = contract_fault {

@@ -2534,6 +2534,35 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Is `place` a form the `mut ref` CICO write-back may store through?
+    /// B-2026-08-05-37.
+    ///
+    /// The write-back runs AFTER the callee's scope is popped, so storing has
+    /// to RE-EVALUATE the place in the caller's frame. That is only sound when
+    /// re-evaluation is a no-op, which rules out every subscript that could
+    /// have a side effect or a changed value — `bump(mut v[next()])` would
+    /// otherwise consume `next()` a second time and write to a different slot
+    /// than the one the callee borrowed.
+    ///
+    /// So: an identifier / `self` root, any chain of field and tuple-index
+    /// hops off it, and an index hop only when the subscript is pure. Anything
+    /// else returns false, the argument is skipped, and behaviour is exactly
+    /// what it was before this rule existed (the write is lost) rather than
+    /// wrong in a new way. Same conservative direction as
+    /// [`Self::index_expr_is_pure`], which it reuses.
+    fn place_is_writeback_safe(place: &Expr) -> bool {
+        match &place.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::place_is_writeback_safe(object)
+            }
+            ExprKind::Index { object, index } => {
+                Self::index_expr_is_pure(index) && Self::place_is_writeback_safe(object)
+            }
+            _ => false,
+        }
+    }
+
     /// Store `new_val` into the place denoted by `place`, recursing through
     /// `set_field` / `set_index` so nested places (`a.b.c = x`,
     /// `v[i].field = x`) write back up the whole chain. Handles every

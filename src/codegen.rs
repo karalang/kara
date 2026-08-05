@@ -2266,6 +2266,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) soa_return_locals: std::collections::HashSet<String>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
+    /// The `mut ref` / `mut Slice` subset of [`Self::fn_param_ref`] — a
+    /// MUTATE-THROUGH borrow, as opposed to a read-only `ref`.
+    ///
+    /// B-2026-08-05-37: the two need different argument lowering. A read-only
+    /// borrow of a place may be satisfied by a pointer to a shallow copy (the
+    /// callee only reads it), and for most types that is what the rvalue path
+    /// produces. A `mut ref` borrow may NOT: the callee's writes have to land
+    /// in the caller's storage, so the argument must be a pointer to the PLACE.
+    /// Passing a copy makes the mutation silently disappear.
+    pub(crate) fn_param_mut_ref: HashMap<String, Vec<bool>>,
     /// Per-parameter `Tensor[T, S]` info (function name → vec of `Some(info)`
     /// for each `(ref) Tensor` param, `None` otherwise). Lets a call site thread
     /// the DECLARED element type of a tensor param into `pending_let_tensor_info`
@@ -7752,6 +7762,7 @@ impl<'ctx> Codegen<'ctx> {
             owned_struct_params: HashSet::new(),
             shared_enum_payload_view_vars: std::collections::HashMap::new(),
             fn_param_ref: HashMap::new(),
+            fn_param_mut_ref: HashMap::new(),
             fn_param_tensor_info: HashMap::new(),
             extern_link_names: HashMap::new(),
             fn_return_type_names: HashMap::new(),

@@ -554,6 +554,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
             .collect();
         self.fn_param_ref.insert(func.name.clone(), ref_flags);
+        // B-2026-08-05-37 — the mutate-through subset, which needs a pointer to
+        // the caller's PLACE rather than to a copy. See `fn_param_mut_ref`.
+        let mut_ref_flags: Vec<bool> = func
+            .params
+            .iter()
+            .map(|p| matches!(&p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
+            .collect();
+        self.fn_param_mut_ref
+            .insert(func.name.clone(), mut_ref_flags);
         // Record per-param `Tensor[T, S]` info so a call site can thread the
         // DECLARED element type into a `Tensor.{from,…}` argument (B-2026-07-18-10;
         // peel one `ref`/`mut ref` — a tensor value is a single `ptr`, so a

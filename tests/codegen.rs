@@ -5998,6 +5998,115 @@ fn main() {
         assert_eq!(out, "a:3:2\nb:3:42\nc:3\nd:5\ne:3:2\nf:3:42\nend\n");
     }
 
+    /// B-2026-08-05-37 — a `mut ref` parameter given a PLACE argument must
+    /// write back into that place.
+    ///
+    /// The callee's write used to land on a shallow COPY of the place and be
+    /// silently discarded: every arm below printed the PRE-call value, on all
+    /// three backends, with no diagnostic at any phase. Only a bare identifier
+    /// argument worked.
+    ///
+    /// This is the general form of two earlier one-shape fixes. B-2026-07-12-1
+    /// (struct field) and B-2026-08-05-2 (tuple element) both taught this path
+    /// to borrow in place, but gated it to a `{ptr,len,cap}` element — correct
+    /// scoping for what those rows measured, since only a heap element can
+    /// DOUBLE FREE. The lost-write half is not type-specific, and B-2026-08-05-2's
+    /// own text predicted exactly this: "a lost `mut ref` write on a shape with
+    /// no bounds-checked read after it is a SILENT wrong answer." So the gate
+    /// is now the PARAMETER MODE rather than the payload type.
+    ///
+    /// Every arm is a distinct place shape or payload class, because the bug
+    /// was invisible to the type-gated fixes precisely by being uniform across
+    /// them: field, nested field, tuple element, `Vec` element, a field of a
+    /// `Vec` element, a whole struct payload, `f64`, `bool`, the FORWARDING
+    /// spelling through a `mut ref` parameter (the one the typechecker directs
+    /// authors to — "this argument is already a mut-ref; drop the `mut`
+    /// marker"), and a generic callee (its own mono call path, which needed
+    /// the same arm). The last two arms are the heap controls that must stay
+    /// correct: they are what the earlier fixes bought.
+    ///
+    /// Seeded from `env.args().len()` so no arm folds away at `-O2`
+    /// (B-2026-08-04-17).
+    #[test]
+    fn e2e_mut_ref_place_argument_writes_back() {
+        let Some(out) = run_program(
+            "struct Q { v: i64 }\n\
+             struct P { q: Q }\n\
+             struct F { v: f64 }\n\
+             struct B { v: bool }\n\
+             struct S { v: i64 }\n\
+             struct V { a: Vec[i64] }\n\
+             fn bump(x: mut ref i64) { x = x + 1i64; }\n\
+             fn bumpf(x: mut ref f64) { x = x + 1.0; }\n\
+             fn setb(x: mut ref bool) { x = true; }\n\
+             fn setq(x: mut ref Q) { x.v = 9i64; }\n\
+             fn setg[T](x: mut ref T, d: T) { x = d; }\n\
+             fn fwd(p: mut ref S) { bump(p.v); }\n\
+             fn push2(v: mut ref Vec[i64]) { v.push(42i64); }\n\
+             fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   // (a) struct field\n\
+             \x20   let mut a: S = S { v: n + 6i64 };\n\
+             \x20   bump(mut a.v);\n\
+             \x20   println(f\"a:{a.v}\");\n\
+             \x20   // (b) NESTED struct field\n\
+             \x20   let mut b: P = P { q: Q { v: n + 6i64 } };\n\
+             \x20   bump(mut b.q.v);\n\
+             \x20   println(f\"b:{b.q.v}\");\n\
+             \x20   // (c) tuple element\n\
+             \x20   let mut c: (i64, i64) = (n + 6i64, 0i64);\n\
+             \x20   bump(mut c.0);\n\
+             \x20   println(f\"c:{c.0}\");\n\
+             \x20   // (d) Vec element\n\
+             \x20   let mut d: Vec[i64] = Vec.new();\n\
+             \x20   d.push(n + 6i64);\n\
+             \x20   bump(mut d[0i64]);\n\
+             \x20   println(f\"d:{d[0i64]}\");\n\
+             \x20   // (e) field of a Vec element\n\
+             \x20   let mut e: Vec[S] = Vec.new();\n\
+             \x20   e.push(S { v: n + 6i64 });\n\
+             \x20   bump(mut e[0i64].v);\n\
+             \x20   println(f\"e:{e[0i64].v}\");\n\
+             \x20   // (f) a whole STRUCT payload, not a scalar\n\
+             \x20   let mut f: P = P { q: Q { v: n + 6i64 } };\n\
+             \x20   setq(mut f.q);\n\
+             \x20   println(f\"f:{f.q.v}\");\n\
+             \x20   // (g) f64 payload\n\
+             \x20   let mut g: F = F { v: 7.0 };\n\
+             \x20   bumpf(mut g.v);\n\
+             \x20   println(f\"g:{g.v as i64}\");\n\
+             \x20   // (h) bool payload\n\
+             \x20   let mut h: B = B { v: false };\n\
+             \x20   setb(mut h.v);\n\
+             \x20   println(f\"h:{h.v}\");\n\
+             \x20   // (i) FORWARDING through a `mut ref` param — no marker, per\n\
+             \x20   //     design.md; this is the spelling the typechecker names\n\
+             \x20   let mut i2: S = S { v: n + 6i64 };\n\
+             \x20   fwd(mut i2);\n\
+             \x20   println(f\"i:{i2.v}\");\n\
+             \x20   // (j) GENERIC callee — its own mono call path\n\
+             \x20   let mut j: S = S { v: n + 6i64 };\n\
+             \x20   setg(mut j.v, n + 7i64);\n\
+             \x20   println(f\"j:{j.v}\");\n\
+             \x20   // CONTROLS: the heap shapes the earlier fixes bought\n\
+             \x20   let mut k: V = V { a: Vec.new() };\n\
+             \x20   k.a.push(n);\n\
+             \x20   push2(mut k.a);\n\
+             \x20   println(f\"k:{k.a.len()}:{k.a[1i64]}\");\n\
+             \x20   let mut l: (Vec[i64], i64) = (Vec.new(), 0i64);\n\
+             \x20   l.0.push(n);\n\
+             \x20   push2(mut l.0);\n\
+             \x20   println(f\"l:{l.0.len()}:{l.0[1i64]}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a:8\nb:8\nc:8\nd:8\ne:8\nf:9\ng:8\nh:true\ni:8\nj:8\nk:2:42\nl:2:42\n"
+        );
+    }
+
     /// B-2026-08-05-8 — `contains` on a PATTERN-BOUND `String` payload.
     ///
     /// This was a run-vs-build divergence, not a diagnostics nit: `karac check`

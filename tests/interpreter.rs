@@ -29680,6 +29680,113 @@ fn test_optres_tuple_payload_is_owned_exactly_once() {
 }
 
 #[test]
+fn test_mut_ref_place_argument_writes_back() {
+    // B-2026-08-05-37 — the interpreter half. A `mut ref` parameter given a
+    // PLACE argument must write back into that place.
+    //
+    // The interpreter's CICO write-back only accepted a bare IDENTIFIER
+    // argument; every projection `continue`d, so the callee's write was
+    // silently discarded and the program printed the PRE-call value. Codegen
+    // had the same bug through a different mechanism (a pointer to a shallow
+    // copy), so the two AGREED on the wrong answer for most shapes — which is
+    // why the usual run-vs-build oracle did not catch it. Only `bump(mut v[0])`
+    // diverged, and only because codegen had an unrelated `vec[i]` arm.
+    //
+    // Keep in step with the codegen twin `e2e_mut_ref_place_argument_writes_back`
+    // (same arms, same expected output). The seed is the literal 1 here rather
+    // than `env.args().len()` for the reason given in the tuple-element twin
+    // above: the codegen fixture needs an opaque seed to survive -O2, and 1 is
+    // what that yields under its harness.
+    assert_eq!(
+        run("struct Q { v: i64 }\n\
+             struct P { q: Q }\n\
+             struct F { v: f64 }\n\
+             struct B { v: bool }\n\
+             struct S { v: i64 }\n\
+             struct V { a: Vec[i64] }\n\
+             fn bump(x: mut ref i64) { x = x + 1i64; }\n\
+             fn bumpf(x: mut ref f64) { x = x + 1.0; }\n\
+             fn setb(x: mut ref bool) { x = true; }\n\
+             fn setq(x: mut ref Q) { x.v = 9i64; }\n\
+             fn setg[T](x: mut ref T, d: T) { x = d; }\n\
+             fn fwd(p: mut ref S) { bump(p.v); }\n\
+             fn push2(v: mut ref Vec[i64]) { v.push(42i64); }\n\
+             fn main() {\n\
+                let n: i64 = 1i64;\n\
+                let mut a: S = S { v: n + 6i64 };\n\
+                bump(mut a.v);\n\
+                println(f\"a:{a.v}\");\n\
+                let mut b: P = P { q: Q { v: n + 6i64 } };\n\
+                bump(mut b.q.v);\n\
+                println(f\"b:{b.q.v}\");\n\
+                let mut c: (i64, i64) = (n + 6i64, 0i64);\n\
+                bump(mut c.0);\n\
+                println(f\"c:{c.0}\");\n\
+                let mut d: Vec[i64] = Vec.new();\n\
+                d.push(n + 6i64);\n\
+                bump(mut d[0i64]);\n\
+                println(f\"d:{d[0i64]}\");\n\
+                let mut e: Vec[S] = Vec.new();\n\
+                e.push(S { v: n + 6i64 });\n\
+                bump(mut e[0i64].v);\n\
+                println(f\"e:{e[0i64].v}\");\n\
+                let mut f: P = P { q: Q { v: n + 6i64 } };\n\
+                setq(mut f.q);\n\
+                println(f\"f:{f.q.v}\");\n\
+                let mut g: F = F { v: 7.0 };\n\
+                bumpf(mut g.v);\n\
+                println(f\"g:{g.v as i64}\");\n\
+                let mut h: B = B { v: false };\n\
+                setb(mut h.v);\n\
+                println(f\"h:{h.v}\");\n\
+                let mut i2: S = S { v: n + 6i64 };\n\
+                fwd(mut i2);\n\
+                println(f\"i:{i2.v}\");\n\
+                let mut j: S = S { v: n + 6i64 };\n\
+                setg(mut j.v, n + 7i64);\n\
+                println(f\"j:{j.v}\");\n\
+                let mut k: V = V { a: Vec.new() };\n\
+                k.a.push(n);\n\
+                push2(mut k.a);\n\
+                println(f\"k:{k.a.len()}:{k.a[1i64]}\");\n\
+                let mut l: (Vec[i64], i64) = (Vec.new(), 0i64);\n\
+                l.0.push(n);\n\
+                push2(mut l.0);\n\
+                println(f\"l:{l.0.len()}:{l.0[1i64]}\");\n\
+             }\n"),
+        "a:8\nb:8\nc:8\nd:8\ne:8\nf:9\ng:8\nh:true\ni:8\nj:8\nk:2:42\nl:2:42\n"
+    );
+}
+
+/// B-2026-08-05-37, the conservative half: the write-back RE-EVALUATES the
+/// place after the callee's scope is popped, so a subscript that is not
+/// obviously pure is skipped rather than evaluated twice. `next(mut c)` must
+/// run exactly once — evaluating it again would both double its side effect
+/// and pick a different slot than the one the callee borrowed.
+///
+/// The skipped write is the pre-fix behaviour (lost), not a new wrong answer,
+/// and this pins that choice so a later widening is deliberate. Codegen has no
+/// such restriction (it passes a pointer computed once), so this shape is a
+/// known interp/AOT divergence recorded on the row.
+#[test]
+fn test_mut_ref_place_writeback_skips_impure_subscript() {
+    assert_eq!(
+        run(
+            "fn next(c: mut ref i64) -> i64 { c = c + 1i64; return 0i64; }\n\
+             fn bump(x: mut ref i64) { x = x + 1i64; }\n\
+             fn main() {\n\
+                let mut c: i64 = 0i64;\n\
+                let mut v: Vec[i64] = Vec.new();\n\
+                v.push(7i64);\n\
+                bump(mut v[next(mut c)]);\n\
+                println(f\"{v[0i64]}:{c}\");\n\
+             }\n"
+        ),
+        "7:1\n"
+    );
+}
+
+#[test]
 fn test_tuple_element_borrowed_in_place_for_ref_params() {
     // B-2026-08-05-1 and -2 — the ORACLE half. The interpreter has always
     // borrowed a tuple element in place for a `ref` / `mut ref` parameter;

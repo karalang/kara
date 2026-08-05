@@ -1327,6 +1327,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
+        let mut_ref_flags = self
+            .fn_param_mut_ref
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
         let slice_elems = self
             .fn_param_slice_elem
             .get(&name)
@@ -1404,6 +1409,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&a.value)? {
                     compiled_args.push(elem_ptr.into());
                     continue;
+                }
+                // B-2026-08-05-37: a `mut ref` parameter given a PLACE
+                // argument (`bump(mut g.val)`, `bump(mut g.q.v)`,
+                // `bump(mut t.0)`, `bump(p.val)` forwarding through a borrow)
+                // must receive a pointer to that place. The rvalue path below
+                // materialises a shallow COPY and passes a pointer to the
+                // copy, so the callee's write lands on a temporary and is
+                // silently discarded — measured 7 instead of 8 on all three
+                // backends for every one of those spellings.
+                //
+                // Why this is the general form of two earlier one-shape fixes.
+                // B-2026-07-12-1 and B-2026-08-05-2 taught the field and
+                // tuple-element arms to borrow in place, but gated both to a
+                // `{ptr,len,cap}` element "so a scalar or enum element keeps
+                // the existing path" — the scoping was right for what those
+                // rows had measured (a DOUBLE FREE, which only a heap element
+                // can have). The lost-write half is not type-specific: it hits
+                // scalars, user structs, floats and bools alike, and B-2026-08-05-2's
+                // own text predicted it — "a lost `mut ref` write on a shape
+                // with no bounds-checked read after it is a SILENT wrong
+                // answer". So the gate here is the PARAMETER MODE, not the
+                // payload type: a mutate-through borrow of a place always
+                // needs the place.
+                //
+                // Read-only `ref` params are deliberately untouched. A copy is
+                // a correct borrow for a reader, and the existing arms below
+                // do type-specific work on that path (the `Option[shared T]`
+                // field RC-inc, the declared-`ref` field forward) that has its
+                // own regression history.
+                if mut_ref_flags.get(i).copied().unwrap_or(false) {
+                    if let Some(place_ptr) = self.mut_ref_place_arg_ptr(&a.value) {
+                        compiled_args.push(place_ptr.into());
+                        continue;
+                    }
                 }
                 // A borrow-returning call in `ref`-arg position
                 // (`first(pick(v))`, B-2026-06-10-4): the call's result IS
@@ -2787,6 +2826,84 @@ impl<'ctx> super::Codegen<'ctx> {
                 .to_string()
         })?;
         Ok((ptr, val))
+    }
+
+    /// Pointer to the PLACE a `mut ref` argument denotes — B-2026-08-05-37.
+    ///
+    /// `None` for anything that is not a place this pass can resolve, and the
+    /// caller then falls through to the existing rvalue path unchanged. That
+    /// is the pre-fix behaviour, so an unresolved shape is no worse than
+    /// before (its write is still lost) rather than miscompiled differently.
+    ///
+    /// Mostly [`Self::field_chain_place_ptr`], with ONE deliberate difference:
+    /// that function bails at a `ref` / `mut ref` parameter root, because its
+    /// other callers must not write through a borrow they do not own. Here
+    /// following the borrow is exactly the point — `fn go(p: mut ref P) {
+    /// bump(p.v); }` is the FORWARDING spelling, the one the typechecker
+    /// directs authors to ("this argument is already a mut-ref; drop the `mut`
+    /// marker"), and it was silently losing its write. So the root arm loads
+    /// the stored pointer and the projection hops proceed from there, rather
+    /// than widening `field_chain_place_ptr` for every one of its callers.
+    pub(super) fn mut_ref_place_arg_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+        match &expr.kind {
+            // Only projections need this. A bare identifier already took the
+            // `get_data_ptr` fast path above, and a non-place expression has
+            // no caller storage to write back into.
+            ExprKind::FieldAccess { object, field } => {
+                let obj_ty = self.place_chain_type_name(object)?;
+                // A `shared` / `par` struct binding's slot holds a HANDLE, not
+                // the aggregate, so GEPing it as the struct would write past
+                // the 8-byte slot into neighbouring stack storage. Bail
+                // EXPLICITLY rather than relying on the `struct_types` lookup
+                // happening to miss: a shared field's own write path goes
+                // through the RC header and its own mutability gate, and this
+                // arm has no business reproducing either.
+                if self.shared_types.contains_key(obj_ty.as_str()) {
+                    return None;
+                }
+                let base = self.mut_ref_place_root_ptr(object)?;
+                let st = *self.struct_types.get(obj_ty.as_str())?;
+                let idx = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)? as u32;
+                self.builder
+                    .build_struct_gep(st, base, idx, "mutref.arg.field.p")
+                    .ok()
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let base = self.mut_ref_place_root_ptr(object)?;
+                let tuple_ty = self.place_chain_aggregate_llvm_type(object)?;
+                self.builder
+                    .build_struct_gep(tuple_ty, base, *index as u32, "mutref.arg.tupidx.p")
+                    .ok()
+            }
+            _ => None,
+        }
+    }
+
+    /// The base pointer a [`Self::mut_ref_place_arg_ptr`] projection hangs off.
+    /// Identical to [`Self::field_chain_place_ptr`] except at a borrow root,
+    /// where the stored pointer is followed instead of bailing.
+    fn mut_ref_place_root_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+        let name = match &expr.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            // A nested projection (`g.q.v`) or a `vec[i]` root — resolved by
+            // the shared walk, which handles those and bails on the rest.
+            _ => return self.field_chain_place_ptr(expr),
+        };
+        let slot = self.variables.get(name)?.ptr;
+        if self.ref_params.contains_key(name) {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            return self
+                .builder
+                .build_load(ptr_ty, slot, "mutref.arg.root")
+                .ok()
+                .map(|v| v.into_pointer_value());
+        }
+        Some(slot)
     }
 
     /// B-2026-07-08-6 — does a STRUCT-LITERAL argument have a type the callee
