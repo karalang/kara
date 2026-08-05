@@ -5,7 +5,7 @@
 // This is the FIRST slice of the backend port. The feasibility spike
 // (docs/spikes/selfhost-backend-feasibility.md) proved a Kāra program can emit
 // runnable LLVM IR text against the real runtime ABI — `println` lowers to libc
-// `fwrite` over the `@stdout` global. This module turns that from a hardcoded
+// `fwrite` over the libc stdout global. This module turns that from a hardcoded
 // string into an AST WALK: `emit_program(items)` consumes the parser's
 // `Vec[Item]`, finds `main`, and emits IR for its body.
 //
@@ -219,10 +219,14 @@ struct Emitter {
 }
 
 // Emit a whole program as LLVM IR text. Walks the items, emits `main`'s body
-// (Slice 1: `println` of string literals), and assembles the module —
-// datalayout / triple / the `@stdout` extern / a shared `@.nl` newline / the
-// `@fwrite` declare / the collected string globals / `define i32 @main`.
-pub fn emit_program(items: Vec[Item]) -> String with panics {
+// (Slice 1: `println` of string literals), and assembles the module — the
+// host's `stdout` extern under the spelling `stdout_sym` names (glibc
+// `stdout` / Darwin `__stdoutp`, B-2026-08-05-14) plus the `@kara.stdout`
+// accessor that funnels every print site through it, a shared `@.nl`
+// newline, the `@fwrite` declare, the collected string globals, and
+// `define i32 @main`. Deliberately NO datalayout or triple: each consumer
+// supplies the host's own.
+pub fn emit_program(items: Vec[Item], stdout_sym: String) -> String with panics {
     let mut e = Emitter {
         globals: "".to_string(),
         funcs: "".to_string(),
@@ -346,10 +350,31 @@ pub fn emit_program(items: Vec[Item]) -> String with panics {
     }
     let Emitter { globals, funcs, body, nstr, ntmp, locals, locals_kind, locals_heap, nlbl, in_main, sig_names, sig_ret, sig_par_kinds, sig_par_ref, sig_par_mut, sig_par_off, sig_par_cnt, sig_self_mode, sig_self_kind, cur_ret, st_names, st_field_names, st_field_kinds, st_off, st_cnt, entry_allocas, en_names, en_var_names, en_var_pl, en_var_pl2, en_agg, en_agg_off, en_agg_cnt, loop_break, loop_cont, en_off, en_cnt, en_shared } = e;
     let mut out = "".to_string();
-    out = out
-        + "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
-    out = out + "target triple = \"x86_64-pc-linux-gnu\"\n";
-    out = out + "@stdout = external global ptr\n";
+    // NO `target datalayout` / `target triple` (B-2026-08-05-14). Both were
+    // hardcoded to x86-64 Linux, which made every emitted module wrong on any
+    // other host: clang overrode the triple with a warning, and the JIT was
+    // handed a module claiming a target it was not running on. Omitting them
+    // lets each consumer -- `karac_jit_runner`'s LLJIT and the leak audit's
+    // clang -- supply the HOST's own triple and layout, which is right on all
+    // of them. Safe here specifically because this emitter never emits
+    // `llvm.coro.*`: the seed's codegen.rs must set a datalayout, since an
+    // absent one silently folds `llvm.coro.size` to zero, but nothing in this
+    // module's output depends on layout inference.
+    //
+    // `stdout` is the one genuinely platform-specific symbol and it is passed
+    // in rather than assumed: glibc and wasi-libc export `stdout`, Darwin
+    // exports `__stdoutp` and provides `stdout` only as a macro, so an
+    // emitted module naming `stdout` fails to resolve on Darwin -- the whole
+    // of B-2026-08-05-14. This mirrors the seed's own choice in
+    // src/codegen.rs, which picks the spelling per target.
+    out = out + "@" + stdout_sym.clone() + " = external global ptr\n";
+    // Every print site loads the stream through this accessor instead of
+    // naming the global, so the platform-specific spelling appears EXACTLY
+    // once in the emitted module. Internal, so it costs nothing after inlining.
+    out = out + "define internal ptr @kara.stdout() {\n";
+    out = out + "  %s = load ptr, ptr @" + stdout_sym + ", align 8\n";
+    out = out + "  ret ptr %s\n";
+    out = out + "}\n";
     out = out + "@.nl = internal constant [2 x i8] c\"\\0A\\00\"\n";
     out = out + "declare i64 @fwrite(ptr, i64, i64, ptr)\n";
     out = out + "declare i32 @snprintf(ptr, i64, ptr, ...)\n";
@@ -4034,7 +4059,7 @@ impl Emitter {
     }
 
     // Emit one `println(<literal>)`: intern + two `fwrite`s (string, newline).
-    // Matches the seed's lowering (fwrite over @stdout).
+    // Matches the seed's lowering (fwrite over the libc stdout FILE*).
     fn emit_println_str(mut ref self, sv: String) {
         let g = self.intern_str(sv);
         let StrG { name, len } = g;
@@ -6594,7 +6619,7 @@ impl Emitter {
             + val
             + ", 1\n";
         let st = self.fresh();
-        self.body = self.body + "  " + st.clone() + " = load ptr, ptr @stdout, align 8\n";
+        self.body = self.body + "  " + st.clone() + " = call ptr @kara.stdout()\n";
         let r = self.fresh();
         self.body = self.body
             + "  "
@@ -6609,7 +6634,7 @@ impl Emitter {
         self.emit_write("@.nl".to_string(), 1);
     }
 
-    // `%tA = load ptr @stdout; %tB = call fwrite(gname, 1, len, %tA)`.
+    // `%tA = call @kara.stdout(); %tB = call fwrite(gname, 1, len, %tA)`.
     fn emit_write(mut ref self, gname: String, len: i64) {
         let t0 = self.ntmp;
         self.ntmp = self.ntmp + 1;
@@ -6618,7 +6643,7 @@ impl Emitter {
         self.body = self.body
             + "  %t"
             + t0.to_string()
-            + " = load ptr, ptr @stdout, align 8\n";
+            + " = call ptr @kara.stdout()\n";
         self.body = self.body
             + "  %t"
             + t1.to_string()
@@ -8538,7 +8563,7 @@ impl Emitter {
         self.body =
             self.body + "  " + l.clone() + " = select i1 " + val + ", i64 4, i64 5\n";
         let st = self.fresh();
-        self.body = self.body + "  " + st.clone() + " = load ptr, ptr @stdout, align 8\n";
+        self.body = self.body + "  " + st.clone() + " = call ptr @kara.stdout()\n";
         let r = self.fresh();
         self.body = self.body
             + "  "
@@ -8572,7 +8597,7 @@ impl Emitter {
         let len = self.fresh();
         self.body = self.body + "  " + len.clone() + " = zext i32 " + w + " to i64\n";
         let s = self.fresh();
-        self.body = self.body + "  " + s.clone() + " = load ptr, ptr @stdout, align 8\n";
+        self.body = self.body + "  " + s.clone() + " = call ptr @kara.stdout()\n";
         let r = self.fresh();
         self.body = self.body
             + "  "

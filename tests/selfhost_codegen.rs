@@ -930,6 +930,30 @@ const CORPUS: &[&str] = &[
 
 const ENTRY: &str = ";;;KARA_ENTRY;;;";
 
+/// Marks the cross-host block: the SAME first corpus program re-emitted with
+/// the non-host `stdout` spelling, so the host that is not currently broken
+/// can still check the other host's output shape (B-2026-08-05-14).
+const XHOST: &str = ";;;KARA_XHOST;;;";
+
+/// The `stdout` symbol for the host this test is running on, and the one for
+/// the other libc family. glibc / wasi-libc export `stdout`; Darwin exports
+/// `__stdoutp`. Same rule the seed applies in `src/codegen.rs`.
+fn host_stdout_sym() -> &'static str {
+    if cfg!(target_vendor = "apple") {
+        "__stdoutp"
+    } else {
+        "stdout"
+    }
+}
+
+fn other_stdout_sym() -> &'static str {
+    if cfg!(target_vendor = "apple") {
+        "stdout"
+    } else {
+        "__stdoutp"
+    }
+}
+
 fn kara_str_lit(input: &str) -> String {
     input
         .replace('\\', "\\\\")
@@ -965,19 +989,43 @@ fn build_and_emit_all() -> Option<String> {
             .unwrap_or_else(|e| panic!("copy selfhost module {f}: {e}"));
     }
 
+    // The emitted module's `stdout` spelling is the host's, not a constant
+    // (B-2026-08-05-14). glibc exports `stdout`; Darwin exports `__stdoutp`
+    // and provides `stdout` only as a macro, so a module naming `stdout` did
+    // not resolve on Darwin — the JIT produced no output and the oracle
+    // reported it as a stdout MISMATCH against the seed, i.e. a link failure
+    // wearing a miscompile's clothes. Same rule the seed applies in
+    // src/codegen.rs; the emitted IR here is always run on the host, so the
+    // host cfg IS the target.
+    let stdout_sym = host_stdout_sym();
     let mut driver = String::from(
         "import parser.parse_program;\n\
          import codegen.emit_program;\n\
          \n\
-         fn dump(src: String) with panics {\n\
+         fn dump(src: String, sym: String) with panics {\n\
          \x20   println(\";;;KARA_ENTRY;;;\");\n\
-         \x20   print(emit_program(parse_program(src)));\n\
+         \x20   print(emit_program(parse_program(src), sym));\n\
+         }\n\
+         fn dumpx(src: String, sym: String) with panics {\n\
+         \x20   println(\";;;KARA_XHOST;;;\");\n\
+         \x20   print(emit_program(parse_program(src), sym));\n\
          }\n\
          fn main() {\n",
     );
     for input in CORPUS {
-        driver.push_str(&format!("    dump(\"{}\");\n", kara_str_lit(input)));
+        driver.push_str(&format!(
+            "    dump(\"{}\", \"{stdout_sym}\".to_string());\n",
+            kara_str_lit(input)
+        ));
     }
+    // One extra emission of corpus[0] under the OTHER host's `stdout`
+    // spelling, appended to the same build so the cross-host check costs one
+    // more `emit_program` call rather than a second selfhost compile.
+    driver.push_str(&format!(
+        "    dumpx(\"{}\", \"{}\".to_string());\n",
+        kara_str_lit(CORPUS[0]),
+        other_stdout_sym()
+    ));
     driver.push_str("}\n");
     std::fs::write(tmp.join("src").join("main.kara"), &driver).unwrap();
 
@@ -1051,8 +1099,17 @@ fn selfhost_codegen_matches_seed_run() {
     let Some(all) = build_and_emit_all() else {
         return;
     };
+    // The cross-host block is appended last under its own marker; split it off
+    // before the per-program split so it cannot be mistaken for a corpus entry.
+    let (corpus_out, xhost_ir) = all
+        .split_once(XHOST)
+        .map(|(a, b)| (a.to_string(), Some(b.trim_start_matches('\n').to_string())))
+        .unwrap_or((all.clone(), None));
+    let xhost_ir = xhost_ir.expect("driver must emit a cross-host block");
+    check_cross_host_ir(&xhost_ir);
+
     // Split the driver's stdout into per-program IR blocks.
-    let blocks: Vec<&str> = all.split(ENTRY).skip(1).collect();
+    let blocks: Vec<&str> = corpus_out.split(ENTRY).skip(1).collect();
     assert_eq!(
         blocks.len(),
         CORPUS.len(),
@@ -1075,6 +1132,59 @@ fn selfhost_codegen_matches_seed_run() {
         );
         leak_audit(i, src, ir);
     }
+}
+
+/// B-2026-08-05-14 — the emitter used to hardcode `stdout` (and an x86-64
+/// Linux triple), so on Darwin every emitted module failed to link and the
+/// oracle read the empty output as a stdout MISMATCH rather than a link
+/// failure. The host leg of that bug is now covered by the ordinary oracle
+/// run; this covers the leg the running host is NOT, which is the half that
+/// went unnoticed for as long as it did.
+///
+/// Structural only, deliberately: whether Darwin's linker resolves
+/// `__stdoutp` is not something a Linux run can answer, so this asserts the
+/// things that ARE host-independent — the other host's spelling is the one
+/// emitted, it is declared exactly once, the accessor funnels every use
+/// through it, and no bare `stdout` global survives anywhere in the module.
+fn check_cross_host_ir(ir: &str) {
+    let other = other_stdout_sym();
+    assert!(
+        ir.contains(&format!("@{other} = external global ptr")),
+        "cross-host block must declare @{other}; got:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches(&format!("@{other}")).count(),
+        2,
+        "@{other} must appear exactly twice (the declaration and the one load \
+         inside @kara.stdout); more means a print site named it directly:\n{ir}"
+    );
+    assert!(
+        ir.contains("define internal ptr @kara.stdout()"),
+        "cross-host block must define the @kara.stdout accessor:\n{ir}"
+    );
+    // The host spelling must not leak into a module emitted for the other
+    // host. Checked as a whole-word global reference so `@kara.stdout` and
+    // `__stdoutp` do not match each other.
+    let host = host_stdout_sym();
+    for pat in [
+        format!("@{host} = external"),
+        format!("ptr @{host},"),
+        format!("ptr @{host}\n"),
+    ] {
+        assert!(
+            !ir.contains(&pat),
+            "host spelling {pat:?} leaked into the cross-host module:\n{ir}"
+        );
+    }
+    // The retired hardcodes must not come back on any host.
+    assert!(
+        !ir.contains("target triple"),
+        "emitted module pins a target triple again:\n{ir}"
+    );
+    assert!(
+        !ir.contains("target datalayout"),
+        "emitted module pins a target datalayout again:\n{ir}"
+    );
 }
 
 /// Memory audit for the emitted IR (Slice 9 — drop insertion): compile the
