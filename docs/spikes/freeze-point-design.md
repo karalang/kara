@@ -1,9 +1,11 @@
 # Freeze points: sharing an RC value across `par` branches (B-2026-08-01-33, mechanism 3)
 
-**Status:** design call; **stage 1 partly built and inert** — the `frozen`
-parameter surface and the escape checker have landed, `par` admission and RC
-suppression have not, so the mode still changes no program's behaviour. Proposes
-a language-surface addition, so adopting it into
+**Status:** design call; **stage 1 COMPLETE** — surface, escape check (E0511),
+freeze-site check (E0512), RC suppression, and `par` admission have all landed.
+A `frozen` handle captured by two branches now compiles and computes correctly
+under both the interpreter and AOT. Stages 2 and 3 remain, and #133 needs both:
+`Node.neighbors` is `mut`, so the motivating program is still refused at the
+freeze site. Proposes a language-surface addition, so adopting it into
 [`docs/design.md`](../design.md) is the owner's step — this document exists to
 make the call concrete enough to accept, reject, or amend, and to record why the
 alternatives lose. Build log and two corrections to the staging are at the
@@ -332,6 +334,49 @@ read it. The formatter unwraps the borrow so `karac fmt` still round-trips
 Pinned by `frozen_param_emits_no_refcount_traffic_like_a_borrow`, which asserts
 frozen == 0, frozen == ref, and owned > 0 (the positive control that keeps the
 zero assertion non-vacuous).
+
+## Stage 1: `par` admission (landed) — and the bug it uncovered
+
+Admission itself is small: a `frozen: bool` on `TrackedBinding`, plus an admit
+arm in `detect_par_block_conflicts` that fires before the mechanism-2 promotion
+arm. It is **unconditional** — no env gate — because the two checks that license
+it are always on. E0512 proved every reachable `shared` type is free of `mut`
+fields, so there is no *payload* to race; the borrow lowering removed the
+refcount traffic, so there is no *header* to race.
+
+That is the contrast with mechanism 2 in one line: **promotion makes the header
+race safe by making it atomic (~9.5x on sequential code); freezing removes the
+traffic, so there is nothing to pay for.**
+
+**Writing it uncovered a live miscompile that had nothing to do with `frozen`**
+(B-2026-08-05-10, fixed in `93b1a81`). A `ref`-borrowed `shared` handle captured
+into a par branch read as **zero**: interpreter 108, AOT 101, `karac check`
+silent.
+
+The classifier picks `ParCaptureMode::SharedRc` from the capture's *type name*
+alone, and the head-name helper strips `ref` on the way there — so `ref N`
+classified exactly like owned `N`. But a borrow's slot holds a
+**pointer-to-handle**, so `emit_arc_inc` did not touch a refcount at all: it
+atomically added 1 to *the owner's stored handle pointer*. The callee then
+dereferenced a pointer one byte off. The branch-exit `dec` subtracted the 1
+back, so the corruption left no trace and the symptom was a wrong answer rather
+than a crash — which is why a memory-corruption bug sat undetected.
+
+**One branch is enough**, so it never reached the `E_CONCURRENT_SHARED_STRUCT`
+gate: the gate refuses the two-branch shapes loudly, and the one-branch shape it
+permits was the broken one.
+
+Two things worth carrying forward from that:
+
+**Traffic counts cannot see a wrong answer.** The RC-suppression commit shipped
+a test that counted `rc_inc`/`rc_dec` in the IR, and the full 13k-test suite
+passed with this miscompile live, because nothing in it executed a borrowed
+capture in a par block. Every RC-shape test in this family now pairs the IR
+assertion with an execution that checks the computed value.
+
+**A loud gate can hide a quiet bug behind it.** The shapes the gate refused were
+the ones anyone would have tested by hand; the shape it allowed was the one
+nobody looked at. Worth remembering when the next gate is relaxed.
 
 ## Risks, stated plainly
 
