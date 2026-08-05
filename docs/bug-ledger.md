@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 80 | 1 |
 | missing-feature | 77 | 2 |
 | false-positive | 56 | 0 |
-| perf | 47 | 1 |
+| perf | 48 | 2 |
 | crash | 39 | 0 |
 | soundness | 37 | 1 |
 | diagnostics | 37 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 671 | 4 |
+| codegen | 672 | 5 |
 | interp | 123 | 0 |
 | typecheck | 118 | 2 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **932 surfaced · 9 open · 915 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **933 surfaced · 10 open · 915 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **932 surfaced 
 | B-2026-08-05-18 | 2026-08-05 | typecheck+effect | medium | a `Fn(..)` type's effect clause is dropped — `Fn(ref Vec[u8], i64) -> i64 with panics` PARSES but the slot is still inferred `[pure]`, so no effectful function can ever be passed to a `Fn`-typed parameter and the whole higher-order surface is restricted to pure callees | — |
 | B-2026-08-05-19 | 2026-08-05 | typecheck+codegen | high | generic args are NOT invariant across numeric element types: `Vec[i64]` is silently accepted where `Vec[u16]` is declared, and AOT then reinterprets the buffer — wrong values, out-of-bounds reads, and a run-vs-build divergence | src/typechecker/types.rs::types_compatible (note the TypeParam blanket arm ~line 1273); src/typechecker.rs::is_subtype_with_projections / check_assignable. Repro files as in detail. |
 | B-2026-08-05-20 | 2026-08-05 | codegen | high | A whole-value binding-to-binding move of a BOXED-payload `Option` (`let b2 = body;`) double-frees at -O0 -- deterministic, no destructure involved, and it SURVIVES B-2026-08-05-7's leak-B fix | docs/implementation_checklist/phase-7-codegen.md |
+| B-2026-08-05-21 | 2026-08-05 | codegen | medium | The INTEGER-OVERFLOW check on an index add `v[base + i]` is still emitted after BCE has PROVEN `0 <= base + i < v.len()` -- a fact that already entails the add cannot overflow. The check sits on the loop-carried critical path, so on kata #246 it, not bounds checking, is the entire residual 1.23x vs C: removing the bounds checks moved the kata only 3%, while adding an equivalent overflow check to the C mirror lands C exactly on Kara's time. Writing the same loop over a `Slice` row-view reaches full C parity today (35.07 vs 35.16 ms), because the row view removes the add entirely. | src/codegen/bce_interproc.rs + bce_length_pin.rs (the proven-in-bounds fact); the overflow-check emitter for integer `+` on an index expression |
 
 ### Fixed (915)
 
