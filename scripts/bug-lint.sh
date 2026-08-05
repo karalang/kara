@@ -79,12 +79,35 @@ if kd.exists():
         m = re.search(r"/([^/]+)/README\.md$", p)
         if m:
             readmes[m.group(1)] = pathlib.Path(p)
+    # A leetcode slug resolves by NUMBER, but ledger rows spell the source
+    # four ways — bare `kata:147`, slug `kata:147-insertion-sort-list`,
+    # slug-plus-parenthetical `kata:77-combinations (bitmask, k==0)`, and
+    # `kata:leetcode-95-unique-bst-ii`. Keying only on the exact string
+    # silently demoted every non-bare form to a warning, so the "README must
+    # cite the B-ID" check never ran on them (27 rows, 8 of them real
+    # violations). Resolve on the leading number — with an optional
+    # `leetcode-` prefix — before giving up; a source with no leading number
+    # (bespoke slug, or free-text provenance that belongs in `detail`) still
+    # warns.
+    def resolve_kata(key):
+        rp = readmes.get(key)
+        if rp:
+            return rp
+        m = re.match(r"^(?:leetcode-)?(\d+)\b", key)
+        return readmes.get(m.group(1)) if m else None
+
     ledger_bids = set(seen)
     for r in rows:
         src = r.get("source","")
         if src.startswith("kata:"):
-            num = src.split(":")[1]
-            rp = readmes.get(num)
+            # A withdrawn row has no claim on the kata's README: `invalid` /
+            # `not-reproduced` mean the kata did NOT surface a compiler bug,
+            # so there is nothing for the README to cite and requiring a
+            # citation would push a false claim into the kata corpus.
+            if r.get("status") in {"invalid", "not-reproduced"}:
+                continue
+            num = src.split(":", 1)[1]
+            rp = resolve_kata(num)
             if not rp:
                 warns.append(f"{r['id']}: source {src} but no README found for kata {num}")
             elif r["id"] not in rp.read_text():
