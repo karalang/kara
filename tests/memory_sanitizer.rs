@@ -11314,6 +11314,62 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-28 — the CHAINED xform on a surface-concat receiver:
+    /// `("p:" + s).to_uppercase().len()` / `.trim().len()`. Until the
+    /// span-collision fix these did not COMPILE at all (the dispatcher's own
+    /// "this is a codegen bug" fall-through), which is why the sibling
+    /// `asan_surface_concat_byte_read_receiver_no_leak` above covers only
+    /// `starts_with` / `contains`.
+    ///
+    /// It gets its own test rather than a line in that one because the
+    /// ownership half here had NEVER EXECUTED: the fresh-temp receiver free
+    /// has a dedicated branch treating the String→String xform family as
+    /// allocating an independent copy (so the receiver is safe to free
+    /// behind), and that branch was unreachable for a Binary receiver while
+    /// the call could not be compiled. Compiling it is what makes the free
+    /// path live, so it needs its own leak evidence, not an assumption.
+    ///
+    /// TWO buffers per iteration are at stake, which is the shape worth
+    /// pinning: the concat receiver AND the fresh xform result. Written to
+    /// B-2026-08-04-17's rules — `env.args()` seed, runtime-derived payload,
+    /// and `.len()` on the xform RESULT reads the length word, so the result
+    /// buffer stays live at -O2 — and floored so a regression to zero
+    /// allocations fails loudly rather than passing vacuously.
+    #[test]
+    fn asan_surface_concat_chained_xform_receiver_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let mut v: Vec[String] = Vec.new();
+    let mut b: String = String.new();
+    b.push_str("elem-");
+    b.push_str(n.to_string());
+    b.push_str("-padding-to-force-heap");
+    v.push(b);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 200 {
+        match v.first() {
+            Some(s) => {
+                acc = acc + ("p:".to_string() + s).to_uppercase().len();
+                acc = acc + ("q:".to_string() + s).trim().len();
+            }
+            None => { }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // 28-char payload + 2-char prefix = 30 per xform, two per
+            // iteration, 200 iterations.
+            &["12000"],
+            "surface_concat_chained_xform_receiver",
+            100,
+        );
+    }
+
     #[test]
     fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free

@@ -85208,6 +85208,57 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-08-05-28 — a CHAINED String→String xform on a surface-concat
+    /// receiver. `("p:" + b).to_uppercase().len()` failed codegen outright
+    /// ("no handler for method 'to_uppercase' on non-identifier receiver"),
+    /// while the UNCHAINED `("p:" + b).to_uppercase()` compiled fine. So the
+    /// filed shape was the CHAIN, not the concat receiver — the row's title
+    /// said the xform methods do not compile on such a receiver, and half of
+    /// that is wrong.
+    ///
+    /// Cause was the chained-method span collision, not a missing dispatcher
+    /// arm: the parser gives every link of `x.a().b()` the RECEIVER's span, so
+    /// the outer link's `method_callee_types` entry clobbered the inner's and
+    /// the inner call found a key whose method segment did not match its own.
+    /// The producers now key on the closing paren via
+    /// `SpanKey::for_method_call` — the helper the `method_unwrap_*` tables
+    /// already used for exactly this (Slice 1 of the span-collision fix).
+    ///
+    /// Both members are pinned, chained AND unchained, because only the first
+    /// was broken and a fix that regressed the second would otherwise pass
+    /// unnoticed.
+    #[test]
+    fn chained_string_xform_on_concat_receiver() {
+        assert_eq!(
+            run_program(
+                // Two bindings, not one reused: `+` MOVES its String operand,
+                // so a second concat off `b` is a use-after-move the ownership
+                // gate rightly rejects.
+                "fn main() {\n\
+                 \x20   let b: String = \"y\".to_string();\n\
+                 \x20   let c: String = \"y \".to_string();\n\
+                 \x20   println((\"p:\".to_string() + b).to_uppercase().len());\n\
+                 \x20   println((\"  q\".to_string() + c).trim().len());\n\
+                 }\n"
+            )
+            .as_deref(),
+            // "P:Y" is 3; "  qy ".trim() is "qy", 2.
+            Some("3\n2\n"),
+            "a chained xform on a concat receiver must compile and run"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let b: String = \"y\".to_string();\n\
+                 \x20   println((\"p:\".to_string() + b).to_uppercase());\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("P:Y\n"),
+            "the unchained control must keep working"
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]
