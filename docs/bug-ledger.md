@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 78 | 1 |
 | false-positive | 56 | 0 |
 | perf | 49 | 2 |
-| diagnostics | 40 | 1 |
+| diagnostics | 40 | 0 |
 | crash | 39 | 0 |
 | soundness | 37 | 0 |
 | other | 17 | 1 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
-| other | 27 | 2 |
+| other | 27 | 1 |
 | runtime | 21 | 1 |
 | resolver | 18 | 0 |
 | parser | 11 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced · 7 open · 932 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced · 6 open · 933 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,11 +136,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-33 | 2026-08-05 | codegen | high | LAW, not one fixture: a by-value aggregate param that is CALLER-RETAINS is owned by nobody and leaks once per call on a DEFAULT -O2 build. Three predicates reach it -- generic-erased field (2400 B/40), Map-bearing field (26400 B/160), and direct `shared` field (B-2026-08-05-32, which is therefore a special case of this row, not its own bug) | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION (corpus-wide, UNATTRIBUTED): Kāra's sequential lane is ~1.18x slower than the 2026-06-06 baseline across 36 katas while clang/rustc/go are flat — so it is a karac regression, not host or toolchain drift. | kara-katas bench-baseline.json (2026-06-06) vs bench-results.json; reproduce with the (id,approach,lane,lang) join described in detail |
-| B-2026-08-05-35 | 2026-08-05 | other | medium | the ASAN harness SKIPS on a CODEGEN failure ('setup failed -- skipping'), so a memory_sanitizer test written for a shape that does not yet compile reports ok rather than red -- the same vacuous-green class as B-2026-08-04-17, and it makes a leak regression test unprovable against the compiler it was written for | the ASAN harness helper behind assert_clean_asan_run_min_allocs — its setup-failure path |
 
-### Fixed (932)
+### Fixed (933)
 
-<details><summary>932 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>933 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1098,6 +1097,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-30 | other | medium | the wasm E2E tests skip on a SUCCESSFUL build: `wasm_build_skip_reason` matches the string `wasm-tools not found`, which the browser-bindings path em… | c5005e9 |
 | B-2026-08-05-31 | interp+codegen | medium | the interpreter computes `Tensor[f32]` elements in f64 while AOT uses a packed f32 buffer, so an f32 tensor gives DIFFERENT ANSWERS on the two backen… | 2bfece1 |
 | B-2026-08-05-32 | codegen | high | A struct with a DIRECT `shared` field, bound to a LOCAL and passed BY VALUE, never rc-decs the box -- it leaks on a DEFAULT -O2 build (288 B / 8 allo… | 17b58f4 |
+| B-2026-08-05-35 | other | medium | the ASAN harness SKIPS on a CODEGEN failure ('setup failed -- skipping'), so a memory_sanitizer test written for a shape that does not yet compile re… | 1557d40 |
 
 </details>
 
