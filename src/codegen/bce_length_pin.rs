@@ -137,7 +137,7 @@ fn method_bound_op(name: &str) -> Option<BoundOp> {
 }
 
 /// Every identifier named by a `BoundTerm`.
-fn bound_idents(bt: &BoundTerm, out: &mut Vec<String>) {
+pub(super) fn bound_idents(bt: &BoundTerm, out: &mut Vec<String>) {
     match bt {
         BoundTerm::Ident(n) => out.push(n.clone()),
         BoundTerm::Int(_) => {}
@@ -464,7 +464,7 @@ fn as_strict_lt(cond: &Expr) -> Option<(String, &Expr)> {
     }
 }
 
-fn ident(e: &Expr) -> Option<String> {
+pub(super) fn ident(e: &Expr) -> Option<String> {
     match &e.kind {
         ExprKind::Identifier(n) => Some(n.clone()),
         _ => None,
@@ -1453,7 +1453,7 @@ fn expr_mentions_ident(e: &Expr, name: &str) -> bool {
 /// variant breaks this at compile time rather than silently escaping the scans
 /// above — the same fail-closed discipline as `control_flow_bce.rs`'s
 /// monotone walk. Leaf expressions have no children → vacuously true.
-fn expr_children_all<F: Fn(&Expr) -> bool + Copy>(e: &Expr, pred: F) -> bool {
+pub(super) fn expr_children_all<F: Fn(&Expr) -> bool + Copy>(e: &Expr, pred: F) -> bool {
     match &e.kind {
         ExprKind::Integer(_, _)
         | ExprKind::Float(_, _)
@@ -1751,7 +1751,7 @@ fn analyze_enclosing_body(
 /// (`while j <= BOUND` / `for i in 0..=BOUND` → `BOUND + 1`) that the
 /// ascending pin path deliberately omits. Kept separate so the ascending
 /// path stays byte-identical.
-fn vec_length_lower_bounds(body: &Block) -> HashMap<String, BoundTerm> {
+pub(super) fn vec_length_lower_bounds(body: &Block) -> HashMap<String, BoundTerm> {
     let whole = region_bindings(&body.stmts, &body.final_expr);
     let mut out = HashMap::new();
     for_each_block(body, &mut |block| {
@@ -2091,7 +2091,7 @@ fn for_zero_range_end_lb<'a>(
 /// An enclosing loop whose counter has an upper bound: `(counter, u_max,
 /// body)` where `u_max` is the counter's MAX value in the body as a
 /// `BoundTerm` (`U` for `<= U` / `..=U`, `U - 1` for `< U` / `..U`).
-fn as_enclosing_loop(e: &Expr) -> Option<(String, BoundTerm, &Block)> {
+pub(super) fn as_enclosing_loop(e: &Expr) -> Option<(String, BoundTerm, &Block)> {
     match &e.kind {
         ExprKind::While {
             condition, body, ..
@@ -2181,7 +2181,7 @@ fn as_descending_guard(cond: &Expr) -> Option<String> {
 /// an assignment target buried in an inner block (e.g. `if c { k = i }`), which
 /// would break monotonicity — see the region-binding collector's section
 /// comment.
-fn only_monotone_decrement(body: &Block, k: &str) -> bool {
+pub(super) fn only_monotone_decrement(body: &Block, k: &str) -> bool {
     let mut saw_decrement = false;
     for s in &body.stmts {
         if is_clean_decrement_stmt(s, k) {
@@ -2200,7 +2200,7 @@ fn only_monotone_decrement(body: &Block, k: &str) -> bool {
 
 /// Whether `k` is assigned (any nesting), rebound, or `mut`-written across the
 /// given region.
-fn stmt_touches_var(stmts: &[Stmt], final_expr: &Option<Box<Expr>>, k: &str) -> bool {
+pub(super) fn stmt_touches_var(stmts: &[Stmt], final_expr: &Option<Box<Expr>>, k: &str) -> bool {
     let rb = region_bindings(stmts, final_expr);
     if rb.assigned.contains(k) || rb.is_rebound(k) {
         return true;
@@ -2257,7 +2257,7 @@ fn is_pos_int_lit(e: &Expr) -> bool {
 /// inner loop): the last top-level `let k = E` / `k = E` with `E` a
 /// pure-arithmetic (linear-normalisable) expression, provided `k` is written
 /// nowhere else (nested, compound, mut-arg). `None` on any other shape.
-fn sole_scalar_init(stmts: &[Stmt], k: &str) -> Option<BoundTerm> {
+pub(super) fn sole_scalar_init(stmts: &[Stmt], k: &str) -> Option<BoundTerm> {
     let mut last: Option<BoundTerm> = None;
     for s in stmts {
         if let Some(rhs) = top_level_scalar_def(s, k) {
@@ -2340,7 +2340,7 @@ fn is_int_lit(e: &Expr) -> bool {
 }
 
 /// Deep "some sub-expression satisfies `pred`" over a block.
-fn body_any(block: &Block, pred: &dyn Fn(&Expr) -> bool) -> bool {
+pub(super) fn body_any(block: &Block, pred: &dyn Fn(&Expr) -> bool) -> bool {
     !block_all(block, |c| !expr_contains(c, pred))
 }
 
@@ -2427,7 +2427,12 @@ fn lin_scale(a: &Linear, c: i64) -> Option<Linear> {
 /// `counter := u_max` in `E` (valid because `E` is non-decreasing in the
 /// counter and `counter <= u_max`), then check `B_pin - E[counter:=u_max]`
 /// is a positive constant.
-fn init_below_bound(e_bt: &BoundTerm, counter: &str, u_max: &BoundTerm, b_pin: &BoundTerm) -> bool {
+pub(super) fn init_below_bound(
+    e_bt: &BoundTerm,
+    counter: &str,
+    u_max: &BoundTerm,
+    b_pin: &BoundTerm,
+) -> bool {
     let (Some(e_lin), Some(u_lin), Some(pin_lin)) = (
         bound_to_linear(e_bt),
         bound_to_linear(u_max),
@@ -2590,7 +2595,7 @@ fn scan_enclosing_loops_conv(
 /// The enclosing counter's minimum value: the `for` range's start (`0` when
 /// omitted), or the `while` counter's sole scalar definition among the
 /// statements preceding the loop.
-fn counter_min(e: &Expr, before: &[Stmt], counter: &str) -> Option<BoundTerm> {
+pub(super) fn counter_min(e: &Expr, before: &[Stmt], counter: &str) -> Option<BoundTerm> {
     match &e.kind {
         ExprKind::For { iterable, .. } => {
             let ExprKind::Range { start, .. } = &iterable.kind else {
@@ -2717,7 +2722,7 @@ fn analyze_enclosing_body_conv(
 }
 
 /// A converging guard `lo <= hi` / `lo < hi` with both sides bare identifiers.
-fn as_converging_guard(cond: &Expr) -> Option<(String, String)> {
+pub(super) fn as_converging_guard(cond: &Expr) -> Option<(String, String)> {
     match &cond.kind {
         ExprKind::Binary {
             op: BinOp::LtEq | BinOp::Lt,
@@ -2746,7 +2751,7 @@ fn as_converging_guard(cond: &Expr) -> Option<(String, String)> {
 /// Zero steps is accepted (an unchanged `lo` trivially keeps its entry value);
 /// what must be excluded is a step that happens BEFORE a use, or any write
 /// form other than a clean increment.
-fn increments_are_trailing(body: &Block, lo: &str) -> bool {
+pub(super) fn increments_are_trailing(body: &Block, lo: &str) -> bool {
     let mut stepped = false;
     for s in &body.stmts {
         if is_clean_increment_stmt(s, lo) {
@@ -2775,7 +2780,7 @@ fn increments_are_trailing(body: &Block, lo: &str) -> bool {
 /// first one. Needed only for the LOWER half — the upper half rides on plain
 /// monotonicity (`hi <= hi_init` regardless of ordering), but a lower bound on
 /// a shrinking value is only valid before it shrinks.
-fn decrements_are_trailing(body: &Block, hi: &str) -> bool {
+pub(super) fn decrements_are_trailing(body: &Block, hi: &str) -> bool {
     let mut stepped = false;
     for s in &body.stmts {
         if is_clean_decrement_stmt(s, hi) {
@@ -2804,7 +2809,7 @@ fn decrements_are_trailing(body: &Block, hi: &str) -> bool {
 /// the counter, so its minimum over `counter >= u_min` is there) and check the
 /// result is a non-negative constant. Mirrors `init_below_bound`, which does
 /// the same substitution at the maximum for the upper half.
-fn sum_nonneg_at_min(
+pub(super) fn sum_nonneg_at_min(
     e_base: &BoundTerm,
     lo_init: &BoundTerm,
     counter: &str,
@@ -2875,7 +2880,7 @@ fn is_add_pos_const(value: &Expr, lo: &str) -> bool {
 /// Collect `(vec_var, base_var)` for every `v[base + idx]` / `v[idx + base]` in
 /// `body` where `idx` is one of `idx_names` and both `base` and `v` are bare
 /// identifiers. Sorted+deduped so the emitted fact set is deterministic.
-fn collect_base_indexed(body: &Block, idx_names: &[String]) -> Vec<(String, String)> {
+pub(super) fn collect_base_indexed(body: &Block, idx_names: &[String]) -> Vec<(String, String)> {
     // The predicate always reports `false` so `body_any`'s short-circuit never
     // fires and the walk visits every sub-expression; hits accumulate in the
     // cell instead of the return value.
@@ -2932,7 +2937,7 @@ fn sum_with_index_var(index: &Expr, idx_names: &[String]) -> Option<String> {
 /// exactly once to an integer literal and never assigned, shadowed, or
 /// mut-written. Substituting these is what makes the `n * len` row-extent
 /// products affine (see the section comment).
-fn int_const_bindings(body: &Block) -> HashMap<String, i64> {
+pub(super) fn int_const_bindings(body: &Block) -> HashMap<String, i64> {
     let whole = region_bindings(&body.stmts, &body.final_expr);
     let mut cand: HashMap<String, i64> = HashMap::new();
     for_each_block(body, &mut |block| {
@@ -2983,7 +2988,7 @@ fn mut_used_anywhere(body: &Block, name: &str) -> bool {
 /// Replace every identifier of `bt` that has an immutable integer-literal
 /// binding with that literal. Pure rewriting — the resulting term denotes the
 /// same runtime value.
-fn fold_consts(bt: &BoundTerm, consts: &HashMap<String, i64>) -> BoundTerm {
+pub(super) fn fold_consts(bt: &BoundTerm, consts: &HashMap<String, i64>) -> BoundTerm {
     match bt {
         BoundTerm::Ident(s) => match consts.get(s) {
             Some(v) => BoundTerm::Int(*v),

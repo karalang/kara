@@ -34420,6 +34420,185 @@ fn row_scan() -> i64 {
         );
     }
 
+    /// The row-helper shape: the length pin, the enclosing counter and the
+    /// linear base all sit in the CALLER, so nothing inside `row_scan` can
+    /// prove its own index in range. Shared by the interprocedural wiring
+    /// tests below. `{CALLER_LOOP}` is substituted per test.
+    const INTERPROC_ROW_HELPER_SRC: &str = r#"
+fn row_scan(v: ref Vec[u8], base: i64, len: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len - 1i64;
+    let mut acc = 0i64;
+    while lo <= hi {
+        acc = acc + (v[base + lo] as i64) - (v[base + hi] as i64);
+        lo = lo + 1i64;
+        hi = hi - 1i64;
+    }
+    acc
+}
+
+fn driver() -> i64 {
+    let n = 20i64;
+    let len = 32i64;
+    let v: Vec[u8] = Vec.filled(n * len, 48u8);
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    {CALLER_LOOP}
+    acc
+}
+"#;
+
+    fn interproc_row_helper_src(caller_loop: &str) -> String {
+        let out = INTERPROC_ROW_HELPER_SRC.replace("{CALLER_LOOP}", caller_loop);
+        assert_ne!(out, INTERPROC_ROW_HELPER_SRC, "caller-loop anchor missing");
+        out
+    }
+
+    #[test]
+    fn test_ir_interproc_row_helper_bce_skip_wiring() {
+        // B-2026-08-05-6: `row_scan` walks a caller-owned buffer at a
+        // caller-chosen offset. Every fact the intra-function converging skip
+        // needs is a parameter value here, so `bce_length_pin` alone leaves
+        // both checks standing. `bce_interproc` infers the precondition
+        // `base + (len - 1) < v.len()`, discharges it at the one call site
+        // (`base = i * len`, `i < n`, `v.len() >= n * len`), and installs the
+        // same `ConvergingSkip` record — so the loads carry no check at all.
+        let ir = ir_for(&interproc_row_helper_src(
+            "while i < n { acc = acc + row_scan(v, i * len, len); i = i + 1i64; }",
+        ));
+        assert!(
+            !ir.contains("vidx."),
+            "expected the row-helper loads to carry NO bounds check once the \
+             interprocedural precondition is discharged, but found a `vidx.` \
+             block:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_interproc_skip_refused_when_one_call_site_is_undischarged() {
+        // ONE body is emitted, so ONE fact must cover every call. A second
+        // call site passing an out-of-range `base` cannot discharge, and that
+        // disqualifies the callee outright — the good site does NOT get a
+        // specialised copy. Without this the program would read out of bounds
+        // through the very call that is in range everywhere else.
+        let ir = ir_for(&interproc_row_helper_src(
+            "while i < n { acc = acc + row_scan(v, i * len, len); i = i + 1i64; }\n    \
+             acc = acc + row_scan(v, n * len - 2i64, len);",
+        ));
+        assert!(
+            ir.contains("vidx."),
+            "expected the row-helper loads to KEEP their bounds check when a \
+             second call site cannot discharge the precondition, got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_interproc_skip_refused_for_off_by_one_caller_bound() {
+        // The caller's guard is `i <= n`, not `i < n`, so the last row starts
+        // at `n * len` and runs one whole row past the buffer. The linear
+        // cancellation must fail: `n * len - (n * len + len - 1)` is not a
+        // positive constant.
+        let ir = ir_for(&interproc_row_helper_src(
+            "while i <= n { acc = acc + row_scan(v, i * len, len); i = i + 1i64; }",
+        ));
+        assert!(
+            ir.contains("vidx."),
+            "expected the row-helper loads to KEEP their bounds check under an \
+             off-by-one caller bound, got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn e2e_interproc_row_helper_reads_the_right_elements() {
+        // The IR tests above assert the check is GONE; this one asserts the
+        // loads still land on the right elements once it is. Every position
+        // holds a distinct value (`k * k + 1`), so an off-by-one in either
+        // index — or a row walked at the wrong base — changes the sum. Oracle
+        // is the interpreter's answer for the same source.
+        let out = run_program(
+            "fn row_scan(v: ref Vec[i64], base: i64, len: i64) -> i64 {\n\
+                 let mut lo = 0i64;\n\
+                 let mut hi = len - 1i64;\n\
+                 let mut acc = 0i64;\n\
+                 while lo <= hi {\n\
+                     acc = acc + v[base + lo] * 3i64 - v[base + hi];\n\
+                     lo = lo + 1i64;\n\
+                     hi = hi - 1i64;\n\
+                 }\n\
+                 return acc;\n\
+             }\n\
+             fn main() {\n\
+                 let n = 7i64;\n\
+                 let len = 5i64;\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let mut k = 0i64;\n\
+                 while k < n * len {\n\
+                     v.push(k * k + 1i64);\n\
+                     k = k + 1i64;\n\
+                 }\n\
+                 let mut acc = 0i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < n {\n\
+                     acc = acc + row_scan(v, i * len, len);\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 println(acc);\n\
+             }",
+        );
+        assert_eq!(out, Some("13594\n".to_string()));
+    }
+
+    #[test]
+    fn e2e_interproc_row_helper_still_panics_on_an_undischarged_call() {
+        // The mirror image: a call site that cannot discharge keeps the check,
+        // so an out-of-range row still TRAPS instead of reading past the
+        // buffer. Note what the trapping run proves: the good rows printed
+        // their correct sum first, so the surviving check is not a blanket
+        // "analysis gave up" — the same body served both sites and caught only
+        // the bad one.
+        const BODY: &str = "fn row_scan(v: ref Vec[i64], base: i64, len: i64) -> i64 {\n\
+                 let mut lo = 0i64;\n\
+                 let mut hi = len - 1i64;\n\
+                 let mut acc = 0i64;\n\
+                 while lo <= hi {\n\
+                     acc = acc + v[base + lo] - v[base + hi];\n\
+                     lo = lo + 1i64;\n\
+                     hi = hi - 1i64;\n\
+                 }\n\
+                 return acc;\n\
+             }\n\
+             fn main() {\n\
+                 let n = 7i64;\n\
+                 let len = 5i64;\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let mut k = 0i64;\n\
+                 while k < n * len {\n\
+                     v.push(k * k + 1i64);\n\
+                     k = k + 1i64;\n\
+                 }\n\
+                 let mut acc = 0i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < n {\n\
+                     acc = acc + row_scan(v, i * len, len);\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 println(acc);\n";
+        assert_eq!(
+            run_program(&format!("{BODY}}}")),
+            Some("-1428\n".to_string()),
+            "control: the in-range program must run clean"
+        );
+        let trapped = run_program(&format!(
+            "{BODY}    println(row_scan(v, n * len - 2i64, len));\n}}"
+        ))
+        .expect("program should build and run");
+        assert!(
+            trapped.starts_with("-1428\n") && trapped.contains("vec index out of bounds"),
+            "the out-of-range row must still trap — the second call site cannot \
+             discharge the precondition, so the bounds check must survive; got:\n{trapped}"
+        );
+    }
+
     #[test]
     fn test_ir_descending_loop_bce_skip_wiring() {
         // B-2026-07-17-1: the descending-loop skip proves `k < row.len()` for

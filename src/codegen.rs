@@ -27,6 +27,7 @@ mod arrow;
 mod ascii_const_chars;
 mod assoc_call;
 mod backpressure;
+mod bce_interproc;
 mod bce_length_pin;
 mod borrow_elision;
 mod bounded_channel;
@@ -2026,6 +2027,17 @@ pub(super) struct Codegen<'ctx> {
     /// `hi`'s init). Consumed in `compile_while`, which pushes the matching
     /// `UpperBoundSum` facts. Populated at `compile_function`.
     pub(crate) converging_skips: HashMap<crate::resolver::SpanKey, bce_length_pin::ConvergingSkip>,
+    /// Converging skips a free function earns from an interprocedural bounds
+    /// PRECONDITION every one of its call sites discharges (`bce_interproc.rs`,
+    /// B-2026-08-05-6): the row-helper shape, where the length pin, the
+    /// enclosing counter and the linear base all sit in the caller. Keyed by
+    /// function name, then by the same inner-loop condition `SpanKey` the
+    /// intra-function map uses — the records are identical, so `compile_while`
+    /// cannot tell the two provenances apart and needed no change. Computed
+    /// once per program in `compile_program`, merged into `converging_skips` at
+    /// `compile_function`.
+    pub(crate) interproc_conv_skips:
+        HashMap<String, HashMap<crate::resolver::SpanKey, bce_length_pin::ConvergingSkip>>,
     /// Stack of `(lo, hi)` variable-name pairs from dominating strict
     /// `while lo < hi` guards (innermost last). When a `let mid = lo +
     /// (hi - lo) / 2` (or `(lo + hi) / 2`) binding is compiled under such
@@ -7700,6 +7712,7 @@ impl<'ctx> Codegen<'ctx> {
             asserted_index_bounds: Vec::new(),
             pending_vec_len_pins: HashMap::new(),
             descending_skips: HashMap::new(),
+            interproc_conv_skips: HashMap::new(),
             converging_skips: HashMap::new(),
             vec_len_pins: Vec::new(),
             binsearch_guard_stack: Vec::new(),
@@ -8807,6 +8820,18 @@ impl<'ctx> Codegen<'ctx> {
         // under-hint back to `cap × 1`. Ignore a target-machine failure — the
         // hint falls back to `1` (a sound under-hint, never a correctness issue).
         let _ = self.ensure_target_data();
+        // Interprocedural bounds preconditions (bce_interproc.rs,
+        // B-2026-08-05-6). Whole-PROGRAM analysis — it needs every call site of
+        // a candidate callee — so it runs here rather than per function, and
+        // `compile_function` only merges its own entry. Both kill switches
+        // apply: its own, and the converging-skip switch it feeds.
+        self.interproc_conv_skips = if std::env::var("KARAC_BCE_INTERPROC").as_deref() == Ok("0")
+            || std::env::var("KARAC_BCE_CONV_SKIP").as_deref() == Ok("0")
+        {
+            HashMap::new()
+        } else {
+            crate::codegen::bce_interproc::compute_interproc_converging_skips(program)
+        };
         // Level 2 crash diagnostics — Part 2: stand up DWARF debug-info state
         // before any function compiles (no-op unless KARAC_DEBUG_INFO is set and
         // a source filename was threaded in via set_source_filename, which runs

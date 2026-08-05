@@ -2222,6 +2222,22 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             crate::codegen::bce_length_pin::compute_converging_skips(&func.body)
         };
+        // Interprocedural bounds preconditions (bce_interproc.rs,
+        // B-2026-08-05-6): the same shape with the length pin, the enclosing
+        // counter and the linear base all in the CALLER. The records are
+        // identical to the ones above, so `compile_while` never learns which
+        // provenance a skip has. Merge rather than overwrite — an entry the
+        // local analysis already proved keeps its own (they agree on the same
+        // condition span, and the local proof is the stronger one to trust).
+        // `interproc_conv_skips` is empty when either kill switch is set, so
+        // no gate is needed here.
+        if let Some(extra) = self.interproc_conv_skips.get(&func.name) {
+            for (key, skip) in extra {
+                self.converging_skips
+                    .entry(*key)
+                    .or_insert_with(|| skip.clone());
+            }
+        }
 
         // Slice-parameter scoped-alias metadata (alias-metadata slice 4). Runs
         // after the param-registration loop above, so its map entries survive
