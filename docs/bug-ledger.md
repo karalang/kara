@@ -96,14 +96,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 134 | 0 |
 | double-free | 97 | 1 |
 | codegen-gap | 90 | 1 |
-| run-vs-build | 80 | 0 |
+| run-vs-build | 81 | 1 |
 | missing-feature | 78 | 2 |
 | false-positive | 56 | 0 |
 | perf | 48 | 1 |
 | crash | 39 | 0 |
 | diagnostics | 38 | 0 |
 | soundness | 37 | 0 |
-| other | 16 | 2 |
+| other | 17 | 3 |
 | use-after-free | 12 | 0 |
 
 ### By surface
@@ -112,11 +112,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 675 | 3 |
 | interp | 123 | 0 |
-| typecheck | 120 | 2 |
+| typecheck | 121 | 3 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
-| cli | 27 | 0 |
-| other | 26 | 2 |
+| cli | 28 | 1 |
+| other | 27 | 3 |
 | runtime | 20 | 0 |
 | resolver | 18 | 0 |
 | parser | 11 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **940 surfaced · 8 open · 924 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **942 surfaced · 10 open · 924 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **940 surfaced 
 | B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
 | B-2026-08-05-26 | 2026-08-05 | typecheck | medium | tensor arithmetic infers an f64 element for an f32 operand pair: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]` and `k: f32` types the product `Tensor[f64, ..]`, which only stayed invisible because generic args were permissive about numeric width | — |
 | B-2026-08-05-28 | 2026-08-05 | codegen | medium | The String-to-String xform methods do not COMPILE on a surface-concat receiver: `("p:".to_string() + s).to_uppercase()` / `.trim()` fail with "no handler for method on non-identifier receiver" | docs/implementation_checklist/phase-7-codegen.md |
+| B-2026-08-05-29 | 2026-08-05 | typecheck+cli | high | a `#[target(T)]`-gated fn body is NEVER TYPECHECKED unless you build exactly target T: `karac check` and a native `karac build` both accept a fn containing `let s: String = a;` where `a: i32`, and only `--target=wasm_browser` reports it -- so target-gated code is invisible to the Mend loop, and `karac check` has no `--target` flag to reach it | the `#[target(...)]` gating that excludes a fn from a non-matching target build, and `karac check`'s lack of a `--target` flag |
+| B-2026-08-05-30 | 2026-08-05 | other | medium | the wasm E2E tests skip on a SUCCESSFUL build: `wasm_build_skip_reason` matches the string `wasm-tools not found`, which the browser-bindings path emits as a size-optimization NOTE on a build that succeeded, and the predicate is consulted before `out.status.success()` -- so wasm_browser_rich_exports_marshal_e2e reports ok while asserting nothing | tests/cli.rs::wasm_build_skip_reason (the `wasm-tools not found` arm) and its call sites, which consult it BEFORE out.status.success() |
 
 ### Fixed (924)
 
