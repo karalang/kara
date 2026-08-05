@@ -34965,6 +34965,51 @@ fn generic_numeric_arg_same_layout_and_literals_still_accepted() {
     );
 }
 
+/// B-2026-08-05-24 — the QUALIFIED constructor spelling adopts its expected
+/// payload type exactly like the bare one.
+///
+/// `Option.Some(1)` / `Result.Err(-1)` used to skip the check-mode adoption
+/// entirely, because it matched only an `Identifier` callee. The literal stayed
+/// `i64`, which was invisible while generic arguments were permissive about
+/// numeric width and became a hard error the moment B-2026-08-05-19 closed that
+/// hole. The two spellings are equivalent everywhere else in the language, so
+/// they are asserted here in pairs rather than separately.
+#[test]
+fn qualified_enum_ctor_literal_adopts_expected_type_like_bare() {
+    for (bare, qualified) in [
+        ("Some(1)", "Option.Some(1)"),
+        ("Some(-1)", "Option.Some(-1)"),
+    ] {
+        typecheck_ok(&format!("fn f() -> Option[i32] {{ return {bare}; }}"));
+        typecheck_ok(&format!("fn f() -> Option[i32] {{ return {qualified}; }}"));
+        typecheck_ok(&format!(
+            "fn f() {{ let o: Option[i32] = {qualified}; println(o.is_some()); }}"
+        ));
+    }
+    for (bare, qualified) in [("Ok(1)", "Result.Ok(1)"), ("Err(-1)", "Result.Err(-1)")] {
+        typecheck_ok(&format!("fn f() -> Result[i32, i32] {{ return {bare}; }}"));
+        typecheck_ok(&format!(
+            "fn f() -> Result[i32, i32] {{ return {qualified}; }}"
+        ));
+    }
+    // Narrow element types adopt too — the shape B-2026-08-05-19's own test
+    // covers for the bare spelling only.
+    typecheck_ok("fn f() -> Option[u16] { return Option.Some(3); }");
+
+    // The adoption must not become a blanket "believe the expectation": range
+    // checking still runs through the normal literal path.
+    assert!(
+        !typecheck_errors("fn f() -> Option[u8] { return Option.Some(300); }").is_empty(),
+        "an out-of-range literal must still be rejected through the qualified spelling"
+    );
+    // A mismatched qualifier is not a constructor for the expected type and
+    // must not be silently adopted.
+    assert!(
+        !typecheck_errors("fn f() -> Option[i32] { return Result.Ok(1); }").is_empty(),
+        "`Result.Ok` into an `Option` must still be an error"
+    );
+}
+
 #[test]
 fn enum_payload_push_does_not_change_integer_coercion() {
     typecheck_ok(

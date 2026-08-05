@@ -15037,7 +15037,7 @@ pub fn checked_div(a: i32, b: i32) -> Option[i32] {
 
 #[target(wasm_browser)]
 pub fn safe_div(a: i32, b: i32) -> Result[i32, i32] {
-    if b == 0 { return Result.Err(0 - 1); }
+    if b == 0 { return Result.Err(-1); }
     return Result.Ok(a / b);
 }
 

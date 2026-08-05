@@ -325,8 +325,31 @@ impl<'a> super::TypeChecker<'a> {
         // payload lands there with a concrete expectation already in hand.
         if let ExprKind::Call { callee, args } = &expr.kind {
             if args.len() == 1 {
-                if let ExprKind::Identifier(ctor) = &callee.kind {
-                    let payload_slot = match (ctor.as_str(), expected) {
+                // B-2026-08-05-24 — accept the QUALIFIED spelling too. This
+                // block used to match only an `Identifier` callee, i.e. bare
+                // `Some(..)` / `Ok(..)` / `Err(..)`, so `Option.Some(1)` and
+                // `Result.Err(-1)` never reached the adoption below and their
+                // literal stayed `i64`. While generic arguments were permissive
+                // about numeric width that mismatch was simply tolerated, so the
+                // gap was invisible; B-2026-08-05-19 closed the hole and turned
+                // it into a hard error on a spelling the language treats as
+                // equivalent everywhere else.
+                //
+                // The `(ctor, expected)` match below already pairs `Some` with
+                // `Option` and `Ok`/`Err` with `Result`, so a mismatched
+                // qualifier (`Result.Some`) still falls through to `None`.
+                let ctor_name: Option<&str> = match &callee.kind {
+                    ExprKind::Identifier(c) => Some(c.as_str()),
+                    ExprKind::Path { segments, .. }
+                        if segments.len() == 2
+                            && matches!(segments[0].as_str(), "Option" | "Result") =>
+                    {
+                        Some(segments[1].as_str())
+                    }
+                    _ => None,
+                };
+                if let Some(ctor) = ctor_name {
+                    let payload_slot = match (ctor, expected) {
                         ("Ok", Type::Named { name, args: ta })
                             if name == "Result" && ta.len() == 2 =>
                         {
