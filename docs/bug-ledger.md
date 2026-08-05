@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 135 | 1 |
 | double-free | 97 | 1 |
 | codegen-gap | 90 | 1 |
-| run-vs-build | 82 | 2 |
+| run-vs-build | 81 | 1 |
 | missing-feature | 78 | 2 |
 | false-positive | 56 | 0 |
 | perf | 48 | 1 |
 | crash | 39 | 0 |
-| diagnostics | 38 | 0 |
+| diagnostics | 39 | 0 |
 | soundness | 37 | 0 |
 | other | 17 | 1 |
 | use-after-free | 12 | 0 |
@@ -112,10 +112,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 677 | 4 |
 | interp | 124 | 1 |
-| typecheck | 121 | 2 |
+| typecheck | 121 | 1 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
-| cli | 28 | 1 |
+| cli | 28 | 0 |
 | other | 27 | 2 |
 | runtime | 20 | 0 |
 | resolver | 18 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced · 9 open · 927 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced · 8 open · 928 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,13 +136,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
 | B-2026-08-05-28 | 2026-08-05 | codegen | medium | The String-to-String xform methods do not COMPILE on a surface-concat receiver: `("p:".to_string() + s).to_uppercase()` / `.trim()` fail with "no handler for method on non-identifier receiver" | docs/implementation_checklist/phase-7-codegen.md |
-| B-2026-08-05-29 | 2026-08-05 | typecheck+cli | high | a `#[target(T)]`-gated fn body is NEVER TYPECHECKED unless you build exactly target T: `karac check` and a native `karac build` both accept a fn containing `let s: String = a;` where `a: i32`, and only `--target=wasm_browser` reports it -- so target-gated code is invisible to the Mend loop, and `karac check` has no `--target` flag to reach it | the `#[target(...)]` gating that excludes a fn from a non-matching target build, and `karac check`'s lack of a `--target` flag |
 | B-2026-08-05-31 | 2026-08-05 | interp+codegen | medium | the interpreter computes `Tensor[f32]` elements in f64 while AOT uses a packed f32 buffer, so an f32 tensor gives DIFFERENT ANSWERS on the two backends -- 0.1*3 prints 0.30000000000000004 under `karac run --interp` and 0.30000001192092896 from `karac build` | — |
 | B-2026-08-05-32 | 2026-08-05 | codegen | high | A struct with a DIRECT `shared` field, bound to a LOCAL and passed BY VALUE, never rc-decs the box -- it leaks on a DEFAULT -O2 build (288 B / 8 allocs). The drop IS registered and then never emitted. The fresh-temp form is already fixed, so the b28 fixture's "pre-existing residual" note points at the wrong half | docs/implementation_checklist/phase-7-codegen.md |
 
-### Fixed (927)
+### Fixed (928)
 
-<details><summary>927 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>928 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1094,6 +1093,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-24 | cli | medium | `main` is RED: tests/cli.rs::wasm_browser_rich_exports_marshal_e2e fails a typecheck since 80d7a37c (B-2026-08-05-19, generic args invariant across n… | 8d6d1b92 |
 | B-2026-08-05-26 | typecheck | medium | tensor arithmetic infers an f64 element for an f32 operand pair: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]` and `k: f32` types… | a64e931 |
 | B-2026-08-05-27 | codegen | high | The surface-concat RECEIVER gap is only closed for the len-family: `("p:".to_string() + s).starts_with(..)` still leaks the concat on a DEFAULT -O2 b… | this commit |
+| B-2026-08-05-29 | typecheck+cli | medium | a single-target `karac check` silently omits `#[target(T)]`-gated bodies: they are stripped before any pass, so `check` prints "All checks passed" an… | e865f233 |
 | B-2026-08-05-30 | other | medium | the wasm E2E tests skip on a SUCCESSFUL build: `wasm_build_skip_reason` matches the string `wasm-tools not found`, which the browser-bindings path em… | c5005e9 |
 
 </details>
