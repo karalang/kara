@@ -1092,7 +1092,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-24 | cli | medium | `main` is RED: tests/cli.rs::wasm_browser_rich_exports_marshal_e2e fails a typecheck since 80d7a37c (B-2026-08-05-19, generic args invariant across n… | 8d6d1b92 |
 | B-2026-08-05-26 | typecheck | medium | tensor arithmetic infers an f64 element for an f32 operand pair: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]` and `k: f32` types… | a64e931 |
 | B-2026-08-05-27 | codegen | high | The surface-concat RECEIVER gap is only closed for the len-family: `("p:".to_string() + s).starts_with(..)` still leaks the concat on a DEFAULT -O2 b… | this commit |
-| B-2026-08-05-29 | typecheck+cli | medium | a single-target `karac check` silently omits `#[target(T)]`-gated bodies: they are stripped before any pass, so `check` prints "All checks passed" an… | e865f233 |
+| B-2026-08-05-29 | typecheck+cli | medium | a single-target `karac check` silently omits `#[target(T)]`-gated bodies: they are stripped before any pass, so `check` prints "All checks passed" an… | e865f233 + 192947f + aa38d78 |
 | B-2026-08-05-30 | other | medium | the wasm E2E tests skip on a SUCCESSFUL build: `wasm_build_skip_reason` matches the string `wasm-tools not found`, which the browser-bindings path em… | c5005e9 |
 | B-2026-08-05-31 | interp+codegen | medium | the interpreter computes `Tensor[f32]` elements in f64 while AOT uses a packed f32 buffer, so an f32 tensor gives DIFFERENT ANSWERS on the two backen… | 2bfece1 |
 | B-2026-08-05-32 | codegen | high | A struct with a DIRECT `shared` field, bound to a LOCAL and passed BY VALUE, never rc-decs the box -- it leaks on a DEFAULT -O2 build (288 B / 8 allo… | 17b58f4 |
