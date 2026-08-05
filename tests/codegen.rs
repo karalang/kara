@@ -5998,6 +5998,99 @@ fn main() {
         assert_eq!(out, "a:3:2\nb:3:42\nc:3\nd:5\ne:3:2\nf:3:42\nend\n");
     }
 
+    /// B-2026-08-05-8 — `contains` on a PATTERN-BOUND `String` payload.
+    ///
+    /// This was a run-vs-build divergence, not a diagnostics nit: `karac check`
+    /// passed, the interpreter produced the right answer, and only `karac build`
+    /// refused it — with "Binary op Eq: right operand has non-comparable type
+    /// { ptr, i64, i64 }", blaming the typechecker for an `==` the source never
+    /// contained.
+    ///
+    /// Cause: a `String` payload binding registered `vec_elem_types` (which
+    /// exists for the scope-exit buffer free) but never `string_vars` (which
+    /// method dispatch consults to pick the String arm for a method name that
+    /// String and Vec SHARE). So the binding looked like a `Vec[u8]`,
+    /// `contains` fell through to Vec membership, and that compares elements
+    /// with `==` — handing codegen a whole String struct where a scalar was
+    /// expected.
+    ///
+    /// The matrix matters: the row recorded `.len()` and `.starts_with` working
+    /// on the very same binding, which is what localized this to shared-name
+    /// dispatch rather than to pattern binding in general. All five carriers the
+    /// row listed as failing are covered — the carrier was never the variable,
+    /// the pattern binding was.
+    #[test]
+    fn contains_on_a_pattern_bound_string_payload_compiles() {
+        let out = run_program(
+            r#"
+enum E { A(String), B(i64) }
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn main() {
+    let n: i64 = 1;
+    let mut hits: i64 = 0;
+
+    let r: Result[String, i64] = Result.Ok(mks(n));
+    match r { Result.Ok(s) => { if s.contains(dig(n)) { hits = hits + 1; } } Result.Err(e) => {} }
+
+    let r2: Result[i64, String] = Result.Err(mks(n));
+    match r2 { Result.Ok(v) => {} Result.Err(e) => { if e.contains(dig(n)) { hits = hits + 10; } } }
+
+    let o: Option[String] = Option.Some(mks(n));
+    match o { Option.Some(s) => { if s.contains(dig(n)) { hits = hits + 100; } } Option.None => {} }
+
+    let u: E = E.A(mks(n));
+    match u { E.A(s) => { if s.contains(dig(n)) { hits = hits + 1000; } } E.B(v) => {} }
+
+    let o2: Option[String] = Option.Some(mks(n));
+    if let Option.Some(s) = o2 { if s.contains(dig(n)) { hits = hits + 10000; } }
+
+    println(hits);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "11111",
+                "every carrier must find the needle — a missing digit names the \
+                 shape that regressed (1 Ok, 10 Err, 100 Some, 1000 user enum, \
+                 10000 if-let)"
+            );
+        }
+    }
+
+    /// Companion: the methods that always WORKED must keep working.
+    /// `string_vars` now also drives these bindings, so a mistake in that
+    /// registration would surface as the String arm firing where it should not
+    /// — `len` reading a Vec length instead of a byte length, say.
+    #[test]
+    fn pattern_bound_string_keeps_its_working_methods() {
+        let out = run_program(
+            r#"
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn main() {
+    let r: Result[String, i64] = Result.Ok(mks(7));
+    match r {
+        Result.Ok(s) => {
+            println(s.len());
+            println(s.starts_with("pay"));
+        }
+        Result.Err(e) => { println(0); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "5\ntrue",
+                "`len` must still be the BYTE length of \"pay-7\" and \
+                 `starts_with` must still match"
+            );
+        }
+    }
+
     /// B-2026-08-05-3 — an `Option`/`Result` payload that is a TUPLE with a
     /// heap element must be owned EXACTLY ONCE, on both carriers.
     ///

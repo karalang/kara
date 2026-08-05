@@ -478,6 +478,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.vec_elem_types.insert(name.clone(), u8_ty);
                         bound_vec_elem = Some(u8_ty);
                     }
+                    // B-2026-08-05-8 — ALSO register the binding as a string
+                    // var, not only as a `Vec[u8]`-shaped buffer to free.
+                    //
+                    // `vec_elem_types` above exists for the scope-exit free;
+                    // `string_vars` is what METHOD DISPATCH consults to pick
+                    // the String arm for a method name String and Vec both
+                    // have (`contains`, `push`, `concat`, `sorted`). Without
+                    // this the binding looked like a `Vec[u8]` to dispatch, so
+                    // `s.contains(other)` fell through to Vec membership,
+                    // which compares elements with `==` and handed codegen a
+                    // whole `{ptr, i64, i64}` String where a scalar was
+                    // expected: "Binary op Eq: right operand has
+                    // non-comparable type". `karac check` passed and the
+                    // interpreter ran it correctly, so it presented as a
+                    // run-vs-build divergence whose error text blamed the
+                    // typechecker for an `==` the source never contained.
+                    //
+                    // Same intent as the Map/Set arm below, which registers
+                    // its dispatch side-tables so a match-arm-bound Map/Set
+                    // "dispatches like a let-bound one". String was the one
+                    // payload kind that got the free but not the dispatch.
+                    //
+                    // `CString` is deliberately excluded: its methods route
+                    // through the `CString.<method>` key, so putting it in
+                    // `string_vars` would aim dispatch at the wrong table.
+                    if type_name == "String" {
+                        self.string_vars.insert(name.clone());
+                    }
                     // Map[K,V] / Set[T] payload binding — register the
                     // collection dispatch side-tables (map_key_types /
                     // map_val_types / set_elem_types) off the full collection
