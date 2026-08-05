@@ -11395,6 +11395,57 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-33 predicate (b) — a MAP-BEARING struct passed by value.
+    ///
+    /// `make_aggregate_param_callee_owned` declined the entry copy (a Map field
+    /// cannot be duplicated by the outer-buffer copy, which its own comment
+    /// records as "left on caller-retains"), and the caller had ALREADY
+    /// retracted its drop for the move. The value was then owned by nobody:
+    /// 25,360 B over 40 calls on a DEFAULT -O2 build, confirmed under valgrind
+    /// through the ordinary CLI.
+    ///
+    /// The fix is ownership by TRANSFER — register the callee's drop without an
+    /// entry copy, since the caller moved the value in and there is no original
+    /// left to protect. This test is the leak half; the double-free half is
+    /// guarded by the whole -O0 sweep, whose failure SET must stay at baseline
+    /// (an over-broad widening here aborts rather than leaks, and the -O2 suite
+    /// does not see it — that is recorded in the row).
+    ///
+    /// Floored per B-2026-08-04-17: runtime-derived payload, and the Map is
+    /// read through `len()` on the callee side so the entry cannot be a dead
+    /// allocation at -O2.
+    #[test]
+    fn asan_map_bearing_struct_by_value_param_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct MapH { m: Map[i64, String] }
+
+fn sink(h: MapH) -> i64 { h.m.len() }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut m: Map[i64, String] = Map.new();
+        let mut s: String = String.new();
+        s.push_str("payload-");
+        s.push_str(n.to_string());
+        s.push_str("-padded-out-to-force-heap");
+        m.insert(1, s);
+        let h = MapH { m: m };
+        acc = acc + sink(h);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["40"],
+            "map_bearing_struct_by_value_param",
+            100,
+        );
+    }
+
     #[test]
     fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free

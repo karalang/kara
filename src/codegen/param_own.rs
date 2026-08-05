@@ -113,7 +113,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 // it is offset-correct for any field count — unlike the base
                 // bare-`T`-reinterpret drop path (B-2026-07-15-11), which stays
                 // single-field-gated.
-                return self.try_make_generic_struct_param_callee_owned(type_name, slot);
+                if self.try_make_generic_struct_param_callee_owned(type_name, slot) {
+                    return true;
+                }
+                // B-2026-08-05-33 — OWN BY TRANSFER when no copy is possible.
+                //
+                // The previous attempt at this row tried to keep the CALLER's
+                // drop and left the callee alone; that double-freed as soon as
+                // the callee moved a field out (`let s = b.v`), because
+                // caller-retains says how the param ARRIVES, not what the body
+                // does with it. This takes the other side: the caller already
+                // retracts its drop for exactly this shape
+                // (`move_declined_copy_struct_arg`), i.e. the value was MOVED
+                // in, so the callee can simply take the original buffers. A
+                // copy was never the point — `deep_copy_…` exists to leave the
+                // caller's original intact, and there is no original to
+                // protect once ownership transferred.
+                //
+                // Registering the drop WITHOUT the copy is what
+                // copy-supported params already do one line apart; this is that
+                // pair minus the copy. A field the body moves out is excluded
+                // by the same cap-zeroing move-suppression the copy-supported
+                // path relies on, which is why the `let s = b.v` shape balances
+                // here where keeping the caller's drop did not.
+                //
+                // Held in LOCKSTEP with the caller's retraction, which is the
+                // whole safety argument. Excluded: a shared-owning struct,
+                // where B-2026-08-05-32 made the CALLER keep its drop — owning
+                // here too would rc-dec twice. Self-referential structs are
+                // excluded as well: there the callee may store the alias into
+                // an owning container (B-2026-07-28-3), so a param drop could
+                // free what the container now owns. That leak stays, unchanged.
+                if !self.struct_owns_shared_field(type_name, &mut Vec::new())
+                    && !self.struct_is_self_referential(type_name)
+                {
+                    self.track_struct_var(type_name, slot);
+                    return true;
+                }
+                return false;
             }
             // B-2026-07-10-4: rc-inc buried bare-shared during entry-copy so it stays
             // symmetric with the combined drop's per-element rc-dec (a copy-supported
@@ -222,6 +259,77 @@ impl<'ctx> super::Codegen<'ctx> {
         let owns = ftes.iter().any(|fte| self.field_owns_shared(fte, stack));
         stack.pop();
         owns
+    }
+
+    /// Is `struct_name` (transitively) SELF-REFERENTIAL — does walking its
+    /// field types reach the struct itself?
+    ///
+    /// B-2026-08-05-33. `aggregate_param_copy_supported_struct` declines for
+    /// two unrelated reasons and only one of them means the callee may ALIAS:
+    /// self-reference (`struct N { edges: Vec[N] }`) declines via the `stack`
+    /// cycle guard because the unrolled copy has no finite emission, and the
+    /// callee can then store the alias into an owning container. Every other
+    /// decline — a Map-bearing field, a generic-erased `T`, a direct `shared`
+    /// field — just means this routine cannot duplicate the field.
+    ///
+    /// The walk descends Vec/VecDeque elements because the copy-support walk's
+    /// Vec arm does (`deep_copy_vec_aggregate_elements_in_place` inlines a
+    /// per-element struct copy), and generic args because a cycle can run
+    /// through one. The cycle guard trips iff the struct reaches itself, so
+    /// asking that directly is equivalent to "the decline was the
+    /// self-referential one" while staying independent of how the
+    /// copy-support walk is refactored later.
+    pub(super) fn struct_is_self_referential(&self, struct_name: &str) -> bool {
+        let mut stack = Vec::new();
+        self.struct_reaches(struct_name, struct_name, &mut stack)
+    }
+
+    fn struct_reaches(&self, root: &str, cur: &str, stack: &mut Vec<String>) -> bool {
+        if stack.iter().any(|s| s == cur) {
+            return false;
+        }
+        let Some(ftes) = self.struct_field_type_exprs.get(cur).cloned() else {
+            return false;
+        };
+        stack.push(cur.to_string());
+        let found = ftes
+            .iter()
+            .any(|fte| self.type_expr_reaches(root, fte, stack));
+        stack.pop();
+        found
+    }
+
+    fn type_expr_reaches(&self, root: &str, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {
+        match &fte.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.type_expr_reaches(root, e, stack)),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                if head == root {
+                    return true;
+                }
+                if matches!(head, "Vec" | "VecDeque") {
+                    if let Some(elem) = crate::codegen::helpers::vec_inner_type_expr(fte) {
+                        if self.type_expr_reaches(root, &elem, stack) {
+                            return true;
+                        }
+                    }
+                }
+                if let Some(args) = p.generic_args.as_ref() {
+                    for a in args {
+                        if let crate::ast::GenericArg::Type(t) = a {
+                            if self.type_expr_reaches(root, t, stack) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                if self.struct_types.contains_key(head) && !self.shared_types.contains_key(head) {
+                    return self.struct_reaches(root, head, stack);
+                }
+                false
+            }
+            _ => false,
+        }
     }
 
     /// Name-set companion to `option_inner_shared_type_for_type_expr`: does
