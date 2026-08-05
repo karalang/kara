@@ -127,6 +127,84 @@ mod par_codegen_tests {
         compile_to_ir(&parsed.program, Some(&ownership), Some(&analysis)).expect("codegen failed")
     }
 
+    /// Stage-1 BASELINE for B-2026-08-01-33 mechanism 3, and the measurement
+    /// the design doc's risk section asks for before stage 2 starts.
+    ///
+    /// Three facts, each load-bearing for what the `par`-admission slice has to
+    /// do, and each asserted as a RELATIONSHIP rather than an exact count so an
+    /// unrelated codegen change does not make this a maintenance tax:
+    ///
+    /// 1. **`frozen` is inert in codegen** — a `frozen` pass-through emits
+    ///    exactly the traffic the same program emits with a plain owned
+    ///    parameter. That is the containment claim (the mode lives on
+    ///    `Param::is_frozen` and never reaches codegen) confirmed from the
+    ///    output side rather than argued from the source side.
+    /// 2. **That traffic is the race.** It is non-atomic — plain load/add/store
+    ///    — which is precisely why a multi-branch capture SIGSEGVs
+    ///    (B-2026-07-28-13) and therefore why admission cannot land until the
+    ///    traffic is gone.
+    /// 3. **`ref` already reaches zero.** `rc_elide` (default ON since
+    ///    B-2026-07-15-21) elides the balanced pair on a read-only,
+    ///    non-escaping borrow. So the target state is not new machinery to be
+    ///    invented — it is an existing, shipped, verified channel that `frozen`
+    ///    params have not yet been routed into.
+    ///
+    /// When suppression lands, fact 1 flips and this test is expected to fail
+    /// at that assertion. That is the point: it is the positive control proving
+    /// a future "frozen emits no traffic" assertion is not vacuous.
+    #[test]
+    fn frozen_passthrough_rc_traffic_matches_owned_and_ref_reaches_zero() {
+        let program = |mode: &str| {
+            format!(
+                "shared struct N {{ val: i64 }}\n\
+                 fn inner(n: {mode}N) -> i64 {{ n.val }}\n\
+                 fn outer(n: {mode}N) -> i64 {{ inner(n) }}\n\
+                 fn main() {{ let g = N {{ val: 7 }}; println(outer(g)); }}"
+            )
+        };
+        let traffic = |mode: &str| {
+            let ir = ir_for_analyzed(&program(mode));
+            (
+                ir.matches("rc_inc").count(),
+                ir.matches("rc_dec").count(),
+                ir.matches("atomicrmw").count(),
+            )
+        };
+
+        let owned = traffic("");
+        let frozen = traffic("frozen ");
+        let borrowed = traffic("ref ");
+
+        // Positive control: without it, "frozen == owned" would also hold if
+        // both were zero and the test would assert nothing.
+        assert!(
+            owned.0 > 0 && owned.1 > 0,
+            "an owned `shared` pass-through must emit refcount traffic, else this \
+             test is vacuous; got inc={} dec={}",
+            owned.0,
+            owned.1
+        );
+        assert_eq!(
+            (frozen.0, frozen.1),
+            (owned.0, owned.1),
+            "`frozen` is inert in codegen today — it must emit exactly the owned \
+             traffic. If this fails because the counts are now LOWER, suppression \
+             has landed and this baseline should be replaced by a zero-traffic \
+             assertion"
+        );
+        assert_eq!(
+            frozen.2, 0,
+            "the traffic must be NON-atomic — that is what makes a multi-branch \
+             capture a race rather than merely slow"
+        );
+        assert_eq!(
+            (borrowed.0, borrowed.1),
+            (0, 0),
+            "`ref` must elide to zero: it is the existing channel `frozen` params \
+             will be routed into, so a regression here removes the target state"
+        );
+    }
+
     /// B-2026-08-01-33 — pins the CODEGEN half of the coupling the ownership
     /// relaxation rests on.
     ///

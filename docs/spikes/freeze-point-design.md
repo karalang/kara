@@ -274,6 +274,50 @@ motivating program is refused at the freeze site. That is what the staging
 always said (item 3 defers exactly this), but it is now a diagnostic that names
 the missing piece rather than a program that quietly type-checks.
 
+## Stage 1: the measurement, and what it changes about the last slice
+
+Measured IR for one pass-through chain across three parameter modes:
+
+| `fn inner(n: ? N)` / `fn outer(n: ? N) { inner(n) }` | `rc_inc` | `rc_dec` | `atomicrmw` |
+|---|---|---|---|
+| owned `N` | 4 | 9 | 0 |
+| **`frozen N`** | **4** | **9** | **0** |
+| `ref N` | **0** | **0** | 0 |
+
+Three readings, and the third changes the plan.
+
+**1. `frozen` is byte-identical to owned.** The mode is fully inert in codegen —
+the containment claim confirmed from the *output* side rather than argued from
+the source side.
+
+**2. The traffic is non-atomic.** Plain load/add/store. That is exactly why a
+multi-branch capture SIGSEGVs, and therefore why admission cannot land before
+the traffic is gone: **admission and RC suppression are one deliverable, not
+two.** Landing admission alone reproduces B-2026-07-28-13.
+
+**3. `ref` already reaches zero.** `rc_elide` — default ON since
+B-2026-07-15-21 — elides the balanced pair on a read-only, non-escaping borrow.
+So the suppression slice is **not new machinery to invent**; it is routing
+`frozen` params into an existing, shipped, verified channel
+(`elidable_ref_params` → `borrowed_arg_skip` / `borrowed_param_dec_skip`). That
+is a materially smaller and lower-risk change than this document implied.
+
+**One safety condition must carry over, and it is easy to miss.**
+`safe_elidable_ref_params` does not only check read-only-and-non-escaping; it
+also proves **no call site passes a fresh rvalue**. Eliding a balanced pair on a
+temporary leaks it, because no longer-lived owner is left to release it. That
+condition applies identically to `frozen` params. The frozen escape and
+freeze-site checks justify *ungating* frozen params from
+`KARAC_RC_ELIDE_REF_PARAMS` — they do not justify skipping the fresh-rvalue
+proof.
+
+The baseline is pinned by
+`frozen_passthrough_rc_traffic_matches_owned_and_ref_reaches_zero`
+(`tests/par_codegen.rs`), which asserts relationships rather than exact counts.
+It is the positive control that keeps a future zero-traffic assertion from being
+vacuous, and it is **expected to fail when suppression lands** — that failure is
+the signal, not a regression.
+
 ## Risks, stated plainly
 
 - **Non-counting handles are a new unsafety surface.** If escape checking has a
