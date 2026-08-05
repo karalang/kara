@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 215 | 0 |
-| leak | 135 | 1 |
+| leak | 135 | 0 |
 | double-free | 97 | 1 |
 | codegen-gap | 90 | 1 |
 | run-vs-build | 81 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 677 | 3 |
+| codegen | 677 | 2 |
 | interp | 124 | 0 |
 | typecheck | 121 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced · 7 open · 929 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced · 6 open · 930 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,11 +136,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
 | B-2026-08-05-28 | 2026-08-05 | codegen | medium | The String-to-String xform methods do not COMPILE on a surface-concat receiver: `("p:".to_string() + s).to_uppercase()` / `.trim()` fail with "no handler for method on non-identifier receiver" | docs/implementation_checklist/phase-7-codegen.md |
-| B-2026-08-05-32 | 2026-08-05 | codegen | high | A struct with a DIRECT `shared` field, bound to a LOCAL and passed BY VALUE, never rc-decs the box -- it leaks on a DEFAULT -O2 build (288 B / 8 allocs). The drop IS registered and then never emitted. The fresh-temp form is already fixed, so the b28 fixture's "pre-existing residual" note points at the wrong half | docs/implementation_checklist/phase-7-codegen.md |
 
-### Fixed (929)
+### Fixed (930)
 
-<details><summary>929 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>930 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1095,6 +1094,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-29 | typecheck+cli | medium | a single-target `karac check` silently omits `#[target(T)]`-gated bodies: they are stripped before any pass, so `check` prints "All checks passed" an… | e865f233 |
 | B-2026-08-05-30 | other | medium | the wasm E2E tests skip on a SUCCESSFUL build: `wasm_build_skip_reason` matches the string `wasm-tools not found`, which the browser-bindings path em… | c5005e9 |
 | B-2026-08-05-31 | interp+codegen | medium | the interpreter computes `Tensor[f32]` elements in f64 while AOT uses a packed f32 buffer, so an f32 tensor gives DIFFERENT ANSWERS on the two backen… | 2bfece1 |
+| B-2026-08-05-32 | codegen | high | A struct with a DIRECT `shared` field, bound to a LOCAL and passed BY VALUE, never rc-decs the box -- it leaks on a DEFAULT -O2 build (288 B / 8 allo… | 17b58f4 |
 
 </details>
 
