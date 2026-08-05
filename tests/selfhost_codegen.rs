@@ -1056,7 +1056,14 @@ fn build_and_emit_all() -> Option<String> {
     let run = Command::new(&bin).output().expect("run emitter driver");
     assert!(
         run.status.success(),
-        "emitter driver exited nonzero:\n{}",
+        // `{}` on the status, not just stderr (B-2026-08-05-23): a selfhost
+        // binary that dies by SIGNAL writes NOTHING to stderr, so the bare
+        // stderr message rendered as an empty string and said only that the
+        // run "exited nonzero". `ExitStatus` Display gives "signal: 11
+        // (SIGSEGV)" / "exit status: 1", which is the difference between a
+        // crash and a clean nonzero exit.
+        "emitter driver exited nonzero ({}):\n{}",
+        run.status,
         String::from_utf8_lossy(&run.stderr)
     );
     let out = String::from_utf8_lossy(&run.stdout).into_owned();
@@ -1065,7 +1072,7 @@ fn build_and_emit_all() -> Option<String> {
 }
 
 /// Run LLVM IR text through `karac_jit_runner`, returning (stdout, exit code).
-fn run_ir(ir: &str) -> (String, i32) {
+fn run_ir(ir: &str) -> (String, i32, String) {
     let tmp = std::env::temp_dir().join(format!("karac-cg-ir-{}.ll", std::process::id()));
     std::fs::write(&tmp, ir).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_karac_jit_runner"))
@@ -1076,8 +1083,16 @@ fn run_ir(ir: &str) -> (String, i32) {
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
     )
 }
+
+/// Every harness-level failure inside `karac_jit_runner` — unreadable IR, a
+/// module LLJIT refuses, an unresolved symbol, a missing `main` — is printed
+/// with this prefix. A program's OWN failure never is: `emit_panic` lowers to
+/// `printf` + `exit(1)`, which carries no prefix. So this cleanly separates
+/// "the IR never ran" from "the IR ran and behaved differently".
+const RUNNER_ERR: &str = "karac_jit_runner:";
 
 /// Run a source program through the seed's `karac run`, returning (stdout, code).
 fn seed_run(src: &str) -> (String, i32) {
@@ -1119,8 +1134,23 @@ fn selfhost_codegen_matches_seed_run() {
     );
     for (i, (src, ir)) in CORPUS.iter().zip(blocks.iter()).enumerate() {
         let ir = ir.trim_start_matches('\n');
-        let (kara_out, kara_code) = run_ir(ir);
+        let (kara_out, kara_code, kara_err) = run_ir(ir);
         let (seed_out, seed_code) = seed_run(src);
+        // Report a module that never RAN as what it is, before comparing
+        // output. Both B-2026-07-16-16 and B-2026-08-05-14 were link failures
+        // — the emitted module named a symbol the host could not resolve — and
+        // both surfaced here as `left: "" / right: <expected>` beside an IR
+        // dump that reads as perfectly correct, which is an expensive thing to
+        // stare at. The distinction is free to make and the two bugs are
+        // otherwise indistinguishable.
+        assert!(
+            !kara_err.contains(RUNNER_ERR),
+            "emitted IR for corpus[{i}] ({src:?}) FAILED TO RUN — this is a link/JIT \
+             failure, NOT an output mismatch. Check the module's external symbols \
+             against this host before reading the IR as a miscompile.\n\
+             --- karac_jit_runner stderr ---\n{}\n--- emitted IR ---\n{ir}",
+            kara_err.trim()
+        );
         assert_eq!(
             kara_out, seed_out,
             "stdout mismatch at corpus[{i}] ({src:?}):\n  Kāra-emitted: {kara_out:?}\n  \

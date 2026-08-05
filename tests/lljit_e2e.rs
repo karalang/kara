@@ -76,6 +76,20 @@ fn jit_run_program_capturing(src: &str) -> Option<(String, i32)> {
 
     let output = output?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // A module that never RAN is reported as such, not as an output mismatch.
+    // Every harness-level failure inside `karac_jit_runner` (unresolved symbol,
+    // module LLJIT refuses, missing `main`) carries this prefix; a program's own
+    // `emit_panic` → `exit(1)` does not, so tests expecting a nonzero exit are
+    // unaffected. Without this an unresolved extern reaches the caller as
+    // `("", nonzero)` and surfaces as `assert_eq!(out, "42\n")` failing on an
+    // empty string — the shape that cost real time in B-2026-07-16-16 and again
+    // in B-2026-08-05-14 over in the self-host oracle.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("karac_jit_runner:"),
+        "emitted IR FAILED TO RUN — link/JIT failure, not an output mismatch:\n{}",
+        stderr.trim()
+    );
     // `ExitStatus::code()` is `None` only when the child was killed by
     // a signal — `output_with_hang_watchdog` panics in its watchdog
     // path before we reach here, so any `None` is a real signal kill

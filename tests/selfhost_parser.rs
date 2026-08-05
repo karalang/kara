@@ -919,7 +919,14 @@ fn selfhost_parser_matches_rust_parser() {
         .expect("run kara parser binary");
     assert!(
         run.status.success(),
-        "kara parser binary exited nonzero:\n{}",
+        // `{}` on the status, not just stderr (B-2026-08-05-23): a selfhost
+        // binary that dies by SIGNAL writes NOTHING to stderr, so the bare
+        // stderr message rendered as an empty string and said only that the
+        // run "exited nonzero". `ExitStatus` Display gives "signal: 11
+        // (SIGSEGV)" / "exit status: 1", which is the difference between a
+        // crash and a clean nonzero exit.
+        "kara parser binary exited nonzero ({}):\n{}",
+        run.status,
         String::from_utf8_lossy(&run.stderr)
     );
     let kout = String::from_utf8_lossy(&run.stdout);
