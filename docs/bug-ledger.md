@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 88 | 0 |
 | missing-feature | 76 | 1 |
 | run-vs-build | 76 | 0 |
-| false-positive | 56 | 1 |
+| false-positive | 56 | 0 |
 | perf | 47 | 3 |
 | crash | 39 | 0 |
 | soundness | 36 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 663 | 2 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
-| ownership | 39 | 2 |
+| ownership | 39 | 1 |
 | autopar | 32 | 1 |
 | other | 25 | 2 |
 | cli | 25 | 0 |
@@ -124,23 +124,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **919 surfaced · 7 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **919 surfaced · 6 open · 905 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
-| B-2026-08-04-18 | 2026-08-04 | ownership | low | Moving a heap value OUT of an aggregate element and then assigning it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) warns `value 't' moved here, used again here` -- the reassignment re-initializes the element, so the later use is sound; the partial move is tracked against the whole aggregate | src/use_classifier.rs:441 (Assign arm), src/rc_predicate.rs:119 (reassign_kills) |
 | B-2026-08-05-4 | 2026-08-04 | runtime | high | PERF-REGRESSION introduced by B-2026-07-31-21's fix (75a3a928): a remove-heavy Map runs 1.76x slower because the same-width compacting rehash re-fires on every eviction where the old code doubled once -- kata:146 LRU cache 231.7ms -> 422.9ms on the M5 host lane, ROOT-CAUSED by archive swap, sinks identical | runtime/src/map.rs::next_capacity (hysteresis on the same-width compaction arm) |
 | B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED perf regression bounded to 2026-07-28..07-30: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 codegen is ruled out by byte-identical binaries | none yet — needs a matched karac+archive bisect across 2026-07-28..07-30 |
 | B-2026-08-05-6 | 2026-08-05 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo <= hi { v[base+lo] .. v[base+hi] } }`. The bound holds only ACROSS the call boundary (every caller passes `base = k*len` with `k < n`, and `v.len() == n*len`), and every BCE analysis in bce_length_pin.rs is per-function by construction, so no local fact exists to prove. Carries the whole of kata #246's residual 1.28x vs equal-safety C. Survives INLINING (measured), and LLVM's IRCE does not reach it either (measured, byte-identical assembly). Split off B-2026-08-04-8, whose intra-function shape is fixed. | — |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE that only the -O2 optimizer hides: `karac build` at the documented `KARAC_OPT_LEVEL=0` aborts with glibc `free(): double free detected in tcache 2`, while the same source at the default -O2 runs clean because the payload is dead and LLVM deletes the allocation | — |
 
-### Fixed (904)
+### Fixed (905)
 
-<details><summary>904 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>905 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1064,6 +1063,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-14 | interp | medium | The interpreter silently DROPPED an out-of-range index-assign: `v[100] = 7` on a 2-element Vec produced no error, no growth, and no store — while AOT… | a4ca760 |
 | B-2026-08-04-15 | autopar+codegen | high | AUTO-PAR SILENTLY DROPS STORES through a tuple-element receiver: `t.0.push(x)` recorded NO write in the dependency walk, so two pushes to the same Ve… | 567d5aa |
 | B-2026-08-04-16 | codegen+ownership | high | Moving a Vec OUT of a tuple element, mutating it, and moving it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) aborts with `free(): double free detect… | e986284 (src/codegen/stmts.rs tuple-assign arm; src/codegen/expr_ops.rs tuple_index_elem_type_expr). Pins codegen.rs::e2e_named_source_moved_into_a_tuple_element_is_disarmed, memory_sanitizer.rs::asan_named_source_moved_into_a_tuple_element_is_disarmed (floored at 500 allocations against ~1.8k), interpreter.rs::test_named_source_moved_into_a_tuple_element_is_disarmed. Both codegen tests are stash-proven RED against the unfixed compiler (the E2E aborts to empty output, the ASAN case reports a memory error); the interpreter twin passes both ways, as the oracle should. Verified across 16 probe shapes -- both element positions, Vec / String / Vec[String] elements, both-Vec tuples, fresh-temp vs named sources, and the struct-field control -- all clean on both backends with matching alloc/free counts. cargo test --features llvm: 12974 passed, 0 failed. |
+| B-2026-08-04-18 | ownership | low | Moving a heap value OUT of an aggregate element and then assigning it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) warns `value 't' moved here, used… | c312c8a2 |
 | B-2026-08-04-19 | codegen | high | Double-free (masked at -O2, hard at -O0/JIT): an owned struct/enum binding moved by an ASSIGNMENT — `o.h = h` into a heap-owning user-struct field, o… | 06bf3145 |
 | B-2026-08-04-20 | codegen | medium | The `KARAC_TEST_JIT=1` codegen parity leg did not set KARAC_PROGRAM_ARGS, so `env.args().len()` returned 2 (the `karac_jit_runner` argv `[runner, <ir… | 39b0c294 |
 | B-2026-08-04-21 | cli | medium | `karac fmt` silently deleted every declaration modifier it had no printer for (`unsafe fn`, `comptime fn`, `comptime` param prefix) | c35df3a |
