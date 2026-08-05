@@ -817,23 +817,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // stored in `method_callee_types`; consult it so a provably pure
         // method elides the check, mirroring the narrowing applied to
         // free-function calls in `compile_call`.
-        // B-2026-08-05-28 — try the CHAIN-DISAMBIGUATED key first, then the
-        // receiver span. The typechecker now keys `method_callee_types` on the
-        // closing paren for the three main insert sites, so `x.a().b()` no
-        // longer has its inner entry clobbered by the outer link. The fallback
-        // keeps the producers that have no `args_close_span` in scope
-        // (BoundedChannel, `String.to_cstring`) working unchanged. A fallback
-        // that lands on a sibling link's entry is harmless: the `dispatch_key`
-        // filter just below requires the key's method segment to equal THIS
-        // call's method, so a wrong hit degrades to no key — the pre-fix
-        // behaviour — rather than to a mis-dispatch.
         let callee_key = self
             .method_callee_types
-            .get(&crate::token::method_call_key(call_span, args_close_span))
-            .or_else(|| {
-                self.method_callee_types
-                    .get(&(call_span.offset, call_span.length))
-            })
+            .get(&(call_span.offset, call_span.length))
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 

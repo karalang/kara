@@ -1228,35 +1228,8 @@ impl<'a> super::TypeChecker<'a> {
                 // Cancel-narrowing side-table: record `Type.method` for this
                 // call site so codegen can elide the par-branch cancel check
                 // when the resolved callee is provably non-effectful.
-                // B-2026-08-05-28 — record the entry under BOTH keys.
-                //
-                // The receiver-span key is what every existing consumer reads,
-                // and it must keep its exact present contents: this table has a
-                // dozen collision-aware consumers (`use_classifier`'s mode
-                // resolution, `ownership`, `borrow`) whose workarounds are
-                // calibrated to today's clobbering, and MOVING the key
-                // regressed six of their tests. So the receiver-span insert is
-                // left verbatim, clobbering and all.
-                //
-                // The closing-paren key is the addition. The parser sets
-                // `MethodCall.span = receiver.span`, so every link of
-                // `x.a().b()` shares one span and the outer insert clobbers the
-                // inner — which left the INNER call resolving to a key whose
-                // method segment did not match, hence no dispatch key at all,
-                // hence `("p:" + s).to_uppercase().len()` failing to compile.
-                // Keying on the closing paren is unique per call in a chain
-                // (`SpanKey::for_method_call`, the helper the `method_unwrap_*`
-                // tables already use — Slice 1 of the span-collision fix), so a
-                // consumer that wants the per-call answer can now get it.
-                //
-                // Strictly additive: no existing read changes, and the two keys
-                // coincide for an UNCHAINED call, where the insert is idempotent.
                 self.method_callee_types.insert(
                     SpanKey::from_span(span),
-                    format!("{}.{}", type_name, method),
-                );
-                self.method_callee_types.insert(
-                    SpanKey::for_method_call(span, args_close_span),
                     format!("{}.{}", type_name, method),
                 );
                 // `f64.parse(s: String) -> Option[f64]`. Unlike the integer
@@ -1523,35 +1496,8 @@ impl<'a> super::TypeChecker<'a> {
                         GenericArg::Shape(_) => None,
                     })
                     .collect();
-                // B-2026-08-05-28 — record the entry under BOTH keys.
-                //
-                // The receiver-span key is what every existing consumer reads,
-                // and it must keep its exact present contents: this table has a
-                // dozen collision-aware consumers (`use_classifier`'s mode
-                // resolution, `ownership`, `borrow`) whose workarounds are
-                // calibrated to today's clobbering, and MOVING the key
-                // regressed six of their tests. So the receiver-span insert is
-                // left verbatim, clobbering and all.
-                //
-                // The closing-paren key is the addition. The parser sets
-                // `MethodCall.span = receiver.span`, so every link of
-                // `x.a().b()` shares one span and the outer insert clobbers the
-                // inner — which left the INNER call resolving to a key whose
-                // method segment did not match, hence no dispatch key at all,
-                // hence `("p:" + s).to_uppercase().len()` failing to compile.
-                // Keying on the closing paren is unique per call in a chain
-                // (`SpanKey::for_method_call`, the helper the `method_unwrap_*`
-                // tables already use — Slice 1 of the span-collision fix), so a
-                // consumer that wants the per-call answer can now get it.
-                //
-                // Strictly additive: no existing read changes, and the two keys
-                // coincide for an UNCHAINED call, where the insert is idempotent.
                 self.method_callee_types.insert(
                     SpanKey::from_span(span),
-                    format!("{}.{}", type_name, method),
-                );
-                self.method_callee_types.insert(
-                    SpanKey::for_method_call(span, args_close_span),
                     format!("{}.{}", type_name, method),
                 );
                 let candidates: Vec<(ImplInfo, FunctionSig)> = self
@@ -1941,35 +1887,8 @@ impl<'a> super::TypeChecker<'a> {
                 // builtin Option/Result unwrap-family, which is never
                 // `#[unstable]` / `#[deprecated]`.
                 self.check_method_stability(&type_name, method, span);
-                // B-2026-08-05-28 — record the entry under BOTH keys.
-                //
-                // The receiver-span key is what every existing consumer reads,
-                // and it must keep its exact present contents: this table has a
-                // dozen collision-aware consumers (`use_classifier`'s mode
-                // resolution, `ownership`, `borrow`) whose workarounds are
-                // calibrated to today's clobbering, and MOVING the key
-                // regressed six of their tests. So the receiver-span insert is
-                // left verbatim, clobbering and all.
-                //
-                // The closing-paren key is the addition. The parser sets
-                // `MethodCall.span = receiver.span`, so every link of
-                // `x.a().b()` shares one span and the outer insert clobbers the
-                // inner — which left the INNER call resolving to a key whose
-                // method segment did not match, hence no dispatch key at all,
-                // hence `("p:" + s).to_uppercase().len()` failing to compile.
-                // Keying on the closing paren is unique per call in a chain
-                // (`SpanKey::for_method_call`, the helper the `method_unwrap_*`
-                // tables already use — Slice 1 of the span-collision fix), so a
-                // consumer that wants the per-call answer can now get it.
-                //
-                // Strictly additive: no existing read changes, and the two keys
-                // coincide for an UNCHAINED call, where the insert is idempotent.
                 self.method_callee_types.insert(
                     SpanKey::from_span(span),
-                    format!("{}.{}", type_name, method),
-                );
-                self.method_callee_types.insert(
-                    SpanKey::for_method_call(span, args_close_span),
                     format!("{}.{}", type_name, method),
                 );
             }
