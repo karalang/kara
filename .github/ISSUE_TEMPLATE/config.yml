@@ -1,0 +1,13 @@
+# Questions and design conversation belong in Discussions, not the issue
+# tracker — the README has pointed there since the project opened, and issues
+# stay a list of things that are actually wrong.
+blank_issues_enabled: false
+contact_links:
+  - name: Question, idea, or design feedback
+    url: https://github.com/karalang/kara/discussions/new/choose
+    about: Anything that is not a concrete defect. All input welcome.
+  - name: Language design proposal
+    url: https://github.com/karalang/kara/discussions/new/choose
+    about: >
+      Kāra is pre-v1 and the spec (docs/design.md) is authoritative. Start a
+      Discussion so the shape can be settled before anyone writes code.

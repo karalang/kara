@@ -1,0 +1,88 @@
+name: Bug report
+description: The compiler miscompiles, crashes, rejects valid code, or accepts invalid code.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. The two fields that most often decide how fast this
+        gets fixed are **which executor** you used and a **minimal `.kara`
+        repro** — Kāra has three execution paths that can and do disagree, and
+        knowing which ones you tried usually localizes the bug immediately.
+
+  - type: input
+    id: version
+    attributes:
+      label: karac --version
+      description: Paste the exact string, including the build hash if present.
+      placeholder: karac 0.1.0 (abc1234)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: executors
+    attributes:
+      label: Which executors did you try?
+      description: >
+        Kāra runs code three ways and a disagreement between them is itself a
+        bug class (`run-vs-build`). Trying more than one narrows it a lot: if
+        `--interp` is right and `build` is wrong, the bug is in codegen.
+      options:
+        - label: "`karac run` (LLJIT, the default)"
+        - label: "`karac run --interp` (tree-walk interpreter)"
+        - label: "`karac build` (AOT native binary)"
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: >
+        The smallest `.kara` program that shows the problem — ideally one that
+        compiles cleanly and then misbehaves, rather than a whole project.
+        Nothing helps more than this.
+      render: rust
+      placeholder: |
+        fn main() {
+            // ...
+        }
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+      description: >
+        Exact output on both sides where you can. If the executors disagreed,
+        show each one's output — that comparison is the finding.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: >
+        Architecture is not a formality here: at least one real bug leaked on
+        arm64 while being perfectly balanced on x86.
+      options:
+        - Linux x86_64
+        - Linux arm64
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Windows
+        - WASM target
+        - Other / several
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Optional. If the build itself failed, please say whether you built the
+        runtime archives (`libkarac_runtime.a` and `libkarac_runtime_min.a`) —
+        a missing or stale archive produces link errors that look like compiler
+        bugs. See CONTRIBUTING.md.
+    validations:
+      required: false

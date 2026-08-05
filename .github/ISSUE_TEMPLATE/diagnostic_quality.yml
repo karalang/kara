@@ -1,0 +1,58 @@
+name: Diagnostic quality
+description: The compiler was right, but unhelpful — a bad message, a missing fix, or a fix it should have applied itself.
+labels: ["diagnostics"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Kāra's pitch is that the compiler explains itself well enough for an
+        agent or a newcomer to act on it without guessing. A diagnostic that is
+        *correct but unusable* is therefore a real defect here, not a nitpick —
+        please file it.
+
+  - type: textarea
+    id: code
+    attributes:
+      label: The code
+      description: The smallest program that produces the diagnostic.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: got
+    attributes:
+      label: What the compiler said
+      description: >
+        Paste the output. If you can, include `karac check --output=json` too —
+        the structured record carries the code, class, and any machine-applicable
+        fix, and a mismatch between the two renderings is itself worth knowing.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is wrong with it
+      options:
+        - The message is unclear, misleading, or names the wrong thing
+        - It points at the wrong span
+        - A fix is obvious to a human but the compiler offers none
+        - It offers a fix, but applying it is wrong or incomplete
+        - "`karac explain` has nothing useful for this code"
+        - The JSON record is missing a field the human output implies
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: better
+    attributes:
+      label: What would have helped
+      description: >
+        A sketch is fine. "It should have told me X" or "it should have offered
+        to insert Y" is enough to act on — you do not need to write the final
+        wording.
+    validations:
+      required: true
