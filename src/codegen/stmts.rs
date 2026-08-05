@@ -6468,7 +6468,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // hint table is keyed on the *tail* expr's span (not the
                 // block's), so element/Map/RC types resolve correctly. Direct
                 // `make();` is the degenerate tail == expr case — unchanged.
-                let tail = Self::discarded_owned_temp_tail(expr);
+                let tail = Self::discarded_owned_temp_tail(expr)
+                    .or_else(|| self.discarded_match_value_tail(expr));
                 if tail.is_some() {
                     self.scope_cleanup_actions.push(Vec::new());
                 }
@@ -10304,6 +10305,69 @@ impl<'ctx> super::Codegen<'ctx> {
     /// its own cleanup, so discarded branching tails stay a (safe) leak for a
     /// later slice. Phi-merged fresh-temp branches are the only thing lost by
     /// this conservatism, and they are rare in discard position.
+    /// A `match` used as a discarded expression-STATEMENT whose arms yield a
+    /// fresh heap value — `match d { E.A(n) => f"[{n}]", E.B(_) => "x" };`.
+    ///
+    /// `discarded_owned_temp_tail` recognizes only Call / MethodCall (and
+    /// block wrappers around them), so a match in statement position pushed
+    /// no discard frame at all and its arm value was never freed: a leak of
+    /// one buffer per evaluation, with no binding anywhere that could own it
+    /// (B-2026-08-05-7, `fstring_match_arm_value`). Binding the same match
+    /// (`let s = match … ;`) has always been clean, which is the whole shape
+    /// of the bug — the value is identical, only the discard path is missing.
+    ///
+    /// Returns the MATCH itself, not an arm: exactly one arm runs and
+    /// `compile_expr` hands back the merged phi, so the phi is the thing to
+    /// free once.
+    ///
+    /// FAIL-CLOSED on the arms, and this is the load-bearing part. Every arm
+    /// body's tail must be a value this frame may own:
+    ///   * a non-borrow Call / MethodCall, or an f-string / concat — freshly
+    ///     allocated, nobody else's;
+    ///   * a string LITERAL — `cap == 0`, so `FreeVecBuffer`'s cap guard
+    ///     skips it and a literal arm neither leaks nor double-frees.
+    ///
+    /// Anything else declines the WHOLE match, because an arm yielding a
+    /// place — a payload binding (`E.A(n) => n`), a field, an element —
+    /// hands back storage its container still owns, and freeing the phi
+    /// would double-free exactly when that arm is the one taken. One
+    /// disqualifying arm is enough: the phi is a single value and the frame
+    /// cannot know at compile time which arm produced it.
+    fn discarded_match_value_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+        let ExprKind::Match { arms, .. } = &expr.kind else {
+            return None;
+        };
+        if arms.is_empty() {
+            return None;
+        }
+        for arm in arms {
+            let tail = Self::block_tail_expr(&arm.body);
+            let ok = match &tail.kind {
+                ExprKind::InterpolatedStringLit(_) => true,
+                ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => true,
+                ExprKind::Binary { .. } => self
+                    .string_typed_exprs
+                    .contains(&(tail.span.offset, tail.span.length)),
+                _ => self.expr_yields_fresh_owned_temp(tail),
+            };
+            if !ok {
+                return None;
+            }
+        }
+        Some(expr)
+    }
+
+    /// The value an arm body ultimately yields: an arm may be a bare
+    /// expression or a block, and only the block's tail is the value.
+    fn block_tail_expr(body: &Expr) -> &Expr {
+        match &body.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                b.final_expr.as_deref().map_or(body, Self::block_tail_expr)
+            }
+            _ => body,
+        }
+    }
+
     pub(super) fn discarded_owned_temp_tail(expr: &Expr) -> Option<&Expr> {
         match &expr.kind {
             ExprKind::Call { .. } | ExprKind::MethodCall { .. } => Some(expr),
