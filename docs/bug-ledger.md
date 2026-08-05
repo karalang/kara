@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 213 | 0 |
 | leak | 131 | 0 |
-| double-free | 95 | 0 |
+| double-free | 96 | 1 |
 | codegen-gap | 88 | 0 |
 | missing-feature | 76 | 1 |
 | run-vs-build | 76 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 662 | 1 |
+| codegen | 663 | 2 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **918 surfaced · 6 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **919 surfaced · 7 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **918 surfaced 
 | B-2026-08-05-4 | 2026-08-04 | runtime | high | PERF-REGRESSION introduced by B-2026-07-31-21's fix (75a3a928): a remove-heavy Map runs 1.76x slower because the same-width compacting rehash re-fires on every eviction where the old code doubled once -- kata:146 LRU cache 231.7ms -> 422.9ms on the M5 host lane, ROOT-CAUSED by archive swap, sinks identical | runtime/src/map.rs::next_capacity (hysteresis on the same-width compaction arm) |
 | B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED perf regression bounded to 2026-07-28..07-30: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 codegen is ruled out by byte-identical binaries | none yet — needs a matched karac+archive bisect across 2026-07-28..07-30 |
 | B-2026-08-05-6 | 2026-08-05 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo <= hi { v[base+lo] .. v[base+hi] } }`. The bound holds only ACROSS the call boundary (every caller passes `base = k*len` with `k < n`, and `v.len() == n*len`), and every BCE analysis in bce_length_pin.rs is per-function by construction, so no local fact exists to prove. Carries the whole of kata #246's residual 1.28x vs equal-safety C. Survives INLINING (measured), and LLVM's IRCE does not reach it either (measured, byte-identical assembly). Split off B-2026-08-04-8, whose intra-function shape is fixed. | — |
+| B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE that only the -O2 optimizer hides: `karac build` at the documented `KARAC_OPT_LEVEL=0` aborts with glibc `free(): double free detected in tcache 2`, while the same source at the default -O2 runs clean because the payload is dead and LLVM deletes the allocation | — |
 
 ### Fixed (904)
 
