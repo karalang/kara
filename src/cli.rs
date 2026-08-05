@@ -4195,11 +4195,20 @@ fn render_missing_track_caller_lint_diag(
 /// behaviour, and the author of a native-only build has no reason to be
 /// nagged. What was missing is the fact, plus the flag that acts on it.
 fn target_skip_note(pipeline: &Pipeline) -> Option<String> {
-    if pipeline.target_skipped.is_empty() {
+    render_target_skip_note(&pipeline.target_skipped, crate::target::active_target())
+}
+
+/// The note itself, over a name → rendered-spec map. Split out so the
+/// multi-target driver can reuse it for the items NO requested target
+/// checked — see `unchecked_across_targets`.
+fn render_target_skip_note(
+    skipped: &std::collections::HashMap<String, String>,
+    scope: &str,
+) -> Option<String> {
+    if skipped.is_empty() {
         return None;
     }
-    let mut items: Vec<_> = pipeline
-        .target_skipped
+    let mut items: Vec<_> = skipped
         .iter()
         .map(|(name, spec)| format!("{name} ({spec})"))
         .collect();
@@ -4207,12 +4216,34 @@ fn target_skip_note(pipeline: &Pipeline) -> Option<String> {
     let n = items.len();
     let plural = if n == 1 { "" } else { "s" };
     Some(format!(
-        "note: {n} item{plural} NOT checked — gated away from target '{}': {}\n      \
+        "note: {n} item{plural} NOT checked — gated away from {scope}: {}\n      \
          Their bodies are stripped before any pass runs, so nothing above covers them. \
          Check them with `--targets=all` (or declare `[build] targets` in kara.toml).",
-        crate::target::active_target(),
         items.join(", "),
     ))
+}
+
+/// Items every requested target stripped — the matrix's blind spot.
+///
+/// The single-target note deliberately does not fire per-pass in a matrix
+/// run: an item one pass gates away is usually an item another pass is
+/// busy checking, and nagging about it would be noise. But that reasoning
+/// only holds for items SOME pass admits. `--targets=native,wasm_wasi`
+/// over a `#[target(gpu)]` item checks it nowhere and, before this,
+/// said nothing — the same silence the note exists to break, one level
+/// up. Intersecting the per-pass maps keeps the original intent
+/// (never mention an item a sibling pass checked) and closes that hole.
+fn unchecked_across_targets(
+    per_target: &[std::collections::HashMap<String, String>],
+) -> std::collections::HashMap<String, String> {
+    let Some((first, rest)) = per_target.split_first() else {
+        return std::collections::HashMap::new();
+    };
+    first
+        .iter()
+        .filter(|(name, _)| rest.iter().all(|m| m.contains_key(*name)))
+        .map(|(name, spec)| (name.clone(), spec.clone()))
+        .collect()
 }
 
 /// `target_skipped` as a JSON array of `{name, gated_for}` (B-2026-08-05-29).
@@ -4223,7 +4254,13 @@ fn target_skip_note(pipeline: &Pipeline) -> Option<String> {
 /// "some of the file was never looked at". Sorted by name so the output is
 /// deterministic across runs.
 fn target_skipped_json(pipeline: &Pipeline) -> String {
-    let mut rows: Vec<(&String, &String)> = pipeline.target_skipped.iter().collect();
+    render_target_skipped_json(&pipeline.target_skipped)
+}
+
+/// Map form of [`target_skipped_json`], so the multi-target driver can
+/// emit the same field for the items no requested target checked.
+fn render_target_skipped_json(skipped: &std::collections::HashMap<String, String>) -> String {
+    let mut rows: Vec<(&String, &String)> = skipped.iter().collect();
     rows.sort_by(|a, b| a.0.cmp(b.0));
     let parts: Vec<String> = rows
         .iter()
@@ -6361,6 +6398,7 @@ fn cmd_check_targets(
         total_errors: usize,
         text_blocks: Vec<String>,
         json_entries: Vec<String>,
+        skipped: std::collections::HashMap<String, String>,
     }
     let mut runs: Vec<TargetRun> = Vec::new();
     for target in targets {
@@ -6378,8 +6416,19 @@ fn cmd_check_targets(
             total_errors: total,
             text_blocks: render_text_diagnostics(&pipeline),
             json_entries: collect_diagnostics(&pipeline).entries,
+            skipped: pipeline.target_skipped.clone(),
         });
     }
+
+    // Items NO requested target checked (B-2026-08-05-29). Reported once
+    // for the whole run, not per pass — see `unchecked_across_targets`.
+    let per_target: Vec<_> = runs.iter().map(|r| r.skipped.clone()).collect();
+    let unchecked = unchecked_across_targets(&per_target);
+    let scope = if targets.len() == 1 {
+        format!("target '{}'", targets[0])
+    } else {
+        format!("every checked target ({})", targets.join(", "))
+    };
 
     // A diagnostic is target-agnostic when its rendered block appears
     // on every target. Set semantics — exact duplicate blocks within
@@ -6425,6 +6474,10 @@ fn cmd_check_targets(
                 } else {
                     eprintln!("All checks passed under target '{}'.", run.target);
                 }
+            }
+            if let Some(note) = render_target_skip_note(&unchecked, &scope) {
+                eprintln!();
+                eprintln!("{note}");
             }
         }
         OutputMode::Json => {
@@ -6476,13 +6529,17 @@ fn cmd_check_targets(
                 })
                 .collect();
             println!(
-                "{{\"targets\":[{}],\"shared_diagnostics\":[{}],\"success\":{}}}",
+                "{{\"targets\":[{}],\"shared_diagnostics\":[{}],\"target_skipped\":{},\"success\":{}}}",
                 blocks.join(","),
                 shared_json
                     .iter()
                     .map(|s| s.as_str())
                     .collect::<Vec<_>>()
                     .join(","),
+                // Peer to the single-pass field, same shape: items NO
+                // requested target checked. An EMPTY array is meaningful —
+                // it says the matrix covered everything.
+                render_target_skipped_json(&unchecked),
                 !any_failed,
             );
         }

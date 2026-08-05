@@ -14023,15 +14023,24 @@ fn target_skip_fixture(dir: &str) -> std::path::PathBuf {
 #[test]
 fn single_target_check_notes_the_items_it_skipped() {
     let path = target_skip_fixture("target-skip-note");
+    // `--target=native` EXPLICITLY, where a bare `karac check` used to do.
+    // The bare form is no longer a single-target check for a gated file: it
+    // now runs native plus every gated target and actually reads the body
+    // (B-2026-08-05-29's second half). The note keeps its job for the cases
+    // that discovery cannot cover — an explicitly requested single target,
+    // and a gated body reached through an imported module.
     let out = karac_bin()
-        .args(["check", path.to_str().unwrap()])
+        .args(["check", path.to_str().unwrap(), "--target=native"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     // Still a pass — gating an item away is correct, so this is a note and
-    // the exit status must not change.
+    // the exit status must not change. (Requesting a target explicitly
+    // renders through the per-target driver, which words its success line
+    // "All checks passed under target 'native'." — the assertion is on the
+    // pass, not on the phrasing.)
     assert!(
-        out.status.success() && stderr.contains("All checks passed."),
+        out.status.success() && stderr.contains("All checks passed"),
         "gating an item away must stay a PASS, got: {stderr}"
     );
     assert!(
@@ -14050,8 +14059,15 @@ fn single_target_check_notes_the_items_it_skipped() {
 #[test]
 fn single_target_check_json_reports_skipped_items() {
     let path = target_skip_fixture("target-skip-json");
+    // Explicit single target — see the sibling text test for why the bare
+    // form no longer exercises this path.
     let out = karac_bin()
-        .args(["check", path.to_str().unwrap(), "--output=json"])
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--target=native",
+            "--output=json",
+        ])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -14062,6 +14078,69 @@ fn single_target_check_json_reports_skipped_items() {
         "expected target_skipped to name the gated item, got: {stdout}"
     );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn matrix_notes_only_items_no_target_checked() {
+    // The note's original rule — never mention an item a sibling pass
+    // checked — leaves a hole one level up: a matrix that admits the item
+    // NOWHERE checks it nowhere and used to say nothing, which is the
+    // exact silence the note exists to break. `--targets=native,wasm_wasi`
+    // over a `#[target(gpu)]` item is that case.
+    let tmp = multi_target_dir("matrix-blind");
+    let path = tmp.join("gpu_gated.kara");
+    std::fs::write(
+        &path,
+        "#[target(gpu)]\npub fn gpu_only(a: i32) -> i32 { return a; }\nfn main() {}\n",
+    )
+    .unwrap();
+
+    let uncovered = karac_bin()
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--targets=native,wasm_wasi",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&uncovered.stderr);
+    assert!(uncovered.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("1 item NOT checked")
+            && stderr.contains("gpu_only (gpu)")
+            && stderr.contains("every checked target (native, wasm_wasi)"),
+        "a matrix that checks the item nowhere must say so: {stderr}",
+    );
+
+    // ...and a matrix that DOES cover it stays silent, which is the
+    // property the original single-target-only rule was protecting.
+    let covered = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--targets=native,gpu"])
+        .output()
+        .unwrap();
+    let covered_err = String::from_utf8_lossy(&covered.stderr);
+    assert!(
+        covered.status.success() && !covered_err.contains("NOT checked"),
+        "an item some pass checked must not be reported as skipped: {covered_err}",
+    );
+
+    // JSON peer field, same shape as the single-pass one: empty when the
+    // matrix covered everything, populated when it did not.
+    let json = karac_bin()
+        .args([
+            "check",
+            path.to_str().unwrap(),
+            "--targets=native,wasm_wasi",
+            "--output=json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&json.stdout);
+    assert!(
+        stdout.contains("\"target_skipped\":[{\"name\":\"gpu_only\",\"gated_for\":\"gpu\"}]"),
+        "matrix JSON must carry the uncovered item: {stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]
