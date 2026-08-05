@@ -152,6 +152,20 @@ mod llvm_main {
         VecTracked, // Vec[Tracked]
         OptTracked, // Option[Tracked]
         CrateT,     // struct Crate { lid: i64, item: Tracked } — Drop one level down
+        // ── NESTED shapes: a container inside a container ──
+        //
+        // The axis the ledger keeps producing bugs on. Drop insertion has to be
+        // right for (container × position × backend × par-mode), and everything
+        // above nests at most ONE level (`Vec[Vec[String]]`, `Vec[Payload]`).
+        // The live entries are all two levels: a tuple held by an Option
+        // (B-2026-08-05-3), a Drop value inside a tuple inside a Vec
+        // (B-2026-08-02-22), a Drop value as a Map VALUE (B-2026-08-02-24).
+        // Each was found by a hand probe; none was reachable from this corpus.
+        TupTracked,    // (i64, Tracked) — a Drop value as a tuple element
+        VecTupTracked, // Vec[(i64, Tracked)] — and as a Vec-of-tuples element
+        OptTupVec,     // Option[(Vec[String], i64)] — heap in a tuple in an Option
+        MapTracked,    // Map[String, Tracked] — a Drop value as a Map value
+        ResTracked,    // Result[Tracked, i64] — the Result twin of OptTracked
     }
 
     // A live binding in the generated `main` body.
@@ -515,6 +529,90 @@ mod llvm_main {
                 "        let mut {n}: Crate = new_crate({tag}i64, {lit});"
             ));
             self.add_var_mut(n, Ty::CrateT);
+        }
+
+        // ── producers: nested containers ─────────────────────────────────
+
+        fn make_tup_tracked(&mut self) {
+            let n = self.fresh("tt");
+            let tag = self.fresh_tag();
+            let lit = self.str_literal();
+            let i = self.i64_literal();
+            self.emit(format!(
+                "        let mut {n}: (i64, Tracked) = ({i}, new_tracked({tag}i64, {lit}));"
+            ));
+            self.add_var_mut(n, Ty::TupTracked);
+        }
+
+        fn make_vec_tup_tracked(&mut self) {
+            let n = self.fresh("vtt");
+            self.emit(format!(
+                "        let mut {n}: Vec[(i64, Tracked)] = Vec.new();"
+            ));
+            let pushes = 1 + self.rng.below(3);
+            for _ in 0..pushes {
+                let tag = self.fresh_tag();
+                let lit = self.str_literal();
+                let i = self.i64_literal();
+                self.emit(format!(
+                    "        {n}.push(({i}, new_tracked({tag}i64, {lit})));"
+                ));
+            }
+            self.add_var_mut(n, Ty::VecTupTracked);
+        }
+
+        /// B-2026-08-05-3's shape: heap inside a tuple inside an `Option`. The
+        /// leak there is the tuple ELEMENT's buffer, which only the `Some` arm
+        /// binding reaches — so the value has to be built, wrapped, and later
+        /// destructured for the shape to be exercised at all.
+        fn make_opt_tup_vec(&mut self) {
+            let n = self.fresh("otv");
+            let v = self.vecstr_literal();
+            let i = self.i64_literal();
+            if self.rng.chance(4, 5) {
+                self.emit(format!(
+                    "        let mut {n}: Option[(Vec[String], i64)] = Some(({v}, {i}));"
+                ));
+            } else {
+                self.emit(format!(
+                    "        let mut {n}: Option[(Vec[String], i64)] = None;"
+                ));
+            }
+            self.add_var_mut(n, Ty::OptTupVec);
+        }
+
+        fn make_map_tracked(&mut self) {
+            let n = self.fresh("mt");
+            self.emit(format!(
+                "        let mut {n}: Map[String, Tracked] = Map.new();"
+            ));
+            let inserts = 1 + self.rng.below(3);
+            for _ in 0..inserts {
+                let tag = self.fresh_tag();
+                let key = self.str_literal();
+                let lit = self.str_literal();
+                self.emit(format!(
+                    "        {n}.insert({key}, new_tracked({tag}i64, {lit}));"
+                ));
+            }
+            self.add_var_mut(n, Ty::MapTracked);
+        }
+
+        fn make_res_tracked(&mut self) {
+            let n = self.fresh("rt");
+            if self.rng.chance(4, 5) {
+                let tag = self.fresh_tag();
+                let lit = self.str_literal();
+                self.emit(format!(
+                    "        let mut {n}: Result[Tracked, i64] = Ok(new_tracked({tag}i64, {lit}));"
+                ));
+            } else {
+                let i = self.i64_literal();
+                self.emit(format!(
+                    "        let mut {n}: Result[Tracked, i64] = Err({i});"
+                ));
+            }
+            self.add_var_mut(n, Ty::ResTracked);
         }
 
         // ── transforms: consume live bindings, exercise drop-prone shapes ──
@@ -898,6 +996,100 @@ mod llvm_main {
             true
         }
 
+        // ── transforms: tuple ELEMENTS ────────────────────────────────────
+        //
+        // Three of the live ledger entries are tuple-element shapes and none
+        // was reachable before: a `ref` param given `t.0` (double-free), a
+        // `mut ref` param given `t.0` (the mutation is lost under AOT), and
+        // move-out-then-assign-back (a false-positive move diagnostic).
+
+        /// Borrow a tuple's heap element through a `ref` param. The callee must
+        /// not free it; the tuple stays live and drops once.
+        fn ref_peek_tuple_elem(&mut self) -> bool {
+            let Some(v) = self.live_of(Ty::OptTupVec) else {
+                return false;
+            };
+            // Only the `Some` payload has an element to borrow, so go through
+            // a match rather than projecting an Option directly.
+            let x = self.fresh("tv");
+            self.emit(format!(
+                "        match {} {{ Some({x}) => {{ acc = acc + peek_vec({x}.0) + {x}.1; }}, None => {{}} }}",
+                v.name
+            ));
+            self.kill(&v.name.clone());
+            true
+        }
+
+        /// Consume an `Option[(Vec[String], i64)]` by binding the payload and
+        /// reading its heap element — B-2026-08-05-3 verbatim.
+        fn match_opt_tup_vec(&mut self) -> bool {
+            let Some(o) = self.take(Ty::OptTupVec) else {
+                return false;
+            };
+            let x = self.fresh("otx");
+            self.emit(format!(
+                "        match {o} {{ Some({x}) => {{ acc = acc + tup_vec_len({x}); }}, None => {{}} }}"
+            ));
+            true
+        }
+
+        /// Move a tuple's Drop element OUT into its own binding, then read it.
+        /// The element's body must fire exactly once, at the new binding.
+        fn move_out_tuple_elem(&mut self) -> bool {
+            let Some(t) = self.take(Ty::TupTracked) else {
+                return false;
+            };
+            let n = self.fresh("mo");
+            self.emit(format!("        let {n}: Tracked = {t}.1;"));
+            self.emit(format!("        acc = acc + tracked_len({n});"));
+            true
+        }
+
+        /// Consume a `Vec[(i64, Tracked)]` by owned loop — every element's
+        /// tuple slot must run its body once (B-2026-08-02-22's family).
+        fn for_owned_vec_tup_tracked(&mut self) -> bool {
+            let Some(v) = self.take(Ty::VecTupTracked) else {
+                return false;
+            };
+            let e = self.fresh("vte");
+            self.emit(format!(
+                "        for {e} in {v} {{ acc = acc + tup_tracked_len({e}); }}"
+            ));
+            true
+        }
+
+        /// Displace a `Result[Tracked, i64]` — the Result twin of the Option
+        /// displacement leg fixed in B-2026-08-02-25.
+        fn reassign_res_tracked(&mut self) -> bool {
+            let Some(v) = self.live_mut_of(Ty::ResTracked) else {
+                return false;
+            };
+            if self.rng.chance(1, 2) {
+                let i = self.i64_literal();
+                self.emit(format!("        {} = Err({i});", v.name));
+            } else {
+                let tag = self.fresh_tag();
+                let lit = self.str_literal();
+                self.emit(format!(
+                    "        {} = Ok(new_tracked({tag}i64, {lit}));",
+                    v.name
+                ));
+            }
+            true
+        }
+
+        /// Consume a `Result[Tracked, i64]` through its `Ok` arm.
+        fn match_res_tracked(&mut self) -> bool {
+            let Some(r) = self.take(Ty::ResTracked) else {
+                return false;
+            };
+            let x = self.fresh("rx");
+            self.emit(format!(
+                "        match {r} {{ Ok({x}) => {{ acc = acc + tracked_len({x}); }}, Err({x}e) => {{ acc = acc + {x}e; }} }}"
+            ));
+            true
+        }
+
         // ── sinks: drain every remaining live binding into `acc` ──────────
 
         fn sink_all(&mut self) {
@@ -976,6 +1168,31 @@ mod llvm_main {
                         "        acc = acc + {}.lid + tracked_peek({}.item);",
                         v.name, v.name
                     ),
+                    Ty::TupTracked => format!("        acc = acc + tup_tracked_len({});", v.name),
+                    Ty::VecTupTracked => {
+                        let e = self.fresh("vte");
+                        format!(
+                            "        for {e} in {} {{ acc = acc + tup_tracked_len({e}); }}",
+                            v.name
+                        )
+                    }
+                    Ty::OptTupVec => {
+                        let x = self.fresh("otx");
+                        format!(
+                            "        match {} {{ Some({x}) => {{ acc = acc + tup_vec_len({x}); }}, None => {{}} }}",
+                            v.name
+                        )
+                    }
+                    // Borrowed: the Map itself dies at scope exit, and that is
+                    // what must cascade into every VALUE's body exactly once.
+                    Ty::MapTracked => format!("        acc = acc + {}.len();", v.name),
+                    Ty::ResTracked => {
+                        let x = self.fresh("rsx");
+                        format!(
+                            "        match {} {{ Ok({x}) => {{ acc = acc + tracked_len({x}); }}, Err({x}e) => {{ acc = acc + {x}e; }} }}",
+                            v.name
+                        )
+                    }
                 };
                 self.emit(line);
             }
@@ -1006,7 +1223,7 @@ mod llvm_main {
             // weight. They are the only ones the drop-log oracle can judge, and
             // the displacement transforms all need one live to apply at all —
             // too thin a share and most programs never reach the new shapes.
-            match self.rng.below(15) {
+            match self.rng.below(20) {
                 0 => self.make_str(),
                 1 => self.make_vecstr(),
                 2 => self.make_pair(),
@@ -1021,15 +1238,21 @@ mod llvm_main {
                 11 => self.make_tracked(),
                 12 => self.make_vec_tracked(),
                 13 => self.make_opt_tracked(),
-                _ => self.make_crate(),
+                14 => self.make_crate(),
+                15 => self.make_tup_tracked(),
+                16 => self.make_vec_tup_tracked(),
+                17 => self.make_opt_tup_vec(),
+                18 => self.make_map_tracked(),
+                _ => self.make_res_tracked(),
             }
         }
 
         fn step_one(&mut self) {
             // Try transforms in a random order until one applies; if none does
             // (nothing live of the needed type), produce fresh material.
-            let mut order: [u8; 23] = [
+            let mut order: [u8; 29] = [
                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28,
             ];
             // Fisher-Yates on the fixed array.
             for i in (1..order.len()).rev() {
@@ -1061,7 +1284,14 @@ mod llvm_main {
                     19 => self.for_owned_vec_tracked(),
                     20 => self.ref_peek_tracked(),
                     21 => self.par_capture_tracked(),
-                    _ => false, // slot 22: fall through to a producer
+                    // ── nested containers / tuple elements ──
+                    22 => self.match_opt_tup_vec(),
+                    23 => self.ref_peek_tuple_elem(),
+                    24 => self.move_out_tuple_elem(),
+                    25 => self.for_owned_vec_tup_tracked(),
+                    26 => self.reassign_res_tracked(),
+                    27 => self.match_res_tracked(),
+                    _ => false, // slot 28: fall through to a producer
                 };
                 if applied {
                     return;
@@ -1122,7 +1352,17 @@ struct Crate { lid: i64, item: Tracked }
 
 fn new_crate(tag: i64, name: String) -> Crate {
     return Crate { lid: tag, item: new_tracked(tag, name) };
-}"#;
+}
+
+fn tup_tracked_len(t: (i64, Tracked)) -> i64 { return t.0 + t.1.name.len(); }
+
+fn tup_vec_len(t: (Vec[String], i64)) -> i64 {
+    let mut acc: i64 = t.1;
+    for e in t.0.iter() { acc = acc + e.len(); }
+    return acc;
+}
+
+fn peek_vec(v: ref Vec[String]) -> i64 { return v.len(); }"#;
 
     // ───────────────────────── compile + run under ASan ──────────────────
 
