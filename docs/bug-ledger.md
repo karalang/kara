@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 76 | 1 |
 | run-vs-build | 76 | 0 |
 | false-positive | 56 | 1 |
-| perf | 44 | 1 |
+| perf | 46 | 3 |
 | crash | 39 | 0 |
 | soundness | 36 | 0 |
 | diagnostics | 35 | 0 |
@@ -115,18 +115,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 116 | 0 |
 | ownership | 39 | 2 |
 | autopar | 32 | 1 |
+| other | 25 | 2 |
 | cli | 25 | 0 |
-| other | 24 | 1 |
-| runtime | 19 | 0 |
+| runtime | 20 | 1 |
 | resolver | 18 | 0 |
 | parser | 10 | 0 |
 | lexer | 3 | 0 |
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **915 surfaced · 5 open · 902 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **917 surfaced · 7 open · 902 fixed** (2026-05-20 → 2026-08-04). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **915 surfaced 
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
 | B-2026-08-04-18 | 2026-08-04 | ownership | low | Moving a heap value OUT of an aggregate element and then assigning it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) warns `value 't' moved here, used again here` -- the reassignment re-initializes the element, so the later use is sound; the partial move is tracked against the whole aggregate | src/use_classifier.rs:441 (Assign arm), src/rc_predicate.rs:119 (reassign_kills) |
 | B-2026-08-05-3 | 2026-08-04 | codegen | medium | `Option[(Vec[T], ...)]` leaks the tuple payload's heap element when the Some arm binds and reads it -- 32 bytes definitely lost; the struct payload twin `Option[H]` is clean and the interpreter is correct on both | src/codegen (Option payload drop walk for a TUPLE payload) |
+| B-2026-08-05-4 | 2026-08-04 | runtime | high | PERF-REGRESSION introduced by B-2026-07-31-21's fix (75a3a928): a remove-heavy Map runs 1.76x slower because the same-width compacting rehash re-fires on every eviction where the old code doubled once -- kata:146 LRU cache 231.7ms -> 422.9ms on the M5 host lane, ROOT-CAUSED by archive swap, sinks identical | runtime/src/map.rs::next_capacity (hysteresis on the same-width compaction arm) |
+| B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED perf regression bounded to 2026-07-28..07-30: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 codegen is ruled out by byte-identical binaries | none yet — needs a matched karac+archive bisect across 2026-07-28..07-30 |
 
 ### Fixed (902)
 
