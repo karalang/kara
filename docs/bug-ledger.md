@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 81 | 0 |
 | missing-feature | 78 | 1 |
 | false-positive | 56 | 0 |
-| perf | 49 | 2 |
+| perf | 50 | 3 |
 | diagnostics | 40 | 0 |
 | crash | 39 | 0 |
 | soundness | 38 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 680 | 4 |
+| codegen | 681 | 5 |
 | interp | 124 | 0 |
 | typecheck | 122 | 1 |
 | ownership | 40 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **948 surfaced · 7 open · 933 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **949 surfaced · 8 open · 933 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,8 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **948 surfaced 
 | B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte) and the fix shape SETTLED: on arm64 the sign is decided by KEY TYPE, not architecture -- `Map[i64,i64]` (kata:170) is 1.27x SLOWER across that one commit while `Map[String,i64]` (kata:127) is 1.06x FASTER, so the tag must be gated on whether the key needs a dereference to compare, NOT arch-gated (which would forfeit a measured arm64 win); kata:170's 1.27x is the whole b7ba6ea4..882d8d73 endpoint regression, and separately arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338 | none yet -- CULPRIT 58412d9f and FIX SHAPE both settled by matched-pair measurement on arm64 2026-08-05 (kata:170 i64 keys 1.27x slower, kata:127 String keys 1.06x faster; both archive configs, both orders, all sinks verified). Fix: gate the tag compare on key type in mono.rs emit_map_ctrl_of / runtime map.rs ctrl_of. Open before implementing: one high-load-factor primitive-key probe (long chains might still want the tag). Open after: blast radius across primitive-keyed map katas, and reconcile with B-2026-08-05-34. |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-33 | 2026-08-05 | codegen | high | LAW, not one fixture: a by-value aggregate param that is CALLER-RETAINS is owned by nobody and leaks once per call on a DEFAULT -O2 build. Three predicates reach it -- generic-erased field (2400 B/40), Map-bearing field (26400 B/160), and direct `shared` field (B-2026-08-05-32, which is therefore a special case of this row, not its own bug) | src/codegen/call_dispatch.rs::move_declined_copy_struct_arg (the retraction) + src/codegen/param_own.rs (field_copy_supported / aggregate_param_copy_supported_struct). A correct fix needs an interprocedural "callee consumes an aggregate field" fact, or callee-side copy support for Map-bearing and generic-erased fields |
-| B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT and now re-scoped by direct arm64 measurement: the 1.18x seq-lane median does not survive audit -- 3 katas compare CHANGED workloads (and are the 3 biggest movers), the 'current' side is a rolling accumulation (28/33 last measured 2026-07-28, not 08-05), and on 10 of 32 workload-stable katas the C/Rust mirrors moved 1.2x-1.7x alongside Kara, so 'mirrors are flat' holds only in the median. Matched-pair measurement at this row's own endpoints on arm64 finds a REAL but much smaller regression: 1.11x-1.12x on #8 atoi and #9 palindrome, while #11 is FLAT, #1665 is 4.4x FASTER (join claimed 2.43x slower), and mirrors-moved control #71 is FLAT | kara-katas bench-baseline.json vs bench-results.json -- BUT the join is unsafe as written: it never checks the sink/workload and the 'current' side is not a snapshot. Real bisectable signal is #8 atoi / #9 palindrome at 1.11x-1.12x on arm64 (218dd7d7 -> 688865b4, matched pairs, both orders, sinks verified). Blocked on: baseline absolutes do not reproduce at 218dd7d7 (see detail). No instruction-count instrument exists on the M5 host -- wall-time is adequate for this effect size. |
+| B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-05-37 | 2026-08-05 | typecheck+ownership | medium | a `mut ref` ARGUMENT rooted at a `shared struct` field is accepted and its write is SILENTLY DISCARDED — the same write spelled as an assignment is correctly rejected, and the plain-struct spelling is correctly rejected, so this is a gate that two of its three spellings already close | — |
+| B-2026-08-05-38 | 2026-08-05 | codegen | medium | The narrow-int width trap is emitted UNCONDITIONALLY on every `i8/i16/i32/u8/u16/u32` arithmetic op -- zext/sext to i64, two icmps, an or, and a conditional branch per op -- costing 1.06x-1.12x on narrow-int-dense loops (kata #9 palindrome, #8 atoi) with no range analysis to elide provably in-range checks | docs/implementation_checklist/phase-7-codegen.md -- optimization follow-on to a12a1a69; blocked on nothing, but should be measured on x86 first to confirm it is not arm64-specific |
 
 ### Fixed (933)
 
