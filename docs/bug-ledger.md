@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 213 | 0 |
-| leak | 131 | 1 |
+| leak | 132 | 2 |
 | double-free | 96 | 1 |
 | codegen-gap | 88 | 0 |
 | run-vs-build | 77 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 664 | 4 |
+| codegen | 665 | 5 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **920 surfaced · 8 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **921 surfaced · 9 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **920 surfaced 
 | B-2026-08-05-6 | 2026-08-05 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo <= hi { v[base+lo] .. v[base+hi] } }`. The bound holds only ACROSS the call boundary (every caller passes `base = k*len` with `k < n`, and `v.len() == n*len`), and every BCE analysis in bce_length_pin.rs is per-function by construction, so no local fact exists to prove. Carries the whole of kata #246's residual 1.28x vs equal-safety C. Survives INLINING (measured), and LLVM's IRCE does not reach it either (measured, byte-identical assembly). Split off B-2026-08-04-8, whose intra-function shape is fixed. | — |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-8 | 2026-08-05 | codegen | medium | `s.contains(other)` on a String bound out of a `Result[String, E]` Ok arm fails to COMPILE -- "Binary op Eq: right operand has non-comparable type { ptr, i64, i64 }" -- while `karac check` passes and the interpreter runs it correctly; the same call on a TUPLE-element String payload compiles fine | src/codegen (String `contains` lowering for a direct Result/Option payload binding) |
+| B-2026-08-05-9 | 2026-08-05 | codegen | high | `unwrap_or` with a FRESH F-STRING default leaks on a DEFAULT -O2 build -- 133 leaked allocations in an existing fixture -- while the byte-identical program with a literal `"...".to_string()` default is clean, because the literal default const-folds away and the f-string one does not | — |
 
 ### Fixed (904)
 
