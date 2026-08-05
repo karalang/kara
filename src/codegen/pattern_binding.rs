@@ -1127,30 +1127,67 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the offsets used to inline), capturing its NAME so the
                 // B-2026-07-13-3 generic-payload recording below can look up the
                 // enum's declared payload TypeExprs.
+                // B-2026-08-05-16 — THE SCRUTINEE'S OWN ENUM WINS, unconditionally.
+                //
+                // An unqualified variant pattern inside `match e { .. }` where
+                // `e: E` and `E` declares that variant IS `E`'s variant; no map
+                // order or type coincidence can make it another enum's. That is
+                // checked first here, before any scan.
+                //
+                // The scan below already had a hint arm, but only on the
+                // `(None, Some(h))` branch — a SHARED scrutinee, which has no
+                // inline struct type. A VALUE enum takes `(Some(t), _)` and
+                // pins on `llvm_type` equality alone, ignoring the hint. That
+                // is not a unique key: two enums with structurally identical
+                // layouts share one LLVM struct type, so `.find()` returned
+                // whichever the unordered `enum_layouts` map yielded first.
+                //
+                // Measured on the #39 shape (`Tok.Str(String, Sp)` and
+                // `shared enum Expr { .. Str(SLit) }`): inside `tok_kind`, with
+                // the hint correctly `Some("Tok")`, this resolved to `Expr` in
+                // 4 of 6 compilations of the SAME source and to `Tok` in 2. The
+                // wrong enum's `field_word_offsets` then drove the binding, so
+                // `Sp.length` (value 3) was loaded and dereferenced as a buffer
+                // pointer — `SEGV on unknown address 0x3`, 6/12 runs at -O0.
+                // Renaming only the colliding variant made it 0/12.
+                //
+                // Kept as a pre-step rather than a new arm inside the scan
+                // because the scan's job is to disambiguate when there is NO
+                // hint; when there is one, there is nothing to disambiguate.
                 let matched_enum: Option<String> = self
-                    .enum_layouts
-                    .iter()
-                    .find(|(en, l)| {
-                        if !l.tags.contains_key(variant_name) {
-                            return false;
-                        }
-                        match (&scrut_struct_ty, &self.match_scrutinee_enum_hint) {
-                            // Value enum: the inline struct type pins the layout.
-                            (Some(t), _) => &l.llvm_type == t,
-                            // #39 — a shared (RC-pointer) scrutinee has no inline
-                            // struct type to match on, so a bare variant name
-                            // shared across enums (`Float` in both `Token` and
-                            // `Expr`) would otherwise pick whichever the unordered
-                            // map yields first and read the WRONG word count
-                            // (a `Token.Float` 1-word slot for an `Expr.Float`
-                            // whole-`FloatLit` bind → garbage Span ptr → crash).
-                            // Pin to the match scrutinee's enum by name.
-                            (None, Some(h)) => en.as_str() == h.as_str(),
-                            // No hint and no inline type: legacy first-match.
-                            (None, None) => true,
-                        }
+                    .match_scrutinee_enum_hint
+                    .as_ref()
+                    .filter(|h| {
+                        self.enum_layouts
+                            .get(h.as_str())
+                            .is_some_and(|l| l.tags.contains_key(variant_name))
                     })
-                    .map(|(en, _)| en.clone())
+                    .cloned()
+                    .or_else(|| {
+                        self.enum_layouts
+                            .iter()
+                            .find(|(en, l)| {
+                                if !l.tags.contains_key(variant_name) {
+                                    return false;
+                                }
+                                match (&scrut_struct_ty, &self.match_scrutinee_enum_hint) {
+                                    // Value enum: the inline struct type pins the layout.
+                                    (Some(t), _) => &l.llvm_type == t,
+                                    // #39 — a shared (RC-pointer) scrutinee has no inline
+                                    // struct type to match on, so a bare variant name
+                                    // shared across enums (`Float` in both `Token` and
+                                    // `Expr`) would otherwise pick whichever the unordered
+                                    // map yields first and read the WRONG word count
+                                    // (a `Token.Float` 1-word slot for an `Expr.Float`
+                                    // whole-`FloatLit` bind → garbage Span ptr → crash).
+                                    // Pin to the match scrutinee's enum by name.
+                                    (None, Some(h)) => en.as_str() == h.as_str(),
+                                    // No hint and no inline type: legacy first-match.
+                                    (None, None) => true,
+                                }
+                            })
+                            .map(|(en, _)| en.clone())
+                    })
                     .or_else(|| {
                         // Type-match miss — fall back to variant-name
                         // lookup, but prefer user-declared enums over

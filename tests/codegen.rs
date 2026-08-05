@@ -34622,6 +34622,57 @@ fn row_scan() -> i64 {
         ir.matches("@llvm.sadd.with.overflow").count()
     }
 
+    /// B-2026-08-05-16 — an unqualified variant pattern must resolve against
+    /// the match scrutinee's OWN enum, deterministically.
+    ///
+    /// `Tok.Str(String, Sp)` and `shared enum Expr { .. Str(SLit) }` share the
+    /// bare name `Str`. Resolution pinned on `llvm_type` equality for a VALUE
+    /// scrutinee, which is not a unique key — two enums with structurally
+    /// identical layouts share one LLVM struct type — so the enum came from
+    /// whichever the unordered `enum_layouts` map yielded first. The wrong
+    /// enum's `field_word_offsets` then drove the binding: `Sp.length` (3) was
+    /// loaded and dereferenced as a buffer pointer, SEGV on address 0x3.
+    ///
+    /// ASSERTED BY REPETITION, deliberately. The trigger is the compiler's own
+    /// per-HashMap seed, so ONE green compile proves nothing — the pre-fix
+    /// compiler emitted correct IR on roughly a third of runs. Compiling the
+    /// same source repeatedly and demanding byte-identical IR tests the
+    /// determinism directly, and fails as soon as any run picks the other enum.
+    #[test]
+    fn test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically() {
+        const SRC: &str = r#"
+struct Sp { line: i64, column: i64, offset: i64, length: i64 }
+struct SLit { value: String, span: Sp }
+enum Tok { Str(String, Sp), Int(i64) }
+shared enum Expr { Int(i64), Boolish(i64), Str(SLit) }
+fn text_of(e: Expr) -> String {
+    match e {
+        Int(v) => v.to_string(),
+        Boolish(v) => v.to_string(),
+        Str(n) => n.value,
+    }
+}
+fn tok_kind(t: Tok) -> i64 {
+    match t { Str(s, sp) => 1, Int(v) => 2 }
+}
+fn main() {
+    let t = Tok.Str("tok".to_string(), Sp { line: 1, column: 1, offset: 0, length: 3 });
+    let n = SLit { value: "hello world".to_string(), span: Sp { line: 1, column: 1, offset: 7, length: 11 } };
+    println(tok_kind(t) + text_of(Expr.Str(n)).len());
+}
+"#;
+        let first = ir_for(SRC);
+        for i in 1..24 {
+            let again = ir_for(SRC);
+            assert_eq!(
+                first, again,
+                "IR for the same source differed on compile {i} — an unqualified \
+                 variant name shared across two enums is resolving against \
+                 whichever the unordered enum_layouts map yields first"
+            );
+        }
+    }
+
     #[test]
     fn test_ir_proven_index_add_skips_its_overflow_check() {
         // B-2026-08-05-21: when BCE has proven `0 <= base + i < v.len()`, the
