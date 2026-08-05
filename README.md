@@ -375,7 +375,7 @@ parallelize.
 
 ## Project Status
 
-Actively developed, pre-1.0. The compiler frontend, interpreter, query API, auto-concurrency runtime, and LLVM codegen are complete (roadmap Phases 0–7); the standard-library floor and verification enforcement are effectively done (Phases 8–9), and the additional targets — WASM, the GPU gate — are mostly in place (Phase 10). The project is now in its **v1 pivot: self-hosting the compiler in Kāra** (Phase 12) — the lexer is already ported and running on real source — alongside test coverage and bug-fixing. Remaining before v1: completing self-hosting, then the long-tail standard library (Phase 11). See [docs/roadmap.md](docs/roadmap.md) for the phase-by-phase breakdown.
+Actively developed, pre-1.0. The compiler frontend, interpreter, query API, auto-concurrency runtime, and LLVM codegen are complete (roadmap Phases 0–7); the standard-library floor and verification enforcement are effectively done (Phases 8–9), and the additional targets — WASM, the GPU gate — are mostly in place (Phase 10). The project is now in its **v1 pivot: self-hosting the compiler in Kāra** (Phase 12) — the lexer is fully ported, and the parser, resolver, typechecker, and codegen each have slices landed and passing a differential oracle against the Rust seed — alongside test coverage and bug-fixing. Remaining before v1: completing self-hosting, then the long-tail standard library (Phase 11). See [docs/roadmap.md](docs/roadmap.md) for the phase-by-phase breakdown.
 
 We took a **tree-walk interpreter first** approach: language semantics were validated with an interpreter before LLVM code generation.
 

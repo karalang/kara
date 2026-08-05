@@ -6,31 +6,41 @@
 //! type errors as an ordered `(kind @offset:length)` list, and the two are
 //! diffed line-for-line.
 //!
-//! ## Slice 1 scope — coarse primitive categories, two checks
+//! ## Scope — through slice 21
 //!
 //! The port infers a single coarse CATEGORY per expression — NUM (every int
 //! width + f32/f64, and int/float literals) / BOOL / CHAR / STR / UNKNOWN — and
-//! fires only when BOTH sides of a comparison land in the known primitive set:
+//! fires only when the operands involved land in the known primitive set. The
+//! check set has grown well past the opening pair; each slice below is
+//! delimited by a `── Slice N:` comment in the corpus:
 //!
-//!   * RETURN-TYPE mismatch (`TypeMismatch`): a fn whose declared `-> T`
-//!     category is a known primitive and whose body-TAIL infers to a DIFFERENT
-//!     known primitive.
-//!   * CONDITION-not-bool (`ConditionNotBool`): an `if <cond>` whose cond
-//!     infers to a known NON-bool primitive.
+//!   * Slice 1 — RETURN-TYPE mismatch (`TypeMismatch`) and CONDITION-not-bool
+//!     (`ConditionNotBool`) on `if`.
+//!   * Slices 2–8 — the typing substrate: binding / parameter type
+//!     environment, operator result types, annotated `let`, call-return
+//!     typing, struct-literal and field-access typing, field-name checks
+//!     (`ExtraField` / `UndefinedField`), method-call typing.
+//!   * Slices 9–12 — `match` exhaustiveness (`NonExhaustiveMatch`),
+//!     enum-vs-other mismatch, `MissingField`, argument-count.
+//!   * Slices 13–18 — operator validity: `InvalidUnaryOp`, `InvalidBinaryOp`
+//!     (comparison of distinct primitives, logical operands, arithmetic /
+//!     bitwise operands), `StringNotIndexable`, `NotCallable`.
+//!   * Slices 19–21 — `if`/`else` and match-arm branch-type consistency
+//!     (`BranchTypeMismatch`), and `ConditionNotBool` on `while`.
 //!
 //! All numerics collapse to ONE category, reproducing the seed's literal
 //! leniency EXACTLY (`fn f() -> f64 { 1 }` and `-> i64 { 1.5 }` are both clean).
-//! UNKNOWN (calls, identifiers, `Vec[T]`, comparisons, user types) is never
-//! flagged — so the corpus is curated to keep every seed-produced type error
-//! within the two Slice-1 kinds; `rust_render` panics on any other kind so a
-//! drifting entry fails loudly rather than silently diffing clean. The corpus is
+//! UNKNOWN is never flagged — so the corpus is curated to keep every
+//! seed-produced type error within the kinds listed above; `rust_render`
+//! panics on any other kind so a drifting entry fails loudly rather than
+//! silently diffing clean. The corpus is
 //! also resolve-clean (no undefined names), so resolve errors never perturb the
 //! type-error stream the oracle compares.
 
 use std::path::PathBuf;
 
-/// Complete programs — single- and multi-item — exercising the two Slice-1
-/// checks and, crucially, the UNKNOWN carve-outs that must NOT false-positive.
+/// Complete programs — single- and multi-item — exercising each slice's checks
+/// and, crucially, the UNKNOWN carve-outs that must NOT false-positive.
 const CORPUS: &[&str] = &[
     // ── clean: return type matches (with numeric leniency) ──
     "fn ok_unit() { }",

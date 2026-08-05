@@ -9,9 +9,15 @@
 // string into an AST WALK: `emit_program(items)` consumes the parser's
 // `Vec[Item]`, finds `main`, and emits IR for its body.
 //
-// Slice 1 surface: a `main` whose body is a sequence of `println("literal")`
-// calls (statement or tail position). Everything else is skipped (emitted as
-// nothing) — the emitter grows construct-by-construct, each step verified
+// Surface: through slice 64. It opened at slice 1 — a `main` whose body is a
+// sequence of `println("literal")` calls — and now covers integer arithmetic,
+// `let`/assignment/shadowing, bools and comparisons, `if`/`else`, `while`,
+// `as` casts, unary negation, bitwise and shift operators, indexed assignment,
+// `Vec` push/pop and `String.push_str` (including field receivers),
+// value-position `if`/`match` with typed result slots, struct destructuring,
+// `shared enum` with the RC pointer representation, and `.clone()`. Anything
+// still unhandled is skipped (emitted as nothing) — the emitter grows
+// construct-by-construct, each step verified
 // BEHAVIORALLY (compile the emitted IR + run it, diff its stdout against the
 // seed's `karac run` on the same source). Unlike the front-end oracles, IR text
 // is not byte-reproducible (SSA numbering / block labels are

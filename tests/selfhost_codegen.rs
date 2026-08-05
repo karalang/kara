@@ -8,7 +8,13 @@
 //! Kāra emitter, run that IR via `karac_jit_runner`, and assert its stdout +
 //! exit status match the seed's `karac run` on the same source.
 //!
-//! Slice 1 surface: a `main` of `println("literal")` statements.
+//! Surface: through slice 64 — integer arithmetic, `let`/assignment/shadowing,
+//! bools and comparisons, `if`/`else`, `while`, `as` casts, unary negation,
+//! bitwise and shift operators, indexed assignment, `Vec` push/pop and
+//! `String.push_str` (including field receivers), value-position `if`/`match`
+//! with typed result slots, struct destructuring, `shared enum` with the RC
+//! pointer representation, and `.clone()`. The corpus below is the authority;
+//! each slice is delimited by a `// Slice N:` comment.
 //!
 //! Requires `--features llvm` (the JIT runner + codegen). Skips benignly if the
 //! selfhost driver can't link (no runtime archive), never on a compiler panic.
