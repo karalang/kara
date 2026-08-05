@@ -14366,10 +14366,37 @@ fn wasm_test_dir(tag: &str) -> std::path::PathBuf {
 
 /// Did this `karac build` invocation hit a missing-infrastructure wall
 /// rather than a real failure? Returns the skip reason if so.
-fn wasm_build_skip_reason(stderr: &str) -> Option<&'static str> {
+///
+/// Takes the whole `Output` rather than just its stderr because the answer
+/// depends on the EXIT STATUS. Every wall below but one aborts the build,
+/// so matching its text against a build that SUCCEEDED is always a misread
+/// — which is what B-2026-08-05-30 was: a successful `wasm_browser` build
+/// emits `note: wasm-tools not found — emitted .wasm retains debug info`
+/// (a size-optimization hint from the debug-strip step), the old predicate
+/// read that as the componentizer being absent, and the test returned `ok`
+/// having asserted nothing.
+///
+/// The llvm-feature wall is the ONE exception and is therefore checked
+/// before the status gate: a karac built without `--features llvm`
+/// degrades `build` into a type check, prints its note, and exits 0. Plain
+/// `cargo test` (no `--features llvm`) depends on that skip firing.
+fn wasm_build_skip_reason(out: &std::process::Output) -> Option<&'static str> {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Status-independent: this wall exits 0 (see above).
     if stderr.contains("requires the llvm feature") {
         return Some("karac built without --features llvm");
     }
+    // Everything below aborts the build, so a successful build is by
+    // definition not one of them.
+    if !out.status.success() {
+        return failed_wasm_build_skip_reason(&stderr);
+    }
+    None
+}
+
+/// The walls that ABORT a `karac build`. Split out so the status gate in
+/// `wasm_build_skip_reason` is the only place that decides reachability.
+fn failed_wasm_build_skip_reason(stderr: &str) -> Option<&'static str> {
     if stderr.contains("libkarac_runtime_wasm.a not found") {
         return Some("wasm runtime archive not built (see CLAUDE.md archive recipe)");
     }
@@ -14389,11 +14416,79 @@ fn wasm_build_skip_reason(stderr: &str) -> Option<&'static str> {
     }
     // Embedded component bindings shell out to the external wasm-tools
     // binary (phase-10 "embedded-WIT migration"); a missing install is
-    // missing infrastructure, not a regression.
-    if stderr.contains("wasm-tools not found") {
+    // missing infrastructure, not a regression. Matched on the
+    // COMPONENTIZER's own text rather than the bare phrase: the
+    // debug-strip step words its optional-tool note almost identically
+    // ("wasm-tools not found — emitted .wasm retains debug info"), and
+    // that note can ride along on a build that fails for an unrelated
+    // reason (B-2026-08-05-30).
+    if stderr.contains("wasm-tools not found (`--bindings component`") {
         return Some("wasm-tools not installed (cargo install wasm-tools)");
     }
     None
+}
+
+/// The skip predicate is itself infrastructure — a wrong answer makes
+/// tests report `ok` while asserting nothing, which is worse than a
+/// failure because nobody looks. These pin the three-way discrimination
+/// directly, without needing a container that lacks wasm-tools.
+///
+/// Unix-only because it needs to synthesize an exit status; the wasm E2E
+/// tests it guards are effectively unix-only too.
+#[cfg(unix)]
+#[test]
+fn wasm_skip_predicate_discriminates_notes_from_walls() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let out = |code: i32, stderr: &str| std::process::Output {
+        status: std::process::ExitStatus::from_raw(code << 8),
+        stdout: Vec::new(),
+        stderr: stderr.as_bytes().to_vec(),
+    };
+
+    // B-2026-08-05-30 itself: a SUCCESSFUL wasm_browser build whose
+    // debug-strip step notes the optional tool is missing. Not a skip —
+    // the artifacts exist and every assertion downstream is meaningful.
+    let strip_note = "note: wasm-tools not found — emitted .wasm retains debug info \
+                      (install wasm-tools for ~10x smaller modules, or set \
+                      KARAC_WASM_KEEP_DEBUG=1 to silence this note)\n";
+    assert_eq!(
+        wasm_build_skip_reason(&out(0, strip_note)),
+        None,
+        "a build that SUCCEEDED must never be reported as missing infrastructure",
+    );
+
+    // The componentizer genuinely absent: build aborted, so it is a skip.
+    let componentize_err = "error: wasm-tools not found (`--bindings component` componentizes \
+                            via the external `wasm-tools` binary — design.md § Component Model \
+                            emission): install it with `cargo install wasm-tools`\n";
+    assert_eq!(
+        wasm_build_skip_reason(&out(1, componentize_err)),
+        Some("wasm-tools not installed (cargo install wasm-tools)"),
+    );
+
+    // The llvm-feature wall is the one that exits ZERO — plain
+    // `cargo test` (no --features llvm) depends on it skipping anyway.
+    let no_llvm = "note: karac build requires the llvm feature; falling back to type check\n";
+    assert_eq!(
+        wasm_build_skip_reason(&out(0, no_llvm)),
+        Some("karac built without --features llvm"),
+    );
+
+    // An aborting wall still reads normally, and a plain failure with no
+    // infrastructure marker is a real failure, not a skip.
+    assert_eq!(
+        wasm_build_skip_reason(&out(1, "error: libkarac_runtime_wasm.a not found; set …\n")),
+        Some("wasm runtime archive not built (see CLAUDE.md archive recipe)"),
+    );
+    assert_eq!(
+        wasm_build_skip_reason(&out(
+            1,
+            "error[typecheck]: expected 'i64', found 'String'\n"
+        )),
+        None,
+        "a genuine compile error must fail the test, not skip it",
+    );
 }
 
 /// A wasm binary's preamble distinguishes a Component Model component
@@ -14546,7 +14641,7 @@ fn wasm_wasi_build_aborts_on_target_gate_violation() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_build_aborts_on_target_gate_violation — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -14625,7 +14720,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_build_and_run_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -14715,7 +14810,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_numeric_fstring_build_and_run_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -14811,7 +14906,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_string_split_build_and_run_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -14894,7 +14989,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_entry_point_export_callable_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -14980,7 +15075,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_browser_dts_types_scalar_exports — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15064,7 +15159,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_browser_rich_exports_marshal_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15158,7 +15253,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_component_exports_scalar_entry_point — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15235,7 +15330,7 @@ fn main() {
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
-        if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        if let Some(reason) = wasm_build_skip_reason(&out) {
             eprintln!("skip: wasm_wasi_component_is_byte_reproducible — {reason}");
             return None;
         }
@@ -15302,7 +15397,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_component_exports_record_return — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15387,7 +15482,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_component_exports_record_param — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15480,7 +15575,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_component_exports_option_result — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15570,7 +15665,7 @@ fn main() {}
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_component_exports_string_and_list — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15656,7 +15751,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_explicit_par_block_runs_sequentially — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15743,7 +15838,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_spawn_taskgroup_sequential_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15797,7 +15892,7 @@ fn wasm_build_strips_debug_info_by_default() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_build_strips_debug_info_by_default — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -15864,7 +15959,7 @@ fn concurrent_same_stem_wasm_builds_do_not_collide() {
         .env_remove("KARAC_RUNTIME")
         .output()
         .unwrap();
-    if let Some(reason) = wasm_build_skip_reason(&String::from_utf8_lossy(&probe.stderr)) {
+    if let Some(reason) = wasm_build_skip_reason(&probe) {
         eprintln!("skip: concurrent_same_stem_wasm_builds_do_not_collide — {reason}");
         let _ = std::fs::remove_dir_all(&d1);
         let _ = std::fs::remove_dir_all(&d2);
@@ -15994,7 +16089,7 @@ fn wasm_simd128_default_lowers_vector_ops_to_v128() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_simd128_default_lowers_vector_ops_to_v128 — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16074,7 +16169,7 @@ fn wasm_simd128_opt_out_scalarizes_module() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_simd128_opt_out_scalarizes_module — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16221,7 +16316,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_require_simd_fires_on_simd128_opt_out (default leg) — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16297,7 +16392,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_host_fn_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16432,7 +16527,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wasi_extern_c_stays_loud_undefined — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16502,7 +16597,7 @@ fn wasm_browser_project_mode_emits_dist_artifacts() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_browser_project_mode_emits_dist_artifacts — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16554,7 +16649,7 @@ fn wasm_browser_project_mode_run_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_browser_project_mode_run_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16620,7 +16715,7 @@ fn wasm_project_bindings_none_emits_raw_module_only() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_project_bindings_none_emits_raw_module_only — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16664,7 +16759,7 @@ fn wasm_project_wasi_emits_embedded_component() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_project_wasi_emits_embedded_component — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16741,7 +16836,7 @@ fn wasm_project_toolchain_pin_mismatch_fails() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_project_toolchain_pin_mismatch_fails — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16821,7 +16916,7 @@ fn wasm_browser_build_emits_wasm_and_js() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_browser_build_emits_wasm_and_js — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16871,7 +16966,7 @@ fn wasm_browser_build_aborts_on_target_gate_violation() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_browser_build_aborts_on_target_gate_violation — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -16945,7 +17040,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_browser_build_and_run_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -17123,7 +17218,7 @@ fn ssr_counter_example_dual_target_e2e() {
         .output()
         .unwrap();
     let web_err = String::from_utf8_lossy(&web.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&web_err) {
+    if let Some(reason) = wasm_build_skip_reason(&web) {
         eprintln!("skip: ssr_counter_example_dual_target_e2e (client leg) — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -17227,7 +17322,7 @@ fn bindings_none_suppresses_browser_glue() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: bindings_none_suppresses_browser_glue — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -17271,7 +17366,7 @@ fn bindings_browser_on_wasi_emits_glue() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: bindings_browser_on_wasi_emits_glue — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -17319,7 +17414,7 @@ fn bindings_explicit_component_emits_embedded_component() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: bindings_explicit_component_emits_embedded_component — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18149,7 +18244,7 @@ fn wasm_threads_host_fn_emits_proxy_glue() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_host_fn_emits_proxy_glue — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18238,7 +18333,7 @@ fn main() with writes(Reporter) {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_host_fn_proxy_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18392,7 +18487,7 @@ fn wasm_threads_instantiate_threaded_export_taskgroup_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_instantiate_threaded_export_taskgroup_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18475,7 +18570,7 @@ fn wasm_threads_timer_after_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_timer_after_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18582,7 +18677,7 @@ fn wasm_threads_animation_frames_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_animation_frames_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18690,7 +18785,7 @@ fn wasm_threads_every_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_every_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18827,7 +18922,7 @@ fn wasm_threads_pointer_moves_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_pointer_moves_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -18926,7 +19021,7 @@ fn wasm_pointer_moves_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_pointer_moves_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19002,7 +19097,7 @@ fn wasm_threads_wheel_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_wheel_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19097,7 +19192,7 @@ fn wasm_wheel_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_wheel_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19172,7 +19267,7 @@ fn wasm_threads_keydown_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_keydown_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19267,7 +19362,7 @@ fn wasm_keydown_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_keydown_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19341,7 +19436,7 @@ fn wasm_threads_input_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_input_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19435,7 +19530,7 @@ fn wasm_input_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_input_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19513,7 +19608,7 @@ fn wasm_threads_keyup_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_keyup_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19608,7 +19703,7 @@ fn wasm_keyup_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_keyup_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19679,7 +19774,7 @@ fn wasm_threads_clicks_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_clicks_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19774,7 +19869,7 @@ fn wasm_clicks_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_clicks_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19846,7 +19941,7 @@ fn wasm_threads_dblclick_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_dblclick_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -19941,7 +20036,7 @@ fn wasm_dblclick_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_dblclick_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20012,7 +20107,7 @@ fn wasm_threads_resize_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_resize_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20107,7 +20202,7 @@ fn wasm_resize_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_resize_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20180,7 +20275,7 @@ fn wasm_threads_contextmenu_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_contextmenu_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20286,7 +20381,7 @@ fn wasm_contextmenu_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_contextmenu_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20342,7 +20437,7 @@ fn wasm_threads_focus_blur_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_focus_blur_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20436,7 +20531,7 @@ fn wasm_focus_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_focus_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20478,7 +20573,7 @@ fn wasm_blur_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_blur_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20578,7 +20673,7 @@ fn wasm_threads_touch_payload_recv_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_touch_payload_recv_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20682,7 +20777,7 @@ fn wasm_touchstart_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_touchstart_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20724,7 +20819,7 @@ fn wasm_touchmove_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_touchmove_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20766,7 +20861,7 @@ fn wasm_touchend_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_touchend_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20816,7 +20911,7 @@ fn plume_example_pointer_steered_flow_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: plume_example_pointer_steered_flow_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -20931,7 +21026,7 @@ fn plume_example_click_pinned_vortex_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: plume_example_click_pinned_vortex_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21056,7 +21151,7 @@ fn fathom_example_dblclick_contextmenu_zoom_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: fathom_example_dblclick_contextmenu_zoom_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21192,7 +21287,7 @@ fn fathom_example_touch_pan_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: fathom_example_touch_pan_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21327,7 +21422,7 @@ fn fathom_example_focus_blur_pause_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: fathom_example_focus_blur_pause_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21461,7 +21556,7 @@ fn fathom_example_resize_reflow_e2e() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: fathom_example_resize_reflow_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21588,7 +21683,7 @@ fn wasm_time_after_sequential_target_rejected() {
     // No-`llvm` build: `karac build` warns "requires the llvm feature" and
     // falls back to a type check that never reaches the codegen gate — skip
     // rather than mis-assert a build failure.
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_time_after_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21632,7 +21727,7 @@ fn wasm_every_sequential_target_rejected() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_every_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21673,7 +21768,7 @@ fn wasm_threads_project_emits_dual_artifact_set() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_project_emits_dual_artifact_set — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
@@ -21770,7 +21865,7 @@ fn main() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+    if let Some(reason) = wasm_build_skip_reason(&out) {
         eprintln!("skip: wasm_threads_spawn_join_runs_on_worker_pool_e2e — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
