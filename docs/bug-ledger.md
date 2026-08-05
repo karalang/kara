@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 213 | 0 |
-| leak | 131 | 0 |
+| leak | 131 | 1 |
 | double-free | 96 | 1 |
 | codegen-gap | 88 | 0 |
+| run-vs-build | 77 | 1 |
 | missing-feature | 76 | 1 |
-| run-vs-build | 76 | 0 |
 | false-positive | 56 | 0 |
 | perf | 47 | 3 |
 | crash | 39 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 663 | 2 |
+| codegen | 664 | 4 |
 | interp | 122 | 0 |
 | typecheck | 116 | 0 |
 | ownership | 39 | 1 |
@@ -124,22 +124,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **919 surfaced · 6 open · 905 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **920 surfaced · 8 open · 904 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` is excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errors (E_CONCURRENT_SHARED_STRUCT) and auto-par SILENTLY declines (concurrency.rs B-2026-07-16-6 gate) — so the RC tier forfeits the flagship feature and the Rc-vs-Arc choice is forced at type-declaration time. The compiler should elide read-only par RC traffic or promote atomicity per type, not error. SUPERSEDES this entry's earlier 'no freeze point' framing, which is demoted to one of three candidate mechanisms | — |
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
+| B-2026-08-05-3 | 2026-08-04 | codegen | medium | `Option[(Vec[T], ...)]` leaks the tuple payload's heap element when the Some arm binds and reads it -- 32 bytes definitely lost; the struct payload twin `Option[H]` is clean and the interpreter is correct on both | src/codegen (Option payload drop walk for a TUPLE payload) |
 | B-2026-08-05-4 | 2026-08-04 | runtime | high | PERF-REGRESSION introduced by B-2026-07-31-21's fix (75a3a928): a remove-heavy Map runs 1.76x slower because the same-width compacting rehash re-fires on every eviction where the old code doubled once -- kata:146 LRU cache 231.7ms -> 422.9ms on the M5 host lane, ROOT-CAUSED by archive swap, sinks identical | runtime/src/map.rs::next_capacity (hysteresis on the same-width compaction arm) |
 | B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED perf regression bounded to 2026-07-28..07-30: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 codegen is ruled out by byte-identical binaries | none yet — needs a matched karac+archive bisect across 2026-07-28..07-30 |
 | B-2026-08-05-6 | 2026-08-05 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo <= hi { v[base+lo] .. v[base+hi] } }`. The bound holds only ACROSS the call boundary (every caller passes `base = k*len` with `k < n`, and `v.len() == n*len`), and every BCE analysis in bce_length_pin.rs is per-function by construction, so no local fact exists to prove. Carries the whole of kata #246's residual 1.28x vs equal-safety C. Survives INLINING (measured), and LLVM's IRCE does not reach it either (measured, byte-identical assembly). Split off B-2026-08-04-8, whose intra-function shape is fixed. | — |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE that only the -O2 optimizer hides: `karac build` at the documented `KARAC_OPT_LEVEL=0` aborts with glibc `free(): double free detected in tcache 2`, while the same source at the default -O2 runs clean because the payload is dead and LLVM deletes the allocation | — |
+| B-2026-08-05-8 | 2026-08-05 | codegen | medium | `s.contains(other)` on a String bound out of a `Result[String, E]` Ok arm fails to COMPILE -- "Binary op Eq: right operand has non-comparable type { ptr, i64, i64 }" -- while `karac check` passes and the interpreter runs it correctly; the same call on a TUPLE-element String payload compiles fine | src/codegen (String `contains` lowering for a direct Result/Option payload binding) |
 
-### Fixed (905)
+### Fixed (904)
 
-<details><summary>905 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>904 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1069,7 +1071,6 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-21 | cli | medium | `karac fmt` silently deleted every declaration modifier it had no printer for (`unsafe fn`, `comptime fn`, `comptime` param prefix) | c35df3a |
 | B-2026-08-05-1 | codegen | high | Passing a TUPLE ELEMENT to a `ref` parameter (`peek(t.0)` where `fn peek(v: ref Vec[i64])`) double-frees the element buffer under AOT; the struct-fie… | 99d27f7 (src/codegen/call_dispatch.rs — a TupleIndex arm in the ref-argument path, sibling to B-2026-07-12-1's FieldAccess arm). ONE arm closes both rows. Pins codegen.rs::e2e_tuple_element_borrowed_in_place_for_ref_params, memory_sanitizer.rs::asan_tuple_element_borrowed_in_place_for_ref_params (floored at 300 against ~800 allocations), interpreter.rs::test_tuple_element_borrowed_in_place_for_ref_params. Both codegen tests are stash-proven RED against the unfixed compiler (E2E panics with `vec index out of bounds`, ASAN reports a memory error); the interpreter twin passes both ways. cargo test --features llvm: 12980 passed, 0 failed. |
 | B-2026-08-05-2 | codegen | high | A `mut ref` parameter given a TUPLE ELEMENT (`bump(mut t.0)`) does not mutate the element under AOT -- the program then PANICS reading the index the… | 99d27f7 (src/codegen/call_dispatch.rs — a TupleIndex arm in the ref-argument path, sibling to B-2026-07-12-1's FieldAccess arm). ONE arm closes both rows. Pins codegen.rs::e2e_tuple_element_borrowed_in_place_for_ref_params, memory_sanitizer.rs::asan_tuple_element_borrowed_in_place_for_ref_params (floored at 300 against ~800 allocations), interpreter.rs::test_tuple_element_borrowed_in_place_for_ref_params. Both codegen tests are stash-proven RED against the unfixed compiler (E2E panics with `vec index out of bounds`, ASAN reports a memory error); the interpreter twin passes both ways. cargo test --features llvm: 12980 passed, 0 failed. |
-| B-2026-08-05-3 | codegen | medium | `Option[(Vec[T], ...)]` leaks the tuple payload's heap element when the Some arm binds and reads it -- 32 bytes definitely lost; the struct payload t… | 18a4084 |
 
 </details>
 
