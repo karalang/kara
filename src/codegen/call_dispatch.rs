@@ -4494,6 +4494,33 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.aggregate_param_copy_supported_struct(&type_name, &mut Vec::new()) {
             return;
         }
+        // B-2026-08-05-32 — a struct with a DIRECT `shared` field must KEEP its
+        // drop. Copy-support declines for two unrelated reasons, and the move
+        // semantics above only follow from one of them:
+        //
+        //   * a self-referential `struct N { edges: Vec[N] }` (B-2026-07-28-3)
+        //     declines because the per-element copy has no finite emission. The
+        //     callee then receives an ALIAS it may STORE into an owning
+        //     container, so the caller must give up its drop or both free the
+        //     same buffers. That is the case this retraction was written for.
+        //
+        //   * a direct `shared` field declines because `field_copy_supported`
+        //     bails on it. Nothing is stored and nothing is aliased: the callee
+        //     is caller-retains and therefore never entry-copies, so it never
+        //     rc-INCs and never rc-DECs. The binding's drop is the box's ONLY
+        //     rc-dec, and retracting it stranded the box — one leaked RC box per
+        //     call (`let d = DirH { value: Val.Ident(..) }; f(d);`).
+        //
+        // Keeping the drop cannot double-dec here precisely because the callee
+        // is caller-retains: there is no second owner to balance against. The
+        // fresh-TEMP form of this shape already reasons the same way and
+        // registers a drop for exactly this reason (B-2026-07-04-9(b)'s
+        // `src_shared_owning`); the comment there claims the let-bound sibling
+        // "is already covered by `track_struct_var` at its binding site", which
+        // was true only until this retraction removed it.
+        if self.struct_owns_shared_field(&type_name, &mut Vec::new()) {
+            return;
+        }
         let var = var.clone();
         self.suppress_struct_cleanup_for_tail_identifier(&var);
     }

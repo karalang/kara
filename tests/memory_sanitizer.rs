@@ -7594,6 +7594,73 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-32: a struct with a DIRECT `shared` field, bound to a LOCAL
+    /// and passed BY VALUE, leaked its RC box — one per call.
+    ///
+    /// `move_declined_copy_struct_arg` (B-2026-07-28-4) retracts the caller's
+    /// `StructDrop` whenever copy-support declines, so the argument is a true
+    /// move. That is right for the shape it was written for — a self-referential
+    /// `struct N { edges: Vec[N] }`, where the callee receives an ALIAS it may
+    /// store into an owning container and both would free the same buffers.
+    ///
+    /// Copy-support also declines for a direct `shared` field, and there the
+    /// move reasoning does not follow: the callee is caller-retains, so it never
+    /// entry-copies, never rc-INCs and never rc-DECs. The binding's drop is the
+    /// box's ONLY rc-dec, and retracting it stranded the box.
+    ///
+    /// The three controls are kept in the program because a too-broad fix
+    /// double-decs exactly there, and a double rc-dec ABORTS rather than leaks:
+    /// an `Option[shared]` field (copy-supported, so the callee's entry-copy
+    /// balances it), a fresh-TEMP arg (B-2026-07-04-9(b) registers its own
+    /// drop), and a local moved to another local without ever being passed.
+    #[test]
+    fn asan_direct_shared_field_struct_local_passed_by_value_rc_balanced() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct DirH { value: Val }
+struct OptH { value: Option[Val] }
+fn pay(i: i64) -> String { f"payload-{i}-long-enough-aaaa" }
+fn use_dir(h: DirH) -> i64 {
+    match h.value {
+        Val.Ident(s) => { if s.starts_with("payload") { s.len() + 1i64 } else { s.len() } }
+        Val.Num(n) => n,
+        Val.Nothing => 0i64,
+    }
+}
+fn use_opt(h: OptH) -> i64 {
+    match h.value { Some(_) => 1i64, None => 0i64 }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < base + 39i64 {
+        // The leak: local, then passed by value.
+        let d = DirH { value: Val.Ident(pay(i)) };
+        t = t + use_dir(d);
+        // Control 1 — Option[shared] field, same local-then-pass shape.
+        let o = OptH { value: Some(Val.Ident(pay(i))) };
+        t = t + use_opt(o);
+        // Control 2 — fresh-temp arg.
+        t = t + use_dir(DirH { value: Val.Ident(pay(i)) });
+        // Control 3 — local moved to another local, never passed.
+        let m = DirH { value: Val.Ident(pay(i)) };
+        let _m2 = m;
+        i = i + 1i64;
+    }
+    println(t);
+}
+"#,
+            &["2260"],
+            "direct_shared_field_struct_local_passed_by_value_rc_balanced",
+            // 88 allocations at -O2 (the optimizer folds some of the four
+            // per-iteration boxes); 328 at -O0. The floor only has to sit well
+            // above the 3 an allocation-free run reports.
+            50,
+        );
+    }
+
     /// B-2026-07-04-9(b) (FIXED): a struct with a DIRECT `shared` field
     /// (`DirH { value: Val }`, `Val` a shared enum) passed as an INLINE
     /// fresh-temp arg (`borrow_dir(DirH { value: Val.Ident(..) })`) leaked its
