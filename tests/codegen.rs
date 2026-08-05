@@ -5998,6 +5998,48 @@ fn main() {
         assert_eq!(out, "a:3:2\nb:3:42\nc:3\nd:5\ne:3:2\nf:3:42\nend\n");
     }
 
+    /// B-2026-08-05-3, RESULT leg — a `Result` payload that is a TUPLE with a
+    /// heap element must be owned exactly once.
+    ///
+    /// Two gaps, both on the `Result` carrier:
+    ///
+    /// (1) A consuming arm ran `suppress_inline_result_payload_cleanup`
+    ///     unconditionally, disarming the source for a binding that has NO
+    ///     owner of its own. A struct payload is `track_struct_var`'d and a
+    ///     direct `String`/`Vec` payload is `track_vec_var`'d, but
+    ///     `bind_pattern_values` never `track_tuple_var`s a match binding — so
+    ///     the buffer went to nobody. `Option` has been consumption-gated since
+    ///     B-2026-07-03-31; `Result` never was.
+    ///
+    /// (2) A GUARDED arm leaked, and only when the guard mentioned the binding:
+    ///     `Ok(x) if x.1 == 5i64` leaked while `Ok(x) if n == 1i64` was clean.
+    ///     `a == b` on scalars does not stay a surface `Binary` — the lowering
+    ///     pass rewrites it to `Call { callee: Path(["i64", "eq"]) }`, which the
+    ///     consumption classifier read as a path-callee CONSTRUCTION and scored
+    ///     as a transfer. That correction is carrier-independent.
+    ///
+    /// The OPTION carrier's own leak is NOT fixed here and the row stays open —
+    /// see its ledger entry. The first attempt registered a second, independent
+    /// scope-exit drop at the let-site; it passed every hand probe and
+    /// DOUBLE-FREED in the wild (drop_fuzz seed 4272), because a droppable tuple
+    /// payload is always >= 4 words and therefore already heap-boxed with a
+    /// `BoxedEnumDrop` owning it. That is where the Option fix belongs, and it
+    /// additionally needs the consuming-arm suppressors to clear the box's
+    /// `inner_drop_fn` — without which the move-out and tuple-destructure arms
+    /// double-free instead.
+    ///
+    /// The controls are load-bearing: the tuple PATTERN destructure
+    /// (`Ok((v, k))`) binds elements that DO own themselves, and the struct and
+    /// all-scalar payloads must keep their existing behavior.
+    ///
+    /// Seeded from `env.args().len()`, looped 100x, with every payload read
+    /// through an element or its bytes so nothing folds or dead-strips at `-O2`
+    /// (B-2026-08-04-17).
+    ///
+    /// This test is the VALUE half — the bug was a pure leak and the printed
+    /// answer was already correct, so it passes against the unfixed compiler.
+    /// `asan_optres_tuple_payload_is_owned_exactly_once` is the leak-detecting
+    /// twin and is the one that goes red; keep the two fixtures in step.
     /// B-2026-08-05-3 — an `Option`/`Result` payload that is a TUPLE with a
     /// heap element must be owned exactly once.
     ///
@@ -6056,89 +6098,83 @@ fn main() {
              \x20   let mut acc = 0i64;\n\
              \x20   let mut i = base;\n\
              \x20   while i < base + 100i64 {\n\
-             \x20       // 1. Option[tuple] — the reported shape: bound and READ, never moved.\n\
-             \x20       let o1: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
-             \x20       match o1 {\n\
-             \x20           Option.Some(x) => { acc = acc + x.0[0i64] + x.1; }\n\
-             \x20           Option.None => { acc = acc - 1i64; }\n\
-             \x20       }\n\
-             \x20       // 2. Result[tuple] — the same shape on the other carrier.\n\
+             \x20       // 1. Result[tuple] bound and READ, never moved — the leg the ungated\n\
+             \x20       //    arm suppression broke.\n\
              \x20       let r1: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
              \x20       match r1 {\n\
-             \x20           Result.Ok(x) => { acc = acc + x.0[1i64]; }\n\
+             \x20           Result.Ok(x) => { acc = acc + x.0[0i64] + x.1; }\n\
              \x20           Result.Err(e) => { acc = acc + e; }\n\
              \x20       }\n\
-             \x20       // 3. Result[tuple] never matched at all — the let-site walk alone.\n\
+             \x20       // 2. Result[tuple] never matched at all — the let-site walk alone.\n\
              \x20       let r2: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
              \x20       acc = acc + 1i64;\n\
-             \x20       // 4. GUARDED arms, both carriers — the `x.1 == 5` operator desugar.\n\
-             \x20       let o2: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
-             \x20       match o2 {\n\
-             \x20           Option.Some(x) if x.1 == 5i64 => { acc = acc + x.0[0i64]; }\n\
-             \x20           _ => { acc = acc - 1i64; }\n\
-             \x20       }\n\
+             \x20       // 3. GUARDED arm — the `x.1 == 5` operator desugar.\n\
              \x20       let r3: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
              \x20       match r3 {\n\
              \x20           Result.Ok(x) if x.1 == 5i64 => { acc = acc + x.0[0i64]; }\n\
              \x20           _ => { acc = acc - 1i64; }\n\
              \x20       }\n\
-             \x20       // 5. String element, read through its BYTES.\n\
-             \x20       let o3: Option[(String, i64)] = Option.Some((mks(i), 5i64));\n\
-             \x20       match o3 {\n\
-             \x20           Option.Some(x) => { if x.0.contains(dig(i)) { acc = acc + x.0.len(); } }\n\
-             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       // 4. String element, read through its BYTES.\n\
+             \x20       let r4: Result[(String, i64), i64] = Result.Ok((mks(i), 5i64));\n\
+             \x20       match r4 {\n\
+             \x20           Result.Ok(x) => { if x.0.contains(dig(i)) { acc = acc + x.0.len(); } }\n\
+             \x20           Result.Err(e) => { acc = acc + e; }\n\
+             \x20       }\n\
+             \x20       // 5. Vec[String] element.\n\
+             \x20       let mut vs: Vec[String] = Vec.new();\n\
+             \x20       vs.push(mks(i));\n\
+             \x20       vs.push(mks(i + 1i64));\n\
+             \x20       let r5: Result[(Vec[String], i64), i64] = Result.Ok((vs, 5i64));\n\
+             \x20       match r5 {\n\
+             \x20           Result.Ok(x) => { acc = acc + x.0.len() + x.0[0i64].len(); }\n\
+             \x20           Result.Err(e) => { acc = acc + e; }\n\
              \x20       }\n\
              \x20       // 6. Heap on the Err half.\n\
-             \x20       let r4: Result[i64, (Vec[i64], i64)] = Result.Err((mkv(i), 5i64));\n\
-             \x20       match r4 {\n\
+             \x20       let r6: Result[i64, (Vec[i64], i64)] = Result.Err((mkv(i), 5i64));\n\
+             \x20       match r6 {\n\
              \x20           Result.Ok(v) => { acc = acc + v; }\n\
              \x20           Result.Err(e) => { acc = acc + e.0[0i64]; }\n\
              \x20       }\n\
              \x20       // 7. if-let, borrow-only and moving.\n\
-             \x20       let r5: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
-             \x20       if let Result.Ok(x) = r5 { acc = acc + x.0[0i64]; } else { acc = acc - 1i64; }\n\
-             \x20       let r6: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       let r7: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       if let Result.Ok(x) = r7 { acc = acc + x.0[0i64]; } else { acc = acc - 1i64; }\n\
+             \x20       let r8: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
              \x20       let mut g: Vec[i64] = Vec.new();\n\
-             \x20       if let Result.Ok(x) = r6 { g = x.0; } else { acc = acc - 1i64; }\n\
+             \x20       if let Result.Ok(x) = r8 { g = x.0; } else { acc = acc - 1i64; }\n\
              \x20       acc = acc + g[0i64] + g.len();\n\
              \x20       // 8. Moved out of the match into an owned-param callee.\n\
-             \x20       let o4: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
-             \x20       match o4 {\n\
-             \x20           Option.Some(x) => { acc = acc + sinkt(x); }\n\
-             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       let r9: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       match r9 {\n\
+             \x20           Result.Ok(x) => { acc = acc + sinkt(x); }\n\
+             \x20           Result.Err(e) => { acc = acc + e; }\n\
              \x20       }\n\
              \x20       // 9. Element MOVED out through the match value.\n\
-             \x20       let o5: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
-             \x20       let g2: Vec[i64] = match o5 { Option.Some(x) => x.0, Option.None => Vec.new() };\n\
+             \x20       let r10: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       let g2: Vec[i64] = match r10 { Result.Ok(x) => x.0, Result.Err(e) => Vec.new() };\n\
              \x20       acc = acc + g2[1i64];\n\
              \x20       // --- CONTROLS: shapes that must NOT gain a second owner ---\n\
              \x20       // C1. Tuple PATTERN destructure — the elements own themselves.\n\
-             \x20       let o6: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
-             \x20       match o6 {\n\
-             \x20           Option.Some((v, k)) => { acc = acc + v[0i64] + k; }\n\
-             \x20           Option.None => { acc = acc - 1i64; }\n\
-             \x20       }\n\
-             \x20       let r7: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
-             \x20       match r7 {\n\
+             \x20       let r11: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));\n\
+             \x20       match r11 {\n\
              \x20           Result.Ok((v, k)) => { acc = acc + v[0i64] + k; }\n\
              \x20           Result.Err(e) => { acc = acc + e; }\n\
              \x20       }\n\
-             \x20       // C2. STRUCT payloads — already registered on another channel.\n\
-             \x20       let o7: Option[H] = Option.Some(H { a: mkv(i), b: 5i64 });\n\
-             \x20       match o7 {\n\
-             \x20           Option.Some(x) => { acc = acc + x.a[0i64] + x.b; }\n\
-             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       // C2. STRUCT payload — must keep its unconditional arm suppression.\n\
+             \x20       let r12: Result[H, i64] = Result.Ok(H { a: mkv(i), b: 5i64 });\n\
+             \x20       match r12 {\n\
+             \x20           Result.Ok(x) => { acc = acc + x.a[0i64] + x.b; }\n\
+             \x20           Result.Err(e) => { acc = acc + e; }\n\
              \x20       }\n\
-             \x20       let r8: Result[H, i64] = Result.Ok(H { a: mkv(i), b: 5i64 });\n\
-             \x20       match r8 {\n\
+             \x20       let r13: Result[H, i64] = Result.Ok(H { a: mkv(i), b: 5i64 });\n\
+             \x20       match r13 {\n\
              \x20           Result.Ok(x) if x.b == 5i64 => { acc = acc + x.a[0i64]; }\n\
              \x20           _ => { acc = acc - 1i64; }\n\
              \x20       }\n\
-             \x20       // C3. All-scalar tuple payload — must get no drop at all.\n\
-             \x20       let o8: Option[(i64, i64)] = Option.Some((i, 5i64));\n\
-             \x20       match o8 {\n\
-             \x20           Option.Some(x) => { acc = acc + x.0 + x.1; }\n\
-             \x20           Option.None => { acc = acc - 1i64; }\n\
+             \x20       // C4. All-scalar tuple payload — must get no drop at all.\n\
+             \x20       let r15: Result[(i64, i64), i64] = Result.Ok((i, 5i64));\n\
+             \x20       match r15 {\n\
+             \x20           Result.Ok(x) => { acc = acc + x.0 + x.1; }\n\
+             \x20           Result.Err(e) => { acc = acc + e; }\n\
              \x20       }\n\
              \x20       i = i + 1i64;\n\
              \x20   }\n\
@@ -6147,7 +6183,7 @@ fn main() {
         ) else {
             return;
         };
-        assert_eq!(out, "acc=74292\n");
+        assert_eq!(out, "acc=59334\n");
     }
 
     /// B-2026-08-04-16 — moving a named heap value into a TUPLE ELEMENT must
