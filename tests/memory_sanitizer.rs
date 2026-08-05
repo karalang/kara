@@ -8423,6 +8423,54 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-7 (collect_all_vec leg): two ownership holes in the
+    /// homogeneous gather, both on the input/output Vec buffers rather than the
+    /// element payloads — a scalar `Result[i64, i64]` reproduced the first.
+    ///
+    /// 1. DOUBLE-FREE of the input Vec. Step 5b frees `fs`'s buffer, justified
+    ///    in its own comment by "the caller's scope-exit drop is suppressed".
+    ///    Nothing suppressed it: `collect_all_vec` is intercepted in
+    ///    `compile_call` BEFORE the ordinary argument-lowering path, which is
+    ///    where `suppress_source_vec_cleanup_for_arg` runs for a moved owned Vec
+    ///    argument. A let-bound `fs` kept its drop and both freed one buffer.
+    /// 2. LEAK on an EMPTY input. The returned Vec is `{ slots, n, n }`, and
+    ///    every Vec free is cap-guarded, so with `n == 0` the `malloc(0)` slots
+    ///    stub was unfreeable by anyone.
+    ///
+    /// Covers both in one program, with runtime-derived closures so the work is
+    /// not folded away.
+    #[test]
+    fn asan_collect_all_vec_input_and_empty_output_owned_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn work(n: i64) -> Result[i64, String] {
+    if n > 0 { Result.Ok(n * 10) } else { Result.Err(f"neg:{n}") }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(base), || work(0 - base), || work(base + 2)];
+    let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+    let mut acc = 0;
+    for r in results {
+        match r {
+            Result.Ok(v) => { acc = acc + v; }
+            Result.Err(e) => { if e.starts_with("neg") { acc = acc + 1; } }
+        }
+    }
+    let empty: Vec[Fn() -> Result[i64, String]] = Vec.new();
+    let none: Vec[Result[i64, String]] = collect_all_vec(empty);
+    acc = acc + none.len();
+    println(acc);
+}
+"#,
+            &["41"],
+            "collect_all_vec_input_and_empty_output_owned_once",
+            // The par runtime's own startup dominates; the floor only has to sit
+            // above the 3 an allocation-free run reports.
+            20,
+        );
+    }
+
     // ── `String.split` — Vec[String] buffer + per-element String frees ──
     //
     // Each `split` returns a `Vec[String]` whose buffer and every element

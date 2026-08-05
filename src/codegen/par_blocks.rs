@@ -1118,6 +1118,17 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // 1. Evaluate the input Vec; extract data pointer + length N.
         let fs_val = self.compile_expr(fs_expr)?.into_struct_value();
+        // B-2026-08-05-7: step 5b below frees this buffer, justified in its own
+        // comment by "`fs` is a moved owned param … so the caller's scope-exit
+        // drop is suppressed". Nothing was suppressing it. `collect_all_vec` is
+        // INTERCEPTED in `compile_call` before the ordinary argument-lowering
+        // path (call_dispatch.rs), which is where
+        // `suppress_source_vec_cleanup_for_arg` normally runs for a moved owned
+        // Vec argument — so a let-bound `fs` kept its scope-exit drop and BOTH
+        // freed the same buffer: `let fs: Vec[Fn() -> i64] = Vec[|| 1];
+        // collect_all_vec(fs);` aborted with a double-free. The premise was
+        // right and only the call was missing; make it explicit here.
+        self.suppress_source_vec_cleanup_for_arg(fs_expr);
         let data_ptr = self
             .builder
             .build_extract_value(fs_val, 0, "cav.fs.data")
@@ -1320,7 +1331,35 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_free_if_cap_positive(data_ptr, fs_cap, 1);
 
         // 6. Output Vec[Result[T, E]] = { slots, N, N }.
-        Ok(self.build_vec_value(slots_ptr, n, n))
+        //
+        // B-2026-08-05-7: the returned Vec's CAP is `n`, and every Vec free in
+        // the compiler is cap-guarded (`cap > 0`). With an EMPTY input the
+        // slots `malloc(0)` above still returns a live 1-byte block, which the
+        // returned `{ slots, 0, 0 }` then made unfreeable by anyone — a small
+        // unconditional leak on `collect_all_vec(<empty Vec>)`. Hand back a
+        // NULL data pointer in that case so the value is a genuinely empty Vec,
+        // and free the stub here. Reads are unaffected: len 0 means no consumer
+        // dereferences the pointer.
+        let is_empty = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, n, i64_t.const_zero(), "cav.n.isempty")
+            .unwrap();
+        let free_bb = self.context.append_basic_block(outer_fn, "cav.empty.free");
+        let done_bb = self.context.append_basic_block(outer_fn, "cav.empty.done");
+        let keep_bb = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, free_bb, done_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        self.builder
+            .build_call(self.free_fn, &[slots_ptr.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+        self.builder.position_at_end(done_bb);
+        let data_phi = self.builder.build_phi(ptr_ty, "cav.data").unwrap();
+        data_phi.add_incoming(&[(&ptr_ty.const_null(), free_bb), (&slots_ptr, keep_bb)]);
+        let data = data_phi.as_basic_value().into_pointer_value();
+        Ok(self.build_vec_value(data, n, n))
     }
 
     /// Lower `collect_all(|| a, || b, …)` (phase-6) — the heterogeneous
