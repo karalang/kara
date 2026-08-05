@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 679 | 3 |
+| codegen | 680 | 4 |
 | interp | 124 | 0 |
 | typecheck | 121 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
-| other | 28 | 3 |
 | cli | 28 | 0 |
-| runtime | 20 | 0 |
+| other | 27 | 2 |
+| runtime | 21 | 1 |
 | resolver | 18 | 0 |
 | parser | 11 | 0 |
 | effect | 4 | 0 |
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced 
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
-| B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED ARM64-ONLY perf regression: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; REPRODUCED 2026-08-05 on the M5 Pro with matched karac+archive pairs at b7ba6ea4 vs main (1.26x-1.28x slower, order-independent, lean and full archives agreeing) while the SAME two commits run 1.15x FASTER on x86_64 Linux; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 CODEGEN by byte-identical binaries (runtime after 07-30 is NOT ruled out) | none yet — arm64 reproduction CONFIRMED 2026-08-05 (1.26x–1.28x, matched pairs, both orders); next step is a matched-pair bisect ON ARM64, starting with the 24 runtime/ commits in b7ba6ea4..882d8d73 |
+| B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64-ONLY perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte): kata:170 two-sum-III runs 1.27x-1.28x slower on the M5 Pro across that ONE commit (786 -> 1000 ms, lean lane), which is the whole b7ba6ea4..882d8d73 endpoint regression; the SAME commit is ~3% FASTER on x86_64, so it is an ARCHITECTURE TRADEOFF awaiting a fix-shape decision, not a revert -- and separately, arm64 never received the 1.28x x86 speedup that landed in b7ba6ea4..a42b5338 | none yet -- CULPRIT IDENTIFIED 2026-08-05 by matched-pair candidate test on arm64 (58412d9f vs parent a42b5338, both archive configs, both orders, all sinks 762965). Next step is an OWNER DECISION on fix shape: arch-gated vs key-type-gated tag test. The bisect fallback is no longer needed for the lean/recorded lane; a full-archive residual (~1.18x after 58412d9f) remains unexplained. |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-33 | 2026-08-05 | codegen | high | LAW, not one fixture: a by-value aggregate param that is CALLER-RETAINS is owned by nobody and leaks once per call on a DEFAULT -O2 build. Three predicates reach it -- generic-erased field (2400 B/40), Map-bearing field (26400 B/160), and direct `shared` field (B-2026-08-05-32, which is therefore a special case of this row, not its own bug) | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION (corpus-wide, UNATTRIBUTED): Kāra's sequential lane is ~1.18x slower than the 2026-06-06 baseline across 36 katas while clang/rustc/go are flat — so it is a karac regression, not host or toolchain drift. | kara-katas bench-baseline.json (2026-06-06) vs bench-results.json; reproduce with the (id,approach,lane,lang) join described in detail |
