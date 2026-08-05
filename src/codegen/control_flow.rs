@@ -218,6 +218,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.block_only_borrows_result_tuple_payload(value, pattern, then_block) {
             self.suppress_inline_result_payload_cleanup(value, pattern);
         }
+        self.retract_boxed_tuple_inner_drop_for_block(value, pattern, Some(then_block));
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
@@ -516,6 +517,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.block_only_borrows_result_tuple_payload(value, pattern, body) {
             self.suppress_inline_result_payload_cleanup(value, pattern);
         }
+        self.retract_boxed_tuple_inner_drop_for_block(value, pattern, Some(body));
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
@@ -971,6 +973,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
         self.suppress_optres_payload_bodies_for_match(value, pattern);
+        // B-2026-08-05-3 (Option leg): a let-else binding escapes into the
+        // enclosing scope, so it always takes the boxed tuple's interior.
+        self.retract_boxed_tuple_inner_drop_for_block(value, pattern, None);
         // B-2026-07-21-16: `let Some(s) = a.opt else { … }` over an OWNED
         // place — zero the source field on the match edge (the escaped
         // binding owns the payload); the divergent else edge leaves it for

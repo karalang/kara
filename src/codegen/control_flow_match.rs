@@ -560,6 +560,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     ) {
                         self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
                     }
+                    // B-2026-08-05-3 (Option leg): a consuming arm takes the
+                    // BOXED tuple payload's interior, so downgrade the box drop
+                    // to box-only. No-op for every non-tuple payload.
+                    self.retract_boxed_tuple_inner_drop_for_arm(
+                        scrutinee,
+                        &arm.pattern,
+                        &arm.body,
+                        arm.guard.as_ref(),
+                    );
                     // B-2026-08-03-3 — the same suppression for a TUPLE-ELEMENT
                     // scrutinee (`match t.0 { Result.Err(e) => .. }`). The two
                     // above key on a BINDING in `inline_{option,result}_payload_
@@ -6051,6 +6060,117 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_struct_gep(layout.llvm_type, slot.ptr, 3, "respl.movearg.cap")
         {
             let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        }
+    }
+
+    /// B-2026-08-05-3 — does this arm take OWNERSHIP of a named boxed TUPLE
+    /// payload's interior? If so, its `BoxedEnumDrop` must be downgraded to a
+    /// box-only free, or the arm's owner and the box both free the same buffer.
+    /// Returns the scrutinee binding name to retract against.
+    ///
+    /// Two ways an arm takes it, needing different rules:
+    ///
+    ///   * a per-element DESTRUCTURE (`Some((v, k))`) ALWAYS does —
+    ///     `bind_pattern_values` gives each heap leaf its own `track_vec_var`,
+    ///     whatever the body then does with it. B-2026-07-18-3's fresh-temp
+    ///     path reaches the same conclusion structurally, by never installing
+    ///     an inner drop for this shape.
+    ///   * a WHOLE-value binding (`Some(x)`) does so only when the arm actually
+    ///     consumes it: `Some(x) => x.0` hands the element out and must
+    ///     retract, while `Some(x) => x.0[0]` merely reads and must NOT — that
+    ///     binding registers no owner, so retracting there re-opens the leak.
+    ///
+    /// Both error directions here are LEAKS, never a double free, which is why
+    /// the classifier's conservative "consumed" default is safe on this site
+    /// too even though it points the opposite way from the suppressors above.
+    fn boxed_tuple_payload_arm_takes_ownership(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        arm_only_borrows: bool,
+    ) -> Option<String> {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return None;
+        };
+        if !self.boxed_enum_payload_vars.contains(name.as_str()) {
+            return None;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return None;
+        };
+        if !matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        ) {
+            return None;
+        }
+        let destructures = patterns
+            .iter()
+            .any(|p| matches!(&p.kind, PatternKind::Tuple(_)));
+        let whole_tuple_binding = patterns.iter().any(|p| {
+            matches!(&p.kind, PatternKind::Binding(_))
+                && self
+                    .pattern_binding_types
+                    .get(&(p.span.offset, p.span.length))
+                    .is_some_and(|t| t == "Tuple")
+        });
+        (destructures || (whole_tuple_binding && !arm_only_borrows)).then(|| name.clone())
+    }
+
+    /// The binding names a `Some`/`Ok`/`Err` arm introduces, for the borrow
+    /// verdict in [`Self::boxed_tuple_payload_arm_takes_ownership`].
+    fn variant_arm_binds(pattern: &Pattern) -> Vec<String> {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return Vec::new();
+        };
+        let mut binds = Vec::new();
+        for p in patterns {
+            collect_pattern_bindings(p, &mut binds);
+        }
+        binds
+    }
+
+    /// `match`-arm entry point for the retraction above.
+    pub(super) fn retract_boxed_tuple_inner_drop_for_arm(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) {
+        let binds = Self::variant_arm_binds(pattern);
+        let only_borrows = !binds.is_empty()
+            && binds.iter().all(|v| {
+                super::consume_class::binding_only_borrowed(v, body)
+                    && guard.is_none_or(|g| super::consume_class::binding_only_borrowed(v, g))
+            });
+        if let Some(name) =
+            self.boxed_tuple_payload_arm_takes_ownership(scrutinee, pattern, only_borrows)
+        {
+            self.clear_boxed_enum_inner_drop(&name);
+        }
+    }
+
+    /// Block-body sibling, for the if-let `then_block` / while-let `body`
+    /// scopes. `let`-else passes `None`: its bindings escape into the enclosing
+    /// scope, so they always take ownership.
+    pub(super) fn retract_boxed_tuple_inner_drop_for_block(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: Option<&crate::ast::Block>,
+    ) {
+        let binds = Self::variant_arm_binds(pattern);
+        let only_borrows = block.is_some_and(|b| {
+            !binds.is_empty()
+                && binds
+                    .iter()
+                    .all(|v| super::consume_class::binding_only_borrowed_block(v, b))
+        });
+        if let Some(name) =
+            self.boxed_tuple_payload_arm_takes_ownership(scrutinee, pattern, only_borrows)
+        {
+            self.clear_boxed_enum_inner_drop(&name);
         }
     }
 

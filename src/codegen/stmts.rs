@@ -4686,10 +4686,40 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // derivation gives; without it a bound-then-
                                 // matched pop result leaked the node.
                                 let payload_te = Self::option_generic_arg_type_expr(te);
+                                // B-2026-08-05-3 — a TUPLE payload carrying heap
+                                // (`Option[(Vec[String], i64)]`). `inner` below
+                                // is a struct NAME and is `None` for a tuple, so
+                                // the box drop was box-ONLY and the tuple's
+                                // elements leaked. Resolve the tuple's own
+                                // recursive drop and give it to the SAME
+                                // `BoxedEnumDrop` — the B-2026-07-12-4 pattern,
+                                // and the named-binding peer of what
+                                // B-2026-07-18-3 already does for a fresh-temp
+                                // scrutinee.
+                                //
+                                // ONE OWNER, which is the whole lesson of the
+                                // first attempt: that one registered a SECOND,
+                                // independent drop action at this site. It
+                                // passed every hand probe and double-freed in
+                                // the wild (drop_fuzz seed 4272), because a
+                                // droppable tuple payload is at least four words
+                                // and so is ALWAYS already boxed here. A
+                                // consuming match arm hands the interior to its
+                                // binding and retracts this back to box-only
+                                // (`clear_boxed_enum_inner_drop`).
+                                let tuple_inner_drop = payload_te
+                                    .as_ref()
+                                    .filter(|p| {
+                                        matches!(p.kind, TypeKind::Tuple(_))
+                                            && self.option_payload_struct_or_enum_drop_ok(p)
+                                    })
+                                    .cloned()
+                                    .map(|p| self.emit_drop_fn_for_type_expr(&p));
                                 for (enum_name, variant, inner) in &boxed {
                                     let nested_opt_drop = payload_te
                                         .as_ref()
-                                        .and_then(|p| self.option_shared_payload_element_drop(p));
+                                        .and_then(|p| self.option_shared_payload_element_drop(p))
+                                        .or(tuple_inner_drop);
                                     if let Some(drop_fn) = nested_opt_drop {
                                         self.track_boxed_enum_var_with_inner_drop(
                                             var_name,

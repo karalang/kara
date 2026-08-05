@@ -2451,6 +2451,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `option_payload_inline_recursive_drop_ok` (the String/Vec overlay
     /// gate); a `false` keeps the status-quo fast path.
     pub(super) fn option_payload_struct_or_enum_drop_ok(&self, payload_te: &TypeExpr) -> bool {
+        // B-2026-08-05-3 — a TUPLE payload carrying heap is the same situation
+        // one type-shape over, and fell out at the `TypeKind::Path` bind below.
+        // Requires at least one non-trivially-copyable element, so an
+        // all-scalar `(i64, i64)` still gets no drop registered against it.
+        if let TypeKind::Tuple(elems) = &payload_te.kind {
+            return elems
+                .iter()
+                .any(|e| !super::vec_method::is_trivially_copyable_te(e))
+                && self.te_recursive_drop_fully_supported(payload_te);
+        }
         let TypeKind::Path(p) = &payload_te.kind else {
             return false;
         };
@@ -5495,6 +5505,33 @@ impl<'ctx> super::Codegen<'ctx> {
         f.get_name()
             .to_str()
             .is_ok_and(|n| n.starts_with("__karac_dropbodies_"))
+    }
+
+    /// B-2026-08-05-3 — downgrade `name`'s `BoxedEnumDrop` to a BOX-ONLY free
+    /// by clearing its `inner_drop_fn`, leaving the action itself in place so
+    /// the box allocation is still reclaimed.
+    ///
+    /// Mutates rather than retains: this is the "a match arm now owns the box's
+    /// interior" signal, not "nothing needs freeing". It is the named-binding
+    /// peer of the choice B-2026-07-18-3's fresh-temp path makes structurally —
+    /// there, a per-element destructure simply never gets an inner drop
+    /// installed; here the let-site cannot see the pattern yet, so the drop is
+    /// installed optimistically and retracted by the consuming arm.
+    pub(super) fn clear_boxed_enum_inner_drop(&mut self, name: &str) {
+        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+            for action in frame.iter_mut() {
+                if let CleanupAction::BoxedEnumDrop {
+                    name: n,
+                    inner_drop_fn,
+                    ..
+                } = action
+                {
+                    if n == name {
+                        *inner_drop_fn = None;
+                    }
+                }
+            }
+        }
     }
 
     /// Retract the `__karac_dropbodies_*` field-bodies action for `name`,

@@ -35994,6 +35994,21 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-3 — an `Option`/`Result` TUPLE payload owned exactly once,
+    /// on both carriers. Three gaps: the `Result` consuming-arm suppression was
+    /// ungated; a GUARDED arm leaked because `x.1 == 5i64` lowers to
+    /// `Call { Path(["i64","eq"]) }`, which the consumption classifier read as
+    /// a construction; and the `Option` box drop was box-ONLY, because
+    /// `inner_drop_fn` derives from a struct NAME and a tuple has none.
+    ///
+    /// Arms O9 (element moved out of the match) and O10 (tuple PATTERN
+    /// destructure) are pinned because they DOUBLE-FREE if the box's inner drop
+    /// is not retracted for a consuming arm — they are what defeated the first
+    /// attempt at the Option leg, alongside drop_fuzz seed 4272.
+    ///
+    /// Seeded from `env.args().len()` with element and byte reads throughout so
+    /// nothing folds or dead-strips (B-2026-08-04-17); ~3,800 allocations,
+    /// floored well below that.
     /// B-2026-08-05-3, RESULT leg — a `Result` tuple payload owned exactly once.
     /// Two gaps: the consuming-arm suppression was ungated (disarming the source
     /// for a binding that owns nothing), and a GUARDED arm leaked because
@@ -36117,13 +36132,83 @@ fn main() {
                  \x20           Result.Ok(x) => { acc = acc + x.0 + x.1; }\n\
                  \x20           Result.Err(e) => { acc = acc + e; }\n\
                  \x20       }\n\
+                 \x20       // --- OPTION carrier (B-2026-08-05-3's own shape; second attempt) ---\n\
+                 \x20       // O1. Bound and READ, never moved.\n\
+                 \x20       let o1: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       match o1 {\n\
+                 \x20           Option.Some(x) => { acc = acc + x.0[0i64] + x.1; }\n\
+                 \x20           Option.None => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
+                 \x20       // O2. NEVER matched at all — the let-site walk alone. This is what\n\
+                 \x20       //     shows the bug is scope-exit, not arm binding.\n\
+                 \x20       let o2: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       acc = acc + 1i64;\n\
+                 \x20       // O3. GUARDED arm.\n\
+                 \x20       let o3: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       match o3 {\n\
+                 \x20           Option.Some(x) if x.1 == 5i64 => { acc = acc + x.0[0i64]; }\n\
+                 \x20           _ => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
+                 \x20       // O4. String element, read through its BYTES.\n\
+                 \x20       let o4: Option[(String, i64)] = Option.Some((mks(i), 5i64));\n\
+                 \x20       match o4 {\n\
+                 \x20           Option.Some(x) => { if x.0.contains(dig(i)) { acc = acc + x.0.len(); } }\n\
+                 \x20           Option.None => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
+                 \x20       // O5. Vec[String] element.\n\
+                 \x20       let mut ovs: Vec[String] = Vec.new();\n\
+                 \x20       ovs.push(mks(i));\n\
+                 \x20       ovs.push(mks(i + 1i64));\n\
+                 \x20       let o5: Option[(Vec[String], i64)] = Option.Some((ovs, 5i64));\n\
+                 \x20       match o5 {\n\
+                 \x20           Option.Some(x) => { acc = acc + x.0.len() + x.0[0i64].len(); }\n\
+                 \x20           Option.None => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
+                 \x20       // O6. if-let, borrow-only and moving.\n\
+                 \x20       let o6: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       if let Option.Some(x) = o6 { acc = acc + x.0[0i64]; } else { acc = acc - 1i64; }\n\
+                 \x20       let o7: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       let mut og: Vec[i64] = Vec.new();\n\
+                 \x20       if let Option.Some(x) = o7 { og = x.0; } else { acc = acc - 1i64; }\n\
+                 \x20       acc = acc + og[0i64] + og.len();\n\
+                 \x20       // O8. Moved into an owned-param callee.\n\
+                 \x20       let o8: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       match o8 {\n\
+                 \x20           Option.Some(x) => { acc = acc + sinkt(x); }\n\
+                 \x20           Option.None => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
+                 \x20       // --- The two shapes that DEFEATED the first attempt at this leg. ---\n\
+                 \x20       // O9. Element MOVED out through the match value. The arm takes the\n\
+                 \x20       //     box's interior, so the box drop must retract to box-only.\n\
+                 \x20       let o9: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       let og2: Vec[i64] = match o9 { Option.Some(x) => x.0, Option.None => Vec.new() };\n\
+                 \x20       acc = acc + og2[1i64];\n\
+                 \x20       // O10. Tuple PATTERN destructure — the leaf bindings own their\n\
+                 \x20       //      elements, so the box drop must retract here too.\n\
+                 \x20       let o10: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));\n\
+                 \x20       match o10 {\n\
+                 \x20           Option.Some((v, k)) => { acc = acc + v[0i64] + k; }\n\
+                 \x20           Option.None => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
+                 \x20       // O11. STRUCT payload control — a different channel owns it.\n\
+                 \x20       let o11: Option[H] = Option.Some(H { a: mkv(i), b: 5i64 });\n\
+                 \x20       match o11 {\n\
+                 \x20           Option.Some(x) => { acc = acc + x.a[0i64] + x.b; }\n\
+                 \x20           Option.None => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
+                 \x20       // O12. All-scalar tuple payload — must get no drop at all.\n\
+                 \x20       let o12: Option[(i64, i64)] = Option.Some((i, 5i64));\n\
+                 \x20       match o12 {\n\
+                 \x20           Option.Some(x) => { acc = acc + x.0 + x.1; }\n\
+                 \x20           Option.None => { acc = acc - 1i64; }\n\
+                 \x20       }\n\
                  \x20       i = i + 1i64;\n\
                  \x20   }\n\
                  \x20   println(f\"acc={acc}\");\n\
                  }\n",
-            &["acc=59334"],
+            &["acc=108568"],
             "optres_tuple_payload_is_owned_exactly_once",
-            1400,
+            3000,
         );
     }
 
