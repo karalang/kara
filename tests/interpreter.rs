@@ -30097,3 +30097,52 @@ fn match_arm_rebinding_a_moved_name_still_runs_its_drop_body() {
         "the binding's NAME must not change observable drop behaviour"
     );
 }
+
+/// B-2026-08-05: `File.read` / `BufReader.read` accept a fixed `Array[u8, N]`
+/// as the `mut Slice[u8]` buffer, matching AOT.
+///
+/// The idiom is the one `examples/relay` ships for `TcpStream.read`:
+///
+///     let mut buf: Array[u8, N] = [0u8; N];
+///     f.read(mut buf)
+///
+/// AOT coerces the array to the slice parameter and reads fine; the
+/// interpreter rejected it with a runtime error, so the SAME program worked
+/// under `karac build` and died under `karac run --interp`. `File.write`
+/// already took a `Value::Array` deliberately ("be permissive at the
+/// interpreter level — the typechecker enforces the declared shape"); read was
+/// the inconsistent half. Found dogfooding the first file-I/O probe of the
+/// Cumulus app.
+#[test]
+fn file_read_accepts_a_fixed_array_buffer_like_aot() {
+    let dir = std::env::temp_dir().join("karac_file_read_array_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("probe.bin");
+    let p = path.to_str().unwrap().replace('\\', "/");
+    let src = format!(
+        "fn main() with reads(FileSystem) writes(FileSystem) {{\n\
+         let mut out: Vec[u8] = Vec.new();\n\
+         for i in 0..8 {{ out.push((i * 17) as u8); }}\n\
+         match File.create(\"{p}\") {{\n\
+         Ok(f) => {{ match f.write(out.as_slice()) {{ Ok(n) => {{ }} Err(e) => {{ println(\"werr\"); }} }} }}\n\
+         Err(e) => {{ println(\"cerr\"); }}\n\
+         }}\n\
+         match File.open(\"{p}\") {{\n\
+         Ok(f) => {{\n\
+         let mut buf: Array[u8, 8] = [0u8; 8];\n\
+         match f.read(mut buf) {{\n\
+         Ok(n) => {{ println(f\"read {{n}} first={{buf[0]}} last={{buf[7]}}\"); }}\n\
+         Err(e) => {{ println(\"rerr\"); }}\n\
+         }}\n\
+         }}\n\
+         Err(e) => {{ println(\"oerr\"); }}\n\
+         }}\n\
+         }}\n"
+    );
+    let out = run(&src);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        out, "read 8 first=0 last=119\n",
+        "the interpreter must read through a fixed Array buffer exactly as AOT does; got: {out}"
+    );
+}

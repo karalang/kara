@@ -55,6 +55,25 @@ impl<'a> super::Interpreter<'a> {
                         len,
                         ..
                     } => (storage.clone(), start, len),
+                    // A fixed `Array[u8, N]` (or a `Vec[u8]`) passed as the
+                    // `mut Slice[u8]` buffer — the idiom `examples/relay`
+                    // ships for `TcpStream.read`:
+                    //
+                    //     let mut buf: Array[u8, 4096] = [0u8; 4096];
+                    //     f.read(mut buf)
+                    //
+                    // AOT accepts it (the array coerces to a slice); the
+                    // interpreter rejected it, so the same program read fine
+                    // under `karac build` and died under `karac run --interp`.
+                    // `File.write` directly below already takes `Value::Array`
+                    // for exactly this reason ("be permissive at the
+                    // interpreter level — the typechecker enforces the declared
+                    // shape"); read now matches write. The whole array is the
+                    // buffer, so the slice window is the full range.
+                    Value::Array(ref rc) => {
+                        let len = rc.read().unwrap().len();
+                        (rc.clone(), 0usize, len)
+                    }
                     other => {
                         return Some(self.record_runtime_error(
                             format!(

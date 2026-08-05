@@ -109,6 +109,14 @@ impl<'a> super::Interpreter<'a> {
                         len,
                         ..
                     } => (storage.clone(), start, len),
+                    // Same array-as-buffer acceptance as `File.read` — see the
+                    // comment there. Identical shape, identical divergence:
+                    // AOT coerced `Array[u8, N]` to the slice param and the
+                    // interpreter did not.
+                    Value::Array(ref rc) => {
+                        let len = rc.read().unwrap().len();
+                        (rc.clone(), 0usize, len)
+                    }
                     other => {
                         return Some(self.record_runtime_error(
                             format!(
