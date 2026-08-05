@@ -7760,6 +7760,24 @@ fn main() {
     /// (`Option[Inner]`, `Inner { s: String }`) destructured and dropped
     /// undestructured. Same fix (`emit_option_drop_fn` recurses into the
     /// struct's `__karac_drop_struct_Inner`). B-2026-07-03-27.
+    ///
+    /// COVERAGE HOLE CLOSED 2026-08-05 (B-2026-08-05-22). This fixture used to
+    /// carry only the Vec-sourced (moved-in owned param) half, while its enum
+    /// sibling carries BOTH that and a fresh-temp source — and the fresh-temp
+    /// half is the one that leaks. A 2x2 over {enum, struct} payload x {Vec,
+    /// fresh-temp} source says the SOURCE is the axis and the payload kind is
+    /// not: Vec-sourced is clean for both, fresh-temp leaks for both (enum
+    /// 360 B/10, struct 200 B/5 at -O0). So this test passed for a reason that
+    /// had nothing to do with the struct payload — it simply never ran the
+    /// broken path. The `use_a(mk())` half below is that path.
+    ///
+    /// -O0 ONLY, deliberately, and it is NOT floored with
+    /// `assert_clean_asan_run_min_allocs`. `Some(_)` never reads the payload,
+    /// so this is B-2026-08-04-17's DISCARD-shaped family: at -O2 LLVM deletes
+    /// the allocation whether or not it is freed, which is why the added half
+    /// reads clean there. A min-allocs floor would therefore fail at -O2 on a
+    /// correct compiler. Per that row's conclusion for this family, the -O0
+    /// sweep is the only lever and the fixture is not contorted to chase -O2.
     #[test]
     fn asan_b27_option_struct_undestructured_drop_no_leak() {
         assert_clean_asan_run(
@@ -7767,15 +7785,23 @@ fn main() {
 struct Inner { s: String }
 struct A { value: Option[Inner] }
 fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn mk() -> A { A { value: Some(Inner { s: "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm".to_string() }) } }
 fn build() -> Vec[A] {
     let mut v: Vec[A] = Vec.new();
     let mut i = 0;
     while i < 6 { v.push(A { value: Some(Inner { s: "ssssssssssssssssssssssssssssssssssssssss".to_string() }) }); i = i + 1; }
     v
 }
-fn main() { let xs = build(); let mut t = 0; for a in xs { t = t + use_a(a); } println(t); }
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + use_a(a); }            // Vec-sourced: always was clean
+    let mut i = 0;                               // fresh-temp source: the broken path
+    while i < 6 { t = t + use_a(mk()); i = i + 1; }
+    println(t);
+}
 "#,
-            &["6"],
+            &["12"],
             "b27_option_struct_undestructured_drop",
         );
     }
