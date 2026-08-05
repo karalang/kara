@@ -13754,7 +13754,32 @@ impl<'ctx> super::Codegen<'ctx> {
         //     statement-end) when body-eligible with an own `impl Drop`;
         //     else the field-bodies walk (bodies) + `track_struct_var`
         //     (memory); else `track_struct_var` alone.
-        if self.expr_yields_fresh_owned_temp(object) {
+        // B-2026-08-04-17 — a STRUCT-LITERAL receiver is a fresh owned temp
+        // too, and was silently excluded here.
+        //
+        // `expr_yields_fresh_owned_temp` admits only `Call` / `MethodCall`
+        // (54 call sites depend on that narrowness, so it is widened HERE
+        // rather than there — the same local-widening precedent as
+        // `call_dispatch.rs`'s fresh-arg gate). A struct literal constructs a
+        // new value and borrows nothing, so it is fresh-owned by construction.
+        //
+        // The disagreement was internal to this block: `shape_ok` below reads
+        // `matches!(object.kind, StructLiteral | Call)`, i.e. the body already
+        // anticipates a struct-literal receiver that this guard could never
+        // let through. So the whole drop-track block was skipped for
+        // `R { v: "x".to_string() }.get()` and the materialized temp's heap
+        // field was never freed.
+        //
+        // Measured at -O0 (the level at which an ownership-emission fixture
+        // actually tests what codegen emitted): 9 bytes leaked, exactly the
+        // field String. `let r = R { .. }; r.get()` and `mk().get()` were both
+        // clean — only the inline literal receiver leaked, which is what
+        // localises the fault to this guard rather than to the drop machinery.
+        // Invisible at -O2, where the allocation is deleted outright: the
+        // vacuous-fixture hazard this row is about, caught by its own -O0 leg.
+        let receiver_is_fresh_owned = self.expr_yields_fresh_owned_temp(object)
+            || matches!(&object.kind, ExprKind::StructLiteral { .. });
+        if receiver_is_fresh_owned {
             if is_shared {
                 if let Some(heap_type) = self.shared_types.get(&type_name).map(|i| i.heap_type) {
                     self.track_rc_var(&synth, val.into_pointer_value(), heap_type);

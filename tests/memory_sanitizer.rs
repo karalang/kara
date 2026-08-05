@@ -17261,21 +17261,50 @@ fn main() {
         // drop frees the payload), so the materialization must NOT also drop the
         // caller's copy — verify no double-free / leak across a struct literal, an
         // enum literal, and a call-result receiver.
-        assert_clean_asan_run(
+        // DE-VACUUMED (B-2026-08-04-17). As originally written this allocated
+        // NOTHING at -O2: literal payloads, printed once, so every buffer was
+        // foldable or dead and LLVM deleted them. It passed while a real leak
+        // existed -- the struct-literal receiver's field String was never
+        // freed, which the -O0 leg caught and which is fixed alongside this.
+        //
+        // Rewritten to the row's three-legged recipe so it is a live gate at
+        // the DEFAULT level rather than only at -O0: an opaque seed
+        // (`env.args().len()` is 1 under this harness but the optimizer cannot
+        // see that), runtime-derived payload CONTENT, a BYTE-level read via
+        // `contains`, and enough iterations to survive unrolling. Floored so it
+        // cannot silently drift back to zero.
+        assert_clean_asan_run_min_allocs(
             r#"
 struct R { v: String }
 impl R { fn get(self) -> String { self.v } }
 enum E { A(String) }
 impl E { fn take(self) -> String { match self { E.A(s) => s } } }
-fn mk() -> R { R { v: "chained".to_string() } }
+fn mk(n: i64) -> R { R { v: f"chained-{n}" } }
 fn main() {
-    println(R { v: "structlit".to_string() }.get());
-    println(E.A("enumlit".to_string()).take());
-    println(mk().get());
+    let seed = env.args().len();
+    let mut hits = 0i64;
+    let mut i = 0i64;
+    while i < 60i64 {
+        let n = seed + i;
+        // The shape under test: an inline STRUCT-LITERAL receiver for an
+        // owned-`self` method. Its materialized temp was never drop-tracked.
+        let a = R { v: f"structlit-{n}" }.get();
+        // Enum-literal and call-result receivers, the fixture's other two arms.
+        let b = E.A(f"enumlit-{n}").take();
+        let c = mk(n).get();
+        // Byte-level reads against a runtime-derived needle, so the buffers
+        // are live and cannot be deleted.
+        if a.contains(f"structlit-{n}") { hits = hits + 1i64; }
+        if b.contains(f"enumlit-{n}") { hits = hits + 1i64; }
+        if c.contains(f"chained-{n}") { hits = hits + 1i64; }
+        i = i + 1i64;
+    }
+    println(f"hits={hits}");
 }
 "#,
-            &["structlit", "enumlit", "chained"],
+            &["hits=180"],
             "user_method_builtin_name_on_literal_receiver",
+            100,
         );
     }
 
