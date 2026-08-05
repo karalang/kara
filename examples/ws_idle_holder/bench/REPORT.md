@@ -112,6 +112,18 @@ alongside; this file is **what we measured and what it means**, not
 | socket.io _(stretch)_ | stretch | n/a | n/a | **deferred (optional)** — framework tax over Node; not blocking v1 | deferred | [§socket.io](#socketio-stretch) |
 | Python asyncio websockets _(stretch)_ | stretch | n/a | n/a | **deferred (optional)**, lean-cut — not blocking v1 | deferred | [§Python](#python-asyncio-websockets-stretch) |
 
+> **What is inside Kāra's 12.1 KB.** The comparator rows name their stacks
+> (`Rust (rustls + tokio)`, `Go (gorilla/websocket)`, …) while the Kāra row
+> does not, which could be read as Kāra measuring a thinner stack. It is not:
+> `karac-runtime` links tokio, hyper, rustls and ring, so the TLS and I/O
+> machinery under Kāra's number is substantially the same as under the Rust
+> comparator's — the harness is in-process TLS on both sides, which is what
+> makes the pair apples-to-apples. "No third-party dependencies" elsewhere in
+> the project's docs is a claim about a **Kāra program's** dependency list
+> (there are no Kāra packages to add), not about the Rust crates the runtime
+> is built from. What differs between the two rows is the per-connection
+> state each runtime keeps, which is the thing being measured.
+>
 > ¹ **Java/Netty** is the one stack whose RSS ≠ live set: a JVM's footprint
 > is dominated by GC heap-commit, which is `-Xmx`-dependent. The **14.4 KB /
 > 1.19×** is the RSS at a balanced deployment heap (`-Xmx4g` @ 250K); the

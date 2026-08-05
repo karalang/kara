@@ -267,8 +267,8 @@ The numbers behind each claim:
 
 In-tree — no third-party Kāra packages to add, and no package manager to
 reach for. (The Rust runtime crate that backs these surfaces does link
-tokio, hyper, and rustls; the point is that a Kāra program's dependency
-list stays empty.) Blocking-style I/O, no function coloring — the
+tokio, hyper, rustls, and ring; the point is that a Kāra program's
+dependency list stays empty.) Blocking-style I/O, no function coloring — the
 effect-driven scheduler moves blocking work off the par-runtime threads.
 Minimal, compiling examples live in
 [`examples/std_net`](examples/std_net).
