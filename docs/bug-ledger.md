@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 215 | 0 |
-| leak | 134 | 0 |
+| leak | 135 | 1 |
 | double-free | 97 | 1 |
 | codegen-gap | 90 | 1 |
 | run-vs-build | 82 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 676 | 3 |
+| codegen | 677 | 4 |
 | interp | 124 | 1 |
 | typecheck | 121 | 2 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **943 surfaced · 9 open · 926 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **944 surfaced · 10 open · 926 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **943 surfaced 
 | B-2026-08-05-29 | 2026-08-05 | typecheck+cli | high | a `#[target(T)]`-gated fn body is NEVER TYPECHECKED unless you build exactly target T: `karac check` and a native `karac build` both accept a fn containing `let s: String = a;` where `a: i32`, and only `--target=wasm_browser` reports it -- so target-gated code is invisible to the Mend loop, and `karac check` has no `--target` flag to reach it | the `#[target(...)]` gating that excludes a fn from a non-matching target build, and `karac check`'s lack of a `--target` flag |
 | B-2026-08-05-30 | 2026-08-05 | other | medium | the wasm E2E tests skip on a SUCCESSFUL build: `wasm_build_skip_reason` matches the string `wasm-tools not found`, which the browser-bindings path emits as a size-optimization NOTE on a build that succeeded, and the predicate is consulted before `out.status.success()` -- so wasm_browser_rich_exports_marshal_e2e reports ok while asserting nothing | tests/cli.rs::wasm_build_skip_reason (the `wasm-tools not found` arm) and its call sites, which consult it BEFORE out.status.success() |
 | B-2026-08-05-31 | 2026-08-05 | interp+codegen | medium | the interpreter computes `Tensor[f32]` elements in f64 while AOT uses a packed f32 buffer, so an f32 tensor gives DIFFERENT ANSWERS on the two backends -- 0.1*3 prints 0.30000000000000004 under `karac run --interp` and 0.30000001192092896 from `karac build` | — |
+| B-2026-08-05-32 | 2026-08-05 | codegen | high | A struct with a DIRECT `shared` field, bound to a LOCAL and passed BY VALUE, never rc-decs the box -- it leaks on a DEFAULT -O2 build (288 B / 8 allocs). The drop IS registered and then never emitted. The fresh-temp form is already fixed, so the b28 fixture's "pre-existing residual" note points at the wrong half | docs/implementation_checklist/phase-7-codegen.md |
 
 ### Fixed (926)
 
