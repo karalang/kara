@@ -232,6 +232,26 @@ impl std::fmt::Display for LazyExprIR {
     }
 }
 
+/// The float width an interpreter `Tensor`'s elements represent. The
+/// interpreter stores every float as f64, so an `f32` tensor must round after
+/// each write / element-wise op to agree with codegen's packed f32 buffer.
+/// Non-float and f64 elements use `F64`, which rounds nothing. B-2026-08-05-31.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TensorElemWidth {
+    F32,
+    F64,
+}
+
+impl TensorElemWidth {
+    /// Round `v` to this width. A no-op for `F64`.
+    pub fn round(self, v: f64) -> f64 {
+        match self {
+            TensorElemWidth::F32 => v as f32 as f64,
+            TensorElemWidth::F64 => v,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
@@ -328,6 +348,15 @@ pub enum Value {
     Tensor {
         dims: Arc<Vec<i64>>,
         data: Arc<RwLock<Vec<Value>>>,
+        /// B-2026-08-05-31 — the declared element WIDTH, so f32 tensors round
+        /// to f32 precision. `Value` has no f32 carrier (every float is f64),
+        /// which made `Tensor[f32]` arithmetic disagree with AOT's packed f32
+        /// buffer: `0.1 * 3` printed 0.30000000000000004 here and
+        /// 0.30000001192092896 from `karac build`. Carrying the width lets the
+        /// element-wise ops and element writes round through `as f32`, matching
+        /// codegen. `F64` is the default and preserves prior behaviour for every
+        /// other element type.
+        elem: TensorElemWidth,
     },
     /// `Column[T]` — nullable 1-D column (phase-11 data-science stdlib,
     /// Arrow commitment; interpreter MVP). `data` holds one `Value` per

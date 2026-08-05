@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use crate::ast::*;
 use crate::token::Span;
 
-use super::value::Value;
+use super::value::{TensorElemWidth, Value};
 
 impl<'a> super::Interpreter<'a> {
     // ── Operators ───────────────────────────────────────────────
@@ -30,7 +30,7 @@ impl<'a> super::Interpreter<'a> {
             (UnaryOp::Neg, Value::Float(f)) => Value::Float(-f),
             // Element-wise tensor negation — fold `-` over each element into a
             // fresh value-semantics tensor (the operand is read, not moved).
-            (UnaryOp::Neg, Value::Tensor { dims, data }) => {
+            (UnaryOp::Neg, Value::Tensor { dims, data, elem }) => {
                 let elems = data.read().unwrap().clone();
                 let mut out = Vec::with_capacity(elems.len());
                 for x in elems {
@@ -39,9 +39,11 @@ impl<'a> super::Interpreter<'a> {
                         return Value::Unit;
                     }
                 }
+                Self::round_tensor_elems(&mut out, elem);
                 Value::Tensor {
                     dims,
                     data: Arc::new(RwLock::new(out)),
+                    elem,
                 }
             }
             // Element-wise column negation — negate each valid slot; null
@@ -290,17 +292,19 @@ impl<'a> super::Interpreter<'a> {
                 Value::Tensor {
                     dims: ad,
                     data: ada,
+                    elem: ae,
                 },
                 Value::Tensor {
                     dims: bd,
                     data: bda,
+                    ..
                 },
-            ) => self.eval_tensor_tensor_binop(op, &ad, &ada, &bd, &bda, span),
-            (_, Value::Tensor { dims, data }, scalar @ (Value::Int(_) | Value::Float(_))) => {
-                self.eval_tensor_scalar_binop(op, &dims, &data, scalar, false, span)
+            ) => self.eval_tensor_tensor_binop(op, &ad, &ada, &bd, &bda, ae, span),
+            (_, Value::Tensor { dims, data, elem }, scalar @ (Value::Int(_) | Value::Float(_))) => {
+                self.eval_tensor_scalar_binop(op, &dims, &data, scalar, false, elem, span)
             }
-            (_, scalar @ (Value::Int(_) | Value::Float(_)), Value::Tensor { dims, data }) => {
-                self.eval_tensor_scalar_binop(op, &dims, &data, scalar, true, span)
+            (_, scalar @ (Value::Int(_) | Value::Float(_)), Value::Tensor { dims, data, elem }) => {
+                self.eval_tensor_scalar_binop(op, &dims, &data, scalar, true, elem, span)
             }
 
             // Element-wise three-valued-logic ops on `Column[T]` (phase-11
@@ -638,7 +642,24 @@ impl<'a> super::Interpreter<'a> {
     /// `run_program` bypass), then a fresh tensor whose elements are the
     /// per-position scalar results. Both buffers are cloned out before the
     /// loop so `a + a` (an aliased data `Arc`) can't deadlock on two read
+    /// B-2026-08-05-31 — round every float slot to the tensor's element width.
+    /// The interpreter stores all floats as f64, so an `f32` tensor has to be
+    /// re-rounded after each element-wise op or its results drift away from
+    /// codegen's packed f32 buffer (`0.1 * 3` differed in the 8th digit).
+    /// A no-op for `F64` and for non-float slots.
+    fn round_tensor_elems(elems: &mut [Value], elem: TensorElemWidth) {
+        if elem == TensorElemWidth::F64 {
+            return;
+        }
+        for v in elems.iter_mut() {
+            if let Value::Float(f) = v {
+                *v = Value::Float(elem.round(*f));
+            }
+        }
+    }
+
     /// guards of one `RwLock`.
+    #[allow(clippy::too_many_arguments)]
     fn eval_tensor_tensor_binop(
         &mut self,
         op: &BinOp,
@@ -646,6 +667,7 @@ impl<'a> super::Interpreter<'a> {
         ada: &Arc<RwLock<Vec<Value>>>,
         bd: &Arc<Vec<i64>>,
         bda: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         span: &Span,
     ) -> Value {
         if ad.as_ref() != bd.as_ref() {
@@ -662,18 +684,21 @@ impl<'a> super::Interpreter<'a> {
         let a = ada.read().unwrap().clone();
         let b = bda.read().unwrap().clone();
         let slots = a.into_iter().zip(b).map(Some).collect();
-        let Some((out, _)) = self.map_binop_slots(op, slots, span) else {
+        let Some((mut out, _)) = self.map_binop_slots(op, slots, span) else {
             return Value::Unit;
         };
+        Self::round_tensor_elems(&mut out, elem);
         Value::Tensor {
             dims: ad.clone(),
             data: Arc::new(RwLock::new(out)),
+            elem,
         }
     }
 
     /// Element-wise `Tensor ⊕ scalar` (or `scalar ⊕ Tensor` when
     /// `scalar_on_left`). Broadcasts the scalar across every element (with
     /// the int→float promotion of [`Self::broadcast_pair`]).
+    #[allow(clippy::too_many_arguments)]
     fn eval_tensor_scalar_binop(
         &mut self,
         op: &BinOp,
@@ -681,6 +706,7 @@ impl<'a> super::Interpreter<'a> {
         data: &Arc<RwLock<Vec<Value>>>,
         scalar: Value,
         scalar_on_left: bool,
+        elem: TensorElemWidth,
         span: &Span,
     ) -> Value {
         let elems = data.read().unwrap().clone();
@@ -688,12 +714,14 @@ impl<'a> super::Interpreter<'a> {
             .into_iter()
             .map(|x| Some(Self::broadcast_pair(x, &scalar, scalar_on_left)))
             .collect();
-        let Some((out, _)) = self.map_binop_slots(op, slots, span) else {
+        let Some((mut out, _)) = self.map_binop_slots(op, slots, span) else {
             return Value::Unit;
         };
+        Self::round_tensor_elems(&mut out, elem);
         Value::Tensor {
             dims: dims.clone(),
             data: Arc::new(RwLock::new(out)),
+            elem,
         }
     }
 

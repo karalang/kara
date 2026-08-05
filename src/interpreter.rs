@@ -2708,7 +2708,7 @@ impl<'a> Interpreter<'a> {
         // tuple (parser desugar) or a bare Int for rank-1; the target's
         // `Arc<RwLock<...>>` storage aliases the binding's, so the write
         // lands regardless of how the receiver was reached.
-        if let Value::Tensor { dims, data } = {
+        if let Value::Tensor { dims, data, .. } = {
             // Resolve the receiver the same way as the container arms
             // below: identifier lookup or expression eval.
             match &object.kind {

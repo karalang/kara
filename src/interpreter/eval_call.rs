@@ -937,6 +937,9 @@ impl<'a> super::Interpreter<'a> {
                             Value::Tensor {
                                 dims: std::sync::Arc::new(dims),
                                 data: std::sync::Arc::new(std::sync::RwLock::new(data)),
+                                // The IPC stream decodes to f64 slots; no
+                                // narrowing claim to carry. B-2026-08-05-31.
+                                elem: crate::interpreter::value::TensorElemWidth::F64,
                             }
                         }
                         Err(msg) => self.record_runtime_error(msg, span),

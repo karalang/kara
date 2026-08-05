@@ -22,7 +22,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::ast::{BinOp, CallArg, Expr, ExprKind, TypeExpr, TypeKind};
-use crate::interpreter::value::Value;
+use crate::interpreter::value::{TensorElemWidth, Value};
 use crate::token::Span;
 
 // `mean`/`mean_axis` read numeric elements as `f64`, and `min`/`max` keep the
@@ -41,7 +41,12 @@ use crate::interpreter::value::EnumData;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TensorElemFill {
     Int,
-    Float,
+    /// B-2026-08-05-31 — carries the declared float WIDTH so a `Tensor[f32]`
+    /// built by `zeros`/`ones`/`full` is tagged f32 and its later element-wise
+    /// ops round to f32. The old shape collapsed every float to one variant,
+    /// which is what the doc comment below used to record as a known
+    /// limitation.
+    Float(TensorElemWidth),
     Bool,
 }
 
@@ -55,7 +60,10 @@ fn classify_elem_name(name: &str) -> Option<TensorElemFill> {
     match name {
         "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
         | "usize" => Some(TensorElemFill::Int),
-        "f16" | "bf16" | "f32" | "f64" => Some(TensorElemFill::Float),
+        // f16 / bf16 have no Rust-stable carrier and no codegen narrowing to
+        // match against, so they ride the f64 path exactly as before.
+        "f32" => Some(TensorElemFill::Float(TensorElemWidth::F32)),
+        "f16" | "bf16" | "f64" => Some(TensorElemFill::Float(TensorElemWidth::F64)),
         "bool" => Some(TensorElemFill::Bool),
         _ => None,
     }
@@ -256,11 +264,20 @@ impl<'a> super::Interpreter<'a> {
     /// historical `Value::Float` — the numerical stack's primary element
     /// type. `is_one` selects the 1-fill (`Tensor.ones`) vs the 0-fill
     /// (`Tensor.zeros`).
+    /// The element width the pending `Tensor[Elem, …]` annotation implies.
+    /// `F64` when there is no hint or the element is not a narrow float.
+    fn pending_tensor_width(&self) -> TensorElemWidth {
+        match self.pending_tensor_fill {
+            Some(TensorElemFill::Float(w)) => w,
+            _ => TensorElemWidth::F64,
+        }
+    }
+
     fn tensor_scalar_fill(&self, is_one: bool) -> Value {
         match self.pending_tensor_fill {
             Some(TensorElemFill::Int) => Value::Int(if is_one { 1 } else { 0 }),
             Some(TensorElemFill::Bool) => Value::Bool(is_one),
-            Some(TensorElemFill::Float) | None => Value::Float(if is_one { 1.0 } else { 0.0 }),
+            Some(TensorElemFill::Float(_)) | None => Value::Float(if is_one { 1.0 } else { 0.0 }),
         }
     }
 
@@ -310,6 +327,7 @@ impl<'a> super::Interpreter<'a> {
         Some(Value::Tensor {
             dims: Arc::new(dims),
             data: Arc::new(RwLock::new(data)),
+            elem: self.pending_tensor_width(),
         })
     }
 
@@ -349,6 +367,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(dims),
             data: Arc::new(RwLock::new(elements)),
+            elem: self.pending_tensor_width(),
         }
     }
 
@@ -368,7 +387,7 @@ impl<'a> super::Interpreter<'a> {
         // channel to element signedness (B-2026-07-04-8; see the Column twin).
         args_close_span: &Span,
     ) -> Option<Value> {
-        let Value::Tensor { dims, data } = obj else {
+        let Value::Tensor { dims, data, elem } = obj else {
             return None;
         };
         // Unsigned-64 element order for the ordering methods below
@@ -398,13 +417,13 @@ impl<'a> super::Interpreter<'a> {
                     Err(e) => Some(self.record_runtime_error(e, span)),
                 }
             }
-            "iter_axis" => Some(self.eval_tensor_iter_axis(dims, data, args, span)),
-            "reshape" => Some(self.eval_tensor_reshape(dims, data, args, span)),
-            "permute" => Some(self.eval_tensor_permute(dims, data, args, span)),
-            "slice" => Some(self.eval_tensor_slice(dims, data, args, span)),
-            "squeeze" => Some(self.eval_tensor_squeeze(dims, data, args, span)),
-            "transpose" => Some(self.eval_tensor_transpose(dims, data, args, span)),
-            "matmul" => Some(self.eval_tensor_matmul(dims, data, args, span)),
+            "iter_axis" => Some(self.eval_tensor_iter_axis(dims, data, *elem, args, span)),
+            "reshape" => Some(self.eval_tensor_reshape(dims, data, *elem, args, span)),
+            "permute" => Some(self.eval_tensor_permute(dims, data, *elem, args, span)),
+            "slice" => Some(self.eval_tensor_slice(dims, data, *elem, args, span)),
+            "squeeze" => Some(self.eval_tensor_squeeze(dims, data, *elem, args, span)),
+            "transpose" => Some(self.eval_tensor_transpose(dims, data, *elem, args, span)),
+            "matmul" => Some(self.eval_tensor_matmul(dims, data, *elem, args, span)),
             "sum" | "mean" | "prod" | "min" | "max" | "range" => {
                 Some(self.eval_tensor_reduce(method, data, span))
             }
@@ -477,6 +496,7 @@ impl<'a> super::Interpreter<'a> {
                 Some(Value::Tensor {
                     dims: dims.clone(),
                     data: Arc::new(RwLock::new(out)),
+                    elem: *elem,
                 })
             }
             // `zip_with(other, |a, b| ...)` -> a fresh tensor of the same shape,
@@ -501,6 +521,7 @@ impl<'a> super::Interpreter<'a> {
                 let Value::Tensor {
                     dims: odims,
                     data: odata,
+                    elem,
                 } = other
                 else {
                     return Some(self.record_runtime_error(
@@ -542,6 +563,7 @@ impl<'a> super::Interpreter<'a> {
                 Some(Value::Tensor {
                     dims: dims.clone(),
                     data: Arc::new(RwLock::new(out)),
+                    elem,
                 })
             }
             // `argmin` / `argmax` -> `Option[i64]` (ElementwiseOrd, S6c): the
@@ -602,7 +624,7 @@ impl<'a> super::Interpreter<'a> {
                 Some(Value::Array(Arc::new(RwLock::new(out))))
             }
             "sum_axis" | "mean_axis" => {
-                Some(self.eval_tensor_axis_reduce(method, dims, data, args, span))
+                Some(self.eval_tensor_axis_reduce(method, dims, data, *elem, args, span))
             }
             "broadcast_add" | "broadcast_sub" | "broadcast_mul" | "broadcast_div" => {
                 Some(self.eval_tensor_broadcast(method, dims, data, args, span))
@@ -644,6 +666,7 @@ impl<'a> super::Interpreter<'a> {
         let Value::Tensor {
             dims: b_dims,
             data: b_data,
+            elem,
         } = other
         else {
             return self.record_runtime_error(format!("{method} argument must be a tensor"), span);
@@ -728,6 +751,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(out_dims),
             data: Arc::new(RwLock::new(out)),
+            elem,
         }
     }
 
@@ -804,6 +828,7 @@ impl<'a> super::Interpreter<'a> {
         method: &str,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -882,6 +907,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(sub_dims),
             data: Arc::new(RwLock::new(acc)),
+            elem,
         }
     }
 
@@ -899,6 +925,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -948,6 +975,7 @@ impl<'a> super::Interpreter<'a> {
             .map(|b| Value::Tensor {
                 dims: Arc::new(sub_dims.clone()),
                 data: Arc::new(RwLock::new(b)),
+                elem,
             })
             .collect();
         Value::Array(Arc::new(RwLock::new(out)))
@@ -964,6 +992,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -1022,6 +1051,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(new_dims),
             data: Arc::new(RwLock::new(elements)),
+            elem,
         }
     }
 
@@ -1036,6 +1066,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -1110,6 +1141,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(new_dims),
             data: Arc::new(RwLock::new(out)),
+            elem,
         }
     }
 
@@ -1120,6 +1152,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -1156,6 +1189,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(new_dims),
             data: Arc::new(RwLock::new(out)),
+            elem,
         }
     }
 
@@ -1171,6 +1205,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -1184,6 +1219,10 @@ impl<'a> super::Interpreter<'a> {
         let Value::Tensor {
             dims: odims,
             data: odata,
+            // The RHS width is not read: the typechecker requires both operands
+            // to share an element type, so the receiver's `elem` parameter is
+            // authoritative and binding this one would only shadow it.
+            ..
         } = &other
         else {
             return self.record_runtime_error(
@@ -1254,9 +1293,21 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
         }
+        // B-2026-08-05-31 — matmul PRODUCES values (sums of products) rather
+        // than moving them, so an f32 result must be rounded like the
+        // element-wise ops are, or a `Tensor[f32]` product drifts from
+        // codegen's f32 accumulation.
+        if elem == TensorElemWidth::F32 {
+            for v in out.iter_mut() {
+                if let Value::Float(f) = v {
+                    *v = Value::Float(elem.round(*f));
+                }
+            }
+        }
         Value::Tensor {
             dims: Arc::new(vec![m as i64, n as i64]),
             data: Arc::new(RwLock::new(out)),
+            elem,
         }
     }
 
@@ -1270,6 +1321,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -1338,6 +1390,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(new_dims),
             data: Arc::new(RwLock::new(out)),
+            elem,
         }
     }
 
@@ -1351,6 +1404,7 @@ impl<'a> super::Interpreter<'a> {
         &mut self,
         dims: &[i64],
         data: &Arc<RwLock<Vec<Value>>>,
+        elem: TensorElemWidth,
         args: &[CallArg],
         span: &Span,
     ) -> Value {
@@ -1417,6 +1471,7 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: Arc::new(new_dims),
             data: Arc::new(RwLock::new(elements)),
+            elem,
         }
     }
 }

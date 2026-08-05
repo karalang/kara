@@ -577,7 +577,7 @@ impl<'a> super::Interpreter<'a> {
                 // arrives as a tuple index (parser desugar); rank-1
                 // accepts a bare Int. Row-major offset + runtime bounds
                 // checks via `tensor_offset`.
-                if let Value::Tensor { dims, data } = &obj {
+                if let Value::Tensor { dims, data, .. } = &obj {
                     let Some(components) =
                         crate::interpreter::method_call_tensor::index_components(&idx)
                     else {

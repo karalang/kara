@@ -24420,6 +24420,45 @@ fn main() {
     );
 }
 
+/// B-2026-08-05-31 — an `f32` tensor's elements must be rounded to f32
+/// precision, matching codegen's packed f32 buffer.
+///
+/// The interpreter stores every float as f64 (`Value::Float(f64)`), so before
+/// this a `Tensor[f32]` computed in full double precision while `karac build`
+/// used real f32 lanes, and the two backends printed DIFFERENT answers for the
+/// same program: `0.1 * 3` gave 0.30000000000000004 under `karac run --interp`
+/// and 0.30000001192092896 from the built binary. AOT was the correct one.
+///
+/// `Value::Tensor` now carries the declared element width and the element-wise
+/// ops round through it. The scalar line is the control: a plain `f32` local is
+/// f64 on BOTH backends, so it is unchanged here — this is a tensor-only
+/// narrowing, not a general f32 carrier.
+#[test]
+fn tensor_f32_elements_round_to_f32_precision() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Tensor[f32, [1]] = Tensor.from([0.1]);
+    let b: Tensor[f32, [1]] = a * 3.0;
+    println(b.sum());
+    let neg: Tensor[f32, [1]] = -b;
+    println(neg.sum());
+    let d: Tensor[f64, [1]] = Tensor.from([0.1]);
+    let e: Tensor[f64, [1]] = d * 3.0;
+    println(e.sum());
+    let s: f32 = 0.1;
+    println(s * 3.0);
+}
+"#,
+    );
+    // f32 lane: 0.1f32 * 3 rounds to 0.30000001192092896 — the value `karac
+    // build` produces. f64 lane and the scalar keep full double precision.
+    assert_eq!(
+        out,
+        "0.30000001192092896\n-0.30000001192092896\n0.30000000000000004\n0.30000000000000004\n"
+    );
+}
+
 #[test]
 fn tensor_narrow_element_storage_and_sort_reduction() {
     // The `run` surface for narrow-width tensor storage + ops (the native
