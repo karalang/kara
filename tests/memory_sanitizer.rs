@@ -35091,9 +35091,17 @@ fn main() {
     /// visible to both the alias and base paths (double-free). Churns the
     /// allocations in a loop so a per-iteration imbalance accumulates well past
     /// LSan's noise floor.
+    ///
+    /// B-2026-08-04-17: the first version of this fixture was VACUOUS — it
+    /// seeded `build(8i64)` from a literal and read the payloads back through
+    /// `.len()` alone, which is both failure modes at once (foldable content,
+    /// and buffers whose bytes are never read). It measured 0 program
+    /// allocations at `-O2`, so it proved nothing about a drop it was written
+    /// to pin. Now seeded from `env.args().len()` and reading the String's
+    /// BYTES (`contains`) plus a Vec ELEMENT, with a floor.
     #[test]
     fn asan_plain_alias_struct_fields_no_leak() {
-        assert_clean_asan_run(
+        assert_clean_asan_run_min_allocs(
             r#"
 type Name = String;
 type Ints = Vec[i64];
@@ -35103,26 +35111,36 @@ struct Holder { label: Name, nums: Ints }
 fn build(n: i64) -> Holder {
     let mut v: Ints = Vec.new();
     let mut i = 0i64;
-    while i < n { v.push(i); i = i + 1i64; }
-    return Holder { label: f"held{n}", nums: v };
+    while i < n + 7i64 { v.push(i); i = i + 1i64; }
+    return Holder { label: f"held-{n}-runtime-heap", nums: v };
 }
 
-fn weigh(h: Holder) -> i64 { return h.label.len() + h.nums.len(); }
+fn weigh(h: Holder) -> i64 {
+    let mut w = 0i64;
+    if h.label.contains("runtime-heap") { w = w + 1i64; }
+    return w + h.nums[0i64] + h.nums.len();
+}
 
 fn main() {
+    let base: i64 = env.args().len();
     let mut total = 0i64;
     let mut k = 0i64;
-    while k < 200i64 {
-        let h = build(8i64);
+    while k < base + 49i64 {
+        let h = build(base);
         total = total + weigh(h);
         k = k + 1i64;
     }
     println(total);
 }
 "#,
-            // Each iter: label "held8" is 5 chars + 8 elements = 13; x200 = 2600.
-            &["2600"],
+            // base=1: each iter builds an 8-element Vec and a 19-char label →
+            // 1 (contains) + 0 (nums[0]) + 8 (len) = 9; ×50 iterations = 450.
+            &["450"],
             "plain_alias_struct_fields_no_leak",
+            // 50 iterations × (label buffer + element buffer) is ~100
+            // allocations; the floor sits far above the 3 of a folded-away run
+            // while leaving room for allocator/inlining variation.
+            50,
         );
     }
 
