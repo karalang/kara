@@ -1804,11 +1804,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         .insert(var_name.clone(), type_name.clone());
                 }
                 // L227 SharedRc path: atomic rc_inc + cleanup registration.
+                //
+                // B-2026-08-05-10 — EXCLUDE BORROWED CAPTURES. The ownership
+                // classifier picks `SharedRc` from the capture's TYPE NAME
+                // alone (`is_shared_type_name`), and `type_expr_head_name`
+                // strips `ref` / `mut ref` on the way there — so a `ref N`
+                // parameter classifies exactly like an owned `N`. The two are
+                // not interchangeable here: a borrow's slot holds a
+                // POINTER-TO-HANDLE, not a handle.
+                //
+                // Emitting the SharedRc prologue for one was silently
+                // catastrophic. `emit_arc_inc` does
+                // `getelementptr %karac.shared.T, <captured>, 0, 0` and
+                // atomically adds 1 — so with a pointer-to-handle it did not
+                // touch any refcount, it incremented the OWNER'S STORED
+                // HANDLE POINTER by one. The callee then dereferenced a
+                // pointer one byte off and read garbage (measured: a field
+                // that should read 7 read 0). The branch-exit `dec` subtracted
+                // the 1 back, which is why the corruption left no trace after
+                // the par block and the program merely printed a wrong answer
+                // instead of crashing.
+                //
+                // Skipping is correct rather than merely safe: a borrow's
+                // referent is kept alive by whoever owns it, and that owner
+                // outlives the par run by construction — `karac_par_run` does
+                // not return until every branch has finished, which is the
+                // same argument the `SharedRc` doc comment already makes for
+                // the parent's own reference. So the branch needs no reference
+                // of its own, and the capture behaves as `Copy`: the pointer
+                // is threaded through the env untouched.
                 let is_shared_rc = par_capture_modes.is_some_and(|modes| {
                     modes.iter().any(|(n, m)| {
                         n == var_name && matches!(m, crate::ownership::ParCaptureMode::SharedRc)
                     })
-                });
+                }) && !self.ref_params.contains_key(var_name);
                 if is_shared_rc {
                     if let Some(type_name) = saved_var_types.get(var_name) {
                         if let Some(heap_type) =

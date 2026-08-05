@@ -127,6 +127,107 @@ mod par_codegen_tests {
         compile_to_ir(&parsed.program, Some(&ownership), Some(&analysis)).expect("codegen failed")
     }
 
+    /// B-2026-08-05-10 regression — a BORROWED `shared` handle captured into a
+    /// `par` branch must read its real payload.
+    ///
+    /// Contains no `frozen` token: this is ordinary Kāra and the bug predated
+    /// the freeze work, which merely made it reachable through a second
+    /// spelling.
+    ///
+    /// What went wrong: the ownership classifier picks `ParCaptureMode::SharedRc`
+    /// from the capture's TYPE NAME alone, and the head-name helper strips `ref`
+    /// on the way there — so `ref N` classified exactly like owned `N`. But a
+    /// borrow's slot holds a POINTER-TO-HANDLE, so the branch prologue's
+    /// `emit_arc_inc` did not touch a refcount at all: it atomically added 1 to
+    /// the owner's stored handle pointer. The callee then dereferenced a pointer
+    /// one byte off and read 0 instead of 7. The branch-exit `dec` subtracted the
+    /// 1 back, so the corruption vanished and the program just printed a wrong
+    /// answer — 101 rather than 108.
+    ///
+    /// ONE branch is enough, which is why this survived: it never reaches the
+    /// `E_CONCURRENT_SHARED_STRUCT` gate. The gate refuses the two-branch shapes
+    /// loudly, and the one-branch shape it permits was the broken one.
+    ///
+    /// Asserted as a COMPUTED VALUE, deliberately. The suppression commit that
+    /// exposed this shipped a test counting `rc_inc`/`rc_dec` in the IR, and a
+    /// traffic count cannot see a wrong answer — the whole 13k-test suite passed
+    /// with this miscompile live. Every RC-shape test in this family pairs the
+    /// IR assertion with an execution that checks the result.
+    #[test]
+    fn borrowed_shared_capture_in_a_par_branch_reads_its_real_payload() {
+        for mode in ["ref ", "frozen ", ""] {
+            let out = run_program(&format!(
+                r#"
+shared struct N {{ val: i64 }}
+fn worker(n: {mode}N, k: i64) -> i64 {{ n.val + k }}
+fn driver(n: {mode}N) -> i64 {{
+    let (a, b) = par {{
+        let a = worker(n, 1);
+        let b = 100;
+        (a, b)
+    }};
+    a + b
+}}
+fn main() {{
+    let g = N {{ val: 7 }};
+    println(driver(g));
+}}
+"#
+            ));
+            if let Some(out) = out {
+                assert_eq!(
+                    out.trim(),
+                    "108",
+                    "a `{mode}`-mode `shared` capture must read val=7 inside the \
+                     branch (7+1+100); reading 0 gives the 101 this bug produced"
+                );
+            }
+        }
+    }
+
+    /// B-2026-08-01-33 mechanism 3, stage 1 — `par` ADMISSION, end to end.
+    ///
+    /// Two branches both capture the same `frozen` handle and call through it.
+    /// Before admission this was `E_CONCURRENT_SHARED_STRUCT`; it now compiles
+    /// and computes (7+1) + (7+2) = 17.
+    ///
+    /// Both races are gone by construction, which is what licenses the
+    /// admission: the freeze-site check (E0512) refused the parameter unless
+    /// every reachable `shared` type is free of `mut` fields (no payload to
+    /// race), and `frozen` lowers to a borrow so the capture emits no refcount
+    /// traffic (no header to race). That is the distinction from mechanism 2,
+    /// which makes the header race safe by making it atomic and costs ~9.5x on
+    /// sequential code.
+    #[test]
+    fn frozen_multi_branch_capture_is_admitted_and_computes_correctly() {
+        let out = run_program(
+            r#"
+shared struct N { val: i64 }
+fn worker(n: frozen N, k: i64) -> i64 { n.val + k }
+fn driver(n: frozen N) -> i64 {
+    let (a, b) = par {
+        let a = worker(n, 1);
+        let b = worker(n, 2);
+        (a, b)
+    };
+    a + b
+}
+fn main() {
+    let g = N { val: 7 };
+    println(driver(g));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "17",
+                "two branches sharing one `frozen` handle must each read val=7 \
+                 — (7+1) + (7+2)"
+            );
+        }
+    }
+
     /// B-2026-08-01-33 mechanism 3, stage 1 — RC SUPPRESSION, and the
     /// measurement that made it a ten-line change instead of a new pass.
     ///

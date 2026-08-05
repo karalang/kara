@@ -160,6 +160,14 @@ struct TrackedBinding {
     /// the promotion buys) and there is no payload to race in the first place
     /// (that is what the immutability buys).
     ///
+    /// B-2026-08-01-33 mechanism 3 — this binding is a `frozen` parameter, so a
+    /// multi-branch capture of it is ADMITTED rather than reported.
+    ///
+    /// Only a parameter can be true here in stage 1: `frozen` is a parameter
+    /// mode and there is no `freeze` expression yet, so a `let` binding has no
+    /// way to become frozen. When the freeze statement lands, the let-binding
+    /// collector is the second site that must set this.
+    ///
     /// `None` — the common case — when any reachable type has a `mut` field.
     /// Atomic RC would fix only the HEADER; a `mut` payload written from two
     /// branches is still a data race, which is precisely why `par struct`
@@ -167,6 +175,7 @@ struct TrackedBinding {
     /// write to a branch-LOCAL instance from one to the shared value needs
     /// instance-level escape analysis (mechanism 1), not a type-level check.
     atomic_promotion: Option<Vec<String>>,
+    frozen: bool,
 }
 
 /// One branch's reference to a tracked binding, tagged with whether it can
@@ -310,6 +319,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         kind,
                         readonly_scalar_fields,
                         atomic_promotion,
+                        frozen: p.is_frozen,
                     },
                 );
             }
@@ -758,6 +768,10 @@ fn record_pattern_inner(
                             kind,
                             readonly_scalar_fields,
                             atomic_promotion,
+                            // A `let` binding cannot be frozen in stage 1 —
+                            // `frozen` is a parameter mode and no `freeze`
+                            // expression exists yet.
+                            frozen: false,
                         },
                     );
                 }
@@ -776,6 +790,10 @@ fn record_pattern_inner(
                             kind,
                             readonly_scalar_fields,
                             atomic_promotion,
+                            // A `let` binding cannot be frozen in stage 1 —
+                            // `frozen` is a parameter mode and no `freeze`
+                            // expression exists yet.
+                            frozen: false,
                         },
                     );
                 }
@@ -1572,6 +1590,36 @@ fn detect_par_block_conflicts(
                     // which atomic refcounting does nothing about; that is the
                     // reason a type with a `mut` field is not promotable here
                     // even though its header could be made safe.
+                    // B-2026-08-01-33 mechanism 3 — FROZEN ADMISSION. The
+                    // capture is allowed outright, with no promotion and no
+                    // diagnostic, because both races are already gone by
+                    // construction:
+                    //
+                    // * PAYLOAD race — the freeze-site check (E0512) refused
+                    //   this parameter unless every `shared` type reachable
+                    //   from its type is free of `mut` fields, so there is
+                    //   nothing writable to race on.
+                    // * HEADER race — the escape check (E0511) refused it
+                    //   unless its only uses are reads of immutable scalar
+                    //   fields and pass-through to other `frozen` slots, and
+                    //   `frozen T` lowers to a BORROW, so those uses emit no
+                    //   refcount traffic at all (measured: owned
+                    //   rc_inc=4/rc_dec=9, frozen 0/0).
+                    //
+                    // Note how this differs from mechanism 2 directly below.
+                    // Promotion makes the header race SAFE by making it
+                    // atomic, which costs ~9.5x on sequential code and is why
+                    // it ships inert behind an env var. Freezing REMOVES the
+                    // traffic, so there is no header to race and nothing to
+                    // pay for. That is the whole reason mechanism 3 was the
+                    // design call.
+                    //
+                    // Unconditional — no env gate — because the two checks
+                    // above are what license it, and both are always on.
+                    if binding.frozen {
+                        reported.insert(name);
+                        continue;
+                    }
                     if let Some(types) = &binding.atomic_promotion {
                         if std::env::var("KARAC_PAR_ATOMIC_PROMOTION").as_deref() == Ok("1") {
                             promoted.extend(types.iter().cloned());

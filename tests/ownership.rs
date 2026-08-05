@@ -9905,6 +9905,48 @@ fn frozen_escape_check_is_inert_without_a_frozen_param() {
 /// handle impossible — no `mut` field anywhere reachable. Strictly stronger,
 /// therefore sound as a stand-in, and it turns the staging's deferral of
 /// `mut`-bearing types into a diagnostic instead of a silence.
+/// B-2026-08-01-33 mechanism 3, stage 1 — `par` ADMISSION at the ownership
+/// layer, with its fail-closed control.
+///
+/// A `frozen` handle captured by two branches is admitted; the SAME program
+/// with the keyword removed is still refused. The control is the point — an
+/// admission that fires on non-frozen bindings would silently reopen
+/// B-2026-07-28-13's SIGSEGV, so the test is written so that deleting the
+/// `binding.frozen` guard turns it red.
+#[test]
+fn frozen_multi_branch_par_capture_is_admitted_but_only_when_frozen() {
+    let program = |mode: &str| {
+        format!(
+            "shared struct N {{ val: i64 }}\n\
+             fn worker(n: {mode}N, k: i64) -> i64 {{ n.val + k }}\n\
+             fn driver(n: {mode}N) -> i64 {{\n\
+                 let (a, b) = par {{\n\
+                     let a = worker(n, 1);\n\
+                     let b = worker(n, 2);\n\
+                     (a, b)\n\
+                 }};\n\
+                 a + b\n\
+             }}\n\
+             fn main() {{ let g = N {{ val: 7 }}; println(f\"{{driver(g)}}\"); }}"
+        )
+    };
+
+    // `ownership_ok` asserts the program is clean, which IS the admission
+    // claim — it panics with the diagnostics if the capture is refused.
+    ownership_ok(&program("frozen "));
+
+    // Fail-closed control: identical program, keyword removed.
+    let owned = ownership_errors(&program(""));
+    assert!(
+        owned
+            .iter()
+            .any(|e| e.message.contains("multiple concurrent tasks")),
+        "without `frozen` the same capture must STILL be refused — admitting it \
+         would reopen the SIGSEGV this gate exists to prevent; got {:?}",
+        owned.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn frozen_freeze_site_refuses_types_that_cannot_be_frozen() {
     let prelude = "struct Plain { val: i64 }\n\
