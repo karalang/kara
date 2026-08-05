@@ -8499,7 +8499,52 @@ impl<'ctx> super::Codegen<'ctx> {
                             if !self.ref_params.contains_key(n.as_str()));
                     if source_owned {
                         if let Some(slot) = self.variables.get(&name).copied() {
-                            self.track_inline_option_agg_payload_var(&name, slot.ptr, &field_te);
+                            // B-2026-08-05-7 (leak B): if this field's payload is
+                            // HEAP-BOXED, the inline registration is the wrong
+                            // drop — it reads the payload WORDS as the value, but
+                            // word 0 holds a box POINTER, so it freed nothing and
+                            // both the 32-byte envelope and the payload's own
+                            // buffer leaked once per destructure. The source's
+                            // struct drop, which does handle the boxed case, has
+                            // just been disarmed by the tag-zero below, so the
+                            // leaf is the only remaining owner and must carry the
+                            // box drop instead.
+                            //
+                            // This is the `Option[Wide]`-moved-into-a-struct case:
+                            // `Holder { body }` then `let Holder { body } = h`.
+                            // Never destructuring the Holder was always clean,
+                            // which is what localized it here rather than to the
+                            // struct-literal move.
+                            // Restricted to a payload whose own drop we can
+                            // actually resolve (a known user STRUCT). Without
+                            // that filter the swap replaces a working inline
+                            // registration with a BOX-ONLY free for payloads
+                            // `boxed_enum_payload_variants` cannot name — an
+                            // enum payload, a tuple — and the interior leaks
+                            // instead of the envelope. Measured: the unfiltered
+                            // version fixed this leak and introduced two others
+                            // (b04_7 480 B, b31 792 B). Those shapes keep the
+                            // inline path they were already correct on.
+                            let boxed: Vec<_> = self
+                                .boxed_enum_payload_variants(&field_te)
+                                .into_iter()
+                                .filter(|(_, _, inner)| inner.is_some())
+                                .collect();
+                            if boxed.is_empty() {
+                                self.track_inline_option_agg_payload_var(
+                                    &name, slot.ptr, &field_te,
+                                );
+                            } else {
+                                for (enum_lit, variant, inner) in boxed {
+                                    self.track_boxed_enum_var(
+                                        &name,
+                                        slot.ptr,
+                                        enum_lit,
+                                        variant,
+                                        inner.as_deref(),
+                                    );
+                                }
+                            }
                         }
                         // B-2026-07-04-7 — the comment above ("Struct drop NEVER
                         // frees an `Option` field") no longer holds: a copy-supported

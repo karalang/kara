@@ -28734,6 +28734,60 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-7 (leak B): an `Option` field whose payload is HEAP-BOXED,
+    /// destructured out of its owning struct, leaked both the box envelope and
+    /// the payload's own buffer.
+    ///
+    /// The leaf registration used `track_inline_option_agg_payload_var`, which
+    /// reads the payload WORDS as the value — but for a boxed payload word 0 is
+    /// a box POINTER, so it freed nothing. The source struct's drop, which does
+    /// handle the boxed case, had just been disarmed by the move-out tag-zero,
+    /// so nothing was left owning either allocation.
+    ///
+    /// NEVER destructuring the holder was always clean, which is what localized
+    /// this to the destructure rather than to the struct-literal move that the
+    /// sibling fixture's name suggests.
+    ///
+    /// The swap to a box drop is restricted to a payload whose own drop can be
+    /// resolved (a known user struct). Unfiltered it replaces a working inline
+    /// registration with a box-ONLY free for payloads that cannot be named — an
+    /// enum payload, a tuple — and the interior leaks instead of the envelope;
+    /// that cost two other fixtures before the filter went in.
+    ///
+    /// NOTE: pins at -O0 only; -O2 deletes the allocations outright.
+    #[test]
+    fn asan_destructured_struct_field_boxed_option_owned_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Wide { tag: i64, payload: String }
+struct Holder { name: String, body: Option[Wide] }
+fn build(i: i64) -> Holder {
+    let body: Option[Wide] = Some(Wide { tag: 7, payload: f"pay-{i}-long-enough-aaaa" });
+    Holder { name: f"holder-{i}-long-enough", body: body }
+}
+fn read(h: Holder) -> i64 {
+    let Holder { name, body } = h;
+    let mut n = name.len() as i64;
+    if name.starts_with("holder") { n = n + 1i64; }
+    match body {
+        Some(w) => { let Wide { tag, payload } = w; tag + (payload.len() as i64) + n }
+        None => n,
+    }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut acc = 0i64;
+    let mut i = 0;
+    while i < base + 49 { acc = acc + read(build(i)); i = i + 1; }
+    println(acc);
+}
+"#,
+            &["2580"],
+            "destructured_struct_field_boxed_option_owned_once",
+            100,
+        );
+    }
+
     #[test]
     fn asan_mapval_inner_map_insert_get_no_uaf() {
         // Slice 3r leg 1 (gap (d) sibling): `m.insert(k, inner)` where `inner`
