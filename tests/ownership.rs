@@ -9791,6 +9791,215 @@ fn frozen_param_permits_scalar_read_and_frozen_passthrough() {
     );
 }
 
+/// STAGE 2 — the mode survives PROJECTION. A place rooted at a `frozen`
+/// parameter (`n.a.b`, `n.kids[i]`, `n.pair.1`) is frozen too, so it may be
+/// read when it resolves to a scalar and passed whole to another `frozen`
+/// slot at any depth.
+///
+/// Stage 1 permitted only a depth-1 immutable SCALAR field and only the BARE
+/// handle as an argument, which is why the motivating shape — a recursive
+/// traversal that walks a `Vec` of children — did not compile: both
+/// `n.kids.len()` and `n.kids[i]` were rejected as projections through a
+/// non-scalar field.
+///
+/// The boundary is drawn at PLACES, not bindings, and it is drawn where the
+/// measurement puts it: a projection into a `frozen` slot emits `rc_inc=0 /
+/// rc_dec=0`, while `let k = n.inner` emits `2 / 3`. The reject battery below
+/// pins the binding forms as still refused; `frozen_place_projection_emits_
+/// no_refcount_traffic` (tests/par_codegen.rs) pins the codegen fact this
+/// rests on.
+#[test]
+fn frozen_param_projection_is_sticky_through_fields_and_indexing() {
+    let prelude = "shared struct Deep { d: i64 }\n\
+                   shared struct Inner { v: i64, deep: Deep }\n\
+                   shared struct Node { val: i64, kids: Vec[Inner], pair: (i64, i64) }\n";
+    let cases: &[(&str, &str)] = &[
+        ("scalar at depth 1", "fn f(n: frozen Node) -> i64 { n.val }"),
+        (
+            "scalar through a field chain and an index",
+            "fn f(n: frozen Node) -> i64 { n.kids[0].deep.d }",
+        ),
+        (
+            "scalar through a tuple index",
+            "fn f(n: frozen Node) -> i64 { n.pair.1 }",
+        ),
+        (
+            "a frozen scalar as the index operand",
+            "fn f(n: frozen Node) -> i64 { n.kids[n.val].v }",
+        ),
+        (
+            "len on a container reached through a place",
+            "fn f(n: frozen Node) -> i64 { n.kids.len() }",
+        ),
+        (
+            "is_empty on a container reached through a place",
+            "fn f(n: frozen Node) -> bool { n.kids.is_empty() }",
+        ),
+        (
+            "an indexed element passed whole to a frozen slot",
+            "fn g(i: frozen Inner) -> i64 { i.v }\n\
+             fn f(n: frozen Node) -> i64 { g(n.kids[0]) }",
+        ),
+        (
+            "a field chain passed whole to a frozen slot",
+            "fn g(d: frozen Deep) -> i64 { d.d }\n\
+             fn f(n: frozen Node) -> i64 { g(n.kids[0].deep) }",
+        ),
+    ];
+    for (label, body) in cases {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        // `ownership_ok` panics WITH the diagnostics, which is the report this
+        // wants; the label goes in the message so the failing row is named.
+        eprintln!("[frozen stage-2 accept] {label}");
+        ownership_ok(&src);
+    }
+}
+
+/// The stage-2 rule's fail-closed half: a projection may be READ or PASSED ON,
+/// never MATERIALIZED. Every form that introduces a new name for a handle, or
+/// hands one to something this pass cannot check, still reports.
+///
+/// This is the half that keeps the relaxation honest. Admitting a binding
+/// would hand out a non-counting handle whose retain codegen still emits
+/// (measured: `let k = n.inner` is `rc_inc=2 / rc_dec=3` even in borrow mode),
+/// and two branches racing that refcount is B-2026-07-28-13's SIGSEGV.
+#[test]
+fn frozen_param_projection_still_refuses_materializing_uses() {
+    let prelude = "shared struct Deep { d: i64 }\n\
+                   shared struct Inner { v: i64, deep: Deep }\n\
+                   shared struct Node { val: i64, kids: Vec[Inner], tbl: Map[i64, i64] }\n";
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "an element bound to a local",
+            "fn f(n: frozen Node) -> i64 { let k = n.kids[0]; k.v }",
+            "cannot be used through this element",
+        ),
+        (
+            "an element bound by a for loop",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
+             for k in n.kids { s = s + k.v; } s }",
+            "cannot be projected through `.kids`",
+        ),
+        (
+            "an element returned",
+            "fn f(n: frozen Node) -> Inner { n.kids[0] }",
+            "cannot be used through this element",
+        ),
+        (
+            "the container itself returned",
+            "fn f(n: frozen Node) -> Vec[Inner] { n.kids }",
+            "cannot be projected through `.kids`",
+        ),
+        (
+            "an element passed to a non-`frozen` slot",
+            "fn g(i: Inner) -> i64 { i.v }\n\
+             fn f(n: frozen Node) -> i64 { g(n.kids[0]) }",
+            "passed to a non-`frozen` slot",
+        ),
+        (
+            "an element passed to a LABELLED frozen slot",
+            "fn g(i: frozen Inner) -> i64 { i.v }\n\
+             fn f(n: frozen Node) -> i64 { g(i: n.kids[0]) }",
+            "passed to a non-`frozen` slot",
+        ),
+        (
+            "a user method on an element",
+            "impl Inner { fn get(ref self) -> i64 { self.v } }\n\
+             fn f(n: frozen Node) -> i64 { n.kids[0].get() }",
+            "cannot be used through this element",
+        ),
+        (
+            "a non-whitelisted builtin method on the container",
+            "fn f(n: frozen Node) -> i64 { n.kids.push(n.kids[0]); 0 }",
+            "cannot be projected through `.kids`",
+        ),
+        (
+            "an element stored in a tuple",
+            "fn f(n: frozen Node) -> (Inner, i64) { (n.kids[0], 1) }",
+            "cannot be used through this element",
+        ),
+        (
+            "an element stored in a struct literal",
+            "struct H { h: Inner }\n\
+             fn f(n: frozen Node) -> H { H { h: n.kids[0] } }",
+            "cannot be used through this element",
+        ),
+        (
+            "an element as a match scrutinee",
+            "fn f(n: frozen Node) -> i64 { match n.kids[0] { _ => 1 } }",
+            "cannot be used through this element",
+        ),
+        // Indexing is modelled for `Vec` / arrays / slices only. A `Map` index
+        // is not a hole — it resolves to no type, so it reports.
+        (
+            "indexing a container this pass does not model",
+            "fn f(n: frozen Node) -> i64 { n.tbl[1] }",
+            "cannot be used through this element",
+        ),
+        // The closure rule composes with stickiness: a projection inside a
+        // closure body is still a capture of the ROOT handle.
+        (
+            "a scalar read through a projection inside a closure",
+            "fn f(n: frozen Node) -> i64 { let g = || n.kids[0].v; g() }",
+            "captured by a closure",
+        ),
+    ];
+    for (label, body, expected) in cases {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)
+                && e.kind == OwnershipErrorKind::FrozenParamEscapes),
+            "[{label}] expected a FrozenParamEscapes error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The shape the whole entry exists for: a RECURSIVE traversal of a `shared`
+/// graph, shared read-only across two `par` branches.
+///
+/// Stage 1 refused this program with two errors (`n.kids.len()` and
+/// `n.kids[i]`, both "cannot be projected through `.kids`"). Stage 2 accepts
+/// it, and the fail-closed control is that the same program written with `ref`
+/// instead of `frozen` is STILL refused at the par capture — so the admission
+/// is not something a borrow gets for free.
+#[test]
+fn frozen_recursive_traversal_is_admitted_across_par_branches() {
+    let program = |mode: &str| {
+        format!(
+            "shared struct Node {{ val: i64, kids: Vec[Node] }}\n\
+             fn sum(n: {mode}Node) -> i64 {{\n\
+                 let mut s: i64 = n.val;\n\
+                 let mut i: i64 = 0;\n\
+                 while i < n.kids.len() {{ s = s + sum(n.kids[i]); i = i + 1; }}\n\
+                 s\n\
+             }}\n\
+             fn driver(root: {mode}Node) -> i64 {{\n\
+                 let (a, b) = par {{ let a = sum(root); let b = sum(root); (a, b) }};\n\
+                 a + b\n\
+             }}\n\
+             fn main() {{\n\
+                 let leaf = Node {{ val: 3, kids: [] }};\n\
+                 let root = Node {{ val: 1, kids: [leaf] }};\n\
+                 println(f\"{{driver(root)}}\");\n\
+             }}"
+        )
+    };
+    ownership_ok(&program("frozen "));
+
+    let borrowed = ownership_errors(&program("ref "));
+    assert!(
+        borrowed
+            .iter()
+            .any(|e| e.message.contains("multiple concurrent tasks")),
+        "a `ref` handle captured by two branches must STILL be refused — only \
+         `frozen` carries the freeze-site guarantee that licenses admission; \
+         got {:?}",
+        borrowed.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 /// Every other position is reported. The list is deliberately long: the module
 /// is a WHITELIST precisely so that a position nobody enumerated still fails,
 /// and these pin the ones that were enumerated. Each case asserts the specific

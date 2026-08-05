@@ -1,16 +1,20 @@
 # Freeze points: sharing an RC value across `par` branches (B-2026-08-01-33, mechanism 3)
 
-**Status:** design call; **stage 1 COMPLETE ON BOTH PARALLELISM SURFACES** —
-surface, escape check (E0511), freeze-site check (E0512), RC suppression,
-explicit-`par` admission, and auto-par admission have all landed.
-A `frozen` handle captured by two branches now compiles and computes correctly
-under both the interpreter and AOT. Stages 2 and 3 remain, and #133 needs both:
-`Node.neighbors` is `mut`, so the motivating program is still refused at the
-freeze site. Proposes a language-surface addition, so adopting it into
-[`docs/design.md`](../design.md) is the owner's step — this document exists to
-make the call concrete enough to accept, reject, or amend, and to record why the
-alternatives lose. Build log and two corrections to the staging are at the
-bottom; read those before starting from the staging list.
+**Status:** design call; **stage 1 COMPLETE ON BOTH PARALLELISM SURFACES**
+(surface, escape check E0511, freeze-site check E0512, RC suppression,
+explicit-`par` admission, auto-par admission) and **stage 2 LANDED for
+PLACES** — projection through field access, indexing, and tuple indexing is
+now sticky, so a recursive traversal of a `shared` graph compiles and runs
+from several `par` branches (measured 3.7x wall on 4 cores). What stage 2 does
+*not* yet admit is a **binding**: `let k = n.kids[i]` still materialises a
+counted handle and is still refused — see § "Stage 2" for why the boundary is
+there. Stage 3 remains, and #133 still needs it: `Node.neighbors` is `mut`, so
+the motivating program is refused at the freeze site. Proposes a
+language-surface addition, so adopting it into [`docs/design.md`](../design.md)
+is the owner's step — this document exists to make the call concrete enough to
+accept, reject, or amend, and to record why the alternatives lose. Build log
+and two corrections to the staging are at the bottom; read those before
+starting from the staging list.
 
 ## The gap, stated as the constraint it actually is
 
@@ -110,9 +114,14 @@ Each stage is independently useful and independently testable.
    No stickiness: only whole-handle pass-through and scalar projection. Closes
    "share an immutable structure read-only across branches" for non-traversing
    shapes. This is the stage that validates the escape checker, which is where
-   the unsafety lives.
+   the unsafety lives. **LANDED.**
 2. **Stickiness** through field access and indexing. This is what #133 needs,
-   and it is the bulk of the type-checker work.
+   and it is the bulk of the type-checker work. **LANDED for places** (see
+   § "Stage 2") — and it turned out *not* to be type-checker work at all: the
+   place walk is answered structurally from `struct_info`, in the escape
+   checker, with no type-level mode and no `TypeKind::Frozen`. The
+   binding half is deferred and belongs to mechanism 1, for the reason the
+   measurement gives.
 3. **Freezing a `mut`-bearing type** — the deep-immutability check at the freeze
    site. #133 needs this too (`Node.neighbors` is `mut`), but it is separable
    from stage 2 and much smaller.
@@ -449,6 +458,115 @@ that field, over a program that ran sequentially. Check with
 `bash -c 'time ./binary'` and compare `user` to `real`; `nm` cannot tell you,
 because the `karac_par_*` statics are stripped at link.
 
+## Stage 2: stickiness through projection (landed) — PLACES, not bindings
+
+Stage 1 permitted exactly two shapes: an immutable **scalar** field one level
+deep, and the **bare handle** as an argument to another `frozen` slot. That is
+why the shape this whole entry is about did not compile: a traversal needs
+`n.kids.len()` and `n.kids[i]`, and both were "cannot be projected through
+`.kids`".
+
+Stage 2 generalises the *place*. A **frozen place** is the parameter, or any
+chain of `.field` / `[i]` / `.0` rooted at it, and the mode survives every
+step. A frozen place may be:
+
+1. **read**, when it resolves to a scalar — `n.val`, `n.inner.deep.d`,
+   `n.kids[i].val`;
+2. **passed whole to another `frozen` parameter** — `g(n.inner)`,
+   `g(n.kids[i])`, at any depth;
+3. **queried with `len()` / `is_empty()`** when it reaches a builtin container.
+
+It may *not* be **bound**. `let k = n.kids[i]`, `for k in n.kids`, returning
+it, storing it, a user method receiver, a non-`frozen` slot — all still report.
+
+### The boundary is where the measurement put it
+
+Per-function refcount traffic in the emitted IR, borrow-mode receiver,
+counted inside `outer`'s own frame (`main` and the `__karac_*` drop helpers
+carry traffic in every variant, so a module-wide count cannot see this):
+
+| body | `rc_inc` | `rc_dec` |
+|---|---|---|
+| `readd(o.inner.deep)` — chained projection into a frozen slot | 0 | 0 |
+| `readi(o.kids[i])` — index projection into a frozen slot | 0 | 0 |
+| `o.kids.len()` | 0 | 0 |
+| `o.inner.get()` — method on a projection | 0 | 0 |
+| `let k = o.inner; k.v` — **bound to a local** | **2** | **3** |
+
+A projection is a deref; a binding materialises a counted handle. Two branches
+racing that non-atomic refcount is exactly B-2026-07-28-13's SIGSEGV, so the
+binding forms stay refused — admitting them needs the retain *removed*, which
+is mechanism 1 proper, not a widening of this rule.
+
+Pinned in both directions by
+`frozen_place_projection_emits_no_refcount_traffic` (tests/par_codegen.rs):
+the three admitted shapes must be `(0, 0)` **and** the binding shape must be
+non-zero, so the test cannot pass vacuously if codegen ever stops emitting
+refcount traffic for an unrelated reason. Mutation-checked — feeding the
+binding body to the projection assertion fails with `left: (2, 3)`.
+
+### Two guards, deliberately independent
+
+Every step of the place walk refuses a `mut` field, even though the
+freeze-site check (E0512) has already refused any type whose reachable closure
+contains one. The projection rule's safety argument is "concurrent readers
+cannot race a payload nobody may write", and that should not silently depend
+on a check in a different module. (Assignment *through* a place is refused
+further upstream still: the typechecker rejects `n.val = 5` with "shared
+struct field `Node.val` is not declared mut".)
+
+### `len` / `is_empty`, the one carve-out
+
+Without a length there is no bounded traversal, so the rest of stage 2 would
+be unreachable for the shape that motivates it. The exception is narrow on
+three independent axes at once: the method name is one of exactly two; the
+receiver must resolve to a **builtin** container, so no user body ever
+receives the handle; and any type carrying a user `impl` block is excluded, so
+`impl Vec { fn len(…) }` cannot smuggle a body in through the builtin name.
+
+### What it buys, measured
+
+The motivating shape, now expressible: a recursive traversal of a 2^15-node
+`shared` tree, run from four `par` branches over one shared root. Same source,
+same answer (`2863154246400`, identical across 20 repeat runs and across
+interp / `karac run` / AOT):
+
+| build | wall | cpu | |
+|---|---|---|---|
+| sequential (no `par`, `KARAC_AUTO_PAR=0`) | 0.765s | 0.765s | baseline |
+| **explicit `par` over `frozen`, `KARAC_AUTO_PAR=0`** | **0.206s** | 0.762s | **3.7x wall, 4 cores** |
+
+CPU time is unchanged between the two, which is what makes this parallelism
+rather than a folding artifact; the work was also confirmed to scale linearly
+(doubling the repeat count doubled the time) before any ratio was read off it.
+valgrind on the same program: 0 definitely lost, 0 indirectly lost (the
+1,216-byte "possibly lost" is the glibc `pthread_create` DTV this entry has
+already characterised, 4 blocks for 4 branches).
+
+**The control that matters:** the identical program written with `ref` instead
+of `frozen` is still refused at the par capture (`E_CONCURRENT_SHARED_STRUCT`).
+Borrow semantics alone do not license the admission — the freeze-site
+guarantee does.
+
+### One honest caveat about auto-par
+
+With auto-par left ON, the frozen build additionally recognises *parallel
+reductions inside the traversal itself* (`sum`'s accumulator loop, `repeat`'s)
+and nests them inside the outer parallel group. The answer stays correct, but
+on this shape it costs ~60% more CPU (1.19s vs 0.75s) for no wall-clock gain
+over the explicit-`par`-only build. That is a cost-model question about
+nesting a reduction inside an already-parallel region, not a correctness one,
+and it is not specific to `frozen` — but `frozen` is what makes these bodies
+reachable by the analyzer in the first place, so it shows up here first.
+
+### What stage 2 does NOT close
+
+`Node.neighbors` is `mut`, so #133 is still refused at the freeze site — that
+is stage 3, unchanged. And a real BFS binds every node it pops, so #133 needs
+the binding case too, which is mechanism 1. Stage 2 makes *recursive
+traversals over deeply-immutable graphs* work; it does not make every
+traversal work.
+
 ## Risks, stated plainly
 
 - **Non-counting handles are a new unsafety surface.** If escape checking has a
@@ -457,8 +575,16 @@ because the `karac_par_*` statics are stripped at link.
   fail-closed and no-wildcard, the way `region_bindings` was after
   B-2026-07-04-13 — and stage 1 exists to shake it out before stickiness
   multiplies the surface.
-- **Stage 2 touches the type checker broadly.** Mode propagation through
-  projection is not a contained edit.
+- ~~**Stage 2 touches the type checker broadly.** Mode propagation through
+  projection is not a contained edit.~~ **Wrong, and worth recording as
+  wrong.** Stage 2 landed entirely inside `frozen_escape.rs`: the mode does
+  not propagate through the *type* at all, it is re-derived per place by
+  walking `struct_info` one projection at a time. The type checker was not
+  touched, `TypeKind::Frozen` is still never constructed, and the retained
+  ~16 walk arms were still not needed. The generalisation that made it small
+  is that a place's frozen-ness is a property of its **root**, which is
+  already how the auto-par arm keyed its whitelist. Stage 3 (per-instance
+  freeze) may still want a type-level mode; stage 2 did not.
 - **It is language surface.** design.md is authoritative and this needs owner
   buy-in; that is the point of writing it down rather than building it.
 - **Unmeasured.** No prototype, so the claimed win (#133's 1.28x punch loop,

@@ -1,18 +1,18 @@
-//! `frozen` parameter escape check — B-2026-08-01-33 mechanism 3, stage 1.
+//! `frozen` parameter escape check — B-2026-08-01-33 mechanism 3, stages 1–2.
 //!
-//! ## Why this exists before the mode does anything
+//! ## Why this exists, and why it landed first
 //!
-//! A `frozen T` is meant to be a **non-counting** handle: codegen emits no
+//! A `frozen T` is a **non-counting** handle: codegen emits no
 //! `rc_inc`/`rc_dec` for it, which is what makes concurrent reads across `par`
 //! branches safe (it removes the raced refcount header rather than making it
 //! atomic). That property is only sound while the handle cannot outlive the
 //! owner whose count it is skipping — a non-counting handle that escapes is a
 //! use-after-free.
 //!
-//! So escape checking is the precondition for every other part of the feature,
-//! and it lands *before* `par` admission and before RC suppression, while the
-//! mode is still inert. Nothing here can currently miscompile a program; what
-//! it does is make the rule real so admission has something to stand on. See
+//! So escape checking is the precondition for every other part of the feature.
+//! It landed *before* `par` admission and before RC suppression, while the mode
+//! was still inert, so that admission had something to stand on. Both now
+//! depend on it. See
 //! [`docs/spikes/freeze-point-design.md`](../../docs/spikes/freeze-point-design.md)
 //! § "Risks, stated plainly".
 //!
@@ -25,31 +25,63 @@
 //!
 //! This module inverts that. The walks below are **exhaustive matches with no
 //! `_` wildcard**, so a new AST node breaks this file's build instead of
-//! silently opening an escape route. And a frozen identifier is flagged at the
-//! LEAF: only the two positions stage 1 explicitly permits consume their frozen
-//! operand without recursing into it. Every other position — including any
-//! position nobody thought about — reaches the bare `Identifier` arm and is
-//! reported. The failure direction is a false positive (a rejected program that
-//! could have been allowed), never a missed escape.
+//! silently opening an escape route. And a frozen PLACE is judged in
+//! [`walk_expr`]'s prologue, which consumes it: only the positions explicitly
+//! permitted below skip that judgement, and they do so by intercepting *before*
+//! the prologue runs. Every other position — including any position nobody
+//! thought about — reaches the prologue with a place that is not a scalar read
+//! and is reported. The failure direction is a false positive (a rejected
+//! program that could have been allowed), never a missed escape.
 //!
-//! ## What stage 1 permits
+//! ## What is permitted (stage 2: PLACES, not bindings)
 //!
-//! 1. **Reading an immutable scalar field** — `n.val`. Lowers to a plain deref
-//!    and yields a register copy, so no handle leaves. Immutable-and-scalar is
-//!    the same predicate `concurrent_shared.rs` already admits for the
-//!    scalar-field `par` case, for the same reason.
-//! 2. **Passing the whole handle to another `frozen` parameter** —
-//!    `helper(n)` where `helper`'s matching parameter is itself declared
-//!    `frozen`. The callee is checked by this same pass, so the guarantee
-//!    composes across the call rather than being re-derived at each site. This
-//!    is the property that makes the motivating program (LeetCode #133, whose
-//!    traversal lives in a callee) reachable at all.
+//! Stage 1 permitted exactly two shapes: reading an immutable *scalar field*
+//! one level deep, and passing the *bare handle* to another `frozen`
+//! parameter. Stage 2 generalises both to a **frozen place** — the parameter
+//! itself, or any chain of field access / indexing / tuple indexing rooted at
+//! it (`n.inner.deep`, `n.kids[i]`, `n.pair.1`).
 //!
-//! Everything else is an escape *for now*, including shapes that will become
-//! legal in stage 2 — binding it to a local, projecting a nested handle
-//! (`n.neighbors`), calling a method on it. Those need mode stickiness through
-//! projection before they can be allowed, and rejecting them today is what
-//! stops a program from depending on a spelling whose semantics are undecided.
+//! 1. **Reading a frozen place whose type is a scalar** — `n.val`,
+//!    `n.inner.deep.d`, `n.kids[i].val`. Lowers to a chain of derefs and
+//!    yields a register copy, so no handle leaves.
+//! 2. **Passing a frozen place whole to another `frozen` parameter** —
+//!    `helper(n)`, `helper(n.inner)`, `helper(n.kids[i])`. The callee is
+//!    checked by this same pass, so the guarantee composes across the call
+//!    rather than being re-derived at each site. This is the property that
+//!    makes a callee-side traversal (LeetCode #133) reachable at all.
+//! 3. **`len()` / `is_empty()` on a builtin container reached through a
+//!    place** — `n.kids.len()`. A narrow, explicitly-enumerated exception,
+//!    justified below.
+//!
+//! **Why places and not bindings.** Measured per-function refcount traffic in
+//! the emitted IR, borrow-mode receiver, `outer`'s own frame:
+//!
+//! | body | `rc_inc` | `rc_dec` |
+//! |---|---|---|
+//! | `readd(o.inner.deep)` — chained projection into a frozen slot | 0 | 0 |
+//! | `readi(o.kids[i])` — index projection into a frozen slot | 0 | 0 |
+//! | `o.kids.len()` | 0 | 0 |
+//! | `let k = o.inner; k.v` — **bound to a local** | **2** | **3** |
+//!
+//! A projection is a deref; a *binding* materialises a counted handle. That is
+//! the boundary this stage draws, and it is drawn where the measurement puts
+//! it, not where it would be convenient. `let`-binding a projection, `for
+//! k in n.kids`, and every other form that introduces a new name for a handle
+//! stay reported — admitting them needs the retain removed first, which is
+//! mechanism 1 proper. The measurement is pinned from the codegen side by
+//! `frozen_place_projection_emits_no_refcount_traffic` (tests/par_codegen.rs),
+//! so a codegen change that starts retaining across a projection turns that
+//! test red instead of silently invalidating this rule.
+//!
+//! **Why `len` / `is_empty` are carved out.** Without a length there is no
+//! bounded traversal, so the rest of stage 2 would be unreachable for the
+//! shape that motivates it. The exception is kept honest by being narrow on
+//! three independent axes: the method name is one of exactly two, the receiver
+//! must resolve to a BUILTIN container (never a user aggregate, so no user
+//! body ever receives the handle), and any type carrying a user `impl` block
+//! is excluded outright — so `impl Vec { fn len(...) }` cannot smuggle a body
+//! in through the builtin name. Both methods return a count; neither can
+//! retain the receiver.
 //!
 //! ## Known conservatism, stated so it is not mistaken for a hole
 //!
@@ -59,15 +91,23 @@
 //!   function is rejected either way) and never under-reports.
 //! - **Only free-function calls compose.** A `frozen` argument in a *method*
 //!   call is reported, because resolving a method to its declaration needs the
-//!   typechecker's callee map and stage 1 does not wire it.
-//! - **Unknown types fail closed.** If a parameter's type name does not resolve
-//!   to a `struct_info` entry, its scalar-field set is empty, so every field
-//!   read off it is reported.
+//!   typechecker's callee map and this pass does not wire it.
+//! - **Unknown types fail closed.** Place-type resolution is positive-evidence
+//!   only: a field on a type with no `struct_info` entry, an index into
+//!   anything that is not a `Vec` / array / slice, or a projection through a
+//!   field this pass cannot resolve all yield "no type", and a place with no
+//!   type is reported.
+//! - **A `mut` field is refused at every step**, even though the freeze-site
+//!   check (E0512) has already refused any type whose reachable closure
+//!   contains one. Two independent guards, because the projection rule's
+//!   safety argument ("concurrent readers cannot race a payload nobody may
+//!   write") should not silently depend on a check in another module.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 use crate::token::Span;
+use crate::typechecker::{types::Type, TypeCheckResult};
 
 use super::{OwnershipError, OwnershipErrorKind};
 
@@ -77,12 +117,15 @@ use super::{OwnershipError, OwnershipErrorKind};
 /// rejection would leave the reader guessing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Reason {
-    /// A bare use of the handle in any position other than the two permitted
+    /// A bare use of the handle in any position other than the permitted
     /// ones — returned, bound to a local, stored, captured, and so on.
     Materialized,
-    /// `n.field` where `field` is `mut`, non-scalar, or unresolvable. The read
-    /// would yield something other than a register copy.
+    /// `….field` where `field` is `mut` or unresolvable, or where the place it
+    /// names is neither read as a scalar nor passed to a `frozen` slot.
     Projection { field: String },
+    /// `….[i]` / `….0` in the same situation as [`Reason::Projection`] — the
+    /// element is a handle and the position does not permit one.
+    Element,
     /// Passed to a call slot whose parameter is not declared `frozen` (or to a
     /// callee this pass cannot resolve, which includes every method call).
     NonFrozenArgument,
@@ -95,14 +138,19 @@ enum Reason {
     Captured,
 }
 
-/// Walk state. `frozen` maps each in-scope frozen parameter name to the set of
-/// its type's immutable scalar fields — precomputed because the walk hits it at
-/// every field access.
-struct Cx<'a> {
-    frozen: HashMap<&'a str, HashSet<String>>,
+/// Walk state. `frozen` maps each in-scope frozen parameter name to the *type*
+/// its place chain starts from; every projection resolves one step further
+/// through [`place_type`], so a chain of any depth is answerable from here.
+struct Cx<'a, 't> {
+    tc: &'t TypeCheckResult,
+    frozen: HashMap<&'a str, Type>,
     /// Free-function name → per-position `is_frozen` flags, used to decide
     /// whether passing the handle on is permitted.
     fn_frozen_params: HashMap<&'a str, Vec<bool>>,
+    /// Type names carrying a user `impl` block. A builtin container name that a
+    /// user has extended is not treated as a builtin by the `len`/`is_empty`
+    /// exception, so no user body can receive the handle through it.
+    user_impl_types: HashSet<String>,
     /// True while walking a closure body. A reference to a frozen parameter
     /// there is a CAPTURE into an environment that can outlive the call, so
     /// the two permitted positions are suppressed — reading a scalar field
@@ -113,14 +161,83 @@ struct Cx<'a> {
     found: Vec<(String, Span, Reason)>,
 }
 
-impl<'a> Cx<'a> {
-    /// The frozen parameter name this expression denotes, if it is a bare
-    /// reference to one.
-    fn frozen_ident(&self, e: &Expr) -> Option<&'a str> {
-        let ExprKind::Identifier(name) = &e.kind else {
-            return None;
+impl<'a> Cx<'a, '_> {
+    /// The frozen parameter a PLACE expression is rooted at, if any.
+    ///
+    /// Recognises exactly the three projection forms stage 2 makes sticky —
+    /// field access, indexing, tuple indexing — plus the bare identifier. Any
+    /// other expression shape is not a place, so it is not rooted anywhere and
+    /// its sub-expressions are walked normally (where a frozen identifier
+    /// reports at the leaf).
+    fn frozen_place_root(&self, e: &Expr) -> Option<&'a str> {
+        match &e.kind {
+            ExprKind::Identifier(name) => self.frozen.get_key_value(name.as_str()).map(|(k, _)| *k),
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::Index { object, .. }
+            | ExprKind::TupleIndex { object, .. } => self.frozen_place_root(object),
+            _ => None,
+        }
+    }
+
+    /// The static type of a frozen place, resolved one projection at a time.
+    ///
+    /// POSITIVE EVIDENCE ONLY: every step that this pass cannot resolve —
+    /// a field on a type with no `struct_info` entry, an index into something
+    /// that is not a `Vec` / array / slice, a `mut` field — yields `None`, and
+    /// a place with no type is reported by the caller. The failure direction is
+    /// a rejected program, never an admitted handle.
+    fn place_type(&self, e: &Expr) -> Option<Type> {
+        match &e.kind {
+            ExprKind::Identifier(name) => self.frozen.get(name.as_str()).cloned(),
+            ExprKind::FieldAccess { object, field } => {
+                let base = self.place_type(object)?;
+                let info = self.tc.struct_info.get(head_type_name(&base)?)?;
+                // Refused even though E0512 has already refused any type whose
+                // reachable closure contains a `mut` field — see the module
+                // header on why this guard is deliberately independent.
+                if info.mut_fields.contains(field) {
+                    return None;
+                }
+                info.fields
+                    .iter()
+                    .find(|(fname, _, _)| fname == field)
+                    .map(|(_, fty, _)| fty.clone())
+            }
+            ExprKind::Index { object, .. } => element_type(&self.place_type(object)?),
+            ExprKind::TupleIndex { object, index } => match self.place_type(object)? {
+                Type::Tuple(items) => items.get(*index as usize).cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether a frozen place reads through to a SCALAR — the register-copy
+    /// case, which no position can turn into an escape because no handle
+    /// exists to escape.
+    fn reads_as_scalar(&self, e: &Expr) -> bool {
+        self.place_type(e)
+            .is_some_and(|t| super::is_copy_type_basic(&t))
+    }
+
+    /// Whether `method` on this frozen place is one of the two read-only
+    /// builtin-container queries stage 2 permits. See the module header for why
+    /// the carve-out exists and on which three axes it is kept narrow.
+    fn permits_builtin_query(&self, receiver: &Expr, method: &str) -> bool {
+        if !matches!(method, "len" | "is_empty") {
+            return false;
+        }
+        let Some(ty) = self.place_type(receiver) else {
+            return false;
         };
-        self.frozen.get_key_value(name.as_str()).map(|(k, _)| *k)
+        match &ty {
+            Type::Array { .. } | Type::Slice { .. } | Type::Str => true,
+            Type::Named { name, .. } => {
+                matches!(name.as_str(), "Vec" | "String" | "Map" | "Set" | "Deque")
+                    && !self.user_impl_types.contains(name)
+            }
+            _ => false,
+        }
     }
 
     fn flag(&mut self, name: &str, span: &Span, reason: Reason) {
@@ -128,9 +245,45 @@ impl<'a> Cx<'a> {
     }
 }
 
+/// The struct/enum name a type is headed by, for a `struct_info` lookup.
+fn head_type_name(ty: &Type) -> Option<&str> {
+    match ty {
+        Type::Shared(name) => Some(name),
+        Type::Named { name, .. } => Some(name),
+        _ => None,
+    }
+}
+
+/// The element type indexing yields, for the containers stage 2 models.
+///
+/// Deliberately short: a `Map`/`Set` index is not listed, so indexing one
+/// yields `None` and is reported. Widening this list is a decision, not an
+/// oversight.
+fn element_type(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Array { element, .. }
+        | Type::Slice { element, .. }
+        | Type::Vector { element, .. } => Some((**element).clone()),
+        Type::Named { name, args } if name == "Vec" && args.len() == 1 => Some(args[0].clone()),
+        _ => None,
+    }
+}
+
+/// The diagnostic category a rejected frozen place falls into, chosen from the
+/// place's OWN outermost form so the message names what the author wrote.
+fn place_reason(e: &Expr) -> Reason {
+    match &e.kind {
+        ExprKind::FieldAccess { field, .. } => Reason::Projection {
+            field: field.clone(),
+        },
+        ExprKind::Index { .. } | ExprKind::TupleIndex { .. } => Reason::Element,
+        _ => Reason::Materialized,
+    }
+}
+
 impl super::OwnershipChecker<'_> {
     /// Report every use of a `frozen` parameter of `f` that is not one of the
-    /// two shapes stage 1 permits. Emits `E0511` at each offending use.
+    /// shapes this pass permits. Emits `E0511` at each offending use.
     ///
     /// No-op — and, importantly, no program-wide work — for a function with no
     /// `frozen` parameter, which today is every function in every program.
@@ -139,35 +292,24 @@ impl super::OwnershipChecker<'_> {
             return;
         }
 
-        let mut frozen: HashMap<&str, HashSet<String>> = HashMap::new();
-        for p in f.params.iter().filter(|p| p.is_frozen) {
-            let fields = self.immutable_scalar_fields(&p.ty);
-            for name in binding_names_of(&p.pattern) {
-                frozen.insert(name, fields.clone());
-            }
-        }
-        if frozen.is_empty() {
-            return;
-        }
+        // Computed through a free function so the immutable borrow of
+        // `typecheck_result` / `program` the walk needs is finished before the
+        // errors are pushed through `&mut self`.
+        let found = collect_frozen_escapes(f, self.program, self.typecheck_result);
 
-        let mut cx = Cx {
-            frozen,
-            fn_frozen_params: collect_fn_frozen_params(self.program),
-            in_closure: false,
-            found: Vec::new(),
-        };
-        walk_block(&f.body, &mut cx);
-
-        for (name, span, reason) in std::mem::take(&mut cx.found) {
+        for (name, span, reason) in found {
             let (what, fix) = match &reason {
                 Reason::Materialized => (
                     format!("`frozen` parameter `{name}` escapes here"),
                     format!(
                         "a `frozen` handle is non-counting, so it must not outlive the call. \
-                         Stage 1 allows only two uses: reading an immutable scalar field \
-                         (`{name}.field`), and passing the whole handle to another parameter \
-                         that is also declared `frozen`. To store, return, or capture it, take \
-                         the parameter by value instead of `frozen`"
+                         The permitted uses are: reading a place off `{name}` whose type is a \
+                         SCALAR (`{name}.field`, `{name}.a.b`, `{name}.items[i].n`), passing \
+                         such a place whole to another parameter that is also declared \
+                         `frozen`, and `len()` / `is_empty()` on a container reached through \
+                         one. Binding it to a local materialises a counted handle and is not \
+                         permitted — to store, return, or capture it, take the parameter by \
+                         value instead of `frozen`"
                     ),
                 ),
                 Reason::Projection { field } => (
@@ -175,11 +317,21 @@ impl super::OwnershipChecker<'_> {
                         "`frozen` parameter `{name}` cannot be projected through `.{field}` yet"
                     ),
                     format!(
-                        "stage 1 permits reading only an IMMUTABLE SCALAR field off a `frozen` \
-                         handle, because that lowers to a register copy and no handle escapes. \
-                         `{field}` is `mut`, non-scalar, or on a type this pass could not \
-                         resolve. Projecting a nested handle needs the mode to survive the \
-                         projection, which is stage 2"
+                        "a place off a `frozen` handle may be READ when it resolves to a \
+                         scalar, or passed whole to another `frozen` parameter — both lower to \
+                         derefs with no refcount traffic. This one is neither: `{field}` is \
+                         `mut`, or lives on a type this pass could not resolve, or the place \
+                         is a handle in a position that would materialise it"
+                    ),
+                ),
+                Reason::Element => (
+                    format!("`frozen` parameter `{name}` cannot be used through this element yet"),
+                    format!(
+                        "indexing a place off a `frozen` handle yields a value that may be READ \
+                         when it is a scalar, or passed whole to another `frozen` parameter. \
+                         This position would materialise it instead — or the container is one \
+                         this pass does not model (only `Vec`, arrays and slices are indexed \
+                         through `{name}`)"
                     ),
                 ),
                 Reason::Captured => (
@@ -197,8 +349,8 @@ impl super::OwnershipChecker<'_> {
                     format!("`frozen` parameter `{name}` is passed to a non-`frozen` slot"),
                     "the callee could store the handle, so the guarantee has to hold on its \
                      side too. Declare the receiving parameter `frozen` as well, and the check \
-                     composes across the call. Method calls are not resolved by stage 1 and are \
-                     reported even when the parameter is `frozen`"
+                     composes across the call. Method calls are not resolved by this pass and \
+                     are reported even when the parameter is `frozen`"
                         .to_string(),
                 ),
             };
@@ -212,40 +364,80 @@ impl super::OwnershipChecker<'_> {
             });
         }
     }
+}
 
-    /// Immutable scalar fields of the struct `ty` names — the one field set a
-    /// `frozen` handle may be read through in stage 1.
-    ///
-    /// Fail-closed at every step: a type expression that is not a plain path, a
-    /// name with no `struct_info` entry, or an enum yields the empty set, so
-    /// every projection off it is reported. Mirrors
-    /// `concurrent_shared.rs::readonly_scalar_fields` — same two conditions
-    /// (absent from `mut_fields`, `is_copy_type_basic`) for the same reason:
-    /// an immutable field cannot be written by anyone, and a scalar read copies
-    /// a register rather than aliasing a buffer.
-    fn immutable_scalar_fields(&self, ty: &TypeExpr) -> HashSet<String> {
-        // A `frozen` param is stored as `Ref(T)` — see the parser's `frozen` arm.
-        let ty = match &ty.kind {
-            TypeKind::Ref(inner) => inner.as_ref(),
-            _ => ty,
+/// Run the walk over `f` and return every rejected use. Free-standing so the
+/// shared borrows of `program` / `tc` it holds end before the caller pushes
+/// diagnostics through `&mut self`.
+fn collect_frozen_escapes<'a>(
+    f: &'a Function,
+    program: &'a Program,
+    tc: &TypeCheckResult,
+) -> Vec<(String, Span, Reason)> {
+    let mut frozen: HashMap<&str, Type> = HashMap::new();
+    for p in f.params.iter().filter(|p| p.is_frozen) {
+        let Some(root) = frozen_root_type(&p.ty) else {
+            continue;
         };
-        let TypeKind::Path(path) = &ty.kind else {
-            return HashSet::new();
-        };
-        let Some(name) = path.segments.last() else {
-            return HashSet::new();
-        };
-        let Some(info) = self.typecheck_result.struct_info.get(name.as_str()) else {
-            return HashSet::new();
-        };
-        info.fields
-            .iter()
-            .filter(|(fname, fty, _)| {
-                !info.mut_fields.contains(fname) && super::is_copy_type_basic(fty)
-            })
-            .map(|(fname, _, _)| fname.clone())
-            .collect()
+        for name in binding_names_of(&p.pattern) {
+            frozen.insert(name, root.clone());
+        }
     }
+    if frozen.is_empty() {
+        return Vec::new();
+    }
+
+    let mut cx = Cx {
+        tc,
+        frozen,
+        fn_frozen_params: collect_fn_frozen_params(program),
+        user_impl_types: collect_user_impl_types(program),
+        in_closure: false,
+        found: Vec::new(),
+    };
+    walk_block(&f.body, &mut cx);
+    cx.found
+}
+
+/// The type a `frozen` parameter's place chain starts from.
+///
+/// Fail-closed: a type expression that is not a plain path yields `None`, the
+/// parameter contributes no tracked name, and — if it was the only one — the
+/// function is skipped. That is safe because a parameter whose type this pass
+/// cannot name is also one the freeze-site check (E0512) refuses outright, so
+/// the program does not compile either way.
+fn frozen_root_type(ty: &TypeExpr) -> Option<Type> {
+    // A `frozen` param is stored as `Ref(T)` — see the parser's `frozen` arm.
+    let ty = match &ty.kind {
+        TypeKind::Ref(inner) => inner.as_ref(),
+        _ => ty,
+    };
+    let TypeKind::Path(path) = &ty.kind else {
+        return None;
+    };
+    // The last segment is the `struct_info` key. A generic instantiation
+    // (`Vec[T]`) correctly fails that lookup later and is reported.
+    path.segments.last().map(|name| Type::Named {
+        name: name.clone(),
+        args: Vec::new(),
+    })
+}
+
+/// Every type name carrying a user `impl` block. Consulted only by the
+/// `len`/`is_empty` carve-out, to keep a user-authored body from reaching a
+/// frozen handle through a builtin container name.
+fn collect_user_impl_types(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for item in &program.items {
+        if let Item::ImplBlock(b) = item {
+            if let TypeKind::Path(path) = &b.target_type.kind {
+                if let Some(name) = path.segments.last() {
+                    out.insert(name.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Every top-level function's per-position `is_frozen` flags, keyed by name.
@@ -253,7 +445,7 @@ impl super::OwnershipChecker<'_> {
 /// Free functions only: impl methods and trait methods are deliberately absent,
 /// so a frozen argument in a method call falls through to
 /// [`Reason::NonFrozenArgument`]. Resolving a method call to its declaration
-/// needs the typechecker's callee-type map, and wiring that is stage 2's job —
+/// needs the typechecker's callee-type map, which this pass does not wire —
 /// leaving it out over-reports rather than admitting an unchecked callee.
 fn collect_fn_frozen_params(program: &Program) -> HashMap<&str, Vec<bool>> {
     let mut map: HashMap<&str, Vec<bool>> = HashMap::new();
@@ -272,7 +464,7 @@ fn binding_names_of(p: &Pattern) -> Vec<&str> {
     match &p.kind {
         PatternKind::Binding(name) => vec![name.as_str()],
         // Any destructuring parameter pattern spreads the handle across several
-        // bindings whose individual modes stage 1 has not defined. Returning
+        // bindings whose individual modes are not defined. Returning
         // nothing here means the parameter contributes no tracked name, and the
         // `frozen.is_empty()` guard above then skips the function entirely —
         // which would be a HOLE, so the caller must keep at least one plain
@@ -287,12 +479,13 @@ fn binding_names_of(p: &Pattern) -> Vec<&str> {
 
 // ── Walks ───────────────────────────────────────────────────────
 //
-// Exhaustive, no `_` arms. A frozen identifier is reported at the LEAF
-// (`ExprKind::Identifier`), so every position that merely recurses is covered
-// automatically — including positions added to the AST after this was written,
-// which will fail to compile here until they are handled explicitly.
+// Exhaustive, no `_` arms. A frozen PLACE is judged at the outermost place
+// expression (see [`walk_expr`]'s prologue), and every position that merely
+// recurses is covered automatically — including positions added to the AST
+// after this was written, which will fail to compile here until they are
+// handled explicitly.
 
-fn walk_block<'a>(b: &'a Block, cx: &mut Cx<'a>) {
+fn walk_block<'a>(b: &'a Block, cx: &mut Cx<'a, '_>) {
     for s in &b.stmts {
         walk_stmt(s, cx);
     }
@@ -301,7 +494,7 @@ fn walk_block<'a>(b: &'a Block, cx: &mut Cx<'a>) {
     }
 }
 
-fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a>) {
+fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
     match &s.kind {
         StmtKind::Let { value, .. } => walk_expr(value, cx),
         StmtKind::LetUninit { .. } => {}
@@ -333,70 +526,99 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a>) {
     }
 }
 
-/// Walk a call's arguments, permitting a frozen handle only in a slot whose
-/// declared parameter is itself `frozen`.
-fn walk_call_args<'a>(callee: Option<&str>, args: &'a [CallArg], cx: &mut Cx<'a>) {
+/// Walk the sub-expressions a frozen place contains that are NOT part of the
+/// place itself — the index operands. `f(n.kids[g(x)])` still has to check
+/// `g(x)`; only the projection chain is consumed by the permitting rule.
+fn walk_place_indices<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
+    match &e.kind {
+        ExprKind::Identifier(_) => {}
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            walk_place_indices(object, cx)
+        }
+        ExprKind::Index { object, index } => {
+            walk_place_indices(object, cx);
+            walk_expr(index, cx);
+        }
+        // Not a place at all — reachable only if a caller asks about an
+        // expression `frozen_place_root` rejected, which never happens.
+        _ => walk_expr(e, cx),
+    }
+}
+
+/// Walk a call's arguments, permitting a frozen place only when it reads as a
+/// scalar (safe in any slot) or when the slot's declared parameter is itself
+/// `frozen` (the guarantee composes across the call).
+fn walk_call_args<'a>(callee: Option<&str>, args: &'a [CallArg], cx: &mut Cx<'a, '_>) {
     let sig = callee.and_then(|name| cx.fn_frozen_params.get(name).cloned());
     for (i, a) in args.iter().enumerate() {
-        let Some(name) = cx.frozen_ident(&a.value) else {
+        let Some(name) = cx.frozen_place_root(&a.value) else {
             walk_expr(&a.value, cx);
             continue;
         };
-        // A LABELLED argument is not matched positionally, and stage 1 does not
-        // reorder against the declaration — so it is not resolved, and falls
-        // through to the report. Conservative, not a hole.
         if cx.in_closure {
             cx.flag(name, &a.value.span, Reason::Captured);
+            walk_place_indices(&a.value, cx);
             continue;
         }
-        let permitted = a.label.is_none()
+        // A scalar read is a register copy: no handle exists to escape, so the
+        // slot's mode is irrelevant.
+        if cx.reads_as_scalar(&a.value) {
+            walk_place_indices(&a.value, cx);
+            continue;
+        }
+        let resolved = cx.place_type(&a.value).is_some();
+        // A LABELLED argument is not matched positionally, and this pass does
+        // not reorder against the declaration — so it is not resolved, and
+        // falls through to the report. Conservative, not a hole.
+        let permitted = resolved
+            && a.label.is_none()
             && !a.mut_marker
             && sig
                 .as_ref()
                 .is_some_and(|s| s.get(i).copied() == Some(true));
         if !permitted {
-            cx.flag(name, &a.value.span, Reason::NonFrozenArgument);
+            // An UNRESOLVABLE place is reported for what it is (a projection
+            // this pass could not follow) rather than as a slot-mode problem,
+            // which would send the reader to fix the wrong declaration.
+            let reason = if resolved {
+                Reason::NonFrozenArgument
+            } else {
+                place_reason(&a.value)
+            };
+            cx.flag(name, &a.value.span, reason);
         }
+        walk_place_indices(&a.value, cx);
     }
 }
 
-fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a>) {
+fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
+    // ── Frozen places are judged here, before the shape dispatch ──
+    //
+    // A place rooted at a frozen parameter — the bare name or any chain of
+    // `.field` / `[i]` / `.0` off it — is consumed by this prologue and NOT
+    // recursed into, which is what makes the permitted forms permitted. In
+    // VALUE position the only permitted form is a read that resolves to a
+    // scalar; the two handle-carrying positions (a `frozen` argument slot, a
+    // builtin `len`/`is_empty` receiver) intercept before reaching here.
+    if let Some(root) = cx.frozen_place_root(e) {
+        if cx.in_closure {
+            cx.flag(root, &e.span, Reason::Captured);
+        } else if !cx.reads_as_scalar(e) {
+            let reason = place_reason(e);
+            cx.flag(root, &e.span, reason);
+        }
+        walk_place_indices(e, cx);
+        return;
+    }
+
     match &e.kind {
-        // ── The leaf that reports ───────────────────────────────
-        ExprKind::Identifier(name) => {
-            if let Some(tracked) = cx.frozen.get_key_value(name.as_str()).map(|(k, _)| *k) {
-                let reason = if cx.in_closure {
-                    Reason::Captured
-                } else {
-                    Reason::Materialized
-                };
-                cx.flag(tracked, &e.span, reason);
-            }
-        }
+        // Reached only for a NON-frozen identifier — a frozen one is consumed
+        // by the prologue above.
+        ExprKind::Identifier(_) => {}
 
-        // ── Permitted position 1: immutable scalar field read ───
-        ExprKind::FieldAccess { object, field } => {
-            match cx.frozen_ident(object) {
-                Some(name) => {
-                    // Judged here, so the object is NOT recursed into — that is
-                    // what makes this position permitted rather than reported.
-                    if cx.in_closure {
-                        cx.flag(name, &object.span, Reason::Captured);
-                    } else if !cx.frozen[name].contains(field) {
-                        cx.flag(
-                            name,
-                            &object.span,
-                            Reason::Projection {
-                                field: field.clone(),
-                            },
-                        );
-                    }
-                }
-                None => walk_expr(object, cx),
-            }
-        }
+        ExprKind::FieldAccess { object, .. } => walk_expr(object, cx),
 
-        // ── Permitted position 2: pass-through to a frozen slot ─
+        // ── Permitted position: pass-through to a frozen slot ───
         ExprKind::Call { callee, args } => {
             let name = match &callee.kind {
                 ExprKind::Identifier(n) => Some(n.as_str()),
@@ -445,8 +667,26 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a>) {
                 walk_call_args(None, args, cx);
             }
         }
-        ExprKind::MethodCall { object, args, .. } => {
-            walk_expr(object, cx);
+        // ── Permitted position: a read-only builtin container query ──
+        //
+        // `n.kids.len()`. Narrow on three axes at once — see the module header
+        // — so that no user body can receive the handle. Anything else falls
+        // through to `walk_expr`, where the receiver is judged as an ordinary
+        // frozen place and reported.
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            if !cx.in_closure
+                && cx.frozen_place_root(object).is_some()
+                && cx.permits_builtin_query(object, method)
+            {
+                walk_place_indices(object, cx);
+            } else {
+                walk_expr(object, cx);
+            }
             walk_call_args(None, args, cx);
         }
         ExprKind::TupleIndex { object, .. } => walk_expr(object, cx),

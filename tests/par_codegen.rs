@@ -333,6 +333,163 @@ fn main() {
         }
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 2** — the codegen fact the
+    /// projection-stickiness rule rests on, pinned in both directions.
+    ///
+    /// The ownership relaxation admits a place rooted at a `frozen` parameter
+    /// (`n.inner`, `n.kids[i]`, `n.a.b`) to be read as a scalar or passed
+    /// whole to another `frozen` slot, and refuses every form that BINDS one.
+    /// That boundary is not a taste call — it is where the measurement put it:
+    ///
+    /// | body, borrow-mode receiver, `outer`'s own frame | `rc_inc` | `rc_dec` |
+    /// |---|---|---|
+    /// | `readi(o.inner)` — projection into a frozen slot | 0 | 0 |
+    /// | `readi(o.kids[0])` — index projection | 0 | 0 |
+    /// | `o.kids.len()` | 0 | 0 |
+    /// | `let k = o.inner; k.v` — **bound to a local** | **2** | **3** |
+    ///
+    /// A projection is a deref; a binding materialises a counted handle, and
+    /// two branches racing that non-atomic refcount is B-2026-07-28-13's
+    /// SIGSEGV. This test asserts the zero AND the non-zero, so it fails if
+    /// codegen ever starts retaining across a projection (the relaxation would
+    /// silently stop being safe) and equally if the binding case quietly
+    /// stopped emitting traffic (the assertion would have gone vacuous).
+    ///
+    /// Counted PER FUNCTION, not over the whole module: `main` and the
+    /// per-type `__karac_*` drop helpers carry traffic of their own in every
+    /// variant, and a module-wide count cannot see the frame that matters.
+    /// That is the same frame-bounding mistake this entry already paid for
+    /// once, in the other direction.
+    #[test]
+    fn frozen_place_projection_emits_no_refcount_traffic() {
+        /// `(rc_inc, rc_dec)` inside one `define`, user functions only.
+        fn traffic_in(ir: &str, func: &str) -> (usize, usize) {
+            let mut inside = false;
+            let (mut inc, mut dec) = (0, 0);
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside {
+                    inc += line.matches("rc_inc").count();
+                    dec += line.matches("rc_dec").count();
+                }
+            }
+            (inc, dec)
+        }
+        let program = |body: &str| {
+            format!(
+                "shared struct Inner {{ v: i64 }}\n\
+                 shared struct Outer {{ a: i64, inner: Inner, kids: Vec[Inner] }}\n\
+                 fn readi(i: ref Inner) -> i64 {{ i.v }}\n\
+                 {body}\n\
+                 fn main() {{\n\
+                     let g = Outer {{ a: 1, inner: Inner {{ v: 7 }}, kids: [Inner {{ v: 9 }}] }};\n\
+                     println(f\"{{outer(g)}}\");\n\
+                 }}"
+            )
+        };
+        let admitted: &[(&str, &str)] = &[
+            (
+                "field projection into a frozen slot",
+                "fn outer(o: ref Outer) -> i64 { readi(o.inner) }",
+            ),
+            (
+                "index projection into a frozen slot",
+                "fn outer(o: ref Outer) -> i64 { readi(o.kids[0]) }",
+            ),
+            (
+                "len on a container reached through a place",
+                "fn outer(o: ref Outer) -> i64 { o.kids.len() }",
+            ),
+        ];
+        for (label, body) in admitted {
+            let got = traffic_in(&ir_for_analyzed(&program(body)), "outer");
+            assert_eq!(
+                got,
+                (0, 0),
+                "[{label}] a projection off a borrowed handle must emit NO \
+                 refcount traffic — that zero is the whole reason the stage-2 \
+                 ownership rule may admit it into a `par` branch"
+            );
+        }
+
+        // The negative control, and the reason the boundary is where it is: a
+        // BINDING is not a projection. If this ever reaches (0, 0) the
+        // assertions above stop discriminating and the ownership rule could be
+        // widened — but that is a decision to take deliberately, on a fresh
+        // measurement, not to inherit from a silently-passing test.
+        let bound = traffic_in(
+            &ir_for_analyzed(&program(
+                "fn outer(o: ref Outer) -> i64 { let k = o.inner; k.v }",
+            )),
+            "outer",
+        );
+        assert!(
+            bound.0 > 0 && bound.1 > 0,
+            "binding a projection to a local must STILL emit refcount traffic \
+             — that is why `let k = n.inner` is refused while `f(n.inner)` is \
+             admitted; got inc={} dec={}",
+            bound.0,
+            bound.1
+        );
+    }
+
+    /// B-2026-08-01-33 mechanism 3, **stage 2** — the motivating shape, end to
+    /// end: a RECURSIVE traversal of a `shared` graph, run from two `par`
+    /// branches over one shared root.
+    ///
+    /// Stage 1 refused this program outright — `n.kids.len()` and `n.kids[i]`
+    /// were both "cannot be projected through `.kids`", so no traversal could
+    /// be written at all. It now compiles and computes `(1+2+3+4) * 2 = 20`.
+    ///
+    /// Asserted as a COMPUTED VALUE rather than as IR, deliberately: this
+    /// family already shipped a miscompile (B-2026-08-05-10) that a traffic
+    /// count could not see, where a borrowed capture read zero and the program
+    /// just printed a wrong answer. The IR fact is pinned by its own test
+    /// above; this one pins that the program is right.
+    #[test]
+    fn frozen_recursive_traversal_computes_correctly_across_par_branches() {
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, kids: Vec[Node] }
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val;
+    let mut i: i64 = 0;
+    while i < n.kids.len() {
+        s = s + sum(n.kids[i]);
+        i = i + 1;
+    }
+    s
+}
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = sum(root);
+        let b = sum(root);
+        (a, b)
+    };
+    a + b
+}
+fn main() {
+    let l1 = Node { val: 3, kids: [] };
+    let l2 = Node { val: 4, kids: [] };
+    let mid = Node { val: 2, kids: [l1, l2] };
+    let root = Node { val: 1, kids: [mid] };
+    println(driver(root));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "20",
+                "two branches recursively traversing one `frozen` graph must \
+                 each total 1+2+3+4"
+            );
+        }
+    }
+
     /// B-2026-08-01-33 mechanism 3, stage 1 — RC SUPPRESSION, and the
     /// measurement that made it a ten-line change instead of a new pass.
     ///
