@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 49 | 2 |
 | diagnostics | 40 | 0 |
 | crash | 39 | 0 |
-| soundness | 37 | 0 |
+| soundness | 38 | 1 |
 | other | 17 | 1 |
 | use-after-free | 12 | 0 |
 
@@ -112,8 +112,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 680 | 4 |
 | interp | 124 | 0 |
-| typecheck | 121 | 0 |
-| ownership | 39 | 1 |
+| typecheck | 122 | 1 |
+| ownership | 40 | 2 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
 | other | 27 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced · 6 open · 933 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **948 surfaced · 7 open · 933 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-33 | 2026-08-05 | codegen | high | LAW, not one fixture: a by-value aggregate param that is CALLER-RETAINS is owned by nobody and leaks once per call on a DEFAULT -O2 build. Three predicates reach it -- generic-erased field (2400 B/40), Map-bearing field (26400 B/160), and direct `shared` field (B-2026-08-05-32, which is therefore a special case of this row, not its own bug) | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT and now re-scoped by direct arm64 measurement: the 1.18x seq-lane median does not survive audit -- 3 katas compare CHANGED workloads (and are the 3 biggest movers), the 'current' side is a rolling accumulation (28/33 last measured 2026-07-28, not 08-05), and on 10 of 32 workload-stable katas the C/Rust mirrors moved 1.2x-1.7x alongside Kara, so 'mirrors are flat' holds only in the median. Matched-pair measurement at this row's own endpoints on arm64 finds a REAL but much smaller regression: 1.11x-1.12x on #8 atoi and #9 palindrome, while #11 is FLAT, #1665 is 4.4x FASTER (join claimed 2.43x slower), and mirrors-moved control #71 is FLAT | kara-katas bench-baseline.json vs bench-results.json -- BUT the join is unsafe as written: it never checks the sink/workload and the 'current' side is not a snapshot. Real bisectable signal is #8 atoi / #9 palindrome at 1.11x-1.12x on arm64 (218dd7d7 -> 688865b4, matched pairs, both orders, sinks verified). Blocked on: baseline absolutes do not reproduce at 218dd7d7 (see detail). No instruction-count instrument exists on the M5 host -- wall-time is adequate for this effect size. |
+| B-2026-08-05-37 | 2026-08-05 | typecheck+ownership | medium | a `mut ref` ARGUMENT rooted at a `shared struct` field is accepted and its write is SILENTLY DISCARDED — the same write spelled as an assignment is correctly rejected, and the plain-struct spelling is correctly rejected, so this is a gate that two of its three spellings already close | — |
 
 ### Fixed (933)
 

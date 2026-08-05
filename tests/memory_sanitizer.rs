@@ -13982,6 +13982,80 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 mechanism 3, stage 2 — a RECURSIVE traversal of a
+    /// `shared` graph through a NON-COUNTING (`frozen`) handle, run from two
+    /// `par` branches over one shared root.
+    ///
+    /// This is the surface the stage-2 relaxation opened, and it is the one
+    /// worth an ASAN/LSan gate: the branches walk the same 255-node tree
+    /// concurrently while codegen emits NO retain/release for any place
+    /// projected off the frozen root. That is the point — a projection is a
+    /// deref, so there is no refcount for two branches to race — but it also
+    /// means nothing is counting, so a hole in the escape check would show up
+    /// here as a use-after-free rather than as a wrong answer.
+    ///
+    /// NOT VACUOUS, and deliberately so (B-2026-08-04-17): the seed is
+    /// `env.args().len()` (opaque, 1 under both the harness and a bare run),
+    /// every node's tag is an f-string built from it at runtime, and `main`
+    /// reads those bytes back with `contains` after the traversal. So the ~510
+    /// heap blocks the tree costs are real allocations the optimizer cannot
+    /// fold away, and the floor below pins that.
+    ///
+    /// Expected output is computed independently rather than read off a run:
+    /// 255 nodes x (val 1 + tag length 19) = 5100 per traversal, x2 branches
+    /// = 10200, +1 for the `contains` check = 10201.
+    #[test]
+    fn asan_frozen_recursive_traversal_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { tag: String, val: i64, kids: Vec[Node] }
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 {
+        return Node { tag: f"leaf-{seed}-runtime-heap", val: seed, kids: [] };
+    }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { tag: f"node-{seed}-runtime-heap", val: seed, kids: [a, b] };
+}
+
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val + n.tag.len();
+    let mut i: i64 = 0;
+    while i < n.kids.len() {
+        s = s + sum(n.kids[i]);
+        i = i + 1;
+    }
+    return s;
+}
+
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = sum(root);
+        let b = sum(root);
+        (a, b)
+    };
+    return a + b;
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(7, seed);
+    let total = driver(root);
+    let mut w: i64 = 0;
+    if root.tag.contains("runtime-heap") { w = 1; }
+    println(total + w);
+}
+"#,
+            &["10201"],
+            "frozen_recursive_traversal_across_par_branches_no_leak",
+            // 255 nodes, each costing a tag String plus (for the 127 internal
+            // ones) a kids buffer. The floor sits far above the 3 of a
+            // folded-away run while leaving room for allocator variation.
+            200,
+        );
+    }
+
     /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
     /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
     /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec
