@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 97 | 1 |
 | codegen-gap | 90 | 0 |
 | run-vs-build | 81 | 0 |
-| missing-feature | 78 | 2 |
+| missing-feature | 78 | 1 |
 | false-positive | 56 | 0 |
 | perf | 49 | 2 |
 | diagnostics | 40 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 679 | 3 |
 | interp | 124 | 0 |
-| typecheck | 121 | 1 |
+| typecheck | 121 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | other | 28 | 3 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced · 8 open · 931 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced · 7 open · 932 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,14 +134,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **947 surfaced 
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT) |
 | B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED ARM64-ONLY perf regression: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; REPRODUCED 2026-08-05 on the M5 Pro with matched karac+archive pairs at b7ba6ea4 vs main (1.26x-1.28x slower, order-independent, lean and full archives agreeing) while the SAME two commits run 1.15x FASTER on x86_64 Linux; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 CODEGEN by byte-identical binaries (runtime after 07-30 is NOT ruled out) | none yet — arm64 reproduction CONFIRMED 2026-08-05 (1.26x–1.28x, matched pairs, both orders); next step is a matched-pair bisect ON ARM64, starting with the 24 runtime/ commits in b7ba6ea4..882d8d73 |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
-| B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
 | B-2026-08-05-33 | 2026-08-05 | codegen | high | LAW, not one fixture: a by-value aggregate param that is CALLER-RETAINS is owned by nobody and leaks once per call on a DEFAULT -O2 build. Three predicates reach it -- generic-erased field (2400 B/40), Map-bearing field (26400 B/160), and direct `shared` field (B-2026-08-05-32, which is therefore a special case of this row, not its own bug) | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION (corpus-wide, UNATTRIBUTED): Kāra's sequential lane is ~1.18x slower than the 2026-06-06 baseline across 36 katas while clang/rustc/go are flat — so it is a karac regression, not host or toolchain drift. | kara-katas bench-baseline.json (2026-06-06) vs bench-results.json; reproduce with the (id,approach,lane,lang) join described in detail |
 | B-2026-08-05-35 | 2026-08-05 | other | medium | the ASAN harness SKIPS on a CODEGEN failure ('setup failed -- skipping'), so a memory_sanitizer test written for a shape that does not yet compile reports ok rather than red -- the same vacuous-green class as B-2026-08-04-17, and it makes a leak regression test unprovable against the compiler it was written for | the ASAN harness helper behind assert_clean_asan_run_min_allocs — its setup-failure path |
 
-### Fixed (931)
+### Fixed (932)
 
-<details><summary>931 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>932 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1091,6 +1090,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-22 | codegen | high | A fresh-temp aggregate ARGUMENT whose heap lives only behind `Option` fields registered no caller-side cleanup and leaked one payload per call -- 749… | this commit |
 | B-2026-08-05-23 | other | medium | the JIT/selfhost oracles report a module that NEVER RAN as an output mismatch: run_ir discarded karac_jit_runner's stderr, so an unresolved external… | 9e25bfaa |
 | B-2026-08-05-24 | cli | medium | `main` is RED: tests/cli.rs::wasm_browser_rich_exports_marshal_e2e fails a typecheck since 80d7a37c (B-2026-08-05-19, generic args invariant across n… | 8d6d1b92 |
+| B-2026-08-05-25 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejecte… | 895ea26 |
 | B-2026-08-05-26 | typecheck | medium | tensor arithmetic infers an f64 element for an f32 operand pair: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]` and `k: f32` types… | a64e931 |
 | B-2026-08-05-27 | codegen | high | The surface-concat RECEIVER gap is only closed for the len-family: `("p:".to_string() + s).starts_with(..)` still leaks the concat on a DEFAULT -O2 b… | this commit |
 | B-2026-08-05-28 | codegen | medium | a String-to-String xform does not compile when its RESULT is itself a method RECEIVER — `("p:".to_string() + s).to_uppercase().len()` fails with "no… | 7f067c28 |
