@@ -150,6 +150,55 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The CONTEXTUAL type a scalar-numeric collection literal should adopt from
+    /// its expected type (`let v: Vec[u16] = [1, 2, 3]` -> `Vec[u16]`), or
+    /// `None` when the expression is not such a literal or the context does not
+    /// name a scalar element.
+    ///
+    /// Factored out of the post-`check_assignable` re-record block so the same
+    /// decision can be made BEFORE the assignability check. That block's comment
+    /// asserted "acceptance semantics are unchanged — `check_assignable` above
+    /// already ruled", which held only while the check was permissive about
+    /// numeric generic arguments. B-2026-08-05-19 makes two concrete numeric
+    /// generic args invariant, so an unsuffixed literal defaulting to `i64` now
+    /// has to adopt `u16` before acceptance is judged, not after. B-2026-08-05-19.
+    fn contextual_scalar_collection_type(expr: &Expr, expected: &Type) -> Option<Type> {
+        if !matches!(
+            &expr.kind,
+            ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. }
+                | ExprKind::RepeatLiteral { .. }
+        ) {
+            return None;
+        }
+        fn is_scalar_numeric(t: &Type) -> bool {
+            matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+        }
+        let ctx = match expected {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        match ctx {
+            Type::Named { name, args }
+                if (name == "Vec" || name == "VecDeque")
+                    && args.len() == 1
+                    && is_scalar_numeric(&args[0]) =>
+            {
+                Some(ctx.clone())
+            }
+            Type::Slice { element, .. } if is_scalar_numeric(element) => Some(Type::Named {
+                name: "Vec".to_string(),
+                args: vec![(**element).clone()],
+            }),
+            // `Array[T, N]`: the dedicated check-mode arm further up only
+            // recognises an `ArrayLiteral`, so a PREFIX literal
+            // (`first(Array[10, 20, 30])` against `Array[i32, 3]`) reached the
+            // assignability check still typed `Array[i64, 3]`.
+            Type::Array { element, .. } if is_scalar_numeric(element) => Some(ctx.clone()),
+            _ => None,
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         // B-2026-07-02-7: an UNSUFFIXED integer literal (bare or negated) at
         // a narrow-int-typed position must fit that type's range — `let x:
@@ -315,8 +364,24 @@ impl<'a> super::TypeChecker<'a> {
                                         if segments.len() == 2 && segments[1] == "new"
                                 )
                     );
+                    // B-2026-08-05-19 — also push the slot for an UNSUFFIXED
+                    // INTEGER LITERAL payload. `let o: Option[u16] = Some(3)`
+                    // used to be accepted only because generic arguments were
+                    // permissive about numeric width: the literal inferred `i64`
+                    // and `Option[i64]` was let through against `Option[u16]`.
+                    // With that hole closed the literal has to actually adopt
+                    // `u16`, which is what pushing the slot does.
+                    //
+                    // A literal is the safe extension precisely where the
+                    // comment above says a blanket push is not: the warned case
+                    // is `Some(i)` with `i: i64` into an `Option[u64]`, an
+                    // IDENTIFIER, which stays in synthesis mode here. Range
+                    // checking still applies through the normal literal path, so
+                    // `Some(300)` into `Option[u8]` is still caught.
+                    let payload_is_unsuffixed_int =
+                        Self::unsuffixed_int_literal_value(&args[0].value).is_some();
                     if let Some(slot) = payload_slot {
-                        if payload_is_inferred_ctor {
+                        if payload_is_inferred_ctor || payload_is_unsuffixed_int {
                             self.check_expr(&args[0].value, &slot);
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
@@ -912,6 +977,18 @@ impl<'a> super::TypeChecker<'a> {
         // but unsound for variables, whose value is unknown at compile time.
         // This is the variable half of B-2026-07-09-7; the literal half is
         // the two `*_int_literal_value` blocks at the top of check_expr.
+        // B-2026-08-05-19: a scalar-numeric collection literal adopts its
+        // contextual element type HERE, before acceptance is judged. Unsuffixed
+        // integer literals infer as `i64`, so `let v: Vec[u16] = [1, 2, 3]`
+        // otherwise reads as `Vec[i64]` vs `Vec[u16]` — which the new
+        // generic-argument invariance correctly rejects. Adopting first means
+        // the check compares `Vec[u16]` with `Vec[u16]`; the block further down
+        // still re-records and still range-checks each element, so a genuinely
+        // out-of-range literal (`let v: Vec[i8] = [200]`) is unaffected.
+        let actual = match Self::contextual_scalar_collection_type(expr, expected) {
+            Some(t) if actual != Type::Error => t,
+            _ => actual,
+        };
         self.check_int_widening_coercion(expr, expected, &actual);
         self.check_assignable(expected, &actual, expr.span.clone());
         // B-2026-07-02-6: a collection literal admitted against a

@@ -34898,6 +34898,73 @@ fn enum_payload_receives_the_expected_type() {
 /// check-mode-coerces and trips the i64 -> u64 narrowing diagnostic, where
 /// synthesis mode accepted it. `book_snippets_compile` caught that on ch08's
 /// `find[T]`, and this pins the behaviour so the scope cannot quietly widen.
+/// B-2026-08-05-19 — generic arguments are INVARIANT across numeric LAYOUTS.
+/// `Vec[i64]` where `Vec[u16]` is declared used to typecheck clean and then
+/// miscompile: AOT read the 8-byte-element buffer as 2-byte elements
+/// (`sum_u16` returned 1 instead of 10), while the interpreter — which boxes
+/// values — was accidentally right, so the test path said yes and the shipped
+/// path was wrong. The reverse direction read 4x past the allocation.
+#[test]
+fn generic_numeric_arg_width_mismatch_rejected() {
+    assert!(!typecheck_errors(
+        "fn sum_u16(v: ref Vec[u16]) -> i64 { v.len() }\n\
+         fn main() { let x: Vec[i64] = [1, 2]; println(sum_u16(x)); }"
+    )
+    .is_empty());
+    // Reverse direction, and the float twin (same width, different
+    // representation — `Vec[i64]` into `ref Vec[f64]` printed 5e-324).
+    assert!(!typecheck_errors(
+        "fn f(v: ref Vec[i64]) -> i64 { v.len() }\n\
+         fn main() { let x: Vec[u16] = [1, 2]; println(f(x)); }"
+    )
+    .is_empty());
+    assert!(!typecheck_errors(
+        "fn f(v: ref Vec[f64]) -> i64 { v.len() }\n\
+         fn main() { let x: Vec[i64] = [1, 2]; println(f(x)); }"
+    )
+    .is_empty());
+    // Nested, and the Option payload.
+    assert!(!typecheck_errors(
+        "fn f(v: ref Vec[Vec[u16]]) -> i64 { v.len() }\n\
+         fn main() { let x: Vec[Vec[i64]] = [[1], [2]]; println(f(x)); }"
+    )
+    .is_empty());
+    assert!(!typecheck_errors(
+        "fn f(v: ref Option[u16]) -> i64 { 1 }\n\
+         fn main() { let x: Option[i64] = Some(1); println(f(x)); }"
+    )
+    .is_empty());
+}
+
+/// The other half of B-2026-08-05-19: SIGNEDNESS is not a layout difference,
+/// and unsuffixed literals must still adopt their context. Narrowing the rule
+/// to "any two differing numeric types" broke all of these.
+#[test]
+fn generic_numeric_arg_same_layout_and_literals_still_accepted() {
+    // i64 -> u64: same eight bytes, only the interpretation differs. This is
+    // the ordinary integer coercion the language allows, and `return Some(i)`
+    // with `i: i64` into an `Option[u64]` is a tested shape.
+    typecheck_ok(
+        "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
+             for i in 0..items.len() { if items[i] == target { return Some(i); } } \
+             None \
+         }",
+    );
+    // Unsuffixed literals adopt the annotated element type.
+    typecheck_ok("fn main() { let a: Vec[u16] = [1, 2, 3]; println(a.len()); }");
+    typecheck_ok("fn main() { let a: Vec[i32] = [4, 5]; println(a.len()); }");
+    typecheck_ok("fn main() { let a: Vec[f64] = [1.0, 2.5]; println(a.len()); }");
+    typecheck_ok("fn main() { let o: Option[u16] = Some(3); println(o.is_some()); }");
+    typecheck_ok(
+        "fn first(a: Array[i32, 3]) -> i32 { a[0] }\n\
+         fn main() { let _x = first(Array[10, 20, 30]); }",
+    );
+    // Range checking is unaffected by the literal adoption.
+    assert!(
+        !typecheck_errors("fn main() { let v: Vec[i8] = [200]; println(v.len()); }").is_empty()
+    );
+}
+
 #[test]
 fn enum_payload_push_does_not_change_integer_coercion() {
     typecheck_ok(

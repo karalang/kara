@@ -27,7 +27,7 @@ fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[i64] {
 }
 
 fn main() {
-    let nums = [1, 3, 5, 7, 9, 11, 13];
+    let nums: Vec[i32] = [1, 3, 5, 7, 9, 11, 13];
     match binary_search(nums, 7) {
         Some(i) => println(f"found at index {i}"),
         None => println("not found"),

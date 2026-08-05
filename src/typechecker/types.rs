@@ -1201,6 +1201,84 @@ pub(super) fn projection_unresolvable_with(a: &Type, b: &Type) -> bool {
     }
 }
 
+/// Generic containers whose ARGUMENT decides the physical layout of a buffer or
+/// payload the callee will index or reinterpret. These are the shapes where a
+/// numeric-width mismatch is a miscompile rather than a coercion, so their
+/// arguments are held invariant across numeric layouts. B-2026-08-05-19.
+fn layout_bearing_generic(name: &str) -> bool {
+    matches!(
+        name,
+        "Vec" | "VecDeque" | "Option" | "Result" | "Map" | "HashMap" | "Set" | "HashSet"
+    )
+}
+
+/// [`generic_arg_compatible`] without the numeric-layout invariance — the
+/// pre-B-2026-08-05-19 behaviour, kept for user generics pending expected-type
+/// seeding of generic calls.
+fn generic_arg_compatible_permissive_numeric(
+    variance: crate::ast::Variance,
+    a: &Type,
+    b: &Type,
+) -> bool {
+    match variance {
+        crate::ast::Variance::Covariant => types_compatible(a, b),
+        crate::ast::Variance::Contravariant => types_compatible(b, a),
+        crate::ast::Variance::Invariant => types_compatible(a, b) && types_compatible(b, a),
+    }
+}
+
+/// The physical storage identity of a numeric type: `(is_float, bit width)`.
+/// `None` for anything non-numeric.
+///
+/// Signedness is deliberately NOT part of the key. `i64` and `u64` occupy the
+/// same eight bytes and a container of one can be read as a container of the
+/// other without reinterpreting the buffer — only the value's interpretation
+/// changes, which is the ordinary integer coercion the language already allows
+/// at scalar positions (`fn find[T](..) -> Option[u64] { .. return Some(i); }`
+/// with `i: i64` is an accepted, tested shape). What must be invariant is the
+/// LAYOUT: `Vec[i64]` vs `Vec[u16]` differ in stride, and `Vec[i64]` vs
+/// `Vec[f64]` share a width but not a representation, so both reinterpret the
+/// buffer. B-2026-08-05-19.
+fn numeric_layout_key(t: &Type) -> Option<(bool, u16)> {
+    match t {
+        Type::Int(s) => Some((
+            false,
+            match s {
+                IntSize::I8 => 8,
+                IntSize::I16 => 16,
+                IntSize::I32 => 32,
+                IntSize::I64 => 64,
+                IntSize::I128 => 128,
+            },
+        )),
+        Type::UInt(s) => Some((
+            false,
+            match s {
+                UIntSize::U8 => 8,
+                UIntSize::U16 => 16,
+                UIntSize::U32 => 32,
+                UIntSize::U64 => 64,
+                UIntSize::U128 => 128,
+                // Pointer-width; treated as its own key so `Vec[usize]` is not
+                // silently interchangeable with `Vec[u64]` on a 64-bit target
+                // (they are the same width there, but the equivalence is
+                // target-dependent and this table is not).
+                UIntSize::Usize => 1,
+            },
+        )),
+        Type::Float(s) => Some((
+            true,
+            match s {
+                FloatSize::F16 => 16,
+                FloatSize::BF16 => 17, // distinct key: same width as f16, different layout
+                FloatSize::F32 => 32,
+                FloatSize::F64 => 64,
+            },
+        )),
+        _ => None,
+    }
+}
+
 /// Generic-argument compatibility under a slot's declared variance
 /// (design.md § Variance > per-type variance). The invariant form is
 /// *mutual* compatibility rather than structural equality so the
@@ -1209,6 +1287,27 @@ pub(super) fn projection_unresolvable_with(a: &Type, b: &Type) -> bool {
 /// inference, while one-directional widenings (refined→base) are
 /// rejected.
 fn generic_arg_compatible(variance: crate::ast::Variance, a: &Type, b: &Type) -> bool {
+    // B-2026-08-05-19 — two CONCRETE numeric arguments are INVARIANT, whatever
+    // the slot's declared variance says. `types_compatible` deliberately treats
+    // any int/uint/float pair as compatible, which is the right rule for a
+    // VALUE flowing into a slot (an `i64` into an `f64` parameter). In generic
+    // ARGUMENT position it is unsound: `Vec[i64]` and `Vec[u16]` have different
+    // physical layouts, so accepting one for the other hands the callee a
+    // buffer it reinterprets — `sum_u16(x)` over a `Vec[i64]` read the four
+    // little-endian u16 lanes of the first element and returned 1 instead of
+    // 10, with `karac check` reporting no diagnostic at all. The reverse
+    // direction (`Vec[u16]` into `ref Vec[i64]`) reads 4x PAST the allocation.
+    //
+    // Sited here rather than in `types_compatible` so the value-level rule is
+    // untouched, and above the variance match so a covariant slot cannot let it
+    // through either. Uninstantiated type parameters are NOT numeric, so the
+    // permissive `TypeParam` arm this function relies on for generic library
+    // code (`fn last[T](v: Vec[T]) -> Option[T]`) keeps working unchanged.
+    if let (Some(ka), Some(kb)) = (numeric_layout_key(a), numeric_layout_key(b)) {
+        if ka != kb {
+            return false;
+        }
+    }
     match variance {
         crate::ast::Variance::Covariant => types_compatible(a, b),
         crate::ast::Variance::Contravariant => types_compatible(b, a),
@@ -1391,7 +1490,22 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                         let slot = variances
                             .and_then(|v| v.get(i).copied())
                             .unwrap_or(crate::ast::Variance::Invariant);
-                        generic_arg_compatible(slot, a, b)
+                        if layout_bearing_generic(a_name) {
+                            generic_arg_compatible(slot, a, b)
+                        } else {
+                            // A USER generic (`Box[T]`, `Holder[T]`) keeps the
+                            // pre-existing permissive numeric behaviour for now.
+                            // Enforcing invariance here is correct in principle —
+                            // `Box[i32]` and `Box[i64]` do differ in layout — but
+                            // it rejects `let b: Box[i32] = Box.new(5)`, where the
+                            // literal `5` seeds `T = i64` through generic
+                            // inference and never sees the annotation. Fixing that
+                            // needs expected-type SEEDING of a generic call's type
+                            // params, which is a separate change; until then the
+                            // narrower rule closes the reported hole without
+                            // breaking working code. B-2026-08-05-19.
+                            generic_arg_compatible_permissive_numeric(slot, a, b)
+                        }
                     })
         }
         // `ref T` target is covariant; `mut ref T` is invariant in `T`
