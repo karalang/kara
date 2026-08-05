@@ -3,6 +3,7 @@
 Kāra is a systems programming language for the age of AI-written code. Declare intent; the compiler handles what LLMs get wrong — memory layout, ownership, concurrency — and emits every decision as structured output agents can consume.
 
 Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github.com/karalang/kara/discussions/new/choose) — all input welcome.
+Want to send a patch? [CONTRIBUTING.md](CONTRIBUTING.md) covers the build, the gates, and the invariants worth knowing first.
 
 ---
 
@@ -485,5 +486,7 @@ Licensed under either of
 at your option.
 
 ### Contribution
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test, and submit changes.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
