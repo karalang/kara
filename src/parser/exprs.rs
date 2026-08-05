@@ -2030,11 +2030,18 @@ impl super::Parser {
             // The keyword `ref` is never legal in argument position; the
             // parameter's mode is declared on the callee's signature.
             if self.check(&Token::Ref) {
+                let ref_span = self.current_span();
                 self.error(
                     "`ref` is not written at call sites. \
                      The parameter's mode is declared on the callee's signature. \
                      Remove the `ref` keyword.",
                 );
+                // B-2026-08-05-12 — attach the machine-applicable edit. The
+                // prose already prescribes an unambiguous single-token
+                // deletion, so leaving `replacement` empty made `karac fix`
+                // skip the one diagnostic whose fix is least ambiguous, in the
+                // same run where it applied `&&` -> `and` automatically.
+                self.record_call_site_mode_deletion(self.pos, &ref_span);
                 self.advance(); // consume `ref` and parse the rest of the arg
             }
 
@@ -2047,11 +2054,17 @@ impl super::Parser {
                 if self.pos + 1 < self.tokens.len()
                     && matches!(self.tokens[self.pos + 1].token, Token::Ref)
                 {
+                    let mut_span = self.current_span();
                     self.error(
                         "`mut ref` is not written at call sites. \
                          Use `mut <expr>` instead — the `ref` is implied by \
                          the callee's signature.",
                     );
+                    // B-2026-08-05-12, sibling case the row asked to check:
+                    // it had the same gap. Here `mut` STAYS and only `ref`
+                    // goes, so the edit targets the `ref` token at `pos + 1`
+                    // while the diagnostic is anchored at `mut`.
+                    self.record_call_site_mode_deletion(self.pos + 1, &mut_span);
                     self.advance(); // consume `mut`
                     self.advance(); // consume `ref`
                     true

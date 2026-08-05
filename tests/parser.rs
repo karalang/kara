@@ -12827,3 +12827,80 @@ fn declaration_modifiers_round_trip_through_the_formatter() {
         "`karac fmt` must be a fixpoint on declaration modifiers"
     );
 }
+
+/// B-2026-08-05-12 — the call-site `ref` diagnostic must carry a
+/// machine-applicable edit, not just prose telling the author what to type.
+///
+/// The message was already correct and specific ("Remove the `ref` keyword"),
+/// which is exactly what made the gap worth closing: `karac fix` is the wedge,
+/// and this was the one diagnostic in a run whose fix is least ambiguous — a
+/// single-token deletion — being skipped while `&&` -> `and` in the same file
+/// was applied automatically. It is also a Rust habit, so an author hits it in
+/// their first file, before internalising that parameter modes live on the
+/// signature.
+///
+/// The edit spans `ref` PLUS the following whitespace. Deleting the token span
+/// alone leaves `f( data)` — valid, but fix output that needs a formatting pass
+/// afterwards is a fix people stop trusting.
+#[test]
+fn call_site_ref_carries_a_machine_applicable_deletion() {
+    let src = "fn u32_at(data: ref Vec[u8], off: i64) -> i64 { return data[off]; }\n\
+               fn main() {\n\
+               let data: Vec[u8] = Vec.filled(8, 1u8);\n\
+               let a = u32_at(ref data, 0);\n\
+               println(a);\n\
+               }";
+    let result = karac::parse(src);
+    assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
+    assert!(
+        result.errors[0]
+            .message
+            .contains("not written at call sites"),
+        "unexpected message: {}",
+        result.errors[0].message
+    );
+    assert_eq!(
+        result.fix_edits.len(),
+        1,
+        "the diagnostic must ship an edit; without one `karac fix` skips it"
+    );
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.replacement, "", "the fix is a deletion");
+    assert_eq!(
+        &src[edit.offset..edit.offset + edit.length],
+        "ref ",
+        "the edit must cover the keyword AND its trailing space, so the result \
+         is `u32_at(data, 0)` and not `u32_at( data, 0)`"
+    );
+}
+
+/// The sibling the ledger row asked to check, which had the same gap.
+///
+/// `mut ref x` at a call site keeps the `mut` and drops only the `ref`, so the
+/// edit targets a different token than the one the diagnostic is anchored at —
+/// the message points at `mut`, the deletion removes `ref`.
+#[test]
+fn call_site_mut_ref_deletes_only_the_ref() {
+    let src = "fn bump(v: mut ref Vec[i64]) { v[0] = v[0] + 1; }\n\
+               fn main() {\n\
+               let mut data: Vec[i64] = Vec.filled(4, 0);\n\
+               bump(mut ref data);\n\
+               }";
+    let result = karac::parse(src);
+    assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
+    assert!(
+        result.errors[0]
+            .message
+            .contains("`mut ref` is not written"),
+        "unexpected message: {}",
+        result.errors[0].message
+    );
+    assert_eq!(result.fix_edits.len(), 1);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.replacement, "");
+    assert_eq!(
+        &src[edit.offset..edit.offset + edit.length],
+        "ref ",
+        "only the `ref` goes — `mut` is a legal call-site marker and must survive"
+    );
+}

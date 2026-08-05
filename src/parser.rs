@@ -550,6 +550,40 @@ impl Parser {
         }
     }
 
+    /// Record the machine-applicable deletion for a call-site mode keyword
+    /// (`ref` at an argument, or the `ref` inside `mut ref`) — B-2026-08-05-12.
+    ///
+    /// `token_idx` is the token to delete; `diag_span` anchors the edit to the
+    /// diagnostic that reported it, which for `mut ref` is the `mut` token
+    /// rather than the token being removed.
+    ///
+    /// Deletes the keyword AND the whitespace up to the next token, not just
+    /// the keyword's own span. Deleting the span alone turns `f(ref x)` into
+    /// `f( x)` — still valid, but `karac fix` output that needs a formatting
+    /// pass afterwards is a fix people stop trusting. When there is no next
+    /// token (malformed tail), fall back to the keyword span so the edit is
+    /// still well-formed rather than skipped.
+    fn record_call_site_mode_deletion(&mut self, token_idx: usize, diag_span: &Span) {
+        let Some(tok) = self.tokens.get(token_idx) else {
+            return;
+        };
+        let start = tok.span.offset;
+        let end = self
+            .tokens
+            .get(token_idx + 1)
+            .map(|next| next.span.offset)
+            .filter(|next_off| *next_off > start)
+            .unwrap_or(tok.span.offset + tok.span.length);
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(diag_span),
+            crate::resolver::TextEdit {
+                offset: start,
+                length: end - start,
+                replacement: String::new(),
+            },
+        );
+    }
+
     fn current_span(&self) -> Span {
         if self.pos < self.tokens.len() {
             self.tokens[self.pos].span.clone()
