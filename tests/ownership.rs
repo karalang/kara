@@ -9744,3 +9744,150 @@ fn mut_bearing_shared_struct_conflict_keeps_the_full_migration_advice() {
         "a mut-bearing type still needs the structural migration; got: {sugg}"
     );
 }
+
+// ── `frozen` parameter escape (B-2026-08-01-33 mechanism 3, stage 1) ──
+
+/// The two shapes stage 1 permits, and only those. A `frozen` handle is
+/// non-counting, so the escape rule is what every later part of the feature
+/// (`par` admission, RC suppression) stands on — it lands first, and while the
+/// mode is otherwise inert, precisely so admission has something to rely on.
+#[test]
+fn frozen_param_permits_scalar_read_and_frozen_passthrough() {
+    // Immutable scalar field read: lowers to a deref, yields a register copy,
+    // no handle leaves.
+    ownership_ok(
+        "shared struct N { val: i64 }\n\
+         fn read(n: frozen N) -> i64 { n.val }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+    // Whole-handle pass-through to another `frozen` slot — the property that
+    // makes a callee-side traversal (#133) reachable at all.
+    ownership_ok(
+        "shared struct N { val: i64 }\n\
+         fn inner(m: frozen N) -> i64 { m.val }\n\
+         fn outer(n: frozen N) -> i64 { inner(n) }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+    // A self-recursive call is pass-through to a frozen slot like any other.
+    ownership_ok(
+        "shared struct N { val: i64 }\n\
+         fn walk(n: frozen N) -> i64 { walk(n) }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+    // Impl methods go through the same per-function driver.
+    ownership_ok(
+        "shared struct N { val: i64 }\n\
+         struct H { v: i64 }\n\
+         impl H { fn read(ref self, n: frozen N) -> i64 { n.val } }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+    // A `par` branch is NOT a closure for this rule: branches join before the
+    // function returns, and admitting exactly this sharing is the point of the
+    // feature.
+    ownership_ok(
+        "shared struct N { val: i64 }\n\
+         fn split(n: frozen N) -> i64 { par { let a = n.val; } 0 }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+}
+
+/// Every other position is reported. The list is deliberately long: the module
+/// is a WHITELIST precisely so that a position nobody enumerated still fails,
+/// and these pin the ones that were enumerated. Each case asserts the specific
+/// diagnostic wording, so a rule that silently changes category is caught too.
+#[test]
+fn frozen_param_escape_is_reported_in_every_other_position() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("returned", "fn f(n: frozen N) -> N { n }", "escapes here"),
+        (
+            "bound to a local",
+            "fn f(n: frozen N) -> i64 { let m = n; m.val }",
+            "escapes here",
+        ),
+        (
+            "stored in a struct literal",
+            "struct H { h: N }\nfn f(n: frozen N) -> H { H { h: n } }",
+            "escapes here",
+        ),
+        (
+            "stored in a tuple",
+            "fn f(n: frozen N) -> (N, i64) { (n, 1) }",
+            "escapes here",
+        ),
+        (
+            "method receiver",
+            "fn f(n: frozen N) -> i64 { n.len() }",
+            "escapes here",
+        ),
+        (
+            "match scrutinee",
+            "fn f(n: frozen N) -> i64 { match n { _ => 1 } }",
+            "escapes here",
+        ),
+        (
+            "captured by a defer block",
+            "fn f(n: frozen N) -> i64 { defer { let z = n; } 0 }",
+            "escapes here",
+        ),
+        (
+            "projected through a `mut` field",
+            "fn f(n: frozen M) -> i64 { n.count }",
+            "cannot be projected through `.count`",
+        ),
+        (
+            "projected through a non-scalar field",
+            "fn f(n: frozen P) -> Vec[i64] { n.items }",
+            "cannot be projected through `.items`",
+        ),
+        (
+            "passed to a non-`frozen` slot",
+            "fn takes(x: N) -> i64 { x.val }\nfn f(n: frozen N) -> i64 { takes(n) }",
+            "passed to a non-`frozen` slot",
+        ),
+        // The two closure cases are the ones that matter most: a closure's env
+        // holds the handle and can outlive the call, so BOTH otherwise-permitted
+        // uses are suppressed inside one. This is the hole the first draft of
+        // the checker had — a scalar read inside a closure looked safe because
+        // the read itself is, while the capture that enabled it was not.
+        (
+            "scalar read inside a closure",
+            "fn f(n: frozen N) -> i64 { let g = || n.val; g() }",
+            "captured by a closure",
+        ),
+        (
+            "pass-through inside a closure",
+            "fn inner(m: frozen N) -> i64 { m.val }\n\
+             fn f(n: frozen N) -> i64 { let g = || inner(n); g() }",
+            "captured by a closure",
+        ),
+    ];
+
+    let prelude = "shared struct N { val: i64 }\n\
+                   shared struct M { val: i64, mut count: i64 }\n\
+                   shared struct P { items: Vec[i64] }\n";
+    for (label, body, expected) in cases {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)
+                && e.kind == OwnershipErrorKind::FrozenParamEscapes),
+            "[{label}] expected a FrozenParamEscapes error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// A function with no `frozen` parameter must not pay for the check, and must
+/// not be affected by it. The early-out is what keeps a whole-program pass off
+/// the hot path of every ordinary compile — today that is every function in
+/// every program.
+#[test]
+fn frozen_escape_check_is_inert_without_a_frozen_param() {
+    ownership_ok(
+        "shared struct N { val: i64 }\n\
+         fn takes(x: N) -> N { x }\n\
+         fn store(x: N) -> (N, i64) { (x, 1) }\n\
+         fn closes(x: N) -> i64 { let g = || x.val; g() }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+}

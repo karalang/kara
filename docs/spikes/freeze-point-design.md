@@ -1,9 +1,13 @@
 # Freeze points: sharing an RC value across `par` branches (B-2026-08-01-33, mechanism 3)
 
-**Status:** design call, nothing built. Proposes a language-surface addition, so
-adopting it into [`docs/design.md`](../design.md) is the owner's step — this
-document exists to make the call concrete enough to accept, reject, or amend,
-and to record why the alternatives lose.
+**Status:** design call; **stage 1 partly built and inert** — the `frozen`
+parameter surface and the escape checker have landed, `par` admission and RC
+suppression have not, so the mode still changes no program's behaviour. Proposes
+a language-surface addition, so adopting it into
+[`docs/design.md`](../design.md) is the owner's step — this document exists to
+make the call concrete enough to accept, reject, or amend, and to record why the
+alternatives lose. Build log and two corrections to the staging are at the
+bottom; read those before starting from the staging list.
 
 ## The gap, stated as the constraint it actually is
 
@@ -194,6 +198,42 @@ So the revised stage 1 remainder is: **escape checker → freeze-site
 immutability check → par admission**, in that order, with admission still last
 for the reason already given. The un-erasure that used to head this list is
 done — it is `Param::is_frozen`, and it cost no pass at all.
+
+## Stage 1: the escape checker (landed)
+
+`src/ownership/frozen_escape.rs`, emitting `E0511` from the per-function
+ownership driver. It runs while the mode is still inert, which is the whole
+point: nothing yet depends on the rule, so this is the cheapest moment to find
+out whether the rule can actually be written.
+
+**It is a whitelist.** Walks are exhaustive with no `_` arm, so a new AST node
+breaks the build rather than opening an escape route, and a frozen identifier is
+reported at the *leaf* — only the two positions stage 1 permits consume their
+operand without recursing. Anything nobody enumerated reports. The failure
+direction is a false positive, never a missed escape. That shape is a direct
+response to B-2026-08-04-13/-14/-15, which were one failure mode (a walk that
+recognized some spellings and ignored the rest) in three subsystems in a day.
+
+Permitted: reading an **immutable scalar** field (the predicate
+`concurrent_shared.rs` already admits, for the same reason — an immutable field
+races nobody and a scalar read copies a register), and **whole-handle
+pass-through to another `frozen` parameter**, which is what lets the guarantee
+compose across a call instead of being re-derived at each site. That second one
+is the property #133 needs.
+
+**The design's own claim got tested and one hole turned up.** The first draft
+accepted a scalar field read inside a **closure body**. The read is safe; the
+capture that enabled it is not — the closure's environment holds the handle and
+can outlive the call by being returned, stored, or handed to `spawn`. Both
+permitted positions are now suppressed inside a closure, using the same
+`in_closure` flag and the same argument as `result_escape.rs`. `par` / `seq`
+branches are deliberately *not* closures for this rule: they join before the
+function returns, and admitting exactly that sharing is the feature.
+
+Conservatism that is documented rather than hidden: shadowing is untracked; only
+free-function calls compose (a method call reports, because resolving one needs
+the typechecker's callee map); an unresolvable type yields an empty scalar-field
+set, so every projection off it reports. All three over-report.
 
 ## Risks, stated plainly
 

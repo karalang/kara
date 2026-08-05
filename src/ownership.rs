@@ -21,6 +21,7 @@ mod closure_escape;
 mod concurrent_shared;
 mod elision;
 mod expr_check;
+mod frozen_escape;
 mod par_capture_classify;
 mod par_helpers;
 mod rc_promote;
@@ -510,6 +511,13 @@ pub enum OwnershipErrorKind {
     /// the current function; the ref capture would outlive its source.
     /// Per design.md § Closures Rule 2 sub-case (iv).
     RefCaptureEscapesScope,
+    /// A `frozen` parameter was used in a position stage 1 does not permit
+    /// (B-2026-08-01-33 mechanism 3). A `frozen` handle is non-counting, so a
+    /// use that lets it outlive the call would be a use-after-free once RC
+    /// suppression is wired. The permitted uses are an immutable-scalar field
+    /// read and pass-through to another `frozen` parameter; see
+    /// `src/ownership/frozen_escape.rs` for why the rule is a whitelist.
+    FrozenParamEscapes,
     /// A slice was created from a temporary value (a function call result,
     /// composite literal, etc. — anything without a rooted source binding)
     /// and bound to a name that escapes the enclosing statement. The
@@ -2023,6 +2031,13 @@ impl<'a> OwnershipChecker<'a> {
         // borrow must trace to a `ref` parameter, or it would dangle.
         // design.md § Feature 4 Part 3; B-2026-06-07-5. Emits E0509.
         self.check_ref_return_source_pinning(f);
+
+        // `frozen` parameter escape (B-2026-08-01-33 mechanism 3, stage 1):
+        // a non-counting handle must not outlive the call. Runs before the
+        // mode does anything — admission and RC suppression are wired only
+        // once this holds. Emits E0511. Early-outs on any function without a
+        // `frozen` parameter, which is every function in every program today.
+        self.check_frozen_param_escape(f);
 
         // Infer parameter modes
         let mut modes: Vec<(String, OwnershipMode)> = Vec::new();
