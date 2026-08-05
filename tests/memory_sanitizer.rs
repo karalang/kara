@@ -7259,6 +7259,50 @@ fn main() {
         );
     }
 
+    /// Ad-hoc reduction probe — runs an ARBITRARY `.kara` file through the same
+    /// ASAN path the fixtures use, with the allocation count printed. Ignored by
+    /// default; it asserts nothing about output because the program under
+    /// reduction changes every iteration.
+    ///
+    /// This exists because minimizing a leak on B-2026-08-05-7 means varying the
+    /// PROGRAM, not the compiler, and rebuilding this ~200 MB test binary per
+    /// iteration to edit a string literal dominates the loop. Reading the source
+    /// from the environment rebuilds it once. B-2026-08-05-7's METHOD NOTE
+    /// recommends exactly this shape.
+    ///
+    ///   KARAC_PROBE_SRC=/path/to/reduce.kara KARAC_OPT_LEVEL=0 \
+    ///     cargo test --features llvm --test memory_sanitizer -- \
+    ///     --ignored --exact memory_sanitizer_tests::asan_probe_from_env --nocapture
+    ///
+    /// Prints `PROBE <allocs> allocations, exit <code>` plus the raw ASAN stderr,
+    /// and fails only when ASAN itself reports an error — so a clean run at one
+    /// `-O` level and a dirty run at the other is a single flag flip apart.
+    #[test]
+    #[ignore = "reduction aid: needs KARAC_PROBE_SRC"]
+    fn asan_probe_from_env() {
+        if !asan_available() {
+            eprintln!("PROBE: ASAN unavailable — skipping");
+            return;
+        }
+        let path = std::env::var("KARAC_PROBE_SRC")
+            .expect("set KARAC_PROBE_SRC to the .kara file to reduce");
+        let src = std::fs::read_to_string(&path).expect("KARAC_PROBE_SRC unreadable");
+        let Some((stdout, stderr, status)) = run_under_asan_counting(&src, "probe") else {
+            eprintln!("PROBE: setup failed (parse error / missing runtime archive)");
+            return;
+        };
+        let allocs = asan_malloc_calls(&stderr).map_or(-1, |n| n as i64);
+        eprintln!("PROBE {allocs} allocations, exit {:?}", status.code());
+        eprintln!("PROBE stdout: {}", stdout.trim());
+        if !status.success() {
+            eprintln!("{stderr}");
+        }
+        assert!(
+            status.success(),
+            "PROBE: ASAN reported an error (see above)"
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

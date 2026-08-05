@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 215 | 1 |
 | leak | 132 | 0 |
-| double-free | 96 | 1 |
+| double-free | 97 | 2 |
 | codegen-gap | 89 | 0 |
 | run-vs-build | 80 | 1 |
 | missing-feature | 77 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 670 | 3 |
+| codegen | 671 | 4 |
 | interp | 123 | 0 |
 | typecheck | 118 | 2 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **931 surfaced · 8 open · 915 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **932 surfaced · 9 open · 915 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **931 surfaced 
 | B-2026-08-05-17 | 2026-08-05 | cli | medium | `karac build` does not enforce EFFECT errors that `karac check` reports — a program `check` rejects with 1 error builds and runs; type errors ARE enforced on both paths, so this is specific to the effect checker being absent from the build pipeline, not a general laxness | — |
 | B-2026-08-05-18 | 2026-08-05 | typecheck+effect | medium | a `Fn(..)` type's effect clause is dropped — `Fn(ref Vec[u8], i64) -> i64 with panics` PARSES but the slot is still inferred `[pure]`, so no effectful function can ever be passed to a `Fn`-typed parameter and the whole higher-order surface is restricted to pure callees | — |
 | B-2026-08-05-19 | 2026-08-05 | typecheck+codegen | high | generic args are NOT invariant across numeric element types: `Vec[i64]` is silently accepted where `Vec[u16]` is declared, and AOT then reinterprets the buffer — wrong values, out-of-bounds reads, and a run-vs-build divergence | src/typechecker/types.rs::types_compatible (note the TypeParam blanket arm ~line 1273); src/typechecker.rs::is_subtype_with_projections / check_assignable. Repro files as in detail. |
+| B-2026-08-05-20 | 2026-08-05 | codegen | high | A whole-value binding-to-binding move of a BOXED-payload `Option` (`let b2 = body;`) double-frees at -O0 -- deterministic, no destructure involved, and it SURVIVES B-2026-08-05-7's leak-B fix | docs/implementation_checklist/phase-7-codegen.md |
 
 ### Fixed (915)
 
