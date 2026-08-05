@@ -28674,6 +28674,66 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-7 (boxed-payload destructure leg): destructuring a boxed
+    /// `Option` payload inside a match arm leaked the payload's buffer.
+    ///
+    /// `suppress_boxed_payload_view_move` clears the box's `inner_drop_fn` for
+    /// any source in `boxed_optres_payload_view_vars`, on the stated assumption
+    /// that the move destination "registers its own drop". True for a
+    /// whole-value move (`let x = w;`) and false for a DESTRUCTURE: the leaves
+    /// register nothing, because `callee_owned_src` requires a `StructDrop` on
+    /// the source slot and a payload view binding has none — its drop lives on
+    /// the OPTION's slot. So the box stopped freeing the interior and nobody
+    /// started.
+    ///
+    /// Both spellings are covered because both leaked: a BOUND field
+    /// (`let Wide { tag, payload } = w`) and an UNBOUND one
+    /// (`payload: _`, which has no leaf to own it at all). The
+    /// destructure-in-the-arm-pattern form (`Some(Wide { .. })`) was always
+    /// clean and is kept here as the control that localizes the bug to the
+    /// nested `let`.
+    ///
+    /// The payload must be WIDER than the Option's 3-word area or it is never
+    /// boxed and none of this applies — hence the `tag: i64` beside the String.
+    ///
+    /// NOTE: pins at -O0 only; -O2 deletes the allocation outright.
+    #[test]
+    fn asan_destructured_boxed_option_payload_owned_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Wide { tag: i64, payload: String }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut acc = 0i64;
+    let mut i = 0;
+    while i < base + 49 {
+        let a: Option[Wide] = Some(Wide { tag: 7, payload: f"pay-{i}-long-enough-aaaa" });
+        acc = acc + match a {
+            Some(w) => { let Wide { tag, payload } = w; if payload.starts_with("pay") { tag } else { 0i64 } }
+            None => 0i64,
+        };
+        let b: Option[Wide] = Some(Wide { tag: 3, payload: f"unb-{i}-long-enough-aaaa" });
+        acc = acc + match b {
+            Some(w) => { let Wide { tag, payload: _ } = w; tag }
+            None => 0i64,
+        };
+        let c: Option[Wide] = Some(Wide { tag: 2, payload: f"arm-{i}-long-enough-aaaa" });
+        acc = acc + match c {
+            Some(Wide { tag, payload }) => { if payload.starts_with("arm") { tag } else { 0i64 } }
+            None => 0i64,
+        };
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["600"],
+            "destructured_boxed_option_payload_owned_once",
+            // Three boxed payloads per iteration over 50 iterations.
+            100,
+        );
+    }
+
     #[test]
     fn asan_mapval_inner_map_insert_get_no_uaf() {
         // Slice 3r leg 1 (gap (d) sibling): `m.insert(k, inner)` where `inner`

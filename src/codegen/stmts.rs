@@ -8305,6 +8305,28 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
 
+        // B-2026-08-05-7 — the source is a BOXED Option/Result payload view
+        // binding (`match body { Some(w) => { let Wide { .. } = w; … } }` over
+        // an `Option[Wide]` whose 4-word payload was heap-boxed).
+        //
+        // This is a POSITIVE ownership signal, not an inference from absence.
+        // Membership in `boxed_optres_payload_view_vars` is exactly what makes
+        // `suppress_boxed_payload_view_move` — which already ran for this `let`
+        // — clear the box's `inner_drop_fn`, on the stated assumption that the
+        // move destination "registers its own drop". That holds for a whole-value
+        // move (`let x = w;`, which does register one) and NOT for a destructure,
+        // whose leaves register nothing here: `callee_owned_src` requires a
+        // `StructDrop` on the source slot and a payload view binding has none —
+        // the drop lives on the OPTION's slot. So the box stopped freeing the
+        // interior and nobody started: the payload's buffer leaked, bound
+        // (`let Wide { tag, payload } = w`) or not (`payload: _`) alike.
+        //
+        // Safe by construction rather than by luck: the box's interior walk is
+        // ALREADY disarmed for this exact slot by the time we get here, so
+        // taking ownership cannot double-free against it.
+        let boxed_view_src: bool = matches!(&value.kind, ExprKind::Identifier(n)
+            if self.boxed_optres_payload_view_vars.contains_key(n.as_str()));
+
         // B-2026-07-09-12 clone-on-extract — is the source a VIEW whose heap the
         // source does NOT own (no registered struct-drop of its own)? Two source
         // classes qualify:
@@ -8381,6 +8403,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(slot) = self.variables.get(&name).copied() {
                         self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
                         leaf_cleanup_registered = true;
+                    }
+                } else if boxed_view_src && self.destructure_field_needs_cleanup(&field_te) {
+                    // See `boxed_view_src`: the box's interior walk is already
+                    // disarmed for this source, so the leaf must own the field.
+                    // No source cap-zeroing — there is no second owner to disarm.
+                    if let Some(slot) = self.variables.get(&name).copied() {
+                        self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
                     }
                 } else if let Some(src_ptr) = callee_owned_src {
                     // Callee-owned place source (see `callee_owned_src` above):
@@ -8486,10 +8515,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-            } else if fresh && self.destructure_field_needs_cleanup(&field_te) {
+            } else if (fresh || boxed_view_src) && self.destructure_field_needs_cleanup(&field_te) {
                 // Unbound heap field (`items: _` or dropped by `..`): no
                 // binding to free it, so stash a copy in a synthetic slot and
                 // queue its cleanup — otherwise the buffer leaks.
+                //
+                // B-2026-08-05-7: `boxed_view_src` joins `fresh` here for the
+                // same reason it appears above — with the box's interior walk
+                // disarmed, an UNBOUND field of a destructured boxed payload has
+                // no owner at all (`let Wide { tag, payload: _ } = w;` leaked
+                // `payload` exactly like the bound spelling did).
                 let field_val = self
                     .builder
                     .build_extract_value(sv, idx as u32, "destructure.discard")
