@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 215 | 1 |
 | leak | 134 | 1 |
-| double-free | 97 | 2 |
+| double-free | 97 | 1 |
 | codegen-gap | 89 | 0 |
 | run-vs-build | 80 | 0 |
 | missing-feature | 78 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 674 | 4 |
+| codegen | 674 | 3 |
 | interp | 123 | 0 |
 | typecheck | 120 | 2 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **939 surfaced · 9 open · 922 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **939 surfaced · 8 open · 923 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,14 +135,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **939 surfaced 
 | B-2026-08-05-5 | 2026-08-04 | other | medium | UNATTRIBUTED perf regression bounded to 2026-07-28..07-30: kata:170 two-sum-III runs 1.29x slower (771.2ms -> 997.1ms) with an unchanged .kara source; B-2026-07-31-21's map fix is RULED OUT by measurement and post-2026-07-30 codegen is ruled out by byte-identical binaries | none yet — needs a matched karac+archive bisect across 2026-07-28..07-30 |
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-16 | 2026-08-05 | codegen | medium | NONDETERMINISTIC SEGV at -O0: a bare variant-name pattern whose name is shared by two enums resolves against the UNORDERED enum_layouts map, so per-process HashMap seed decides the payload word offsets -- a payload word is then dereferenced as a pointer. Carried until now as a 'known flaky' test, which is what kept it parked | docs/implementation_checklist/phase-7-codegen.md |
-| B-2026-08-05-20 | 2026-08-05 | codegen | high | A whole-value binding-to-binding move of a BOXED-payload `Option` (`let b2 = body;`) double-frees at -O0 -- deterministic, no destructure involved, and it SURVIVES B-2026-08-05-7's leak-B fix | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
 | B-2026-08-05-26 | 2026-08-05 | typecheck | medium | tensor arithmetic infers an f64 element for an f32 operand pair: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]` and `k: f32` types the product `Tensor[f64, ..]`, which only stayed invisible because generic args were permissive about numeric width | — |
 | B-2026-08-05-27 | 2026-08-05 | codegen | high | The surface-concat RECEIVER gap is only closed for the len-family: `("p:".to_string() + s).starts_with(..)` still leaks the concat on a DEFAULT -O2 build (8200 B / 200 allocs). The len leg's fixture reads `.len()` only, which masks the same class at -O2 | docs/implementation_checklist/phase-7-codegen.md |
 
-### Fixed (922)
+### Fixed (923)
 
-<details><summary>922 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>923 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1086,6 +1085,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-17 | cli | medium | `karac build` does not enforce EFFECT errors that `karac check` reports — a program `check` rejects with 1 error builds and runs; type errors ARE enf… | 0bfde1c |
 | B-2026-08-05-18 | typecheck+effect | medium | a RESOURCE-LESS effect verb (`panics` / `blocks` / `suspends`) is silently dropped wherever an effect LIST is converted to an effect SET — so a `Fn(.… | 69d630b |
 | B-2026-08-05-19 | typecheck+codegen | high | generic args are NOT invariant across numeric element types: `Vec[i64]` is silently accepted where `Vec[u16]` is declared, and AOT then reinterprets… | 80d7a37 (layout rule + literal adoption) + e7a04ac (expected-type seeding; user generics now covered) — `Tensor` still excluded pending B-2026-08-05-26 |
+| B-2026-08-05-20 | codegen | high | A whole-value binding-to-binding move of a BOXED-payload `Option` (`let b2 = body;`) double-frees at -O0 -- deterministic, no destructure involved, a… | e7023333 |
 | B-2026-08-05-21 | codegen | medium | The INTEGER-OVERFLOW check on an index add `v[base + i]` is still emitted after BCE has PROVEN `0 <= base + i < v.len()` -- a fact that already entai… | 72f9fd7d |
 | B-2026-08-05-22 | codegen | high | A fresh-temp aggregate ARGUMENT whose heap lives only behind `Option` fields registered no caller-side cleanup and leaked one payload per call -- 749… | this commit |
 | B-2026-08-05-23 | other | medium | the JIT/selfhost oracles report a module that NEVER RAN as an output mismatch: run_ir discarded karac_jit_runner's stderr, so an unresolved external… | 9e25bfaa |
