@@ -264,7 +264,41 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Slice params/locals register their element type; their LLVM shape is
         // the 2-field `{ptr, i64}` struct.
-        self.slice_elem_types.contains_key(name) && matches!(ty, BasicTypeEnum::StructType(_))
+        if self.slice_elem_types.contains_key(name) && matches!(ty, BasicTypeEnum::StructType(_)) {
+            return true;
+        }
+        // B-2026-08-05-13 — a `mut ref Vec[T]` / `mut ref String` PARAMETER.
+        // Its slot holds a POINTER to the header rather than the header, so
+        // neither check above matches and the lowering used to decline while
+        // `karac query concurrency` still reported `fanned_out: true` (the
+        // report runs the cost verdict but none of codegen's earlier bails).
+        //
+        // The pointer travels by value through the capture channel, so every
+        // worker derefs the SAME header and writes land in one buffer — the
+        // storage-sharing property this predicate exists to establish, reached
+        // one indirection later. It is the same arrangement as a fixed-size
+        // array param, which this function has always accepted because it
+        // "travels by pointer".
+        //
+        // `ref_params` is deliberately NOT saved/cleared around the worker fn
+        // (see `emit_disjoint_worker_fn`), so `out[i] = v` inside the worker
+        // still knows `out` is a borrow and emits the deref. Without that this
+        // would be B-2026-08-05-10 again — a borrowed handle captured into a
+        // parallel context and read at the wrong indirection level.
+        //
+        // Restricted to signature params: `ref_params` also carries pattern
+        // shims and `entry().or_insert()` slot pointers whose storage story is
+        // their own machinery's, not this one's.
+        if self.signature_ref_params.contains(name) {
+            if let Some(inner) = self.ref_params.get(name) {
+                if self.llvm_ty_is_vec_struct(*inner)
+                    || matches!(inner, BasicTypeEnum::ArrayType(_))
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Capture set for a disjoint-write worker: every outer binding the body

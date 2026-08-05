@@ -185,6 +185,59 @@ fn main() {{
         }
     }
 
+    /// B-2026-08-05-13 — a `mut ref Vec[T]` PARAMETER is a valid disjoint-write
+    /// fan-out target.
+    ///
+    /// It used to be silently excluded. `disjoint_target_shares_storage`
+    /// accepts an array, a `Vec`/`String` header struct, or a registered slice;
+    /// a `mut ref Vec` slot holds a POINTER to the header, so none matched and
+    /// the lowering declined — while `karac query concurrency` still reported
+    /// `fanned_out: true`, because the report runs the cost verdict and none of
+    /// codegen's earlier bails. Measured before: real 0.417s / user 0.409s,
+    /// i.e. single-threaded. After: real 0.144s / user 0.549s — 2.9x wall, 3.8x
+    /// cpu on 4 cores.
+    ///
+    /// Nothing `frozen`-specific here; the freeze work only led to it. This
+    /// asserts EVERY element against the sequential definition rather than one
+    /// spot value, because a parallel write landing in the wrong place is
+    /// exactly the failure mode and a single index can miss it.
+    #[test]
+    fn mut_ref_vec_param_is_a_valid_fanout_target() {
+        let out = run_program(
+            r#"
+fn work(k: i64) -> i64 {
+    let mut acc: i64 = 0;
+    let mut t: i64 = 0;
+    while t < 500 { acc = acc + k * 7 + t; t = t + 1; }
+    acc
+}
+fn fill(out: mut ref Vec[i64]) {
+    for i in 0..4096 { out[i] = work(i); }
+}
+fn main() {
+    let mut a: Vec[i64] = Vec.filled(4096, 0);
+    fill(mut a);
+    let mut bad: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 4096 {
+        if a[i] != work(i) { bad = bad + 1; }
+        i = i + 1;
+    }
+    println(bad);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "0",
+                "every element written through a `mut ref Vec` parameter must \
+                 match the sequential definition — a nonzero count means workers \
+                 wrote through the wrong indirection or into private copies"
+            );
+        }
+    }
+
     /// B-2026-08-01-33 mechanism 3, auto-par arm — the admitted loop must
     /// compute the right answer when it actually runs across workers.
     ///
