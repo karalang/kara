@@ -102,17 +102,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 48 | 1 |
 | crash | 39 | 0 |
 | diagnostics | 38 | 0 |
-| soundness | 37 | 1 |
-| other | 15 | 1 |
+| soundness | 37 | 0 |
+| other | 16 | 2 |
 | use-after-free | 12 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 673 | 4 |
+| codegen | 673 | 3 |
 | interp | 123 | 0 |
-| typecheck | 119 | 3 |
+| typecheck | 120 | 3 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 27 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **937 surfaced · 9 open · 920 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **938 surfaced · 9 open · 921 fixed** (2026-05-20 → 2026-08-05). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -136,13 +136,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **937 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-16 | 2026-08-05 | codegen | medium | NONDETERMINISTIC SEGV at -O0: a bare variant-name pattern whose name is shared by two enums resolves against the UNORDERED enum_layouts map, so per-process HashMap seed decides the payload word offsets -- a payload word is then dereferenced as a pointer. Carried until now as a 'known flaky' test, which is what kept it parked | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-18 | 2026-08-05 | typecheck+effect | medium | a `Fn(..)` type's effect clause is dropped — `Fn(ref Vec[u8], i64) -> i64 with panics` PARSES but the slot is still inferred `[pure]`, so no effectful function can ever be passed to a `Fn`-typed parameter and the whole higher-order surface is restricted to pure callees | — |
-| B-2026-08-05-19 | 2026-08-05 | typecheck+codegen | high | generic args are NOT invariant across numeric element types: `Vec[i64]` is silently accepted where `Vec[u16]` is declared, and AOT then reinterprets the buffer — wrong values, out-of-bounds reads, and a run-vs-build divergence | src/typechecker/types.rs::types_compatible (the 'Pragmatic: integer literals' numeric block) and ::generic_arg_compatible (Invariant arm, where the guard belongs); expected-type pushdown for literals is the prerequisite. 7 named typechecker tests listed in detail. |
 | B-2026-08-05-20 | 2026-08-05 | codegen | high | A whole-value binding-to-binding move of a BOXED-payload `Option` (`let b2 = body;`) double-frees at -O0 -- deterministic, no destructure involved, and it SURVIVES B-2026-08-05-7's leak-B fix | docs/implementation_checklist/phase-7-codegen.md |
 | B-2026-08-05-25 | 2026-08-05 | typecheck | low | A constant integer EXPRESSION payload does not adopt its expected type in an enum constructor: `Result.Err(0 - 1)` into `Result[i32, i32]` is rejected as i64, while `Result.Err(-1)` is accepted. Affects the bare and qualified spellings identically (since B-2026-08-05-24), so this is a payload-SHAPE limit, not a spelling one: adoption fires for an unsuffixed literal but not for arithmetic over literals. | src/typechecker/exprs.rs — the check-mode enum-payload adoption block (`payload_is_unsuffixed_int`) |
+| B-2026-08-05-26 | 2026-08-05 | typecheck | medium | tensor arithmetic infers an f64 element for an f32 operand pair: `let p: Tensor[f32, [D]] = a * k` with `a: ref Tensor[f32, [D]]` and `k: f32` types the product `Tensor[f64, ..]`, which only stayed invisible because generic args were permissive about numeric width | — |
 
-### Fixed (920)
+### Fixed (921)
 
-<details><summary>920 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>921 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1084,6 +1084,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-13 | autopar | medium | `karac query concurrency` reports `fanned_out: true` for a disjoint-write loop that runs SINGLE-THREADED when the accumulator is a `mut ref` parameter | 286afea |
 | B-2026-08-05-15 | codegen | medium | taking a free function as a VALUE (`let f = g;`) and calling it through the binding fails to build when any parameter is a `ref Vec[T]` -- the indire… | 72f9f49 |
 | B-2026-08-05-17 | cli | medium | `karac build` does not enforce EFFECT errors that `karac check` reports — a program `check` rejects with 1 error builds and runs; type errors ARE enf… | 0bfde1c |
+| B-2026-08-05-19 | typecheck+codegen | high | generic args are NOT invariant across numeric element types: `Vec[i64]` is silently accepted where `Vec[u16]` is declared, and AOT then reinterprets… | 80d7a37 (layout rule + literal adoption) + e7a04ac (expected-type seeding; user generics now covered) — `Tensor` still excluded pending B-2026-08-05-26 |
 | B-2026-08-05-21 | codegen | medium | The INTEGER-OVERFLOW check on an index add `v[base + i]` is still emitted after BCE has PROVEN `0 <= base + i < v.len()` -- a fact that already entai… | 72f9fd7d |
 | B-2026-08-05-22 | codegen | high | A fresh-temp aggregate ARGUMENT whose heap lives only behind `Option` fields registered no caller-side cleanup and leaked one payload per call -- 749… | this commit |
 | B-2026-08-05-23 | other | medium | the JIT/selfhost oracles report a module that NEVER RAN as an output mismatch: run_ir discarded karac_jit_runner's stderr, so an unresolved external… | 9e25bfaa |
