@@ -9891,3 +9891,85 @@ fn frozen_escape_check_is_inert_without_a_frozen_param() {
          fn main() { println(\"x\"); }\n",
     );
 }
+
+// ── `frozen` freeze-site validity (B-2026-08-01-33 mechanism 3, stage 1) ──
+
+/// The freeze site in stage 1 is the PARAMETER DECLARATION — there is no
+/// `freeze` expression yet, so declaring `frozen T` is the only way to obtain a
+/// frozen value, and therefore the only place the "may this be frozen?"
+/// question can be asked.
+///
+/// Stage 1's form of the design's deep-immutability rule is STRUCTURAL rather
+/// than per-instance: it has no region and no instance liveness, so instead of
+/// proving no mutable handle is live, it requires the type to make such a
+/// handle impossible — no `mut` field anywhere reachable. Strictly stronger,
+/// therefore sound as a stand-in, and it turns the staging's deferral of
+/// `mut`-bearing types into a diagnostic instead of a silence.
+#[test]
+fn frozen_freeze_site_refuses_types_that_cannot_be_frozen() {
+    let prelude = "struct Plain { val: i64 }\n\
+                   par struct P { val: i64 }\n\
+                   shared struct M { val: i64, mut count: i64 }\n\
+                   shared struct Outer { inner: Inner }\n\
+                   shared struct Inner { val: i64, mut bump: i64 }\n";
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "plain struct has no refcount to skip",
+            "fn f(x: frozen Plain) -> i64 { 0 }",
+            "requires a `shared` type",
+        ),
+        (
+            "scalar has no handle at all",
+            "fn f(x: frozen i64) -> i64 { 0 }",
+            "requires a `shared` type",
+        ),
+        (
+            "`par struct` is already atomically shareable",
+            "fn f(x: frozen P) -> i64 { 0 }",
+            "so `frozen` adds nothing",
+        ),
+        (
+            "shared type with a `mut` field",
+            "fn f(x: frozen M) -> i64 { 0 }",
+            "has mutable state",
+        ),
+        // The transitive case is the one that makes this a DEEP check rather
+        // than a field scan: `Outer` is itself mut-free and only reaches
+        // mutable state through `Inner`.
+        (
+            "mutable state reached transitively",
+            "fn f(x: frozen Outer) -> i64 { 0 }",
+            "has mutable state",
+        ),
+    ];
+    for (label, body, expected) in cases {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)
+                && e.kind == OwnershipErrorKind::FrozenTypeNotFreezable),
+            "[{label}] expected a FrozenTypeNotFreezable error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// A deeply-immutable `shared` type is freezable, including when its
+/// immutability is only established by following its fields.
+#[test]
+fn frozen_freeze_site_accepts_a_deeply_immutable_shared_type() {
+    ownership_ok(
+        "shared struct N { val: i64 }\n\
+         fn f(x: frozen N) -> i64 { x.val }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+    // Immutability has to hold through the whole reachable closure, so the
+    // accepting case must also exercise a nested hop — otherwise the test
+    // would pass against a checker that only looked at the named type.
+    ownership_ok(
+        "shared struct Leaf { v: i64 }\n\
+         shared struct Root { leaf: Leaf, tag: i64 }\n\
+         fn f(x: frozen Root) -> i64 { x.tag }\n\
+         fn main() { println(\"x\"); }\n",
+    );
+}

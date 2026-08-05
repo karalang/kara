@@ -407,9 +407,19 @@ impl<'a> super::OwnershipChecker<'a> {
             .collect()
     }
 
-    /// B-2026-08-01-33 mechanism 2 — the set of `shared` types transitively
-    /// reachable from `type_name` when EVERY one of them is free of `mut`
-    /// fields; `None` otherwise.
+    /// The set of `shared` types transitively reachable from `type_name` when
+    /// EVERY type in that closure is free of `mut` fields; `None` otherwise.
+    /// In one word: is `type_name` **deeply immutable**, and if so, what is
+    /// reachable from it?
+    ///
+    /// TWO CONSUMERS, deliberately one definition. B-2026-08-01-33 mechanism 2
+    /// (atomic promotion) uses the returned set as the types to promote.
+    /// Mechanism 3's freeze-site check (`frozen_freeze_site.rs`) uses only
+    /// `is_some()` — a `frozen T` claims deep immutability, and stage 1 has no
+    /// per-instance check to back that claim, so it demands the type provide it
+    /// structurally. Both ask the same question; splitting it into two
+    /// predicates would let the compiler hold two different opinions about what
+    /// "deeply immutable" means.
     ///
     /// Promoting that whole set to atomic refcounting is what makes a
     /// multi-branch capture safe, and it has to be the whole set, not just the
@@ -422,7 +432,7 @@ impl<'a> super::OwnershipChecker<'a> {
     /// Fail-closed at every step: an unresolvable type name, a generic
     /// parameter, or any `mut` field anywhere in the closure yields `None`,
     /// i.e. today's unconditional conflict.
-    fn atomic_promotion_closure(&self, type_name: &str) -> Option<Vec<String>> {
+    pub(super) fn deep_immutability_closure(&self, type_name: &str) -> Option<Vec<String>> {
         // NOTE: the env gate lives at the ADMIT site, not here. The closure is
         // computed unconditionally because the DIAGNOSTIC needs it too: an
         // immutable type gets a one-keyword suggestion, a `mut`-bearing one
@@ -545,7 +555,7 @@ impl<'a> super::OwnershipChecker<'a> {
         let (fields, promotion) = match kind {
             BindingKind::Shared => (
                 self.readonly_scalar_fields(name),
-                self.atomic_promotion_closure(name),
+                self.deep_immutability_closure(name),
             ),
             // `E_CONCURRENT_PLAIN_STRUCT` fires for a structural reason, not an
             // RC one — a plain struct has no refcount to promote.

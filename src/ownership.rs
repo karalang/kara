@@ -22,6 +22,7 @@ mod concurrent_shared;
 mod elision;
 mod expr_check;
 mod frozen_escape;
+mod frozen_freeze_site;
 mod par_capture_classify;
 mod par_helpers;
 mod rc_promote;
@@ -518,6 +519,13 @@ pub enum OwnershipErrorKind {
     /// read and pass-through to another `frozen` parameter; see
     /// `src/ownership/frozen_escape.rs` for why the rule is a whitelist.
     FrozenParamEscapes,
+    /// A `frozen` parameter names a type that may not be frozen
+    /// (B-2026-08-01-33 mechanism 3): not a `shared` type, a `par struct`
+    /// (already atomic, nothing to freeze), or a `shared` type with a `mut`
+    /// field somewhere in its reachable closure. See
+    /// `src/ownership/frozen_freeze_site.rs` for why stage 1's form of the
+    /// deep-immutability check is structural rather than per-instance.
+    FrozenTypeNotFreezable,
     /// A slice was created from a temporary value (a function call result,
     /// composite literal, etc. — anything without a rooted source binding)
     /// and bound to a name that escapes the enclosing statement. The
@@ -2038,6 +2046,12 @@ impl<'a> OwnershipChecker<'a> {
         // once this holds. Emits E0511. Early-outs on any function without a
         // `frozen` parameter, which is every function in every program today.
         self.check_frozen_param_escape(f);
+
+        // Freeze-site validity (same entry, stage 1): may this type be frozen
+        // at all? Runs alongside the escape check because the two answer
+        // different halves of one rule — "can the handle get out" and "was
+        // there anything to freeze". Emits E0512.
+        self.check_frozen_freeze_site(f);
 
         // Infer parameter modes
         let mut modes: Vec<(String, OwnershipMode)> = Vec::new();

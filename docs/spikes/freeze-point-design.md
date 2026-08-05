@@ -235,6 +235,45 @@ free-function calls compose (a method call reports, because resolving one needs
 the typechecker's callee map); an unresolvable type yields an empty scalar-field
 set, so every projection off it reports. All three over-report.
 
+## Stage 1: the freeze-site check (landed)
+
+`src/ownership/frozen_freeze_site.rs`, emitting `E0512`. The escape checker asks
+"can this handle get out?"; this asks the prior question — **may this type be
+frozen at all?**
+
+**Where the freeze site turned out to be.** This document sketches
+`let g = freeze graph;` and puts the check there. Stage 1 has no `freeze`
+expression: declaring `frozen T` on a parameter is the only way to obtain a
+frozen value, so the *parameter declaration* is the freeze site, and that is
+where the check lives. When the `freeze` statement lands, the check moves to it
+— the rule is the same, only the site changes.
+
+**Why the stage-1 form is structural.** The rule above is a property of the
+*instance*: no live mutable handle to it or to anything reachable, for the
+region. Stage 1 has no region, no freeze statement, and no instance-level
+liveness, so it cannot evaluate that. What it can do is require the type to make
+such a handle impossible: no `mut` field anywhere in the reachable closure. That
+is strictly stronger, hence sound as a stand-in, and it converts staging item 3
+from a silence into a diagnostic — `frozen M` where `M` has a `mut` field is
+refused *now*, rather than accepted while the check that would justify it does
+not exist.
+
+Also refused, both fail-closed: a **non-`shared`** type (no refcount to skip, so
+the mode asserts a representation the value does not have) and a **`par
+struct`** (already atomically shareable — `frozen` would be a no-op dressed as a
+guarantee). An unresolvable type name is refused, not assumed freezable.
+
+The predicate is `deep_immutability_closure` — mechanism 2's, renamed from
+`atomic_promotion_closure` and shared rather than reimplemented. Promotion uses
+the returned set as what to promote; the freeze check uses only `is_some()`.
+Two predicates could drift into two opinions about what "deeply immutable"
+means.
+
+**What this costs #133, stated plainly:** `Node.neighbors` is `mut`, so the
+motivating program is refused at the freeze site. That is what the staging
+always said (item 3 defers exactly this), but it is now a diagnostic that names
+the missing piece rather than a program that quietly type-checks.
+
 ## Risks, stated plainly
 
 - **Non-counting handles are a new unsafety surface.** If escape checking has a

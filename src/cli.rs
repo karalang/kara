@@ -3640,6 +3640,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::ReassignToImmutable => "E0506",
                 crate::ownership::OwnershipErrorKind::MutateImmutableBinding => "E0510",
                 crate::ownership::OwnershipErrorKind::FrozenParamEscapes => "E0511",
+                crate::ownership::OwnershipErrorKind::FrozenTypeNotFreezable => "E0512",
                 crate::ownership::OwnershipErrorKind::UnusedMutCaptureNote => "N0507",
                 crate::ownership::OwnershipErrorKind::RefCaptureEscapesScope => "E0508",
                 crate::ownership::OwnershipErrorKind::SliceFromTemporaryEscapes => {
