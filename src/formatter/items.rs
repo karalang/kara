@@ -208,9 +208,18 @@ impl super::Formatter {
             // `format_type_expr` will never see it. Without this, `karac fmt`
             // would silently drop the keyword.
             if p.is_frozen {
+                // `frozen T` is stored as `Ref(T)` (the parser lowers the mode
+                // to a borrow so codegen emits no refcount traffic), so print
+                // the keyword and then the INNER type — otherwise the round
+                // trip would read `frozen ref T`.
                 self.write_str("frozen ");
+                match &p.ty.kind {
+                    TypeKind::Ref(inner) => self.format_type_expr(inner),
+                    _ => self.format_type_expr(&p.ty),
+                }
+            } else {
+                self.format_type_expr(&p.ty);
             }
-            self.format_type_expr(&p.ty);
             if let Some(ref dv) = p.default_value {
                 self.write_str(" = ");
                 self.format_expr(dv);

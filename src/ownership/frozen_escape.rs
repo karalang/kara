@@ -224,6 +224,11 @@ impl super::OwnershipChecker<'_> {
     /// an immutable field cannot be written by anyone, and a scalar read copies
     /// a register rather than aliasing a buffer.
     fn immutable_scalar_fields(&self, ty: &TypeExpr) -> HashSet<String> {
+        // A `frozen` param is stored as `Ref(T)` — see the parser's `frozen` arm.
+        let ty = match &ty.kind {
+            TypeKind::Ref(inner) => inner.as_ref(),
+            _ => ty,
+        };
         let TypeKind::Path(path) = &ty.kind else {
             return HashSet::new();
         };

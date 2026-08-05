@@ -151,6 +151,11 @@ impl super::OwnershipChecker<'_> {
 /// accepts in this position anyway. Anything else yields `None` and is refused
 /// as not-`shared` rather than waved through.
 fn frozen_type_name(ty: &TypeExpr) -> Option<String> {
+    // A `frozen` param is stored as `Ref(T)` — see the parser's `frozen` arm.
+    let ty = match &ty.kind {
+        TypeKind::Ref(inner) => inner.as_ref(),
+        _ => ty,
+    };
     let TypeKind::Path(path) = &ty.kind else {
         return None;
     };

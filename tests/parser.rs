@@ -12587,8 +12587,16 @@ fn frozen_remains_a_legal_identifier() {
 fn frozen_is_recorded_on_the_param_not_in_the_type() {
     use karac::ast::{Item, TypeKind};
 
-    let bare_path =
-        |p: &karac::ast::Param| matches!(&p.ty.kind, TypeKind::Path(pa) if pa.segments == ["N"]);
+    // `frozen T` is stored as `Ref(T)`: the mode lowers to a BORROW so codegen
+    // emits no refcount traffic (measured — an owned `shared` pass-through emits
+    // rc_inc=4/rc_dec=9, the same chain through a borrow emits 0/0). What must
+    // still never appear is `TypeKind::Frozen`: the frozen-ness itself lives on
+    // `Param::is_frozen`, so codegen sees only `Ref`, a form it already handles,
+    // and no unwrap site anywhere has to learn a third borrow spelling.
+    let borrow_of_n = |p: &karac::ast::Param| {
+        matches!(&p.ty.kind, TypeKind::Ref(inner)
+            if matches!(&inner.kind, TypeKind::Path(pa) if pa.segments == ["N"]))
+    };
 
     // Parameter position — the position stage 1 is actually about.
     let r = parse("shared struct N { val: i64 }\nfn r(n: frozen N) -> i64 { n.val }\n");
@@ -12605,8 +12613,8 @@ fn frozen_is_recorded_on_the_param_not_in_the_type() {
         "the mode must be recorded on the param"
     );
     assert!(
-        bare_path(&f.params[0]),
-        "the mode must NOT reach the type tree; got {:?}",
+        borrow_of_n(&f.params[0]),
+        "a `frozen` param must be stored as `Ref(N)`, never as `Frozen`; got {:?}",
         f.params[0].ty.kind
     );
 
@@ -12624,7 +12632,7 @@ fn frozen_is_recorded_on_the_param_not_in_the_type() {
     };
     for (i, p) in f.params.iter().enumerate() {
         assert!(p.is_frozen, "param {i} must be recorded frozen");
-        assert!(bare_path(p), "param {i} must keep a bare path type");
+        assert!(borrow_of_n(p), "param {i} must be stored as `Ref(N)`");
     }
 
     // The mixed case is the one that would catch a latched flag: an unmarked

@@ -295,28 +295,43 @@ multi-branch capture SIGSEGVs, and therefore why admission cannot land before
 the traffic is gone: **admission and RC suppression are one deliverable, not
 two.** Landing admission alone reproduces B-2026-07-28-13.
 
-**3. `ref` already reaches zero.** `rc_elide` — default ON since
-B-2026-07-15-21 — elides the balanced pair on a read-only, non-escaping borrow.
-So the suppression slice is **not new machinery to invent**; it is routing
-`frozen` params into an existing, shipped, verified channel
-(`elidable_ref_params` → `borrowed_arg_skip` / `borrowed_param_dec_skip`). That
-is a materially smaller and lower-risk change than this document implied.
+**3. `ref` already reaches zero** — and *why* it does turned out to matter more
+than the fact itself.
 
-**One safety condition must carry over, and it is easy to miss.**
-`safe_elidable_ref_params` does not only check read-only-and-non-escaping; it
-also proves **no call site passes a fresh rvalue**. Eliding a balanced pair on a
-temporary leaks it, because no longer-lived owner is left to release it. That
-condition applies identically to `frozen` params. The frozen escape and
-freeze-site checks justify *ungating* frozen params from
-`KARAC_RC_ELIDE_REF_PARAMS` — they do not justify skipping the fresh-rvalue
-proof.
+My first reading was that `rc_elide` (default ON since B-2026-07-15-21) elides
+the balanced pair, so suppression would mean routing `frozen` params into that
+channel. **That was wrong**, and one probe disproves it: with
+`KARAC_RC_ELIDE_REF_PARAMS=0`, `ref` *still* emits 0/0. The zero is the **borrow
+convention** — codegen emits no retain/release for a borrow because the caller
+keeps ownership — not the rc-elide pass. Everything that followed from the wrong
+reading (carrying over `safe_elidable_ref_params`' fresh-rvalue proof) is moot:
+that pass is not on this path at all.
 
-The baseline is pinned by
-`frozen_passthrough_rc_traffic_matches_owned_and_ref_reaches_zero`
-(`tests/par_codegen.rs`), which asserts relationships rather than exact counts.
-It is the positive control that keeps a future zero-traffic assertion from being
-vacuous, and it is **expected to fail when suppression lands** — that failure is
-the signal, not a regression.
+## Stage 1: RC suppression (landed)
+
+`frozen T` **lowers to `ref T`** at parse time. The design calls a frozen value
+"non-owning, non-counting"; *non-owning is exactly what `ref` already means*, so
+the mode is expressed in the existing borrow vocabulary instead of new
+machinery. Measured after: owned `rc_inc=4/rc_dec=9`, frozen **0/0**, ref
+**0/0** — frozen is now byte-identical to `ref` rather than to owned.
+
+**Why `param_modes` was not enough**, since this is the trap: ownership already
+inferred `OwnershipMode::Ref` for these params (a read-only param infers `Ref`)
+while codegen still emitted the owned traffic. Codegen drives the calling
+convention from the **declared type**, per CLAUDE.md's rule that body-level
+ownership analysis "is not a signature-derivation mechanism". A mode that wants
+borrow semantics has to say so in the declared type.
+
+**Containment is preserved.** `TypeKind::Frozen` is still never constructed.
+Codegen sees `Ref` — a form it already handles on a shipped, ASAN-verified path
+— so this adds no unwrap site anywhere, and the frozen-ness stays on
+`Param::is_frozen` where the escape check, the freeze-site check, and admission
+read it. The formatter unwraps the borrow so `karac fmt` still round-trips
+`frozen N`, not `frozen ref N`.
+
+Pinned by `frozen_param_emits_no_refcount_traffic_like_a_borrow`, which asserts
+frozen == 0, frozen == ref, and owned > 0 (the positive control that keeps the
+zero assertion non-vacuous).
 
 ## Risks, stated plainly
 

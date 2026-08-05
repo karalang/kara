@@ -88,7 +88,41 @@ impl super::Parser {
                 // misplaced keyword does not cascade into unrelated errors.
                 // The flag was already taken above, so a nested `frozen`
                 // (`frozen frozen T`) is rejected on the inner occurrence.
-                return self.parse_type();
+                let inner = self.parse_type()?;
+                if !frozen_ok {
+                    // Already reported; hand back the bare type so the rest of
+                    // the signature keeps its shape.
+                    return Some(inner);
+                }
+                // `frozen T` LOWERS TO A BORROW — `ref T` — and this is the
+                // whole of stage 1's RC suppression.
+                //
+                // The design calls a `frozen` value "non-owning, non-counting".
+                // Non-owning is exactly what `ref` already means, and codegen
+                // emits no retain/release for a borrow because the caller keeps
+                // ownership. Measured: an owned `shared` pass-through emits
+                // rc_inc=4/rc_dec=9, the same chain through `ref` emits 0/0 —
+                // and it still emits 0/0 with `KARAC_RC_ELIDE_REF_PARAMS=0`, so
+                // that zero is the BORROW CONVENTION, not the rc-elide pass.
+                //
+                // Modes are declared at the signature (CLAUDE.md: body-level
+                // ownership analysis "is not a signature-derivation
+                // mechanism"), so a mode that wants borrow semantics has to say
+                // so in the declared type. Inferring `Ref` into `param_modes`
+                // is not enough and was measured not to be: the mode was
+                // already `Ref` there while codegen still emitted the owned
+                // traffic.
+                //
+                // Note what does NOT happen here: `TypeKind::Frozen` is still
+                // never constructed. Codegen sees `Ref`, a form it already
+                // handles on a shipped, ASAN-verified path, so this adds no
+                // unwrap site anywhere. The frozen-ness itself stays on
+                // `Param::is_frozen`, which is what the escape checker, the
+                // freeze-site check, and `par` admission read.
+                return Some(TypeExpr {
+                    kind: TypeKind::Ref(Box::new(inner)),
+                    span: self.span_from(&start),
+                });
             }
         }
 
