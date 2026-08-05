@@ -280,6 +280,13 @@ fn parse_check_command(args: &[String]) -> Command {
             profiles = Some(parse_profiles_arg(rest));
         } else if let Some(rest) = arg.strip_prefix("--targets=") {
             targets = Some(parse_targets_arg(rest));
+        } else if let Some(rest) = arg.strip_prefix("--target=") {
+            // `karac build` spells this SINGULAR, so reaching for
+            // `check --target=wasm_browser` is the natural move and used
+            // to die on `unknown flag` (B-2026-08-05-29). Accept it as
+            // the one-target spelling of `--targets=`; `all` still works
+            // through the same parser.
+            targets = Some(parse_targets_arg(rest));
         } else if arg == "--concurrency-report" {
             concurrency_report = true;
         } else if parse_simd_report_flag(arg, &mut simd_report) {

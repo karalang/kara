@@ -14380,6 +14380,153 @@ fn check_targets_single_target_parameterizes_resource_set() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A body that is gated to a non-native target and is WRONG in a way
+/// that has nothing to do with targets. `filter_inactive_items` deletes
+/// the whole item before resolution under `native`, so before
+/// B-2026-08-05-29 a bare `karac check` printed "All checks passed" over
+/// two textbook type errors — and `karac check --output=json` is the
+/// Mend loop's front door.
+const GATED_TYPE_ERROR: &str = "\
+#[target(wasm_browser)]
+pub fn blatantly_wrong(a: i32) -> i32 {
+    let s: String = a;
+    return s;
+}
+fn main() {}
+";
+
+#[test]
+fn check_examines_a_target_gated_body_by_default() {
+    let tmp = multi_target_dir("gatedbody");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, GATED_TYPE_ERROR).unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "a file whose only errors are in a gated body must still fail check: {stderr}",
+    );
+    assert!(
+        stderr.contains("── target: wasm_browser ──")
+            && stderr.contains("expected 'String', found 'i32'")
+            && stderr.contains("expected 'i32', found 'String'"),
+        "both errors must be reported, tagged with the target that found them: {stderr}",
+    );
+    // The native pass still runs and still passes — the gated target is
+    // ADDED to the default, it does not replace it.
+    assert!(
+        stderr.contains("── target: native ──"),
+        "native must remain the first pass: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_json_surfaces_a_gated_body_error() {
+    // The Mend loop consumes `--output=json`; a finding that reaches only
+    // the text renderer would not close this bug.
+    let tmp = multi_target_dir("gatedjson");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, GATED_TYPE_ERROR).unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success());
+    assert!(
+        stdout.contains("\"target\":\"wasm_browser\",\"success\":false")
+            && stdout.contains("expected 'String', found 'i32'"),
+        "JSON envelope must carry the gated-target finding: {stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_stays_single_pass_without_gated_items() {
+    // The default must not become a matrix for everyone — a file with no
+    // `#[target]` keeps the one-pass output shape (no per-target header),
+    // which is also what every other check test in this file expects.
+    let tmp = multi_target_dir("ungated");
+    let path = tmp.join("plain.kara");
+    std::fs::write(&path, "fn main() { println(\"ok\"); }\n").unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("All checks passed.") && !stderr.contains("── target:"),
+        "an ungated file must keep the single-pass rendering: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_negated_gate_admitting_native_stays_single_pass() {
+    // `not(gpu)` is ACTIVE on native, so the native pass already reads
+    // the body and a second pass would be pure cost. Guards the
+    // discovery rule against "any #[target] means multi-target".
+    let tmp = multi_target_dir("negated");
+    let path = tmp.join("neg.kara");
+    std::fs::write(
+        &path,
+        "#[target(not(gpu))]\npub fn ok_everywhere(a: i32) -> i32 { return a; }\nfn main() {}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        !stderr.contains("── target:"),
+        "a native-admitted gate needs no extra pass: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn check_accepts_the_singular_target_flag() {
+    // `karac build` spells it `--target=`; reaching for the same on
+    // `check` used to die on `unknown flag` (B-2026-08-05-29).
+    let tmp = multi_target_dir("singular");
+    let path = tmp.join("gated.kara");
+    std::fs::write(&path, GATED_TYPE_ERROR).unwrap();
+
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--target=wasm_browser"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("── target: wasm_browser ──") && !stderr.contains("unknown flag"),
+        "--target= must behave as the one-target spelling of --targets=: {stderr}",
+    );
+
+    // A bad name still reaches the same closed-set diagnostic.
+    let bad = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--target=wasm_wsi"])
+        .output()
+        .unwrap();
+    let bad_err = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        !bad.status.success() && bad_err.contains("unknown target 'wasm_wsi'"),
+        "singular spelling must share --targets= validation: {bad_err}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn check_targets_unknown_name_rejected() {
     let tmp = multi_target_dir("badname");

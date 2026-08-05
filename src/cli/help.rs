@@ -202,10 +202,17 @@ OPTIONS:
                             set each time. Diagnostics are tagged with
                             the producing target; findings identical on
                             every target are reported once as
-                            target-agnostic. Defaults to the discovered
-                            manifest's `[build].targets` when the flag is
-                            absent. Mutually exclusive with --profiles.
-                            Exits non-zero if any target fails.
+                            target-agnostic. When the flag is absent,
+                            defaults to the discovered manifest's
+                            `[build].targets`, and failing that to native
+                            plus every target named by a `#[target(...)]`
+                            attribute in the file — a gated item is absent
+                            under any other target, so its body would
+                            otherwise never be checked at all. Mutually
+                            exclusive with --profiles. Exits non-zero if
+                            any target fails.
+    --target=<name|all>     Accepted as the single-target spelling of
+                            --targets=, matching `karac build --target=`.
     --concurrency-report    Print a human-readable summary of the auto-par
                             analyzer's per-function parallel groups to
                             stdout alongside the check output. Same shape

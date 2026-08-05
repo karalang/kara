@@ -5665,6 +5665,23 @@ fn cmd_check(
             Some(declared)
         }
     });
+    // Neither asked for nor declared: cover whatever the SOURCE ITSELF
+    // gates. A `#[target(T)]` item is deleted before resolution under any
+    // other target, so a single-target check never reads its body —
+    // "All checks passed" on a fn with two plain type errors in it
+    // (B-2026-08-05-29). A `#[target]` annotation names the target the
+    // body is written for, so checking it there is what the annotation
+    // asks for; files with no gated items keep the single-pass default
+    // and pay nothing.
+    let targets = targets.or_else(|| {
+        let extra = gated_check_targets(&source);
+        if extra.is_empty() {
+            return None;
+        }
+        let mut list = vec![crate::target::active_target().to_string()];
+        list.extend(extra.into_iter().map(str::to_string));
+        Some(list)
+    });
     if let Some(list) = targets {
         cmd_check_targets(filename, &source, output, &list, lint_overrides);
         return;
@@ -5841,6 +5858,35 @@ fn cmd_check_profiles(
     if any_failed {
         process::exit(1);
     }
+}
+
+/// Source-side trigger for multi-target check: the targets named by
+/// `#[target(...)]` attributes in `source` that a native check would not
+/// reach. See `target::extra_check_targets_for` for why a gated body is
+/// otherwise never examined (B-2026-08-05-29).
+///
+/// Parses on its own rather than reusing the pipeline's parse, because
+/// the target list has to be known *before* the first pipeline is built.
+/// A source that does not parse yields no extra targets and falls through
+/// to the single-pass path, which reports the parse errors — discovery
+/// must never be the thing that reports them.
+///
+/// Keyed on the ACTIVE target rather than on `native`: the non-llvm
+/// `karac build --target=T` fallback reaches `cmd_check` with T already
+/// active, and there the user asked for exactly T — a discovery that
+/// hardcoded `native` would silently widen that one-target request into
+/// a matrix.
+///
+/// SCOPE: the entry file's own top-level items. A `#[target]` inside an
+/// IMPORTED module is not discovered here, so a gated body in a
+/// dependency module still needs an explicit `--targets`. Recorded on
+/// B-2026-08-05-29 rather than silently narrowed.
+fn gated_check_targets(source: &str) -> Vec<&'static str> {
+    let parsed = crate::parse(source);
+    if !parsed.errors.is_empty() {
+        return Vec::new();
+    }
+    crate::target::extra_check_targets_for(&parsed.program.items, crate::target::active_target())
 }
 
 /// Manifest-side trigger for multi-target check: walk upward from the

@@ -435,6 +435,48 @@ pub fn filter_inactive_items_in(
     tombstones
 }
 
+/// Which targets must be checked IN ADDITION to `base` for every
+/// `#[target(...)]`-gated item in `items` to have its body examined at
+/// all?
+///
+/// [`filter_inactive_items_in`] removes a non-admitted item *before
+/// resolution*, body included — so under a single-target check a gated
+/// body is not merely checked leniently, it is never seen. A file whose
+/// only errors live in a `#[target(wasm_browser)]` fn therefore reports
+/// "All checks passed" under the default `native` check, which is
+/// B-2026-08-05-29: `karac check` is the Mend loop's front door, and it
+/// was reporting success on source it had not read.
+///
+/// Deliberately shares [`item_attrs_and_name`] and [`TargetSpec::is_active_on`]
+/// with the filter, so the two cannot disagree about which items are
+/// gated or about what a spec admits — an item this returns nothing for
+/// is exactly an item the filter keeps.
+///
+/// Returns [`V1_TARGETS`] order, deduped. Empty for a program with no
+/// gated items, and empty for specs `base` already admits (`not(gpu)` on
+/// a native check needs no second pass).
+pub fn extra_check_targets_for(items: &[Item], base: &str) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for item in items {
+        let Some((attrs, _)) = item_attrs_and_name(item) else {
+            continue;
+        };
+        let Some(spec) = target_spec_of(attrs) else {
+            continue;
+        };
+        if spec.is_active_on(base) {
+            continue;
+        }
+        for target in V1_TARGETS {
+            if *target != base && spec.is_active_on(target) && !out.contains(target) {
+                out.push(target);
+            }
+        }
+    }
+    out.sort_by_key(|t| V1_TARGETS.iter().position(|v| v == t).unwrap_or(usize::MAX));
+    out
+}
+
 // ── Target-provided resource sets (phase-10 target gate) ─────────
 //
 // Table per `design.md § Cross-target Compilation > Target-Provided
@@ -515,4 +557,65 @@ pub fn target_provides(target: &str, resource: &str) -> bool {
         _ => &[],
     };
     provided.contains(&resource)
+}
+
+#[cfg(test)]
+mod extra_check_target_tests {
+    use super::extra_check_targets_for;
+    use crate::parse;
+
+    fn extra(src: &str) -> Vec<&'static str> {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "fixture must parse: {src}");
+        extra_check_targets_for(&parsed.program.items, "native")
+    }
+
+    #[test]
+    fn ungated_program_needs_no_second_pass() {
+        assert!(extra("fn main() {}\n").is_empty());
+    }
+
+    #[test]
+    fn positive_gate_names_the_target_to_check_under() {
+        assert_eq!(
+            extra("#[target(wasm_browser)]\npub fn f() {}\nfn main() {}\n"),
+            vec!["wasm_browser"],
+        );
+    }
+
+    #[test]
+    fn multi_name_gate_yields_every_admitted_target_in_canonical_order() {
+        // Both are admitted and the two differ in provided resources, so
+        // checking under only one would leave the other unexamined.
+        assert_eq!(
+            extra("#[target(wasm_wasi, wasm_browser)]\npub fn f() {}\nfn main() {}\n"),
+            vec!["wasm_browser", "wasm_wasi"],
+        );
+    }
+
+    #[test]
+    fn gate_admitting_native_needs_nothing() {
+        // `not(gpu)` is active on native — the ordinary pass reads the
+        // body already, so a second pass would be pure cost.
+        assert!(extra("#[target(not(gpu))]\npub fn f() {}\nfn main() {}\n").is_empty());
+    }
+
+    #[test]
+    fn negated_gate_excluding_native_covers_the_rest() {
+        assert_eq!(
+            extra("#[target(not(native))]\npub fn f() {}\nfn main() {}\n"),
+            vec!["wasm_browser", "wasm_wasi", "gpu"],
+        );
+    }
+
+    #[test]
+    fn repeated_gates_dedupe() {
+        assert_eq!(
+            extra(
+                "#[target(wasm_browser)]\npub fn a() {}\n\
+                 #[target(wasm_browser)]\npub struct S { x: i32 }\nfn main() {}\n"
+            ),
+            vec!["wasm_browser"],
+        );
+    }
 }
