@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 218 | 0 |
 | leak | 141 | 1 |
-| double-free | 103 | 1 |
+| double-free | 104 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 80 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 710 | 4 |
+| codegen | 711 | 4 |
 | interp | 127 | 0 |
 | typecheck | 126 | 0 |
 | ownership | 39 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **980 surfaced · 6 open · 964 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **981 surfaced · 6 open · 965 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -135,11 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **980 surfaced 
 | B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled. The key-type gate this row prescribed is REFUTED on x86 by a tag-only A/B: dropping the tag on kata:170 `Map[i64,i64]` executes 13.1% FEWER instructions and runs 1.20x SLOWER (3763.7 -> 4513.2 ms), because the tag rejects a bucket without touching its key while removing it costs a kv load per occupied bucket. The i64-vs-String pair that decided the old shape straddles TWO implementations (`should_use_mono_map_for` admits only i32/i64 keys, so kata:170 is the inlined mono path and kata:127 the erased runtime path), so it never isolated key type. Holding path and key type FIXED, x86 gains 20% from the tag and arm64 loses 27% -- an ISA effect, which reinstates the arch framing this row had retired. Arch-conditional is the surviving candidate and is UNVALIDATED. Separately, arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338. | MECHANISM MEASURED 2026-08-05 on arm64 with exact libproc counters (scripts/pmc.c): the tag saves 14.7% instructions on Map[i64,i64] but costs 28.7% IPC, netting -10.9% cycles when removed; on Map[String,i64] removing it costs both instructions and cycles. One mechanism, two signs, decided by whether the avoided key compare was expensive. Branch mispredicts RULED OUT (<1% of the top-down breakdown in both configs). Fix shape unchanged: ARCH x KEY-TYPE. OPEN: x86 reports the OPPOSITE SIGN on instruction count (-13.1% vs arm64's +14.7%) for the same flag -- re-measure that lane with pmc.c / perf stat before acting on it. Unmeasured: the Set probe. |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
-| B-2026-08-06-28 | 2026-08-06 | codegen | high | a DISCARDED passthrough call result double-frees its argument's payload at the DEFAULT -O2: `let d: Option[String] = Some(mk()); idopt(d);` aborts with `free(): double free detected in tcache 2`, while binding the result (`let x = idopt(d);`) is clean | — |
+| B-2026-08-06-29 | 2026-08-06 | codegen | high | a BOUND-then-CONSUMED passthrough result double-frees at the DEFAULT -O2: `let x = idopt(d); peek(x);` aborts with `free(): double free detected in tcache 2` -- the form B-2026-08-06-27 fixed for a MATCHED result, still broken when the alias is passed to a consuming callee instead | src/codegen/stmts.rs, the `passthrough_owner_alias` registration B-2026-08-06-27 added; and whatever consumes that alias when the bound name is passed on as an owned argument. Split out of B-2026-08-06-28 (fixed); NOT caused by it — verified broken against the pre-28 compiler. |
 
-### Fixed (964)
+### Fixed (965)
 
-<details><summary>964 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>965 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1129,6 +1129,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-25 | codegen | medium | the generic-impl MONOMORPH NAME mangles only the type argument's HEAD, so `Box[Box[Wide]]` and `Box[Box[Box[Wide]]]` (and `Box[Box[i64]]`, `Box[Box[S… | FIXED (src/codegen/mono.rs: new `append_nested_instantiation_mangle` appends `$<param>_gi_<token>` when a type argument is ITSELF a generic instantiation of a USER struct/enum, deriving the concrete args from the RECEIVER's recorded instantiation). Pins tests/codegen.rs `e2e_two_nested_generic_instantiations_get_distinct_monos`, stash-proven RED. |
 | B-2026-08-06-26 | codegen | medium | a boxed `Result` passed through a passthrough callee and matched with a payload-BINDING arm still double-frees at -O0: `Result[Wide, i64]` where `Wid… | d1aa4477 |
 | B-2026-08-06-27 | codegen | high | an INLINE heap `Option[String]` payload passed by value to a passthrough callee is freed TWICE at the DEFAULT -O2 as well as -O0, when the payload is… | edee55d9 |
+| B-2026-08-06-28 | codegen | high | a DISCARDED passthrough call result double-frees its argument's payload at the DEFAULT -O2: `let d: Option[String] = Some(mk()); idopt(d);` aborts wi… | FIXED (src/codegen/runtime.rs: new `discarded_temp_aliases_armed_source` declines to register a discarded temp's free when the call is a passthrough of an armed source, applied to the inline-Option, inline-Result and boxed-Option registrars; src/codegen/control_flow_match.rs: `call_passthrough_armed_any_source` widens B-2026-08-06-27's detector to the boxed armed set WITHOUT changing that row's let-site gate). Pins tests/memory_sanitizer.rs `asan_discarded_passthrough_result_does_not_free_source_payload`, stash-proven RED. |
 
 </details>
 

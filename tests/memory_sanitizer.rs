@@ -35010,6 +35010,98 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-28 — a DISCARDED passthrough call result must not free its
+    /// argument's payload.
+    ///
+    /// `let d: Option[String] = Some(mk()); idopt(d);` aborted with
+    /// `free(): double free detected in tcache 2` on a DEFAULT -O2 build (and
+    /// identically at -O0, so not an -O0 curiosity). The returned Option is an
+    /// ALIAS of `d`'s payload, but the discarded temp was materialized into a
+    /// slot with a free of its own while `d` stayed armed — two owners.
+    ///
+    /// Calling a function for its effect and ignoring a passthrough return is
+    /// ordinary code, which is why this was high severity despite looking
+    /// contrived.
+    ///
+    /// THREE PAYLOAD SHAPES, each measured broken before the fix rather than
+    /// assumed by symmetry: inline `Option[String]`, inline
+    /// `Result[String, i64]`, and heap-BOXED `Option[Wide]`. An
+    /// `Option[shared T]` payload was ALREADY clean — rc handles are not
+    /// buffer-owned — so it is carried as a control rather than a fourth fix.
+    ///
+    /// THE TWO NEGATIVE CONTROLS ARE THE LOAD-BEARING ONES, because the fix is
+    /// a SUPPRESSION and over-suppressing leaks:
+    ///   * a FRESH temp (`idopt(Some(mk(n)))`) has no named source, so it must
+    ///     still be registered and still freed;
+    ///   * a non-passthrough consuming callee must keep freeing normally.
+    ///
+    /// Under LSan on Linux this file's harness reports either direction, so a
+    /// suppression that went too far fails here rather than silently leaking.
+    ///
+    /// The payload must be genuinely heap — every string is built at runtime
+    /// from `env.args().len()`. A string LITERAL payload is rodata and cannot
+    /// fail; that flawed control has now tripped this family three times
+    /// (B-2026-08-06-21, -27, and this row's own note).
+    #[test]
+    fn asan_discarded_passthrough_result_does_not_free_source_payload() {
+        assert_clean_asan_run_min_allocs(
+            r#"struct Wide { a: String, b: String, c: i64, d: i64 }
+shared struct Node { s: String }
+fn idopt(o: Option[String]) -> Option[String] { o }
+fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
+fn idbox(o: Option[Wide]) -> Option[Wide] { o }
+fn idsh(o: Option[Node]) -> Option[Node] { o }
+fn peek(o: Option[String]) -> i64 {
+    match o { Option.Some(s) => s.len(), Option.None => 0 }
+}
+fn mk(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-a-real-heap-buffer");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // (a) the reported shape — inline Option, discarded passthrough.
+        let d: Option[String] = Option.Some(mk(n + i));
+        idopt(d);
+        // (b) the inline Result sibling.
+        let r: Result[String, i64] = Result.Ok(mk(n + i));
+        idres(r);
+        // (c) the heap-BOXED payload sibling.
+        let bw: Option[Wide] = Option.Some(Wide { a: mk(n + i), b: mk(n + i), c: 1, d: 2 });
+        idbox(bw);
+        // (d) shared payload — already clean, carried as a control.
+        let sh: Option[Node] = Option.Some(Node { s: mk(n + i) });
+        idsh(sh);
+        // CONTROL: a FRESH temp has no named source and must still be freed.
+        idopt(Option.Some(mk(n + i)));
+        // CONTROL: a non-passthrough consuming callee still frees normally.
+        let d3: Option[String] = Option.Some(mk(n + i));
+        acc = acc + peek(d3);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // Oracle-checked, not pasted back from the compiler: `--interp`,
+            // `KARAC_AUTO_PAR=0` AOT and the default auto-par build all print
+            // 1831, and valgrind reports 0 errors / 0 bytes lost on the same
+            // program. The interpreter shares none of codegen's ownership
+            // machinery, so its agreement is what makes this an expected value.
+            &["1831"],
+            "discarded_passthrough_result_does_not_free_source_payload",
+            // 40 rounds x seven runtime-built Strings (Wide carries two), all
+            // heap. A real run measures far above this floor; a folded-away
+            // version could not reach it.
+            200,
+        );
+    }
+
     /// B-2026-08-06-27 — the INLINE sibling of the passthrough double free.
     ///
     /// B-2026-08-06-21 fixed the heap-BOXED payload and asserted the inline

@@ -6488,6 +6488,22 @@ impl<'ctx> super::Codegen<'ctx> {
             .or_else(|| self.call_passthrough_armed_source(value, &self.inline_result_payload_vars))
     }
 
+    /// Superset of [`Self::call_passthrough_armed_inline_source`] that also
+    /// consults the heap-BOXED payload set. B-2026-08-06-28.
+    ///
+    /// Kept separate rather than widening the inline detector, because that one
+    /// is B-2026-08-06-27's `let`-site gate and widening it would change which
+    /// bindings record a `passthrough_owner_alias` — a different decision, on a
+    /// different row, with its own measured behaviour. This variant exists for
+    /// the DISCARDED-temp registrars, where a boxed payload double-freed the
+    /// same way its inline sibling did (`Option[Wide]` with two String fields,
+    /// measured — while an `Option[shared T]` payload was already clean,
+    /// because rc handles are not buffer-owned).
+    pub(super) fn call_passthrough_armed_any_source(&self, value: &Expr) -> Option<String> {
+        self.call_passthrough_armed_inline_source(value)
+            .or_else(|| self.call_passthrough_armed_source(value, &self.boxed_enum_payload_vars))
+    }
+
     /// Shared shape test: is `value` a direct call to a named function, passing
     /// a binding that is present in `armed` in a position the callee returns?
     /// `call_arg_flows_into_return` is conservative-TRUE on a mixed-path callee,

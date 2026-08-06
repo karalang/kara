@@ -4537,11 +4537,45 @@ impl<'ctx> super::Codegen<'ctx> {
     /// borrow-returning producers (`scrutinee_is_borrow_call`): `Map.get` /
     /// `Vec.get` return an `Option` whose payload ALIASES the container's
     /// storage, so freeing it would corrupt the container.
+    /// Does this statement-position temporary ALIAS an already-armed binding's
+    /// payload, rather than own a fresh one? B-2026-08-06-28.
+    ///
+    /// `let d: Option[String] = Some(mk()); idopt(d);` — the discarded result
+    /// of a PASSTHROUGH call is the caller's own payload handed straight back,
+    /// so materializing it and queueing a free gives one buffer two owners:
+    /// `d`'s own armed cleanup frees it too and the program aborts with
+    /// `free(): double free detected in tcache 2` on a DEFAULT -O2 build (and
+    /// identically at -O0 — this is not an -O0 curiosity).
+    ///
+    /// This is the same aliasing class the discarded-temp registrars already
+    /// tell their callers to exclude for borrow-returning producers (`Map.get`
+    /// / `Vec.get`, whose `Option` payload aliases the container's storage). A
+    /// passthrough is the user-function form of it, so the exclusion lives here
+    /// beside them rather than at each call site.
+    ///
+    /// NARROWING the registration is the deliberate direction, not zeroing the
+    /// source: B-2026-08-06-21 tried the zeroing form and turned a clean
+    /// program into a LEAK in precisely this discarded-result case. Leaving the
+    /// SOURCE as sole owner cannot leak — it is still armed — and cannot
+    /// double-free, because nothing else claims the payload.
+    ///
+    /// The detector is B-2026-08-06-27's, reused unchanged. It fires only for a
+    /// direct call passing a NAMED armed binding in a position the callee
+    /// flows into its return; a fresh temp (`idopt(Some(mk(n)))`) has no named
+    /// source, so it is still registered and still freed — verified, because
+    /// suppressing that one would leak.
+    fn discarded_temp_aliases_armed_source(&self, tail: &Expr) -> bool {
+        self.call_passthrough_armed_any_source(tail).is_some()
+    }
+
     pub(super) fn try_track_discarded_inline_option(
         &mut self,
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> bool {
+        if self.discarded_temp_aliases_armed_source(tail) {
+            return false;
+        }
         let key = (tail.span.offset, tail.span.length);
         let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() else {
             return false;
@@ -4677,6 +4711,12 @@ impl<'ctx> super::Codegen<'ctx> {
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> bool {
+        // B-2026-08-06-28, boxed leg — a heap-BOXED payload aliases through a
+        // passthrough exactly as the inline one does; `Option[Wide]` with two
+        // String fields double-freed identically. Measured, not assumed.
+        if self.discarded_temp_aliases_armed_source(tail) {
+            return false;
+        }
         let key = (tail.span.offset, tail.span.length);
         let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() else {
             return false;
@@ -4850,6 +4890,12 @@ impl<'ctx> super::Codegen<'ctx> {
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> bool {
+        // B-2026-08-06-28, Result leg — same aliasing as the Option sibling
+        // above; `idres(r);` on an armed `Result[String, i64]` binding
+        // double-freed identically. Measured, not assumed by symmetry.
+        if self.discarded_temp_aliases_armed_source(tail) {
+            return false;
+        }
         let key = (tail.span.offset, tail.span.length);
         let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() else {
             return false;
