@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 217 | 0 |
 | leak | 138 | 2 |
 | double-free | 97 | 1 |
-| codegen-gap | 91 | 0 |
+| codegen-gap | 92 | 1 |
 | run-vs-build | 81 | 0 |
 | missing-feature | 78 | 1 |
 | false-positive | 56 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 688 | 8 |
+| codegen | 689 | 9 |
 | interp | 125 | 0 |
-| typecheck | 123 | 2 |
+| typecheck | 124 | 3 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **955 surfaced · 10 open · 937 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **956 surfaced · 11 open · 937 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,6 +140,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **955 surfaced 
 | B-2026-08-06-1 | 2026-08-06 | codegen | medium | a generic wrapper's bare `T` field bound to a MAP leaks its whole handle tree: `fn sink(b: Box[Map[i64, String]])` loses 25,830 B / 40 blocks on a DEFAULT -O2 build, because the mono struct drop's bare-`T` reclassification recognises String/Vec/VecDeque heads only -- the concrete twin `Gmap[T] { m: Map[i64, T] }` is clean, since its DECLARED field name is `Map` | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which promotes only to FieldDrop::VecOrString and never to FieldDrop::MapOrSet |
 | B-2026-08-06-2 | 2026-08-06 | codegen | high | a struct LITERAL passed to a GENERIC by-value param whose heap field the callee MOVES OUT leaks that field on a DEFAULT -O2 build -- `take(Box { v: <String> })` where `fn take[T](b: Box[T]) -> T { b.v }`; needs all three of generic-param + literal-arg + move-out, and is NOT B-2026-08-05-33 (whose control has both argument forms leaking alike) nor B-2026-08-06-1 (whose defect is the Map head, and a String is already classified) | — |
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
+| B-2026-08-06-4 | 2026-08-06 | typecheck+codegen | medium | a `shared struct`'s Vec field passed to a `mut Slice[T]` parameter does not COMPILE (LLVM module verification hard-fails) even when the field is declared `mut`, and the immutable case additionally passes `karac check` — the `SharedFieldNotMut` gate cannot see a `Type::Slice` formal | — |
 
 ### Fixed (937)
 
