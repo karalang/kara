@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 141 | 1 |
+| leak | 143 | 2 |
 | double-free | 104 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 712 | 4 |
+| codegen | 714 | 5 |
 | interp | 127 | 0 |
 | typecheck | 126 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **982 surfaced · 6 open · 966 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **984 surfaced · 7 open · 967 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,12 +134,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **982 surfaced 
 | B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT); scripts/asan-o0-leg.sh + tests/asan-o0-known-failures.txt (the ratcheted -O0 leg); CI job memory-sanitizer-o0 |
 | B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled. The key-type gate this row prescribed is REFUTED on x86 by a tag-only A/B: dropping the tag on kata:170 `Map[i64,i64]` executes 13.1% FEWER instructions and runs 1.20x SLOWER (3763.7 -> 4513.2 ms), because the tag rejects a bucket without touching its key while removing it costs a kv load per occupied bucket. The i64-vs-String pair that decided the old shape straddles TWO implementations (`should_use_mono_map_for` admits only i32/i64 keys, so kata:170 is the inlined mono path and kata:127 the erased runtime path), so it never isolated key type. Holding path and key type FIXED, x86 gains 20% from the tag and arm64 loses 27% -- an ISA effect, which reinstates the arch framing this row had retired. Arch-conditional is the surviving candidate and is UNVALIDATED. Separately, arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338. | MECHANISM MEASURED 2026-08-05 on arm64 with exact libproc counters (scripts/pmc.c): the tag saves 14.7% instructions on Map[i64,i64] but costs 28.7% IPC, netting -10.9% cycles when removed; on Map[String,i64] removing it costs both instructions and cycles. One mechanism, two signs, decided by whether the avoided key compare was expensive. Branch mispredicts RULED OUT (<1% of the top-down breakdown in both configs). Fix shape unchanged: ARCH x KEY-TYPE. OPEN: x86 reports the OPPOSITE SIGN on instruction count (-13.1% vs arm64's +14.7%) for the same flag -- re-measure that lane with pmc.c / perf stat before acting on it. Unmeasured: the Set probe. |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
-| B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | BOTH proposed routes are now REFUTED BY MEASUREMENT — see the two dated sections at the end of `detail`. Caller-side (skip the move-zeroing) breaks selfhost_parser_items; callee-side (admit the seeded pair at the escape-guarded param registration in functions.rs) breaks three memory_sanitizer fixtures. Any third attempt must start from those five named counterexamples. |
 | B-2026-08-06-30 | 2026-08-06 | codegen | low | two spellings of the same `frozen` traversal differ by ~1.6x and the cause is unidentified — the ALIAS form (`let k = n.kids[i]; sum(k)`) beats the inline projection (`sum(n.kids[i])`) despite emitting MORE IR | — |
+| B-2026-08-06-31 | 2026-08-06 | codegen | medium | the STRUCT-payload sibling of B-2026-08-06-9 leg A: a named `Option[StructWide]` binding consumed by a READ-ONLY callee leaks its box (-O0) and the payload's interior String (both opt levels) | — |
+| B-2026-08-06-32 | 2026-08-06 | codegen | medium | a heap-BOXED `Option` payload nested inside a `Result`'s INLINE payload area has no owner on any side -- 32 B per construction at -O0 | — |
 
-### Fixed (966)
+### Fixed (967)
 
-<details><summary>966 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>967 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1111,6 +1112,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-6 | codegen | high | a `Map`/`Set` field moved out INDIVIDUALLY left the source handle live, so the owner's struct drop freed storage the destination still owned — `fn ta… | 26b2176 (src/codegen/call_dispatch.rs — the Map/Set arm in `zero_struct_field_move_cap`, plus the Sorted variants in `zero_struct_move_caps_mono`'s existing arm). Pins e2e_map_field_move_out_neutralizes_the_source, test_map_field_move_out_transfers_the_handle, asan_map_field_move_out_neutralizes_the_source. |
 | B-2026-08-06-7 | codegen+interp | high | shift by >= the bit width is UNDEFINED BEHAVIOUR in AOT output — one `let` variable prints two different values in the same run and different values… | ee551b8 (shift legs) + <this commit> (negation leg) |
 | B-2026-08-06-8 | codegen | low | a generic wrapper's bare `T` field bound to a SHARED struct leaks 2,560 B / 80 blocks at -O0 (clean at -O2): `Box[T]` at `T = Node` where `Node` is a… | 0928227 (src/codegen/param_own.rs — `struct_owns_shared_field_subst`, the gate; src/codegen/synth_drop.rs — `emit_nested_struct_shared_rc_decs_ex_mono`, the walker; src/codegen/runtime.rs — `emit_vec_elem_struct_with_shared_drop_fn_mono` plus the `track_struct_var_inst` call site; src/codegen/call_dispatch.rs — the `shared` arm in `zero_struct_field_move_cap_impl`; src/codegen/stmts.rs — the FieldAccess arm in `suppress_block_tail_cleanup`). Pins asan_bare_generic_param_shared_field_is_rc_dec_and_neutralized, e2e_shared_field_moved_out_of_a_value_block_survives_the_frame_drain, test_bare_generic_param_shared_field_transfers_the_handle. |
+| B-2026-08-06-9 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [FIXED] a NAMED `Option` binding passed by value has its let-site… | 9370f723 (leg B: fresh-temp enum arg registrar asks `enum_drop_switch_does_work`); de8881f8 (leg A: the callee owns a boxed non-struct Option payload) |
 | B-2026-08-06-10 | codegen | medium | a callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans the box the caller's struct drop owns: `fn f(h: Option[H]) { match h {… | e6a0a5a1 |
 | B-2026-08-06-11 | codegen | high | an owned boxed-payload enum param that ESCAPES -- returned, or forwarded to another by-value param -- is freed by the callee anyway: `fn id(o: Opt[St… | 05005aae |
 | B-2026-08-06-12 | codegen | high | a GENERIC struct LITERAL used directly as a METHOD RECEIVER cannot be built: `Box { v: <String> }.take()` passes `karac check`, runs correctly under… | 2a985b08 |
