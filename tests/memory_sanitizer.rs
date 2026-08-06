@@ -24455,6 +24455,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-7 tail — a fresh-temp Tensor passed DIRECTLY as an OWNED
+    /// argument (`first(make())`). Owned tensor params are caller-retains, like
+    /// Vec/String: the callee registers no `FreeTensor`, so a temp with no
+    /// binding to own it leaked the whole `[rank][dims][data]` block. The
+    /// kitchen-sink `asan_tensor_lifecycle_clean` fixture caught it once at
+    /// 56 B; this one scales it 40x so a regression can't hide under a single
+    /// block, and pairs it with the two shapes that were ALWAYS clean and must
+    /// stay so — the caller-bound form and the PASSTHROUGH callee, where the
+    /// result binding owns the block and a caller-side free would double it.
+    ///
+    /// THE CALLEE READS THE WHOLE BLOCK (`t.sum()`), NOT ONE ELEMENT, and that
+    /// is what makes this a DEFAULT-BUILD gate. The originating fixture reads
+    /// `t[0, 0]`, which leaves the allocation provably dead and lets LLVM delete
+    /// it outright at `-O2` — the B-2026-08-04-17 vacuity, and the reason this
+    /// leak read as `-O0`-only. Measured unfixed with the summing callee:
+    /// 2,240 B / 40 blocks at KARAC_OPT_LEVEL=0 **and** at the default `-O2`.
+    #[test]
+    fn asan_tensor_fresh_temp_owned_arg_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(v: f64) -> Tensor[f64, [2, 2]] {
+    let t: Tensor[f64, [2, 2]] = Tensor.full([2, 2], v);
+    t
+}
+
+fn total(t: Tensor[f64, [2, 2]]) -> f64 { t.sum() }
+
+fn id(t: Tensor[f64, [2, 2]]) -> Tensor[f64, [2, 2]] { t }
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: f64 = 0.0;
+    while i < 40 {
+        // the leaking shape: fresh temp into an owned param
+        acc = acc + total(make(1.0));
+        // control 1 — caller binding owns it (always clean)
+        let m = make(2.0);
+        acc = acc + total(m);
+        // control 2 — passthrough callee; the RESULT binding owns the block,
+        // so the caller-side free must NOT also fire
+        let p = id(make(3.0));
+        acc = acc + p.sum();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["960"],
+            "tensor_fresh_temp_owned_arg",
+        );
+    }
+
     #[test]
     fn asan_iter_axis_row_view_bind_no_double_free() {
         // B-2026-07-13-7: `t.iter_axis(n)` returns a `Vec[Tensor]` of freshly

@@ -1863,6 +1863,36 @@ impl<'ctx> super::Codegen<'ctx> {
             // passthrough are unaffected (`arg_is_entry_copied_heap_struct`
             // matches only copy-supported heap structs).
             let flows_into_return = self.call_arg_flows_into_return(&name, i);
+            // B-2026-08-05-7 — the TENSOR sibling of the `#20` arm above. A
+            // tensor is a bare `ptr` to one `[rank][dims][data]` block, so
+            // `llvm_ty_is_vec_struct` never admits it and the fresh-temp
+            // materialization above skips it entirely. Owned tensor params
+            // follow the same caller-retains convention Vec/String do — the
+            // callee registers no `FreeTensor` for its by-value param, which
+            // `let m = make(); first(m);` proves by being single-free — so a
+            // temp passed DIRECTLY (`first(make())`) had no owner anywhere and
+            // leaked the whole block, 56 B per call.
+            //
+            // Same passthrough guard as the aggregate registrar below: when the
+            // callee hands the param back (`fn id(t: Tensor…) -> Tensor… { t }`)
+            // the caller's RESULT binding owns the block and a free here would
+            // double it. A tensor param is never entry-copied, so unlike the
+            // struct/enum arms there is no copy-supported exception to carve out.
+            if !flows_into_return
+                && val.is_pointer_value()
+                && self.expr_yields_fresh_owned_temp(&a.value)
+                && self.is_owned_tensor_param(&name, i)
+            {
+                let cur_fn = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|bb| bb.get_parent())
+                    .expect("compile_call inside a function context");
+                let slot =
+                    self.create_entry_alloca(cur_fn, &format!("tensor_arg_tmp{i}"), val.get_type());
+                self.builder.build_store(slot, val).unwrap();
+                self.track_tensor_var(slot);
+            }
             if !flows_into_return
                 || self.arg_is_entry_copied_heap_struct(&a.value)
                 // B-2026-08-01-14 — enum ctor args are entry-copied too:
@@ -2018,6 +2048,29 @@ impl<'ctx> super::Codegen<'ctx> {
             self.register_lazy_user_call_result(&name, v);
             Ok(v)
         }
+    }
+
+    /// Is parameter `i` of free function `name` an OWNED (non-borrow)
+    /// `Tensor[T, S]` param? `fn_param_tensor_info` peels one `ref`/`mut ref`
+    /// (it exists to thread the element type into an inline `Tensor.from`
+    /// argument, which a borrowed param needs just as much), so borrow-ness has
+    /// to come from `fn_param_ref` / `fn_param_mut_ref` separately — the
+    /// tensor-info entry alone would admit `fn f(t: ref Tensor…)`, whose block
+    /// the caller's binding still owns.
+    pub(super) fn is_owned_tensor_param(&self, name: &str, i: usize) -> bool {
+        let is_tensor = self
+            .fn_param_tensor_info
+            .get(name)
+            .and_then(|v| v.get(i))
+            .is_some_and(|info| info.is_some());
+        let flagged = |table: &HashMap<String, Vec<bool>>| {
+            table
+                .get(name)
+                .and_then(|v| v.get(i))
+                .copied()
+                .unwrap_or(false)
+        };
+        is_tensor && !flagged(&self.fn_param_ref) && !flagged(&self.fn_param_mut_ref)
     }
 
     /// The shared (RC) heap-box layout produced by a fresh-temp by-value call

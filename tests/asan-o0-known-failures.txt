@@ -27,11 +27,21 @@
 # Verified by attribution rather than assumed: the fixture passes at 7032a19,
 # i.e. WITHOUT the change that happened to be in flight when the leg was run.
 
-# ── B-2026-08-05-7 (open) — the three it triaged and reduced but did not fix ──
-# A fresh-temp Tensor passed as an owned argument: `first(make())` leaks where
-# `let m = make(); …` is clean. 56 bytes in 1 allocation.
-memory_sanitizer_tests::asan_tensor_lifecycle_clean
+# B-2026-08-05-7's tensor entry (asan_tensor_lifecycle_clean) was REMOVED
+# 2026-08-06: the fresh-temp owned-argument leak it named is fixed. Owned tensor
+# params are caller-retains like Vec/String, and the caller-side materialization
+# that covers those is gated on the Vec `{ptr,len,cap}` LLVM shape, which a
+# tensor — a bare `ptr` to one `[rank][dims][data]` block — is not. It now gets
+# its own caller-scope `FreeTensor` behind the same passthrough guard.
+#
+# Not an -O0 curiosity either: with a callee that reads the WHOLE block
+# (`t.sum()` rather than `t[0, 0]`) the leak measures 2,240 B / 40 blocks
+# IDENTICALLY at -O0 and at the default -O2. The fixture read it one element at
+# a time, which is what let LLVM delete the allocation and made it look
+# -O0-only. `asan_tensor_fresh_temp_owned_arg_no_leak` carries the summing form
+# so the default leg gates it too.
 
+# ── B-2026-08-05-7 (open) — the two it triaged and reduced but did not fix ──
 # An `Option[H]` field read out of a shared-enum payload and passed BY VALUE to
 # a free fn. 64 bytes in 2 allocations. Re-check against B-2026-08-05-33's
 # caller-retains law before diagnosing it fresh — that row is now fixed, and
