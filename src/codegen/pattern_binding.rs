@@ -1282,6 +1282,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let bound =
                                         self.reconstruct_payload_value(sub_pat, &field_words)?;
                                     self.bind_pattern_values(sub_pat, bound)?;
+                                    self.record_deboxed_payload_box(sub_pat, &field_words);
                                 }
                                 return Ok(());
                             }
@@ -1308,6 +1309,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         let bound = self.reconstruct_payload_value(sub_pat, &field_words)?;
                         self.bind_pattern_values(sub_pat, bound)?;
+                        self.record_deboxed_payload_box(sub_pat, &field_words);
                     }
                 }
                 Ok(())
@@ -1439,6 +1441,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let bound =
                                     self.reconstruct_payload_value(sub_pat, &field_words)?;
                                 self.bind_pattern_values(sub_pat, bound)?;
+                                self.record_deboxed_payload_box(sub_pat, &field_words);
                             } else {
                                 let synthetic = Pattern {
                                     kind: PatternKind::Binding(field_pat.name.clone()),
@@ -1447,6 +1450,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let bound =
                                     self.reconstruct_payload_value(&synthetic, &field_words)?;
                                 self.bind_pattern_values(&synthetic, bound)?;
+                                self.record_deboxed_payload_box(&synthetic, &field_words);
                             }
                         }
                         return Ok(());

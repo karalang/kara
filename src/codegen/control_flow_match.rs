@@ -2345,9 +2345,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `place_optres_field_whole_move_info` for why they differ.
                 let admitted = if whole_move {
                     Self::option_payload_te(&field_te).is_some_and(|pt| {
-                        self.is_string_type_expr(&pt)
-                            || self.extract_vec_elem_type(&pt).is_some()
-                            || self.option_payload_struct_or_enum_drop_ok(&pt)
+                        // B-2026-08-06-10 — a heap-BOXED payload is excluded, and
+                        // it is the one place the pairing rule above does NOT
+                        // describe the whole-move leg's only consumer. That
+                        // consumer is a by-value CALL ARGUMENT
+                        // (`suppress_place_optres_field_whole_move_source`), and
+                        // the callee it hands the value to frees nothing when the
+                        // payload is boxed: no parameter registers a box drop
+                        // (caller-retains), and the arm binding is a deboxed copy
+                        // that deliberately registers none either, or it would
+                        // double-free against whoever owns the box. Zeroing the
+                        // tag there transfers ownership to nobody and orphans the
+                        // box — 32 bytes per call, measured, while the SAME callee
+                        // returning a scalar stays clean only because ownership
+                        // infers `ref` and this never runs.
+                        //
+                        // Not zeroing is only half a fix: the caller's drop would
+                        // then free a buffer the callee's arm moved out. The other
+                        // half is the `deboxed_payload_box_ptrs` mirror, which
+                        // zeroes that field's `cap` THROUGH the box so this drop
+                        // skips exactly what the move took. Pair them or neither.
+                        //
+                        // The INLINE classes below keep the old behaviour, where
+                        // the premise does hold — an `Option[String]` payload
+                        // binds to an arm binding with its own `FreeVecBuffer`.
+                        if !self.option_payload_is_boxed(&pt) {
+                            return self.is_string_type_expr(&pt)
+                                || self.extract_vec_elem_type(&pt).is_some()
+                                || self.option_payload_struct_or_enum_drop_ok(&pt);
+                        }
+                        false
                     })
                 } else {
                     self.option_inline_payload_elem(&field_te).is_some()
@@ -2570,6 +2597,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (see `place_optres_field_whole_move_info`), which is wider than the
     /// pattern leg's.
     pub(super) fn suppress_place_optres_field_whole_move_source(&mut self, value: &Expr) {
+        // A heap-BOXED `Option` payload is refused by the classifier's admission
+        // test (B-2026-08-06-10 — see the rationale there): the caller stays
+        // armed because it still owns the box, and the callee's move-out is
+        // neutralized THROUGH that box instead.
         let Some((is_result, _field_te, src_ptr)) = self.place_optres_field_whole_move_info(value)
         else {
             return;
@@ -2582,6 +2613,73 @@ impl<'ctx> super::Codegen<'ctx> {
             self.zero_result_payload_area(result_ty, src_ptr, "respl.argmove");
         } else {
             self.zero_option_field_tag_at(src_ptr);
+        }
+    }
+
+    /// B-2026-08-06-10 — record the enum payload BOX a just-bound match-arm
+    /// binding was deboxed out of, so the move-out neutralizers can mirror
+    /// their zero into storage the box's owner can see. Call sites pair this
+    /// with [`Self::reconstruct_payload_value`] + `bind_pattern_values`, and
+    /// pass the SAME `field_words`, because the debox predicate here has to be
+    /// the same one the reconstruction used.
+    ///
+    /// Insert-or-REMOVE, never insert-only: two arms can bind the same name
+    /// with only one of them boxed, and a stale entry would point the mirror at
+    /// an unrelated allocation. Keying by slot already makes that unreachable;
+    /// the removal keeps the map honest anyway, at the cost of one hash lookup.
+    pub(super) fn record_deboxed_payload_box(
+        &mut self,
+        sub_pat: &Pattern,
+        field_words: &[inkwell::values::IntValue<'ctx>],
+    ) {
+        let PatternKind::Binding(name) = &sub_pat.kind else {
+            return;
+        };
+        let Some(slot) = self.variables.get(name.as_str()).map(|s| s.ptr) else {
+            return;
+        };
+        // OWNED-PARAM scrutinees only — the one shape where the box's owner is
+        // out of reach. Everywhere else the owner is a `BoxedEnumDrop` in this
+        // frame's cleanup queue, and B-2026-08-04-2 already neutralizes those by
+        // retracting the action's inner walk. It chose retraction over a data
+        // write for a reason worth not re-learning: the box's words are also
+        // what a re-homed payload-BODIES walk reads, and zeroing them made a
+        // user Drop body print an empty string — a double free traded for a
+        // silent wrong value. Recording nothing here leaves every in-frame shape
+        // byte-identical and confines the mirror to the cross-call case, where a
+        // data write is the ONLY channel to the caller's drop fn.
+        if !self.pattern_binding_scrutinee_is_owned_param {
+            self.deboxed_payload_box_ptrs.remove(&slot);
+            return;
+        }
+        // …and never through a SHARED enum's payload box. That box lives inside
+        // an RC node other handles can still read, so a cap/len zero there is
+        // corruption rather than neutralization — the same reason
+        // `field_chain_place_ptr` refuses a borrowed root, and the reason
+        // B-2026-07-28-17 hands the callee a defensive CLONE instead. That clone
+        // is a private non-shared `Option`, so the shape this row measured
+        // still reaches the mirror; only the shared original is off limits.
+        if self.pattern_binding_scrutinee_is_shared_enum {
+            self.deboxed_payload_box_ptrs.remove(&slot);
+            return;
+        }
+        // The unpack mirror of `coerce_to_payload_words`'s pack-side boxing —
+        // identical to `reconstruct_payload_value`'s own `want > field_words`.
+        if field_words.is_empty() || self.pattern_payload_word_count(sub_pat) <= field_words.len() {
+            self.deboxed_payload_box_ptrs.remove(&slot);
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        match self
+            .builder
+            .build_int_to_ptr(field_words[0], ptr_ty, "enumbox.mv")
+        {
+            Ok(box_ptr) => {
+                self.deboxed_payload_box_ptrs.insert(slot, box_ptr);
+            }
+            Err(_) => {
+                self.deboxed_payload_box_ptrs.remove(&slot);
+            }
         }
     }
 

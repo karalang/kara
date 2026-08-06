@@ -18,6 +18,10 @@
 #
 # Measured 2026-08-06 at 225a4553, x86_64 Linux, both archives rebuilt
 # lean-then-full: 942 passed / 4 failed / 10 ignored in 92s.
+#
+# THE LIST IS NOW EMPTY (2026-08-06). All four entries are fixed, each removal
+# recorded below with the mechanism rather than deleted silently. The leg still
+# gates: with nothing quarantined, ANY -O0 failure is a new failure.
 
 # B-2026-08-06-2's entry (asan_generic_struct_heap_field_move_out_no_double_free)
 # was REMOVED 2026-08-06: the list was measured at 225a4553 and `eefe88a` fixed
@@ -52,16 +56,21 @@
 # `Option[Option[String]]` whose let-site box drop does own its box — not the
 # same value left unmatched.
 
-# ── B-2026-08-06-10 (open) — reduced, not yet fixed ──
-# A callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans
-# the box the caller's struct drop owns. 64 bytes in 2 allocations.
+# B-2026-08-06-10's entry
+# (asan_shared_payload_view_optres_field_call_arg_copy_no_leak_no_double_free)
+# was REMOVED 2026-08-06: the last entry, so THE LIST IS NOW EMPTY and any -O0
+# failure from here on is a new failure.
 #
-# Re-attributed here from B-2026-08-05-7 after isolation, and the old line is
-# worth remembering as a caution: it read "an `Option[H]` field read out of a
-# shared-enum payload and passed BY VALUE to a free fn", which named three
-# things that all turn out to be irrelevant. Measured one variable at a time,
-# the FIELD form is clean, the shared-enum wrapper is irrelevant (identical leak
-# without it), and the payload's heap-ness is irrelevant. The only variable that
-# moves the result is whether the CALLEE's arm returns `x.label` (leaks) or
-# `x.k` (clean).
-memory_sanitizer_tests::asan_shared_payload_view_optres_field_call_arg_copy_no_leak_no_double_free
+# Its line here had been re-attributed from B-2026-08-05-7 after isolation, and
+# the version before that is worth remembering as a caution — it read "an
+# `Option[H]` field read out of a shared-enum payload and passed BY VALUE to a
+# free fn", naming three things that all turned out to be irrelevant. Measured
+# one variable at a time, the only one that moved the result was whether the
+# CALLEE's arm returns `x.label` (leaked) or `x.k` (clean).
+#
+# The fix is three paired sites — caller stays armed for a boxed payload, callee
+# mirrors its move-out THROUGH the box, and the shared-view defensive clone gets
+# a caller-scope owner. Each alone is a different bug: the first two are a double
+# free without each other, and the third was invisible in the reduction (it is
+# what the fixture's remaining 64 B turned out to be, a second leak of exactly
+# the same size hiding behind the first).

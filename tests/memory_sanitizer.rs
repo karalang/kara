@@ -11908,6 +11908,99 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-10 — a callee that MOVES OUT OF a heap-BOXED `Option`
+    /// payload it received BY VALUE, in both move shapes, with the read-only
+    /// control that has to stay clean.
+    ///
+    /// `H` is four LLVM words against `Option`'s three-word payload area, so
+    /// `coerce_to_payload_words` heap-boxes it and the callee's arm binding is a
+    /// DEBOXED COPY — a private load of a box the CALLER still owns. Three
+    /// callees over that one struct, and the caller is byte-identical for all
+    /// three, so any difference is the callee's arm alone:
+    ///
+    ///   * `take_label` moves a FIELD out (`x.label`). Pre-fix the caller zeroed
+    ///     the source's Option tag on the way in, disarming the very box drop it
+    ///     still owned: 32 bytes orphaned per call.
+    ///   * `take_all` moves the WHOLE payload out (`x`). Same leak — and the arm
+    ///     that pins the fix's two halves together, because the caller-side half
+    ///     alone (stop zeroing the tag) turns THIS one into an ASAN double-free
+    ///     abort. It balances only once the callee mirrors its move-out through
+    ///     the box.
+    ///   * `take_key` reads a scalar (`x.k`) and moves nothing. Ownership infers
+    ///     `ref`, the suppressor never runs, and the box drop owns the lot. It
+    ///     was clean before the fix and must stay clean: a neutralizer that
+    ///     fires too widely surfaces HERE, as a leak of a label nobody moved.
+    ///
+    /// `None` sources are exercised for the reason the sibling test gives — that
+    /// is the direction where an over-eager source zero strands a payload rather
+    /// than double-freeing it.
+    ///
+    /// COVERAGE, stated because it is weaker than the assertion looks: measured
+    /// against the pre-fix compiler this leaks 640 B in 20 allocations at
+    /// `KARAC_OPT_LEVEL=0` and is CLEAN at the default `-O2`, where the whole
+    /// program folds to 3 allocations. Loop-counter-derived labels were not
+    /// enough to defeat that — the loop is fully constant — so the memory half
+    /// of this fixture is really carried by the `-O0` leg
+    /// (`scripts/asan-o0-leg.sh`, B-2026-08-04-17), which is what that leg
+    /// exists for. What it does assert at BOTH levels is the accumulated total,
+    /// so a leak traded for a wrong value still fails here.
+    #[test]
+    fn asan_boxed_option_param_payload_move_out_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct H { label: String, k: i64 }
+struct Node { hp: Option[H], k: i64 }
+
+fn take_label(h: Option[H]) -> String {
+    match h {
+        Option.Some(x) => { return x.label; }
+        Option.None => { return "none".to_string(); }
+    }
+}
+
+fn take_all(h: Option[H]) -> H {
+    match h {
+        Option.Some(x) => { return x; }
+        Option.None => { return H { label: "none".to_string(), k: 0 }; }
+    }
+}
+
+fn take_key(h: Option[H]) -> i64 {
+    match h {
+        Option.Some(x) => { return x.k; }
+        Option.None => { return 0; }
+    }
+}
+
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 10 {
+        let a = Node { hp: Option.Some(H { label: "row-" + i.to_string(), k: i }), k: 1 };
+        let s = take_label(a.hp);
+        acc = acc + s.len();
+
+        let b = Node { hp: Option.Some(H { label: "wide-" + i.to_string(), k: i }), k: 2 };
+        let g = take_all(b.hp);
+        acc = acc + g.label.len() + g.k;
+
+        let c = Node { hp: Option.Some(H { label: "read-" + i.to_string(), k: i }), k: 3 };
+        acc = acc + take_key(c.hp);
+
+        let d = Node { hp: Option.None, k: 4 };
+        acc = acc + take_label(d.hp).len();
+        let e = Node { hp: Option.None, k: 5 };
+        acc = acc + take_key(e.hp);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["240"],
+            "boxed_option_param_payload_move_out",
+        );
+    }
+
     /// B-2026-07-28-16 — the CALL-ARGUMENT sibling of the leg above.
     /// `consume(nd.opt)` hands an owned struct's `Option`/`Result` field to a
     /// parameter that owns it, so the callee's cleanup frees the payload and

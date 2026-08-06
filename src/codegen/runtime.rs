@@ -3623,10 +3623,45 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return val;
         }
-        match self.builder.build_load(opt_ty, dst, "argview.clone.v") {
+        // B-2026-08-06-10 — the clone is a fresh OWNED value with no owner, and
+        // for a heap-BOXED payload that is a straight leak of the box this
+        // clone just allocated.
+        //
+        // The original premise was "the callee frees it", which holds for the
+        // INLINE payload this leg was written against: `Option[String]` binds
+        // its `Some` payload to an arm binding that registers its own
+        // `FreeVecBuffer`. A boxed payload binds a DEBOXED COPY that
+        // deliberately registers nothing — it has to, or it would double-free
+        // against whoever owns the box — so no one on either side of the call
+        // frees the clone. Give it a caller-scope owner.
+        //
+        // Composes with the deboxed move-out mirror rather than fighting it: if
+        // the callee's arm moves a field out, that mirror zeros the field's
+        // `cap` THROUGH this box, so this drop frees the box and skips exactly
+        // what the callee carried away. The inline case is untouched — its
+        // payload is not boxed, so nothing is registered and the callee keeps
+        // freeing as before.
+        let cloned = match self.builder.build_load(opt_ty, dst, "argview.clone.v") {
             Ok(v) => v,
-            Err(_) => val,
+            Err(_) => return val,
+        };
+        if let Some(payload_te) = Self::option_payload_te(&field_te) {
+            if self.option_payload_is_boxed(&payload_te) {
+                let inner = match &payload_te.kind {
+                    TypeKind::Path(p) => p.segments.first().cloned(),
+                    _ => None,
+                }
+                .filter(|n| self.struct_types.contains_key(n.as_str()));
+                self.track_boxed_enum_var(
+                    "__argview_clone_box",
+                    dst,
+                    "Option",
+                    "Some",
+                    inner.as_deref(),
+                );
+            }
         }
+        cloned
     }
 
     /// [`Self::maybe_defensive_copy_param_arg`] at a RETURN position, with

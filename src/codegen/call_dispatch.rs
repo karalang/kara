@@ -2150,6 +2150,15 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
+        self.option_payload_is_boxed(payload_te)
+    }
+
+    /// Would an `Option[T]` payload of type `T` be HEAP-BOXED — i.e. does `T`'s
+    /// LLVM word count exceed `Option`'s seeded payload area? The exact
+    /// predicate `coerce_to_payload_words` boxes on and
+    /// `reconstruct_payload_value` deboxes on, in the one place callers can ask
+    /// it of a payload type-expr alone.
+    pub(super) fn option_payload_is_boxed(&self, payload_te: &TypeExpr) -> bool {
         let Some(layout) = self.enum_layouts.get("Option") else {
             return false;
         };
@@ -5955,6 +5964,35 @@ impl<'ctx> super::Codegen<'ctx> {
                                 Some(held),
                                 inst.as_ref(),
                             );
+                            // B-2026-08-06-10 — the receiver was DEBOXED out of
+                            // an enum payload box, so the slot above is this
+                            // frame's private copy and the zero lands where the
+                            // box's owner cannot see it. When that owner is the
+                            // CALLER (a by-value `Option[Struct]` param sharing
+                            // the box pointer), its `karac_drop_Option_<T>`
+                            // reads the box's own `{ptr,len,cap}`, still finds a
+                            // live `cap`, and frees the buffer this move just
+                            // handed to the destination.
+                            //
+                            // Mirror the neutralization into the box. Same
+                            // helper, same layout — the box holds exactly the
+                            // payload struct the slot copied — so a field the
+                            // move did NOT take keeps its live cap and the
+                            // owner still frees it. Retracting a cleanup action
+                            // (`suppress_boxed_payload_view_move`) cannot serve
+                            // here: across a call there is no action to retract,
+                            // only data the caller's drop fn will read.
+                            if let Some(box_ptr) =
+                                self.deboxed_payload_box_ptrs.get(&slot.ptr).copied()
+                            {
+                                self.zero_struct_field_move_cap_inst(
+                                    box_ptr,
+                                    &struct_name,
+                                    field,
+                                    Some(held),
+                                    inst.as_ref(),
+                                );
+                            }
                         }
                     }
                 }
@@ -6196,6 +6234,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(var_name)
                     .map(|i| self.generic_struct_subst_from_inst(&type_name, i));
                 self.zero_struct_move_caps_mono(slot.ptr, &type_name, subst.as_ref());
+                // B-2026-08-06-10, whole-payload sibling of the field move-out
+                // mirror above. `x` here is a deboxed COPY of a payload box the
+                // CALLER owns (`fn f(h: Option[H]) { match h { Some(x) => x } }`
+                // moves the whole struct out), so the zeroing lands in this
+                // frame and the caller's `karac_drop_Option_<T>` still frees the
+                // buffers the return value carries away — a double free, which
+                // is exactly what the caller-side carve-out turns the leak into
+                // if this mirror is missing. Registration is gated to an
+                // owned-param scrutinee, so an in-frame boxed view keeps
+                // B-2026-08-04-2's retraction and never reaches this store.
+                if let Some(box_ptr) = self.deboxed_payload_box_ptrs.get(&slot.ptr).copied() {
+                    self.zero_struct_move_caps_mono(box_ptr, &type_name, subst.as_ref());
+                }
             }
         }
         // Tuple / anonymous-aggregate binding (B-2026-06-11-4 part a): a moved

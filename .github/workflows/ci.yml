@@ -646,13 +646,18 @@ jobs:
   # test — measured: 20 fixtures are zero-allocation at BOTH levels (heapless by
   # design) and 70 are zero at `-O2` but non-zero at `-O0`.
   #
-  # Runs through `scripts/asan-o0-leg.sh` rather than `cargo test` directly,
-  # because four fixtures still fail here against open bug rows. The script
-  # diffs the failing set against `tests/asan-o0-known-failures.txt` and fails
-  # on any NEW failure — and equally on any listed fixture that starts PASSING,
-  # so the list can only shrink. `#[ignore]` is not usable for this: it is
-  # per-test rather than per-level, so it would delete these fixtures' `-O2`
-  # coverage to buy the `-O0` leg.
+  # Runs through `scripts/asan-o0-leg.sh` rather than `cargo test` directly. The
+  # script diffs the failing set against `tests/asan-o0-known-failures.txt` and
+  # fails on any NEW failure — and equally on any listed fixture that starts
+  # PASSING, so the list can only shrink. `#[ignore]` is not usable for this: it
+  # is per-test rather than per-level, so it would delete a quarantined
+  # fixture's `-O2` coverage to buy the `-O0` leg.
+  #
+  # That list is now EMPTY (2026-08-06, B-2026-08-06-10 closed the last of the
+  # four), so every fixture in the suite is expected to pass here and any
+  # failure is a regression. The script stays in the loop anyway: it is also the
+  # vacuity guard, treating a run that produced no `test result:` line as "did
+  # not run" rather than "everything passed".
   #
   # Cheap: the suite itself is ~90s (the archive build dominates). Also a
   # SEPARATE, NON-required job, matching the other two sanitizer legs.

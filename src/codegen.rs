@@ -2607,6 +2607,30 @@ pub(super) struct Codegen<'ctx> {
     /// Keyed by binding name and snapshotted with the rest of the per-arm var
     /// environment, so an arm's view cannot leak into a sibling arm.
     pub(crate) boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-08-06-10 — match-arm payload bindings that were DEBOXED out of an
+    /// enum payload box: `binding slot -> box pointer`.
+    ///
+    /// A payload wider than the variant's payload area is heap-boxed by
+    /// `coerce_to_payload_words`, and `reconstruct_payload_value` reads it back
+    /// by LOADING the whole box into the binding's own slot. The binding is
+    /// therefore a private COPY, and that is the whole problem: a move-out of
+    /// one of its fields zeroes a `cap` in the copy, where the box's owner
+    /// cannot see it.
+    ///
+    /// Within one frame that is fine — the owner is a `BoxedEnumDrop` action and
+    /// `suppress_boxed_payload_view_move` retracts its inner walk. ACROSS A CALL
+    /// it is not: the owner is the caller's synthesized drop fn reading the box's
+    /// DATA, and a retraction in the callee's cleanup queue is invisible to it.
+    /// A data write is the only channel, so the move-out neutralizers mirror
+    /// their zero through this pointer.
+    ///
+    /// Keyed by SLOT rather than name deliberately. The pointer is an
+    /// `inttoptr` emitted in the arm's own block, so it must never be reached
+    /// from a later, unrelated binding of the same name — a fresh binding has a
+    /// fresh alloca, which makes a stale entry structurally unreachable instead
+    /// of merely unlikely. Cleared per function.
+    pub(crate) deboxed_payload_box_ptrs:
+        HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
     /// B-2026-08-01-15 — locals that are whole-move REBINDS of an owned
     /// param (`let h2 = h;`), transitively. A destructure or match on one
     /// is a param-view bind exactly like the direct param case
@@ -7828,6 +7852,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_scrutinee_payload_bodies_src: None,
             pattern_binding_scrutinee_optres_slot: None,
             boxed_optres_payload_view_vars: HashMap::new(),
+            deboxed_payload_box_ptrs: HashMap::new(),
             param_view_locals: HashSet::new(),
             pattern_binding_scrutinee_optres_area: 0,
             pattern_binding_scrutinee_is_shared_enum: false,
