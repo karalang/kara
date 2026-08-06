@@ -23,9 +23,16 @@ impl<'a> super::Interpreter<'a> {
     pub(crate) fn eval_unary(&mut self, op: &UnaryOp, operand: Value, span: &Span) -> Value {
         let operand_variant = operand.variant_name();
         match (op, operand) {
+            // B-2026-08-06-7: `-iN::MIN` does not fit `iN`. `checked_neg`
+            // catches it only at the i64 carrier's width, so a NARROW operand
+            // (`-(-2147483648i32)`) sailed through with 2147483648 — an
+            // out-of-range i32 — while the i64 equivalent trapped correctly.
+            // Range-check the result against the DECLARED width exactly as the
+            // arithmetic binop arms above do. Codegen mirrors this at the
+            // `iN.neg` assoc-call site.
             (UnaryOp::Neg, Value::Int(i)) => Value::Int(match i.checked_neg() {
-                Some(v) => v,
-                None => return self.record_integer_overflow(span),
+                Some(v) if !self.narrow_oob(v, span) => v,
+                _ => return self.record_integer_overflow(span),
             }),
             (UnaryOp::Neg, Value::Float(f)) => Value::Float(-f),
             // Element-wise tensor negation — fold `-` over each element into a

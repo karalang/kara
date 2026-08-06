@@ -1405,7 +1405,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         operand: Box::new(_args[0].value.clone()),
                     },
                 };
-                return self.compile_expr(&synth);
+                let out = self.compile_expr(&synth)?;
+                // B-2026-08-06-7: `compile_unaryop` lowers the negate as a
+                // checked `0 - v`, but that check runs at the i64 CARRIER's
+                // width — so `-(-2147483648i32)` produced 2147483648, a value
+                // the declared i32 cannot represent, where the i64 equivalent
+                // trapped correctly. This is the one site that knows the
+                // declared width (`type_name`); `compile_unaryop` receives only
+                // a value. Range-check here, exactly as the narrow binops do.
+                //
+                // Signed only: `rewrite_unary` gates `Neg` to `Type::Int`, so a
+                // narrow UNSIGNED negate never reaches this arm.
+                let narrow_bits = match type_name {
+                    "i8" => Some(8u32),
+                    "i16" => Some(16),
+                    "i32" => Some(32),
+                    _ => None,
+                };
+                if let Some(bits) = narrow_bits {
+                    if out.is_int_value() {
+                        let widened = self.widen_int_to_i64(out, false);
+                        self.emit_narrow_range_check(widened, bits, false);
+                        return Ok(widened.into());
+                    }
+                }
+                return Ok(out);
             }
             if method == "not" && _args.len() == 1 {
                 // `not` covers `!bool` and `~int` — target type disambiguates.

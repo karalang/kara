@@ -20618,6 +20618,53 @@ fn test_shift_amount_out_of_range_is_runtime_error_not_panic() {
     }
 }
 
+// B-2026-08-06-7, the negation leg: `-iN::MIN` traps at the DECLARED width.
+//
+// The Neg arm used `checked_neg` on the i64 carrier, which only catches
+// `-i64::MIN` — so `-(-2147483648i32)` produced 2147483648, a value the
+// declared `i32` cannot hold, while the i64 twin trapped correctly. Every
+// narrow width, plus the i64 control that was already right, because the check
+// keys off the type recorded at the expression's span.
+#[test]
+fn test_narrow_negation_of_min_is_runtime_error() {
+    for (src, what) in [
+        ("let a: i8 = -128i8; println(-a);", "i8"),
+        ("let a: i16 = -32768i16; println(-a);", "i16"),
+        ("let a: i32 = -2147483648i32; println(-a);", "i32"),
+        // i64::MIN is built by subtraction rather than written as a literal:
+        // a negative literal parses as `Neg(Integer(n))`, so the POSITIVE half
+        // must fit i64 — and i64::MIN's does not, making `-9223372036854775808i64`
+        // a parse error (`Invalid integer literal`). Filed as B-2026-08-06-13.
+        (
+            "let a: i64 = -9223372036854775807i64 - 1i64; println(-a);",
+            "i64 control",
+        ),
+    ] {
+        let errors = runtime_errors(&format!("fn main() {{\n    {src}\n}}\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer overflow")),
+            "{what}: negating the minimum must raise `integer overflow`, got: {errors:?}"
+        );
+    }
+}
+
+// …and the guard must not over-trap: `-(iN::MIN + 1)` is representable at
+// every width and must stay legal.
+#[test]
+fn test_narrow_negation_inside_range_is_legal() {
+    let out = run_no_errors(
+        "fn main() {\n\
+         \x20   let a: i8 = -127i8; println(-a);\n\
+         \x20   let b: i16 = -32767i16; println(-b);\n\
+         \x20   let c: i32 = -2147483647i32; println(-c);\n\
+         \x20   let d: i32 = 5i32; println(-d);\n\
+         }\n",
+    );
+    assert_eq!(out.trim(), "127\n32767\n2147483647\n-5");
+}
+
 // A shift amount BELOW the width stays legal at every width — the guard must
 // not over-trap. `31` on an i32 and `63` on an i64 are the boundary values the
 // spec explicitly calls legal.

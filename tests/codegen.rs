@@ -4798,6 +4798,92 @@ mod codegen_tests {
         }
     }
 
+    /// B-2026-08-06-7, the negation leg — `-iN::MIN` traps at the DECLARED
+    /// width, not just at the i64 carrier's.
+    ///
+    /// `compile_unaryop` lowers a negate as a checked `0 - v`, but that check
+    /// runs on the i64 carrier, so every narrow negation was effectively
+    /// unchecked: `-(-2147483648i32)` yielded 2147483648 — a value the declared
+    /// `i32` cannot represent — while the i64 twin trapped correctly. That left
+    /// narrow negation as the last operator violating "a narrow-typed value
+    /// always fits its declared width", which B-2026-08-05-38's widening half
+    /// depends on.
+    ///
+    /// Pinned at the IR level as well as by behaviour, for the same reason the
+    /// shift guard is: the E2E twin can only prove the trap for the widths it
+    /// names, and the check has to be there for all of them.
+    #[test]
+    fn test_ir_narrow_negation_emits_range_check() {
+        for src in [
+            "fn f(a: i8) -> i8 { -a }",
+            "fn f(a: i16) -> i16 { -a }",
+            "fn f(a: i32) -> i32 { -a }",
+        ] {
+            let ir = ir_for(src);
+            assert!(
+                ir.contains("ni.oob") || ir.contains("ni.ovf.trap"),
+                "`{src}` must range-check the negated value against its \
+                 declared width:\n{ir}"
+            );
+        }
+    }
+
+    /// The behavioural twin of the above, across every narrow width plus the
+    /// i64 control — and the legal boundary, which must NOT trap.
+    #[test]
+    fn e2e_narrow_negation_traps_at_declared_width() {
+        // Legal: `-(iN::MIN + 1)` fits at every width, and so does the i64 case.
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let a: i32 = -2147483647i32;\n\
+             \x20   println(-a);\n\
+             \x20   let b: i16 = -32767i16;\n\
+             \x20   println(-b);\n\
+             \x20   let c: i8 = -127i8;\n\
+             \x20   println(-c);\n\
+             \x20   let d: i64 = -9223372036854775807i64;\n\
+             \x20   println(-d);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "2147483647\n32767\n127\n9223372036854775807\n");
+    }
+
+    /// The trap itself, on a RUNTIME-derived operand — a constant `-i32::MIN`
+    /// would let the optimizer fold the check away, which would leave the test
+    /// proving nothing about the guard actually emitted (B-2026-08-04-17's
+    /// vacuity hazard applied to a trap fixture). The seed is opaque and the
+    /// value reaches `i32::MIN` only at run time.
+    #[test]
+    fn e2e_narrow_negation_of_min_traps() {
+        let src = r#"
+fn main() {
+    let n: i64 = env.args().len() as i64;
+    let base: i32 = -2147483648i32;
+    let a: i32 = base + (n as i32) - 1i32;
+    println(a);
+    println(-a);
+}
+"#;
+        if let Some(cap) = run_program_capturing(src) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains("-2147483648"),
+                "the operand must reach i32::MIN before the negate, \
+                 got stdout={:?}",
+                cap.stdout
+            );
+            assert!(
+                cap.stdout.contains("integer overflow"),
+                "negating i32::MIN must trap `integer overflow`, \
+                 got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+        }
+    }
+
     #[test]
     fn test_ir_signed_right_shift_is_arithmetic() {
         let ir = ir_for("fn shift(a: i64, b: i64) -> i64 { a >> b }");

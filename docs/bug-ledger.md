@@ -97,11 +97,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 99 | 0 |
 | codegen-gap | 92 | 0 |
 | run-vs-build | 82 | 1 |
-| missing-feature | 78 | 1 |
+| missing-feature | 79 | 2 |
 | false-positive | 56 | 0 |
 | perf | 51 | 4 |
 | diagnostics | 40 | 0 |
-| soundness | 39 | 1 |
+| soundness | 39 | 0 |
 | crash | 39 | 0 |
 | other | 17 | 1 |
 | use-after-free | 13 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 697 | 9 |
-| interp | 126 | 1 |
+| codegen | 697 | 8 |
+| interp | 126 | 0 |
 | typecheck | 124 | 1 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
@@ -119,12 +119,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 27 | 1 |
 | runtime | 21 | 1 |
 | resolver | 18 | 0 |
-| parser | 11 | 0 |
+| parser | 12 | 1 |
+| lexer | 4 | 1 |
 | effect | 4 | 0 |
-| lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **964 surfaced · 11 open · 945 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **965 surfaced · 11 open · 946 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -136,15 +136,15 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **964 surfaced 
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-05-38 | 2026-08-05 | codegen | medium | The narrow-int width trap is emitted UNCONDITIONALLY on every `i8/i16/i32/u8/u16/u32` arithmetic op -- zext/sext to i64, two icmps, an or, and a conditional branch per op -- costing 1.06x-1.12x on narrow-int-dense loops (kata #9 palindrome, #8 atoi) with no range analysis to elide provably in-range checks | src/codegen/expr_ops.rs::narrow_binop_result_provably_fits (the div/mod elision, ac79f284) + compile_narrow_int_binop (the widening, which is 79% of kata #9's cost and is NOT what this row's proposed fixes address). Cross-arch confirmed on x86 via B-2026-08-05-34; unblocked. |
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
-| B-2026-08-06-7 | 2026-08-06 | codegen+interp | high | shift by >= the bit width is UNDEFINED BEHAVIOUR in AOT output — one `let` variable prints two different values in the same run and different values across runs (LLVM shl poison), the JIT disagrees again, and the interpreter raises a raw Rust panic; design.md's `"shift amount out of range"` trap is unimplemented at every width, and narrow `<<` additionally computes at i64 so an `i32` binding can hold 1048576000000 | — |
 | B-2026-08-06-8 | 2026-08-06 | codegen | low | a generic wrapper's bare `T` field bound to a SHARED struct leaks 2,560 B / 80 blocks at -O0 (clean at -O2): `Box[T]` at `T = Node` where `Node` is a `shared struct` -- the third head the bare-param rescue loop does not recognise, after String/Vec (fixed B-2026-07-15-11) and Map/Set (fixed B-2026-08-06-1) | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which now promotes String/Vec/VecDeque and Map/Set heads but not a `shared` one |
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
 | B-2026-08-06-10 | 2026-08-06 | codegen | medium | a callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans the box the caller's struct drop owns: `fn f(h: Option[H]) { match h { Some(x) => x.label } }` leaks 32 B per call, while the same callee returning a SCALAR from the same payload is clean | the callee-side payload move-out suppressors in src/codegen/control_flow_match.rs, reached with a BOXED `Option` payload whose box the CALLER still owns |
 | B-2026-08-06-12 | 2026-08-06 | codegen | medium | a GENERIC struct LITERAL used directly as a METHOD RECEIVER cannot be built: `Box { v: <String> }.take()` passes `karac check`, runs correctly under the interpreter, and then fails `karac build` with an LLVM verifier error -- the literal lowers at the ERASED base layout `{ i64 }` because the outer method call's span CLOBBERS the literal's instantiation record | src/codegen/types_lowering.rs::struct_inst_mono_type_for_expr — the span lookup that returns None here; the record itself is destroyed upstream, in lowering.rs's `Named { args } if !args.is_empty()` filter over `tc.expr_types`, because the parser gives a MethodCall its RECEIVER's span |
+| B-2026-08-06-13 | 2026-08-06 | lexer+parser | low | `i64::MIN` cannot be WRITTEN as a literal in any spelling -- `-9223372036854775808i64` is a parse error (`Invalid integer literal`), because a negative literal parses as `Neg(Integer(n))` and the POSITIVE half must fit i64, which i64::MIN's does not. The value is reachable only by arithmetic (`-9223372036854775807i64 - 1i64`). Same argument applies to every width's minimum, but only i64 is actually unreachable: a narrow minimum's positive half still fits the i64 carrier. | — |
 
-### Fixed (945)
+### Fixed (946)
 
-<details><summary>945 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>946 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1114,6 +1114,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-4 | typecheck+codegen | medium | a `shared struct`'s Vec field passed to a `mut Slice[T]` parameter does not COMPILE (LLVM module verification hard-fails) even when the field is decl… | 28ceec6b |
 | B-2026-08-06-5 | codegen | high | A cast TO `char` inside an f-string hole is DROPPED by both compiled backends -- `println(f"{b as char}")` prints the integer codepoint (98) where th… | 335540c9 |
 | B-2026-08-06-6 | codegen | high | a `Map`/`Set` field moved out INDIVIDUALLY left the source handle live, so the owner's struct drop freed storage the destination still owned — `fn ta… | 26b2176 (src/codegen/call_dispatch.rs — the Map/Set arm in `zero_struct_field_move_cap`, plus the Sorted variants in `zero_struct_move_caps_mono`'s existing arm). Pins e2e_map_field_move_out_neutralizes_the_source, test_map_field_move_out_transfers_the_handle, asan_map_field_move_out_neutralizes_the_source. |
+| B-2026-08-06-7 | codegen+interp | high | shift by >= the bit width is UNDEFINED BEHAVIOUR in AOT output — one `let` variable prints two different values in the same run and different values… | ee551b8 (shift legs) + <this commit> (negation leg) |
 | B-2026-08-06-11 | codegen | high | an owned boxed-payload enum param that ESCAPES -- returned, or forwarded to another by-value param -- is freed by the callee anyway: `fn id(o: Opt[St… | 05005aae |
 
 </details>

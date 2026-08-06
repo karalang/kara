@@ -4967,7 +4967,6 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             return Ok(result);
         }
-        let i64_t = self.context.i64_type();
         let rv = result.into_int_value();
         // Arithmetic: range-check the i64 result against the declared narrow
         // width and trap on overflow. Bitwise / shift results always fit the
@@ -4977,32 +4976,7 @@ impl<'ctx> super::Codegen<'ctx> {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
         ) && !Self::narrow_binop_result_provably_fits(op, r, is_unsigned)
         {
-            let (lo, hi) = if is_unsigned {
-                (0i64, ((1u64 << bits) - 1) as i64)
-            } else {
-                (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1)
-            };
-            let lo_c = i64_t.const_int(lo as u64, true);
-            let hi_c = i64_t.const_int(hi as u64, true);
-            let below = self
-                .builder
-                .build_int_compare(inkwell::IntPredicate::SLT, rv, lo_c, "ni.lo")
-                .unwrap();
-            let above = self
-                .builder
-                .build_int_compare(inkwell::IntPredicate::SGT, rv, hi_c, "ni.hi")
-                .unwrap();
-            let oob = self.builder.build_or(below, above, "ni.oob").unwrap();
-            let fn_val = self.current_fn.unwrap();
-            let trap_bb = self.context.append_basic_block(fn_val, "ni.ovf.trap");
-            let ok_bb = self.context.append_basic_block(fn_val, "ni.ovf.ok");
-            self.builder
-                .build_conditional_branch(oob, trap_bb, ok_bb)
-                .unwrap();
-            self.builder.position_at_end(trap_bb);
-            self.emit_panic("integer overflow");
-            self.builder.build_unreachable().unwrap();
-            self.builder.position_at_end(ok_bb);
+            self.emit_narrow_range_check(rv, bits, is_unsigned);
         }
         // The result stays i64 (the value matches the interpreter's i64 and
         // prints / compares correctly). Consumers that need it at the narrow
@@ -5012,6 +4986,48 @@ impl<'ctx> super::Codegen<'ctx> {
         // for any future representation change without an unused-arg warning.
         let _ = bits;
         Ok(result)
+    }
+
+    /// Trap `integer overflow` when the i64-carrier value `rv` does not fit the
+    /// DECLARED narrow width `bits`. Mirrors the interpreter's `narrow_oob`.
+    ///
+    /// Extracted from [`Self::compile_narrow_int_binop`] so narrow unary
+    /// negation can reuse it (B-2026-08-06-7): `-iN::MIN` overflows exactly the
+    /// same way `iN::MIN - 1` does, and both surfaces must agree on the trap or
+    /// the fix creates a run/build divergence where none existed.
+    pub(super) fn emit_narrow_range_check(
+        &mut self,
+        rv: inkwell::values::IntValue<'ctx>,
+        bits: u32,
+        is_unsigned: bool,
+    ) {
+        let i64_t = self.context.i64_type();
+        let (lo, hi) = if is_unsigned {
+            (0i64, ((1u64 << bits) - 1) as i64)
+        } else {
+            (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1)
+        };
+        let lo_c = i64_t.const_int(lo as u64, true);
+        let hi_c = i64_t.const_int(hi as u64, true);
+        let below = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, rv, lo_c, "ni.lo")
+            .unwrap();
+        let above = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, rv, hi_c, "ni.hi")
+            .unwrap();
+        let oob = self.builder.build_or(below, above, "ni.oob").unwrap();
+        let fn_val = self.current_fn.unwrap();
+        let trap_bb = self.context.append_basic_block(fn_val, "ni.ovf.trap");
+        let ok_bb = self.context.append_basic_block(fn_val, "ni.ovf.ok");
+        self.builder
+            .build_conditional_branch(oob, trap_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(trap_bb);
+        self.emit_panic("integer overflow");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
     }
 
     /// Can this narrow-int arithmetic op's result be proved to fit the declared
