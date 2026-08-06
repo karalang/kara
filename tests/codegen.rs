@@ -6837,6 +6837,59 @@ fn main() {
     /// Expected total is DERIVED, not read off a run: `mk` builds a 2-entry map
     /// and `mkset` a 1-entry set, so a round is
     /// 2+2+(2+3+1)+2+2+2+2+2+1+2+(1+2) = 26, and 26 x 40 = 1040.
+    /// B-2026-08-06-8 — the CORRECTNESS half of the bare-`T` shared-field fix.
+    /// The defect itself is a leak, invisible here; what this pins is the
+    /// use-after-free that fixing it exposes, which prints a WRONG ANSWER.
+    ///
+    /// Once a struct local's drop rc-dec's its `shared` fields, a field moved
+    /// out of a value-position BLOCK (`let x = { let b = mk(); b.v };`) is
+    /// dec'd by the block frame on the way out — the consumer receives a
+    /// freed box. `suppress_block_tail_cleanup` neutralizes an Identifier tail
+    /// but fell through on a FIELD tail, while its function-body sibling
+    /// `suppress_cleanup_for_tail_return` handles any shape.
+    ///
+    /// The CONCRETE spelling is the load-bearing case and the reason this test
+    /// is worth having: `Holder { v: Node }` has always taken the combined
+    /// drop, so it reproduced at HEAD with no generics involved — printing 0
+    /// instead of 38 on a default -O2 build, with 160 valgrind errors. The
+    /// generic spelling is included beside it because the fix routes it onto
+    /// exactly that path.
+    ///
+    /// Expected total is DERIVED, not read off a run: the payload string is 38
+    /// bytes, each of the four legs contributes one length, so 38 x 4 = 152.
+    #[test]
+    fn e2e_shared_field_moved_out_of_a_value_block_survives_the_frame_drain() {
+        let Some(out) = run_program(
+            r#"shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // (a) GENERIC wrapper, field escaping a value-position block.
+    let x1 = { let b = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; b.v };
+    acc = acc + x1.s.len();
+    // (b) CONCRETE wrapper, same shape — broken at HEAD independently of
+    // generics, which is what makes this more than a companion case.
+    let x2 = { let h = Holder { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; h.v };
+    acc = acc + x2.s.len();
+    // (c) CONTROL, the non-block move-out that was already correct.
+    let b3 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let x3 = b3.v;
+    acc = acc + x3.s.len();
+    // (d) CONTROL, the concrete non-block move-out.
+    let h4 = Holder { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let x4 = h4.v;
+    acc = acc + x4.s.len();
+    println(acc);
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out.trim(), "152");
+    }
+
     #[test]
     fn e2e_bare_generic_param_map_field_is_freed_and_neutralized() {
         let Some(out) = run_program(

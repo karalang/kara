@@ -508,6 +508,33 @@ impl<'ctx> super::Codegen<'ctx> {
         );
     }
 
+    /// [`Self::emit_nested_struct_shared_rc_decs`] with the owner's generic
+    /// instantiation, so a field declared as a bare type param is walked as the
+    /// type the param actually binds to (B-2026-08-06-8).
+    ///
+    /// Every classification below reads the DECLARED field `TypeExpr`, which for
+    /// `Box[T] { v: T }` is the erased `T` — not a shared type name, so the
+    /// rc-dec edge was never emitted and the box leaked. `subst` is applied to
+    /// each field type before classification; `None` reproduces the name-only
+    /// behavior byte-for-byte.
+    pub(super) fn emit_nested_struct_shared_rc_decs_mono(
+        &mut self,
+        struct_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        drop_fn: FunctionValue<'ctx>,
+        owns_buffer_free: bool,
+        subst: Option<&std::collections::HashMap<String, TypeExpr>>,
+    ) {
+        self.emit_nested_struct_shared_rc_decs_ex_mono(
+            struct_ptr,
+            struct_name,
+            drop_fn,
+            owns_buffer_free,
+            Some(owns_buffer_free),
+            subst,
+        );
+    }
+
     /// As [`Self::emit_nested_struct_shared_rc_decs`], but `nested_buffer_free`
     /// controls how a nested non-shared struct FIELD is recursed into:
     ///   * `None` — do NOT recurse (skip the nested struct entirely).
@@ -534,6 +561,30 @@ impl<'ctx> super::Codegen<'ctx> {
         drop_fn: FunctionValue<'ctx>,
         owns_buffer_free: bool,
         nested_buffer_free: Option<bool>,
+    ) {
+        self.emit_nested_struct_shared_rc_decs_ex_mono(
+            struct_ptr,
+            struct_name,
+            drop_fn,
+            owns_buffer_free,
+            nested_buffer_free,
+            None,
+        )
+    }
+
+    /// [`Self::emit_nested_struct_shared_rc_decs_ex`] with the owner's generic
+    /// subst applied to each declared field type before classification — see
+    /// [`Self::emit_nested_struct_shared_rc_decs_mono`]. `None` is the
+    /// name-only behavior, byte-for-byte.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn emit_nested_struct_shared_rc_decs_ex_mono(
+        &mut self,
+        struct_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        drop_fn: FunctionValue<'ctx>,
+        owns_buffer_free: bool,
+        nested_buffer_free: Option<bool>,
+        subst: Option<&std::collections::HashMap<String, TypeExpr>>,
     ) {
         // B-2026-06-14-34 — two independent fixes over B-31, both required:
         //
@@ -583,6 +634,23 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
             return;
+        };
+        // B-2026-08-06-8 — resolve each DECLARED field type through the owner's
+        // instantiation before anything below classifies it. Every arm in this
+        // walker (direct `shared`, `Option[shared]`, `Vec[shared]`, the nested
+        // non-shared struct recursion) keys off the field's declared TypeExpr,
+        // which for `Box[T] { v: T }` is the erased `T`: no arm matched, no
+        // rc-dec was emitted, and the box leaked at the owner's scope exit
+        // (2,560 B / 80 blocks on the row's repro). The concrete twin
+        // `Holder { v: Node }` was always clean because its declared name IS
+        // `Node`. An empty/absent subst leaves every `fte` untouched, so a
+        // non-generic owner is byte-for-byte unchanged.
+        let ftes: Vec<TypeExpr> = match subst {
+            Some(s) if !s.is_empty() => ftes
+                .iter()
+                .map(|fte| crate::codegen::helpers::subst_type_params_in_type_expr(fte, s))
+                .collect(),
+            _ => ftes,
         };
         // Force-synthesize the recursive RC drop fn for every shared type
         // referenced by a field (a direct `shared T`, or the inner of an
@@ -1141,7 +1209,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Unlike `mangled_type_name` (head-only, so `Vec[i64]` and `Vec[String]`
     /// collide) this descends into generic args and tuple elements so two
     /// instantiations that differ only in a nested arg get distinct symbols.
-    fn drop_mono_mangle_component(te: &TypeExpr) -> String {
+    pub(super) fn drop_mono_mangle_component(te: &TypeExpr) -> String {
         match &te.kind {
             TypeKind::Path(p) => {
                 let head = p

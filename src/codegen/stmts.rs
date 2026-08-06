@@ -491,6 +491,31 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(_) => {
                 self.suppress_source_vec_cleanup_for_arg(tail);
             }
+            // B-2026-08-06-8 — a FIELD tail (`let x = { let b = mk(); b.v };`).
+            // The function-body sibling `suppress_cleanup_for_tail_return` hands
+            // its tail to `suppress_source_vec_cleanup_for_arg` whatever the
+            // shape, so `fn f() -> T { b.v }` neutralized the source; here only
+            // a bare Identifier did, and a field tail fell through to `_ => {}`.
+            // The block frame then dropped the owner — freeing the very field
+            // the block was handing to its consumer.
+            //
+            // Latent for the buffer types (a moved-out Vec/String tail escapes
+            // through its own value copy), which is why it went unnoticed; it
+            // became observable when a struct local's drop started rc-dec'ing
+            // its `shared` fields, since an rc handle has no such copy. The
+            // CONCRETE spelling `Holder { v: Node }` reproduces it at HEAD
+            // independently of generics — `let x = { let h = Holder { .. }; h.v }`
+            // printed 0 instead of the string length on a default -O2 build,
+            // with 160 valgrind errors — so this arm fixes a pre-existing bug
+            // as well as the one this row is about.
+            //
+            // Routed to the same suppressor as the Identifier arm, so a field
+            // tail gets exactly the neutralizer its type already defines: the
+            // Vec/String cap-zero, the Map/Set null-store, the Option tag-zero,
+            // or the shared null-store.
+            ExprKind::FieldAccess { .. } => {
+                self.suppress_source_vec_cleanup_for_arg(tail);
+            }
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
                 if let Some(inner) = b.final_expr.as_deref() {
                     self.suppress_block_tail_cleanup(inner);

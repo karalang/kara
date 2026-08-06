@@ -5698,6 +5698,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let vec_ty = self.vec_struct_type();
+        if std::env::var("KARAC_DBG_NEU").is_ok() {
+            eprintln!(
+                "[DBG] zero_struct_field_move_cap struct={struct_name} field={field} fname={fname}"
+            );
+        }
         let zero = self.context.i64_type().const_int(0, false);
         // Match Vec/String by concrete LLVM shape too: a String field resolved
         // through the monomorph subst carries the name `str`, which the name list
@@ -5766,6 +5771,35 @@ impl<'ctx> super::Codegen<'ctx> {
             // symmetry rather than a measured fix, and adding a type to a
             // NEUTRALIZER list is safe by construction — it nulls a handle the
             // drop would otherwise free.
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
+        } else if self.shared_types.contains_key(fname.as_str()) {
+            // B-2026-08-06-8 — a moved-out DIRECT `shared` field. The peer of
+            // the Map/Set null-store above, and the arm that makes the shared
+            // half of that bug's fix safe.
+            //
+            // Once a struct local's scope-exit drop rc-dec's its shared fields
+            // (the combined drop that generic owners now also reach), moving the
+            // field OUT leaves two owners of one +1: the returned/destructured
+            // handle, and the source struct whose drop still decs. The box hits
+            // zero while the moved handle is live — a USE-AFTER-FREE, not a leak
+            // (valgrind: `Invalid read of size 8`, 0 bytes into a free'd 32-byte
+            // block, on a DEFAULT -O2 build).
+            //
+            // Nulling the source slot is the neutralizer the rc-dec walker was
+            // already built to expect: every arm of
+            // `emit_nested_struct_shared_rc_decs_ex` loads the field and
+            // `build_is_null`-guards before dec'ing, so a nulled slot is simply
+            // skipped. No inc, no runtime change — the same pure codegen
+            // null-store the Map/Set arm does, against a drop that already
+            // null-checks.
+            //
+            // Chosen over inc'ing the returned alias, which was the other
+            // candidate: an inc has to be threaded onto BOTH the explicit-return
+            // and tail-expression paths (they diverge — `compile_tail_final_expr`
+            // is only reached from `return` when the fn returns `Option[shared]`),
+            // and an over-inc is a silent leak. Nulling is one arm, on the path
+            // every move-out already goes through.
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
             let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
         } else {

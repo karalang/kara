@@ -2551,13 +2551,58 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         struct_name: &str,
     ) -> Option<inkwell::values::FunctionValue<'ctx>> {
-        let fn_name = format!("__karac_vec_elem_full_drop_{struct_name}");
+        self.emit_vec_elem_struct_with_shared_drop_fn_mono(struct_name, None)
+    }
+
+    /// [`Self::emit_vec_elem_struct_with_shared_drop_fn`] specialized to one
+    /// generic instantiation (B-2026-08-06-8).
+    ///
+    /// Both halves of the combined drop are name-keyed in the base form, and
+    /// both are wrong for a generic owner:
+    ///
+    ///   * the step-1 value drop is `emit_struct_drop_synthesis`, which carries
+    ///     no subst — so a `Box[Map[..]]` would lose the bare-param field
+    ///     reclassification B-2026-08-06-1 added to the mono path;
+    ///   * the step-2 rc-dec walker classifies by declared field type, i.e. the
+    ///     erased `T`.
+    ///
+    /// The symbol is mono-suffixed for the same reason the value drop's is:
+    /// `Box[Node]` and `Box[Other]` are different drops and must not collide on
+    /// one cached `__karac_vec_elem_full_drop_Box`. An absent/empty subst
+    /// reproduces the base symbol and the base behavior exactly.
+    pub(super) fn emit_vec_elem_struct_with_shared_drop_fn_mono(
+        &mut self,
+        struct_name: &str,
+        subst: Option<&std::collections::HashMap<String, TypeExpr>>,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let subst = subst.filter(|s| !s.is_empty());
+        // Mirror the value drop's mangling so the two halves agree on identity:
+        // one `$<concrete>` component per generic param, in declared order.
+        let mono_suffix: Option<String> = subst.and_then(|s| {
+            let params = self.struct_generic_params.get(struct_name).cloned()?;
+            let mut suf = String::new();
+            for p in &params {
+                if let Some(te) = s.get(p) {
+                    suf.push('$');
+                    suf.push_str(&Self::drop_mono_mangle_component(te));
+                }
+            }
+            (!suf.is_empty()).then_some(suf)
+        });
+        let subst = mono_suffix.as_ref().and(subst);
+        let fn_name = match &mono_suffix {
+            Some(suf) => format!("__karac_vec_elem_full_drop_{struct_name}{suf}"),
+            None => format!("__karac_vec_elem_full_drop_{struct_name}"),
+        };
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }
         // Step-1 value drop first (None when `S`'s only heap IS its shared
         // field — then there is nothing for step 1 to free).
-        let value_drop = self.emit_struct_drop_synthesis(struct_name);
+        let value_drop = match subst {
+            Some(s) => self.emit_struct_drop_synthesis_mono(struct_name, s),
+            None => self.emit_struct_drop_synthesis(struct_name),
+        };
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let void_ty = self.context.void_type();
         let saved_bb = self.builder.get_insert_block();
@@ -2573,7 +2618,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(vd) = value_drop {
             self.builder.build_call(vd, &[slot_ptr.into()], "").unwrap();
         }
-        self.emit_nested_struct_shared_rc_decs(slot_ptr, struct_name, drop_fn, false);
+        self.emit_nested_struct_shared_rc_decs_mono(slot_ptr, struct_name, drop_fn, false, subst);
         self.builder.build_return(None).unwrap();
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
@@ -5118,21 +5163,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // the String/Vec buffers the value drop already freed (copy-depth ==
         // drop-depth stays intact). Structs with no shared field keep the plain
         // value drop — zero behavior change for them.
-        let drop_fn = if self.struct_owns_shared_field(struct_name, &mut Vec::new()) {
-            match self.emit_vec_elem_struct_with_shared_drop_fn(struct_name) {
-                Some(f) => f,
-                None => return,
-            }
-        } else {
-            let subst = inst
-                .as_ref()
-                .map(|i| self.generic_struct_subst_from_inst(struct_name, i))
-                .unwrap_or_default();
-            match self.emit_struct_drop_synthesis_mono(struct_name, &subst) {
-                Some(f) => f,
-                None => return,
-            }
-        };
+        // The binding's instantiation, resolved once and used by BOTH the gate
+        // below and whichever drop it selects. B-2026-08-06-8: the gate used to
+        // ask the name-only `struct_owns_shared_field`, which reads declared
+        // field types — so `Box[T] { v: T }` at `T = Node` answered `false`,
+        // took the value-drop-only arm, and never rc-dec'd the box. Resolving
+        // the bare param first puts a generic owner on the same combined-drop
+        // path the concrete `Holder { v: Node }` has always taken.
+        let subst = inst
+            .as_ref()
+            .map(|i| self.generic_struct_subst_from_inst(struct_name, i))
+            .unwrap_or_default();
+        let drop_fn =
+            if self.struct_owns_shared_field_subst(struct_name, &mut Vec::new(), Some(&subst)) {
+                // Mono-specialized so the combined drop's own two halves see the
+                // instantiation too — otherwise a generic owner would rc-dec its
+                // shared field correctly while its value half reverted to the
+                // name-keyed drop and lost the B-2026-08-06-1 field frees.
+                match self.emit_vec_elem_struct_with_shared_drop_fn_mono(struct_name, Some(&subst))
+                {
+                    Some(f) => f,
+                    None => return,
+                }
+            } else {
+                match self.emit_struct_drop_synthesis_mono(struct_name, &subst) {
+                    Some(f) => f,
+                    None => return,
+                }
+            };
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::StructDrop {
                 struct_alloca,

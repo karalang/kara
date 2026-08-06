@@ -276,6 +276,26 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         stack: &mut Vec<String>,
     ) -> bool {
+        self.struct_owns_shared_field_subst(struct_name, stack, None)
+    }
+
+    /// [`Self::struct_owns_shared_field`] with the owner's generic subst applied
+    /// to each declared field type before the shared test (B-2026-08-06-8).
+    ///
+    /// This predicate is the GATE that decides whether a struct local gets the
+    /// COMBINED drop (value drop + shared-field rc-dec walker) or the value drop
+    /// alone. It reads declared field types, so `Box[T] { v: T }` at `T = Node`
+    /// answered `false` — the local took the plain value drop, nothing ever
+    /// rc-dec'd the box, and it leaked. The concrete `Holder { v: Node }`
+    /// answered `true` and was always clean; that asymmetry IS the bug.
+    ///
+    /// `None` (or an empty subst) is the name-only behavior, byte-for-byte.
+    pub(super) fn struct_owns_shared_field_subst(
+        &self,
+        struct_name: &str,
+        stack: &mut Vec<String>,
+        subst: Option<&std::collections::HashMap<String, TypeExpr>>,
+    ) -> bool {
         if stack.iter().any(|s| s == struct_name) {
             return false;
         }
@@ -283,7 +303,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         stack.push(struct_name.to_string());
-        let owns = ftes.iter().any(|fte| self.field_owns_shared(fte, stack));
+        let owns = ftes.iter().any(|fte| match subst {
+            Some(s) if !s.is_empty() => {
+                let cte = crate::codegen::helpers::subst_type_params_in_type_expr(fte, s);
+                self.field_owns_shared(&cte, stack)
+            }
+            _ => self.field_owns_shared(fte, stack),
+        });
         stack.pop();
         owns
     }

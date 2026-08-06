@@ -30011,6 +30011,51 @@ fn main() {
     );
 }
 
+/// B-2026-08-06-8 — the ORACLE half. The interpreter has always transferred a
+/// generic wrapper's bare-`T` `shared` field correctly; codegen's gate for "does
+/// this local need the shared-field rc-dec walker" read declared field types, so
+/// `Box[T] { v: T }` at `T = Node` never rc-dec'd the box (a leak) — while the
+/// concrete `Holder { v: Node }` always did.
+///
+/// The block-tail leg is the one that matters here: it is the shape whose
+/// codegen twin printed a WRONG ANSWER (0, then 114 for the full fixture) rather
+/// than merely leaking, so this pins the reference value that twin is measured
+/// against. Memory correctness is not observable from here, only the value.
+///
+/// Passes before and after, which is its job. Seed is a literal for the usual
+/// reason: an in-process interpreter test would see the TEST binary's argv.
+#[test]
+fn test_bare_generic_param_shared_field_transfers_the_handle() {
+    assert_eq!(
+        run(r#"shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn consume(b: Box[Node]) -> i64 { let x = b.v; return x.s.len(); }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // the field escaping a value-position block, both spellings
+    let x1 = { let b = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; b.v };
+    acc = acc + x1.s.len();
+    let x2 = { let h = Holder { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } }; h.v };
+    acc = acc + x2.s.len();
+    // the plain move-out, a whole-struct move, and a never-moved control
+    let b3 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let x3 = b3.v;
+    acc = acc + x3.s.len();
+    let b4 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    let b5 = b4;
+    acc = acc + consume(b5);
+    let b6 = Box { v: Node { s: "padded-out-to-force-a-real-heap-buffer" } };
+    acc = acc + 1;
+    println(acc);
+}
+"#),
+        "153\n"
+    );
+}
+
 /// B-2026-08-06-1 — the ORACLE half. The interpreter has always freed and
 /// transferred a generic wrapper's bare-`T` `Map` / `Set` field correctly;
 /// codegen classified the erased field as no-heap and freed nothing (a leak),

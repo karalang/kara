@@ -14449,6 +14449,112 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-8 — the third head the bare-generic-param rescue could not
+    /// see, after String/Vec (B-2026-07-15-11) and Map/Set (B-2026-08-06-1): a
+    /// field bound to a `shared struct`.
+    ///
+    /// The gate this time is not the drop classifier but
+    /// `track_struct_var_inst`, which asks the NAME-ONLY
+    /// `struct_owns_shared_field` whether a local needs the COMBINED drop
+    /// (value drop + shared-field rc-dec walker) or the value drop alone.
+    /// `Box[T] { v: T }` at `T = Node` answered `false` — declared field type
+    /// `T` is not a shared type — so nothing ever rc-dec'd the box and it
+    /// leaked. The concrete `Holder { v: Node }` answered `true` and was always
+    /// clean; that asymmetry IS the bug, and it is why this test carries the
+    /// concrete spelling alongside the generic one as a live control.
+    ///
+    /// Making the gate see through the bare param is only half of it. Once the
+    /// owner's drop rc-dec's the field, moving the field OUT leaves two owners
+    /// of one +1 and the box hits zero while the moved handle is live — a
+    /// USE-AFTER-FREE, which is what shapes (d)/(e) cover. The neutralizer is a
+    /// null-store into the source slot, which the rc-dec walker's existing
+    /// `build_is_null` guard then skips.
+    ///
+    /// Catches both directions: under-dec'ing as the original leak, over-dec'ing
+    /// or a missed neutralize as a use-after-free on the moved handle.
+    ///
+    /// NOT VACUOUS (B-2026-08-04-17): opaque `env.args().len()` seed, every
+    /// String built from it at runtime and read back through `.len()`, and 40
+    /// rounds x seven boxes so nothing folds away.
+    #[test]
+    fn asan_bare_generic_param_shared_field_is_rc_dec_and_neutralized() {
+        assert_clean_asan_run_min_allocs(
+            r#"shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+struct Trip[T] { a: String, v: T, n: i64 }
+
+fn mk(i: i64, n: i64) -> Node {
+    return Node { s: f"shrv-{i}-padded-out-to-force-a-real-heap-buffer-{n}" };
+}
+
+// Reads the payload BYTES, not just the length, so the buffer cannot be
+// folded away as dead at the default -O2 the ASAN harness builds at.
+fn score(x: Node) -> i64 {
+    let mut r: i64 = x.s.len();
+    if x.s.contains("padded") { r = r + 1i64; }
+    if x.s.contains("zzz") { r = r + 1000i64; }
+    return r;
+}
+
+fn consume(b: Box[Node]) -> i64 { let x = b.v; return score(x); }
+fn peek(b: ref Box[Node]) -> i64 { let x = b.v; return score(x); }
+fn mid(t: Trip[Node]) -> i64 {
+    let x = t.v;
+    let mut r: i64 = score(x) + t.n;
+    if t.a.contains("padding") { r = r + 1i64; }
+    return r;
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) the reported shape — field moved out of a plain LOCAL
+        let b1 = Box { v: mk(i, n) };
+        let x1 = b1.v;
+        acc = acc + score(x1);
+        // (b) a WHOLE-struct move, then consumed by value
+        let b2 = Box { v: mk(i, n) };
+        let b3 = b2;
+        acc = acc + consume(b3);
+        // (c) a `ref` param read — the source keeps ownership
+        let b4 = Box { v: mk(i, n) };
+        acc = acc + peek(b4);
+        // (d) the MID field of a multi-field wrapper (offset-sensitive)
+        let t1 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
+        acc = acc + mid(t1);
+        // (e) moved out and handed straight to a consuming callee — the
+        // use-after-free direction. If the owner's drop dec's a field it no
+        // longer owns, the callee reads a freed box.
+        let b5 = Box { v: mk(i, n) };
+        acc = acc + consume(Box { v: b5.v });
+        // CONTROL, correct before and after: never moved, only dropped whole.
+        let b6 = Box { v: mk(i, n) };
+        acc = acc + 1i64;
+        // CONTROL, the CONCRETE spelling that was always clean — it must stay
+        // clean, since the fix routes the generic owner onto its exact path.
+        let h1 = Holder { v: mk(i, n) };
+        let x3 = h1.v;
+        acc = acc + score(x3);
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["11900"],
+            "bare_generic_param_shared_field_is_rc_dec_and_neutralized",
+            // 40 rounds x seven rc boxes, each with its own String payload; a
+            // real -O2 run measures 526 allocations, so this floor sits well
+            // above anything a folded-away run could reach. The byte-level
+            // `contains` reads in `score` are what keep it there — with
+            // length-only reads the same fixture folded to 48 and tripped the
+            // vacuity guard.
+            400,
+        );
+    }
+
     /// B-2026-08-05-40 — the MEMORY half of the place → `Slice[T]` coercion.
     ///
     /// The header the fix synthesizes points INTO the caller's Vec buffer: no
