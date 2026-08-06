@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 218 | 0 |
 | leak | 141 | 1 |
-| double-free | 99 | 0 |
+| double-free | 100 | 1 |
 | codegen-gap | 92 | 0 |
 | run-vs-build | 85 | 3 |
 | missing-feature | 80 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 703 | 7 |
+| codegen | 704 | 8 |
 | interp | 126 | 0 |
 | typecheck | 126 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **972 surfaced · 9 open · 953 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **973 surfaced · 10 open · 953 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **972 surfaced 
 | B-2026-08-06-18 | 2026-08-06 | codegen | high | a u64 ARITHMETIC RESULT above i64::MAX renders SIGNED under both compiled backends but unsigned under the interpreter -- `println(u64.MAX - 1u64)` prints -2 on JIT/AOT and 18446744073709551614 on interp. Binding the expression to a `let` first is correct on every surface, so the wrong spelling sits next to a working one. PRE-EXISTING and independent of B-2026-08-06-16 (reproduces entirely through `u64.MAX`, no literal required) | — |
 | B-2026-08-06-19 | 2026-08-06 | codegen | medium | a chained FIELD ACCESS on a generic method's RETURN cannot be built: `w.take().f` fails `karac build` with "cannot resolve field 'f' on this receiver" while the identical `let x = w.take(); x.f` builds and runs -- passes `karac check` and runs correctly under the interpreter either way | — |
 | B-2026-08-06-20 | 2026-08-06 | codegen | medium | two instantiations of ONE generic struct reached through a MIX of literal and named receivers collide on the unmangled `@Type.method` symbol, whose signature is whichever instantiation is emitted first -- LLVM verifier error, while either receiver form alone builds | — |
+| B-2026-08-06-21 | 2026-08-06 | codegen | high | a boxed `Option`/`Result` binding passed by value to a PASSTHROUGH callee is freed TWICE at -O0: `fn id(o: Option[Option[i64]]) -> Option[Option[i64]] { o }` aborts with `free(): double free detected in tcache 2`, while the identical program is clean at the default -O2 | The `call_arg_flows_into_return` arm of the by-value arg loop in src/codegen/call_dispatch.rs, which SUPPRESSES the move-zeroing so the caller keeps its drop — correct for an inline payload, but the returned value owns the BOX as well, so both free it. |
 
 ### Fixed (953)
 
