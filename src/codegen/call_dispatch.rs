@@ -5707,11 +5707,6 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let vec_ty = self.vec_struct_type();
-        if std::env::var("KARAC_DBG_NEU").is_ok() {
-            eprintln!(
-                "[DBG] zero_struct_field_move_cap struct={struct_name} field={field} fname={fname}"
-            );
-        }
         let zero = self.context.i64_type().const_int(0, false);
         // Match Vec/String by concrete LLVM shape too: a String field resolved
         // through the monomorph subst carries the name `str`, which the name list
