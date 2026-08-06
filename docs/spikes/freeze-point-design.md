@@ -567,6 +567,51 @@ the binding case too, which is mechanism 1. Stage 2 makes *recursive
 traversals over deeply-immutable graphs* work; it does not make every
 traversal work.
 
+## Stage 3: the obvious route is refuted, and this sizes the work
+
+Stage 3 needs the **`freeze` statement**, not just a relaxed E0512. With
+`frozen` available only as a *parameter* mode, "is this instance immutable for
+the region" is a question about every call site — whole-program analysis, i.e.
+mechanism 1, the thing this design exists to avoid. The statement makes the
+region explicit and the check local, exactly as § "The call" describes.
+
+**The cheap way to add it does not work.** Stage 1's winning move was to keep
+the mode out of the type tree and reuse the borrow vocabulary: `frozen T`
+lowers to `ref T`, and codegen emits no refcount traffic for a borrow. The
+obvious extension is to desugar `let g = freeze graph;` into a `ref`-typed
+local plus a side record, which would need no new `ExprKind` and no
+exhaustive-match churn.
+
+Measured, refcount traffic counted inside the enclosing function only:
+
+| binding form | `rc_inc` | `rc_dec` |
+|---|---|---|
+| `let r = g;` — plain | 4 | 6 |
+| `let r: ref N = g;` — `ref`-typed local | **4** | **6** |
+
+**Identical.** A `ref`-typed *local* is not a borrow at codegen level; it still
+materialises a counted handle. The parameter case works because `frozen T` →
+`ref T` rides the **calling convention** — the caller keeps ownership and the
+callee's slot holds a pointer-to-handle. A local has no caller to borrow from,
+so the annotation buys nothing.
+
+`let r: ref N = g;` does typecheck, build, run, and pass to a `frozen`
+parameter today — so the route looks viable right up until the traffic is
+counted. That is why it is recorded here.
+
+**What stage 3 therefore costs.** A frozen local has to be a genuinely
+non-counting binding, which is codegen work, not a desugar: codegen needs a
+binding class whose slot aliases an existing owner without retaining. That is
+the same capability mechanism 1 would need, which is worth noticing — the
+statement is not a way of avoiding that work, only of making the *check* local
+once the work exists.
+
+Two guards must move together when it lands, and they are deliberately
+independent (§ "Two guards"): the freeze-site check (E0512) refuses any type
+whose reachable closure holds a `mut` field, and stage 2's place walk refuses a
+`mut` field at every projection step. #133 needs both relaxed — `Node.neighbors`
+is `mut` *and* is the traversal path — so neither can be relaxed alone.
+
 ## Risks, stated plainly
 
 - **Non-counting handles are a new unsafety surface.** If escape checking has a
