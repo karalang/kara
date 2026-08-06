@@ -34434,6 +34434,158 @@ fn main() {
         );
     }
 
+    /// A NON-GENERIC user enum whose single-payload variant is itself an enum —
+    /// a shape with EXACTLY ONE legitimate owner, guarded from both directions.
+    ///
+    /// Such a payload gets a 1-word carve-out rather than being sized to the
+    /// variant, so it boxes where a struct payload does not: `WrapE` is 4 words
+    /// against an area of 1, `WrapR` 6 against 1. The `WrapS`/`Big` arm is the
+    /// control for the other side — 6 words against an area of 6, no box at
+    /// all, and it must STAY unregistered because a `BoxedEnumDrop` over an
+    /// inline payload frees a word that was never a pointer.
+    ///
+    /// 70c15e83 gave these boxes an owner at CONSTRUCTION. This fixture exists
+    /// because that is not the only place one could plausibly be registered,
+    /// and a second owner is not a harmless belt-and-braces: adding a
+    /// callee-side param registration on top (which looks right in isolation —
+    /// the callee does receive the box by value) double-frees the `Holder` arm
+    /// below at -O0, measured. So the four ways the value reaches its consumer
+    /// are all here — matched in place, moved out of a struct field into a
+    /// by-value param, and handed to one as a fresh temp — and the fixture is
+    /// red for a SECOND owner just as surely as for none.
+    ///
+    /// Floored per B-2026-08-04-17 — `env.args().len()` seed, runtime-built
+    /// payloads, `contains`/`ends_with` byte reads. Without all three the boxes
+    /// are dead allocations LLVM deletes at -O2 and the fixture asserts nothing
+    /// (measured: 1 alloc with literal payloads, 957 with these).
+    ///
+    /// The leak direction is `-O0`-only, and the suite's opt level comes from
+    /// the process `KARAC_OPT_LEVEL`, so it is red only under
+    /// `KARAC_OPT_LEVEL=0 cargo test --features llvm --test memory_sanitizer`
+    /// (8640 bytes in 240 allocations against a compiler without 70c15e83).
+    /// The double-free direction fails at either level.
+    #[test]
+    fn asan_nongeneric_enum_nested_enum_payload_box_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Big { a: i64, b: i64, c: i64, d: i64, e: i64, s: String }
+enum WrapS { W(Big), Empty }
+enum WrapE { W(Option[String]), Empty }
+enum WrapR { W(Result[String, i64]), Empty }
+struct Holder { o: WrapE, n: i64 }
+fn consume(w: WrapE) -> i64 {
+    match w {
+        WrapE.W(Option.Some(s)) => if s.contains("payload") { 1 } else { 0 },
+        WrapE.W(Option.None) => -1,
+        WrapE.Empty => -2,
+    }
+}
+fn mk(n: i64, i: i64, tag: String) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str(tag);
+    s.push_str("-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 60 {
+        let s: WrapS = WrapS.W(Big { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i, "struct") });
+        match s {
+            WrapS.W(b) => { if b.s.ends_with("heap") { acc = acc + 1; } }
+            WrapS.Empty => { acc = acc - 1; }
+        }
+        let e: WrapE = WrapE.W(Option.Some(mk(n, i, "opt")));
+        match e {
+            WrapE.W(Option.Some(t)) => { if t.contains("payload") { acc = acc + 1; } }
+            WrapE.W(Option.None) => { acc = acc - 1; }
+            WrapE.Empty => { acc = acc - 1; }
+        }
+        let r: WrapR = WrapR.W(Result.Ok(mk(n, i, "res")));
+        match r {
+            WrapR.W(Result.Ok(t)) => { if t.contains("payload") { acc = acc + 1; } }
+            WrapR.W(Result.Err(x)) => { acc = acc + x; }
+            WrapR.Empty => { acc = acc - 1; }
+        }
+        let h = Holder { o: WrapE.W(Option.Some(mk(n, i, "field"))), n: 1 };
+        acc = acc + consume(h.o);
+        acc = acc + consume(WrapE.W(Option.Some(mk(n, i, "temp"))));
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["300"],
+            "nongeneric_enum_nested_enum_payload_box",
+            300,
+        );
+    }
+
+    /// B-2026-08-05-7 (boxed-envelope leg 2) — the owned boxed-payload enum
+    /// param drop must fire ONLY for a param consumed in place.
+    ///
+    /// That registration originally ran for every owned param, which freed a
+    /// box the callee had already handed on. Both escaping shapes are here and
+    /// both were hard failures, not leaks: `ident` returns its param (freeing
+    /// the box it just returned — `free(): double free detected in tcache 2`,
+    /// and at the DEFAULT -O2 as well as -O0), and `fwd` forwards its param to
+    /// a second by-value param (freed by both callees, then SIGSEGV at -O0).
+    /// The fix reuses the type-agnostic escape walk the `Result[shared]` param
+    /// arm already runs, so an escaping param stays unregistered and the
+    /// terminal consumer's free remains the only one.
+    ///
+    /// `get` is the consume-in-place shape the leak fix targets and must stay
+    /// registered — a green run here means neither over- nor under-freeing.
+    ///
+    /// Floored per B-2026-08-04-17, same three rules as its sibling above.
+    #[test]
+    fn asan_boxed_enum_param_escape_no_double_free() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum Opt[T] { Yes(T), No }
+fn mk(n: i64, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn get(o: Opt[String], d: i64) -> i64 {
+    match o {
+        Opt.Yes(s) => if s.contains("payload") { 1 } else { 0 },
+        Opt.No => d,
+    }
+}
+fn fwd(o: Opt[String]) -> i64 { get(o, -1) }
+fn ident(o: Opt[String]) -> Opt[String] { o }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 60 {
+        acc = acc + get(Opt.Yes(mk(n, i)), -1);
+        acc = acc + fwd(Opt.Yes(mk(n, i)));
+        let back: Opt[String] = ident(Opt.Yes(mk(n, i)));
+        match back {
+            Opt.Yes(s) => { if s.ends_with("heap") { acc = acc + 1; } }
+            Opt.No => { acc = acc - 1; }
+        }
+        acc = acc + get(Opt.No, 1);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["240"],
+            "boxed_enum_param_escape",
+            200,
+        );
+    }
+
     #[test]
     fn asan_generic_mono_bare_t_local_reassign_no_leak() {
         // B-2026-07-15-6: inside a monomorphized generic fn, a bare-`T`

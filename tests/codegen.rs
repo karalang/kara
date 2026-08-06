@@ -6409,6 +6409,49 @@ fn main() {
         assert_eq!(out, "a:99:2\nb:7:1:99:3\nc:99\nd:6\n");
     }
 
+    /// B-2026-08-05-7 — an owned boxed-payload enum param that ESCAPES must
+    /// not be freed by the callee.
+    ///
+    /// A `Opt[String]` monomorph packs a 3-word payload into the erased 1-word
+    /// area, so `coerce_to_payload_words` heap-boxes it and the callee's param
+    /// registration frees the box at scope exit. That registration ran for
+    /// every owned param, including the two that hand the box on: `ident`
+    /// returns its param and freed it anyway (`free(): double free detected in
+    /// tcache 2`, SIGABRT) and `fwd` forwards it to a second by-value param
+    /// (freed twice, then a SIGSEGV at -O0).
+    ///
+    /// Kept here rather than only under ASAN because this one aborts at the
+    /// DEFAULT -O2 — the box is live memory whichever way the optimizer goes,
+    /// so no dead-allocation elision can mask it. Asserted strictly
+    /// (`assert_eq!(run_program(..), Some(..))`): an abort makes `run_program`
+    /// return `None`, which the tolerant `let Some(out) = .. else { return }`
+    /// form would swallow as a skip.
+    #[test]
+    fn e2e_boxed_enum_param_escape_no_double_free() {
+        let src = r#"
+enum Opt[T] { Yes(T), No }
+fn get(o: Opt[String], d: i64) -> i64 {
+    match o {
+        Opt.Yes(s) => s.len(),
+        Opt.No => d,
+    }
+}
+fn fwd(o: Opt[String]) -> i64 { get(o, -1) }
+fn ident(o: Opt[String]) -> Opt[String] { o }
+fn main() {
+    println(get(Opt.Yes("consumed in place by the callee"), -1));
+    println(fwd(Opt.Yes("forwarded to a second by-value param")));
+    let back: Opt[String] = ident(Opt.Yes("returned straight back out of the callee"));
+    match back {
+        Opt.Yes(s) => println(s.len()),
+        Opt.No => println(-1),
+    }
+    println(get(Opt.No, 7));
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("31\n36\n40\n7\n"));
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///

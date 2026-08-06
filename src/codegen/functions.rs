@@ -1942,11 +1942,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // for the same reason as the let-site: the payload interior is
                 // the match arm's business.
                 //
+                // NON-ESCAPING params only, and that guard is load-bearing: the
+                // registration originally ran for every owned param, which freed
+                // a box the callee had already handed on. `fn id(v: Opt[String])
+                // -> Opt[String] { v }` returns the box AND freed it — a
+                // double-free at BOTH opt levels — and forwarding it to a second
+                // by-value param (`fn outer(v) { inner(v) }`) freed it twice and
+                // then SIGSEGV'd at -O0. Reusing the `Result[shared]` arm's
+                // escape walk (it is type-agnostic) leaves a forwarded or
+                // returned param unregistered, so the terminal consumer's free
+                // stays the only one and the chain self-balances with no
+                // call-site suppression — the same argument that arm makes.
+                //
                 // The declared param type is `Opt[T]` with a BARE `T`, which is
                 // exactly the erasure that causes the boxing — so resolve it
                 // through the active monomorph subst first, or the predicate
                 // measures the erased one-word `T` and never reports a box.
-                if !self.ref_params.contains_key(&param_name) {
+                if !self.ref_params.contains_key(&param_name)
+                    && self
+                        .result_shared_nonescaping_param_names
+                        .contains(&param_name)
+                {
                     let mono_ty = self.subst_monomorph_type_params(&param.ty);
                     for (enum_name, variant) in self.user_enum_boxed_payload_variants(&mono_ty) {
                         self.track_boxed_enum_var_with_inner_drop(

@@ -2098,6 +2098,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 
+        // Params of THIS mono body that never escape (used only as a `match`
+        // scrutinee, or unused) — gates the owned boxed-enum param drop below.
+        let nonescaping_params = crate::result_escape::nonescaping_param_names(func);
+
         for (i, param) in func.params.iter().enumerate() {
             let param_name = self.param_name(param);
             let param_val = fn_val.get_nth_param(i as u32).unwrap();
@@ -2150,7 +2154,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // Resolve through the active subst first: the declared `Opt[T]` is
             // the erased form, and the predicate must see `Opt[String]` to know
             // it boxes. BOX-ONLY, as at the other two sites.
-            if !self.ref_params.contains_key(&param_name) {
+            //
+            // Gated on the same escape walk as the `compile_function` sibling —
+            // a param that is forwarded or returned hands the box on, and freeing
+            // it here is a double-free (see that site for the two measured
+            // shapes). Computed locally rather than through
+            // `result_shared_nonescaping_param_names`: a mono body is compiled
+            // INLINE inside its caller's, so that field still holds the caller's
+            // set and writing to it would corrupt the caller's `Result[shared]`
+            // arm.
+            if !self.ref_params.contains_key(&param_name)
+                && nonescaping_params.contains(&param_name)
+            {
                 let mono_ty = self.subst_monomorph_type_params(&param.ty);
                 for (enum_name, variant) in self.user_enum_boxed_payload_variants(&mono_ty) {
                     self.track_boxed_enum_var_with_inner_drop(
