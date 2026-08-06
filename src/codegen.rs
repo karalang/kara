@@ -1147,6 +1147,18 @@ pub(super) struct Codegen<'ctx> {
     /// tell `Option[String]` (cap at w2, must suppress) from `Option[i64]`
     /// (no heap payload, nothing to suppress): the `Option` layout is
     /// type-erased. See B-2026-06-10-6.
+    /// B-2026-08-06-27 — result-binding → source-binding, for a `let` whose RHS
+    /// hands one of its armed arguments straight back
+    /// (`call_passes_armed_inline_binding_through`). The result registers no
+    /// cleanup there (the source stays sole owner), so a later disarm keyed on
+    /// the RESULT's name — a consuming match arm's
+    /// `suppress_inline_option_payload_cleanup` — must forward to the SOURCE,
+    /// or the source's free runs over a payload the arm binding already owns.
+    ///
+    /// Measured, not assumed: with the registration skipped but no forwarding,
+    /// a non-binding `Some(_)` arm is clean and a payload-BINDING arm still
+    /// double-frees. That pair is what this map exists for.
+    pub(crate) passthrough_owner_alias: std::collections::HashMap<String, String>,
     pub(crate) inline_option_payload_vars: std::collections::HashSet<String>,
     /// `Result[T, E]` sibling of `inline_option_payload_vars` — names of
     /// `Result` bindings that registered a `FreeInlineResultPayload` (the Ok
@@ -7707,6 +7719,7 @@ impl<'ctx> Codegen<'ctx> {
             var_type_names: HashMap::new(),
             tuple_var_elem_type_names: HashMap::new(),
             tuple_var_elem_type_exprs: HashMap::new(),
+            passthrough_owner_alias: std::collections::HashMap::new(),
             inline_option_payload_vars: std::collections::HashSet::new(),
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),

@@ -6037,7 +6037,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
-        if !self.inline_option_payload_vars.contains(name.as_str()) {
+        // B-2026-08-06-27 — a passthrough result binding owns nothing (its
+        // source does), so a disarm aimed at it must land on the source.
+        let name: &str = self
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .map_or(name.as_str(), |s| s.as_str());
+        if !self.inline_option_payload_vars.contains(name) {
             return;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -6049,7 +6055,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !patterns.iter().any(pattern_consumes_field) {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()) else {
+        let Some(slot) = self.variables.get(name) else {
             return;
         };
         let Some(layout) = self.enum_layouts.get("Option") else {
@@ -6389,7 +6395,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
-        if !self.inline_result_payload_vars.contains(name.as_str()) {
+        // B-2026-08-06-27 — Result twin of the forwarding in
+        // `suppress_inline_option_payload_cleanup`: a passthrough result
+        // binding owns nothing, so the disarm must land on its source.
+        let name: &str = self
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .map_or(name.as_str(), |s| s.as_str());
+        if !self.inline_result_payload_vars.contains(name) {
             return;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
@@ -6402,7 +6415,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !patterns.iter().any(pattern_consumes_field) {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()) else {
+        let Some(slot) = self.variables.get(name) else {
             return;
         };
         let Some(layout) = self.enum_layouts.get("Result") else {
@@ -6452,16 +6465,62 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Boxed-ONLY: an inline payload's caller-retains behaviour on this path is
     /// correct and tested, and must not be disturbed.
     pub(super) fn call_passes_armed_boxed_binding_through(&self, value: &Expr) -> bool {
+        self.call_passes_armed_binding_through(value, &self.boxed_enum_payload_vars)
+    }
+
+    /// INLINE sibling of [`Self::call_passes_armed_boxed_binding_through`].
+    /// B-2026-08-06-27.
+    ///
+    /// The boxed rule's doc originally asserted the inline path was "correct
+    /// and tested" on this shape, on the strength of a single-free measurement
+    /// of an `Option[String]` passthrough. That control used a string LITERAL,
+    /// which lives in rodata and has nothing to free — so it could not have
+    /// failed however wrong the ownership was. With a runtime-built payload the
+    /// inline path double-frees exactly as the boxed one did, at the DEFAULT
+    /// -O2 as well as -O0, and the arm shape is irrelevant (a non-binding
+    /// `Some(_)` arm fails identically).
+    ///
+    /// Same remedy, same direction: the SOURCE binding stays sole owner and the
+    /// result registers nothing. Not the reverse — a discarded result leaves
+    /// the source as the only owner, so zeroing it would leak.
+    pub(super) fn call_passthrough_armed_inline_source(&self, value: &Expr) -> Option<String> {
+        self.call_passthrough_armed_source(value, &self.inline_option_payload_vars)
+            .or_else(|| self.call_passthrough_armed_source(value, &self.inline_result_payload_vars))
+    }
+
+    /// Shared shape test: is `value` a direct call to a named function, passing
+    /// a binding that is present in `armed` in a position the callee returns?
+    /// `call_arg_flows_into_return` is conservative-TRUE on a mixed-path callee,
+    /// so a callee that sometimes returns something else leaves the value
+    /// unregistered here — a leak, the side this file errs toward over a double
+    /// free.
+    fn call_passes_armed_binding_through(
+        &self,
+        value: &Expr,
+        armed: &std::collections::HashSet<String>,
+    ) -> bool {
+        self.call_passthrough_armed_source(value, armed).is_some()
+    }
+
+    /// The shared shape test, returning the SOURCE binding's name so a caller
+    /// can record the ownership alias as well as skip its own registration.
+    fn call_passthrough_armed_source(
+        &self,
+        value: &Expr,
+        armed: &std::collections::HashSet<String>,
+    ) -> Option<String> {
         let ExprKind::Call { callee, args, .. } = &value.kind else {
-            return false;
+            return None;
         };
         let ExprKind::Identifier(callee_name) = &callee.kind else {
-            return false;
+            return None;
         };
-        args.iter().enumerate().any(|(i, a)| {
-            matches!(&a.value.kind, ExprKind::Identifier(n)
-                if self.boxed_enum_payload_vars.contains(n.as_str()))
-                && self.call_arg_flows_into_return(callee_name, i)
+        args.iter().enumerate().find_map(|(i, a)| {
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                return None;
+            };
+            (armed.contains(n.as_str()) && self.call_arg_flows_into_return(callee_name, i))
+                .then(|| n.clone())
         })
     }
 

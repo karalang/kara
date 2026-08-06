@@ -35010,6 +35010,81 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-27 — the INLINE sibling of the passthrough double free.
+    ///
+    /// B-2026-08-06-21 fixed the heap-BOXED payload and asserted the inline
+    /// path was already correct on this shape. That assertion rested on a
+    /// control whose payload was a string LITERAL — rodata, nothing to free —
+    /// so it could not have failed however wrong the ownership was. With a
+    /// runtime-built payload the inline path double-freed identically, at the
+    /// DEFAULT -O2 as well as -O0. A control that cannot fail is worth less
+    /// than no control, and an allocation floor does not catch it because the
+    /// control is not the thing being floored.
+    ///
+    /// TWO owners had to go, and the second only shows up with a payload-
+    /// BINDING arm — a non-binding `Some(_)` arm was clean after the first half
+    /// alone, which is exactly the pair that proved the second was needed:
+    ///
+    ///   1. the let-site registration for the result binding. That site is
+    ///      gated on the RHS being any `Call`, so a PASSTHROUGH call slipped
+    ///      through even though it aliases an existing binding — the very thing
+    ///      the `rhs_is_fresh_inline_enum` arm beside it excludes, for this
+    ///      same double-free reason.
+    ///   2. the consuming arm's disarm, which is keyed on the SCRUTINEE's name.
+    ///      With (1) skipped the result owns nothing, so the disarm found
+    ///      nothing and the source stayed armed against a payload the arm
+    ///      binding now owned. `passthrough_owner_alias` forwards it.
+    ///
+    /// Both `Option` and `Result` are here because each has its own disarm and
+    /// only the pair proves the forwarding is not Option-specific. `peek(e)` is
+    /// a NON-passthrough consuming call and the last arm a fresh TEMP: neither
+    /// has a second owner, both were always clean, and both must stay that way
+    /// — the fix must not disarm an owner that is the only one.
+    ///
+    /// Floored per B-2026-08-04-17 (566 allocations at -O2).
+    #[test]
+    fn asan_inline_payload_passthrough_arg_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn idopt(o: Option[String]) -> Option[String] { o }
+fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
+fn peek(o: Option[String]) -> i64 { match o { Option.Some(s) => s.len(), Option.None => -1 } }
+fn mk(n: i64, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let a: Option[String] = Option.Some(mk(n, i));
+        let abk = idopt(a);
+        match abk { Option.Some(x) => { if x.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        let b: Option[String] = Option.Some(mk(n, i));
+        let bbk = idopt(b);
+        match bbk { Option.Some(_) => { acc = acc + 1; } _ => { acc = acc - 1; } }
+        let r: Result[String, i64] = Result.Ok(mk(n, i));
+        let rbk = idres(r);
+        match rbk { Result.Ok(x) => { if x.ends_with("heap") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        let e: Option[String] = Option.Some(mk(n, i));
+        acc = acc + peek(e);
+        let t = idopt(Option.Some(mk(n, i)));
+        match t { Option.Some(x) => { if x.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["1431"],
+            "inline_payload_passthrough_arg_single_owner",
+            400,
+        );
+    }
+
     #[test]
     fn asan_generic_mono_bare_t_local_reassign_no_leak() {
         // B-2026-07-15-6: inside a monomorphized generic fn, a bare-`T`

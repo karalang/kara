@@ -5873,9 +5873,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // each registrar no-ops for the other shapes.
                                 // Same Call-gated leaking forms (constructors
                                 // + user-fn returns).
-                                self.track_inline_option_payload_var(var_name, slot.ptr, &te);
-                                self.track_inline_result_payload_var(var_name, slot.ptr, &te);
-                                self.track_inline_option_map_payload_var(var_name, slot.ptr, &te);
+                                // B-2026-08-06-27 — the inline sibling of
+                                // B-2026-08-06-21's boxed rule. This site is
+                                // gated on the RHS being any `Call`, so a
+                                // PASSTHROUGH call slips through even though it
+                                // is an alias of an existing binding — exactly
+                                // what the `rhs_is_fresh_inline_enum` arm beside
+                                // it excludes for the non-Call shapes, and for
+                                // the same double-free reason. The source stays
+                                // sole owner.
+                                if let Some(src) = self.call_passthrough_armed_inline_source(value)
+                                {
+                                    self.passthrough_owner_alias
+                                        .insert(var_name.to_string(), src);
+                                } else {
+                                    self.track_inline_option_payload_var(var_name, slot.ptr, &te);
+                                    self.track_inline_result_payload_var(var_name, slot.ptr, &te);
+                                    self.track_inline_option_map_payload_var(
+                                        var_name, slot.ptr, &te,
+                                    );
+                                }
                             }
                         }
                     }
