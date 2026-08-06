@@ -5214,7 +5214,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // it via `var_type_names` for struct-kind locals.
         if let Some(receiver_type) = self.inferred_receiver_type(object) {
             let qualified = format!("{}.{}", receiver_type, method);
-            if let Some(fn_val) = self.module.get_function(&qualified) {
+            // B-2026-08-06-20 — never dispatch a GENERIC impl method through the
+            // unmangled `Type.method` symbol, even when one exists in the module.
+            //
+            // That symbol is the fallback slot the monomorphizer emits when it
+            // cannot resolve an instantiation (`mangle_mono_name` appends a `$`
+            // token only for a param it has a subst for, so an empty subst
+            // mangles back to the base name). It therefore carries WHICHEVER
+            // instantiation was emitted first, and this arm — which runs before
+            // the generic path below — handed every later receiver to it:
+            //
+            //     let n: i64 = env.args().len();
+            //     Box { v: n + 41 }.take()                 // i64, unresolvable
+            //     let b = Box { v: "s".repeat(n) };
+            //     b.take()                                 // String, resolvable
+            //
+            // fixed `@Box.take` at `{ i64 }` and then called it with
+            // `{ {ptr,i64,i64} }` — "Call parameter type does not match function
+            // signature", while either receiver form ALONE built and `karac run`
+            // was correct throughout. Falling through sends the second call to
+            // the monomorphizer, which mangles it per instantiation.
+            //
+            // A non-generic method is unaffected: `generic_fns` carries a
+            // `Type.method` key only for generic ones, so the lookup below is
+            // the same one it always was.
+            if let Some(fn_val) = self
+                .module
+                .get_function(&qualified)
+                .filter(|_| !self.generic_fns.contains_key(&qualified))
+            {
                 // B-2026-08-01-7: an OWNED-`self` method CONSUMES the
                 // receiver — a named value-enum binding's payload-bodies
                 // walk must disarm, exactly like `let c = b;` (the arm

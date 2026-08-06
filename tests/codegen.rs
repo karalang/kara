@@ -6756,6 +6756,57 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("6\n7\n8\n9\n2\n"));
     }
 
+    /// B-2026-08-06-20 — TWO instantiations of ONE generic struct reached
+    /// through a MIX of literal and named receivers.
+    ///
+    /// The sibling test above deliberately uses a separate `Num[i64]` struct to
+    /// avoid this shape. Here it is on purpose: `Box[i64]` via a literal
+    /// receiver and `Box[String]` via a named one, in one program.
+    ///
+    /// The unmangled `@Box.take` is the fallback slot the monomorphizer emits
+    /// when it cannot resolve an instantiation — `mangle_mono_name` appends a
+    /// `$` token only for a param it has a subst for, so an empty subst mangles
+    /// back to the base name. The i64 literal lands there (its `n + 41` field
+    /// initializer has no nameable type, and -12's recovery is fail-closed on
+    /// that), fixing `@Box.take`'s signature at `{ i64 }`. The direct-dispatch
+    /// arm then found that symbol by name and handed it the String receiver
+    /// too: "Call parameter type does not match function signature".
+    ///
+    /// Both receiver forms build ALONE — two named receivers at two
+    /// instantiations emit `Box.take$i64` and `Box.take$struct` correctly — so
+    /// it takes the mix, in that order, to reach it. `karac check` passed and
+    /// `karac run` printed the right answers throughout; only `build` failed.
+    ///
+    /// Both orders are exercised, since the defect is order-sensitive by
+    /// construction (whichever instantiation is emitted first wins the slot),
+    /// and `peek` covers a second method on the same struct so the fix is not
+    /// specific to one symbol. Verified RED against the pre-fix compiler.
+    #[test]
+    fn e2e_generic_method_mixed_literal_and_named_receivers() {
+        let src = r#"
+struct Box[T] { v: T }
+impl[T] Box[T] {
+    fn take(self) -> T { self.v }
+    fn peek(ref self) -> i64 { 9 }
+}
+fn main() {
+    let n: i64 = env.args().len();
+    println(Box { v: n + 41 }.take());
+    let b = Box { v: "named-receiver-string".repeat(n) };
+    println(b.take().len());
+
+    let c = Box { v: "named-first-this-time".repeat(n) };
+    println(c.take().len());
+    println(Box { v: n + 6 }.take());
+
+    println(Box { v: n + 1 }.peek());
+    let d = Box { v: "peek-receiver".repeat(n) };
+    println(d.peek());
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("42\n21\n21\n7\n9\n9\n"));
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///
