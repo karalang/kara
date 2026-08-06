@@ -4008,10 +4008,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // WITHOUT touching its key, which is where the win is (a `String` key
         // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
         // false-positive rate is ~1/128, so `eq` runs on real hits.
-        let is_occupied = self
-            .builder
-            .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
-            .unwrap();
+        // B-2026-08-05-5 probe: `KARAC_MAP_TAG=0` drops the hash-tag half of
+        // this compare, leaving a plain occupancy test. The mono map path only
+        // ever has i32/i64 keys (`should_use_mono_map_for`), so the tag's
+        // benefit -- skipping a cold heap dereference on a heap key -- is
+        // structurally unavailable here; this switch measures what it costs.
+        let is_occupied = if self.map_tag_compare {
+            self.builder
+                .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
+                .unwrap()
+        } else {
+            self.emit_map_is_occupied(status_byte, "ctrl.match")
+        };
         let tomb_i_next = self
             .builder
             .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
@@ -4326,10 +4334,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // WITHOUT touching its key, which is where the win is (a `String` key
         // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
         // false-positive rate is ~1/128, so `eq` runs on real hits.
-        let is_occupied = self
-            .builder
-            .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
-            .unwrap();
+        // B-2026-08-05-5 probe: `KARAC_MAP_TAG=0` drops the hash-tag half of
+        // this compare, leaving a plain occupancy test. The mono map path only
+        // ever has i32/i64 keys (`should_use_mono_map_for`), so the tag's
+        // benefit -- skipping a cold heap dereference on a heap key -- is
+        // structurally unavailable here; this switch measures what it costs.
+        let is_occupied = if self.map_tag_compare {
+            self.builder
+                .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
+                .unwrap()
+        } else {
+            self.emit_map_is_occupied(status_byte, "ctrl.match")
+        };
         let tomb_i_next = self
             .builder
             .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
@@ -5018,10 +5034,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // WITHOUT touching its key, which is where the win is (a `String` key
         // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
         // false-positive rate is ~1/128, so `eq` runs on real hits.
-        let is_occupied = self
-            .builder
-            .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
-            .unwrap();
+        // B-2026-08-05-5 probe: `KARAC_MAP_TAG=0` drops the hash-tag half of
+        // this compare, leaving a plain occupancy test. The mono map path only
+        // ever has i32/i64 keys (`should_use_mono_map_for`), so the tag's
+        // benefit -- skipping a cold heap dereference on a heap key -- is
+        // structurally unavailable here; this switch measures what it costs.
+        let is_occupied = if self.map_tag_compare {
+            self.builder
+                .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
+                .unwrap()
+        } else {
+            self.emit_map_is_occupied(status_byte, "ctrl.match")
+        };
         let tomb_i_next = self
             .builder
             .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
