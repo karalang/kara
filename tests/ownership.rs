@@ -9869,10 +9869,20 @@ fn frozen_param_projection_still_refuses_materializing_uses() {
                    shared struct Inner { v: i64, deep: Deep }\n\
                    shared struct Node { val: i64, kids: Vec[Inner], tbl: Map[i64, i64] }\n";
     let cases: &[(&str, &str, &str)] = &[
+        // RE-TARGETED by stage 2.5. `let k = n.kids[0]; k.v` is now admitted
+        // as a non-counting alias — the traffic that made it unsafe was
+        // removed, not argued away. Two binding rows stay here, pinning the
+        // two edges the admission does NOT cross: a MUTABLE alias (which could
+        // be repointed at a handle from anywhere) and an alias that escapes.
         (
-            "an element bound to a local",
-            "fn f(n: frozen Node) -> i64 { let k = n.kids[0]; k.v }",
+            "an element bound to a MUTABLE local",
+            "fn f(n: frozen Node) -> i64 { let mut k = n.kids[0]; k.v }",
             "cannot be used through this element",
+        ),
+        (
+            "an element bound to a local, then returned",
+            "fn f(n: frozen Node) -> Inner { let k = n.kids[0]; k }",
+            "escapes here",
         ),
         (
             "an element bound by a for loop",
@@ -9956,6 +9966,65 @@ fn frozen_param_projection_still_refuses_materializing_uses() {
     }
 }
 
+/// STAGE 2.5 — a frozen place may be BOUND to an immutable local, and the
+/// local is then a frozen root in its own right.
+///
+/// Stage 2 refused every binding form on a measurement: `let k = n.inner`
+/// emitted `rc_inc=2 / rc_dec=3` even in borrow mode, and two branches racing
+/// that non-atomic refcount is B-2026-07-28-13's SIGSEGV. Stage 2.5 does not
+/// argue the measurement away — it removes the traffic (codegen skips the
+/// element clone, the receive-inc and the scope-exit dec for these bindings),
+/// which is pinned from the codegen side by
+/// `frozen_alias_binding_emits_no_refcount_traffic` (tests/par_codegen.rs).
+///
+/// What licenses it: the alias names the same object as the parameter, whose
+/// owner is the CALLER and therefore outlives the whole call, and the alias
+/// joins the frozen set — so it can no more escape than the parameter can.
+/// The reject battery above pins that second half.
+#[test]
+fn frozen_place_may_be_bound_to_an_immutable_local_alias() {
+    let prelude = "shared struct Deep { d: i64 }\n\
+                   shared struct Inner { v: i64, deep: Deep }\n\
+                   shared struct Node { val: i64, kids: Vec[Inner] }\n";
+    let cases: &[(&str, &str)] = &[
+        (
+            "a field place bound, then read",
+            "fn f(n: frozen Node) -> i64 { let k = n.kids[0]; k.v }",
+        ),
+        (
+            "the bare parameter rebound",
+            "fn f(n: frozen Node) -> i64 { let m = n; m.val }",
+        ),
+        (
+            "an alias projected further",
+            "fn f(n: frozen Node) -> i64 { let k = n.kids[0]; k.deep.d }",
+        ),
+        (
+            "an alias of an alias",
+            "fn f(n: frozen Node) -> i64 { let k = n.kids[0]; let j = k.deep; j.d }",
+        ),
+        (
+            "an alias passed whole to a frozen slot",
+            "fn g(i: frozen Inner) -> i64 { i.v }\n\
+             fn f(n: frozen Node) -> i64 { let k = n.kids[0]; g(k) }",
+        ),
+        (
+            "an alias used as a container query receiver",
+            "fn f(n: frozen Node) -> i64 { let k = n; k.kids.len() }",
+        ),
+        (
+            "an alias bound inside a loop body",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; let mut i: i64 = 0; \
+             while i < n.kids.len() { let k = n.kids[i]; s = s + k.v; i = i + 1; } s }",
+        ),
+    ];
+    for (label, body) in cases {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[frozen stage-2.5 accept] {label}");
+        ownership_ok(&src);
+    }
+}
+
 /// The shape the whole entry exists for: a RECURSIVE traversal of a `shared`
 /// graph, shared read-only across two `par` branches.
 ///
@@ -10008,9 +10077,16 @@ fn frozen_recursive_traversal_is_admitted_across_par_branches() {
 fn frozen_param_escape_is_reported_in_every_other_position() {
     let cases: &[(&str, &str, &str)] = &[
         ("returned", "fn f(n: frozen N) -> N { n }", "escapes here"),
+        // RE-TARGETED by stage 2.5, deliberately. This row used to be `let m =
+        // n; m.val` — a plain rebinding, which is now ADMITTED as a
+        // non-counting alias (it emits no refcount traffic, so there is
+        // nothing left for it to race). The property the row guards is not
+        // "a handle may not be renamed" but "renaming it does not buy an
+        // escape", so the example moves to the shape that actually tests
+        // that: bind it, then try to return the new name.
         (
-            "bound to a local",
-            "fn f(n: frozen N) -> i64 { let m = n; m.val }",
+            "bound to a local, then returned under the new name",
+            "fn f(n: frozen N) -> N { let m = n; m }",
             "escapes here",
         ),
         (
@@ -10033,9 +10109,15 @@ fn frozen_param_escape_is_reported_in_every_other_position() {
             "fn f(n: frozen N) -> i64 { match n { _ => 1 } }",
             "escapes here",
         ),
+        // RE-TARGETED by stage 2.5, same reason as the row above: the bare
+        // `let z = n;` this used to be is now an admitted alias, and admitting
+        // it in a `defer` body is correct — a deferred block runs at scope
+        // exit, still inside the call, so the alias cannot outlive the owner.
+        // What the row is for is that the walk DESCENDS into defer bodies, so
+        // it now uses a form that is still refused there.
         (
-            "captured by a defer block",
-            "fn f(n: frozen N) -> i64 { defer { let z = n; } 0 }",
+            "used through a method receiver inside a defer block",
+            "fn f(n: frozen N) -> i64 { defer { let z = n; println(z.len()); } 0 }",
             "escapes here",
         ),
         (

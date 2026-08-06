@@ -858,6 +858,17 @@ pub struct OwnershipCheckResult {
     /// `par {}` capture. Codegen must emit the atomic path for EVERY refcount
     /// op on these types; see `OwnershipChecker::atomic_promoted_types`.
     pub atomic_promoted_types: std::collections::HashSet<String>,
+    /// B-2026-08-01-33 mechanism 3, stage 2.5 — the INITIALIZER span of every
+    /// `let` the frozen-escape walk admitted as a non-counting ALIAS of a place
+    /// rooted at a `frozen` parameter (`let k = n.kids[i];`). Codegen must skip
+    /// three things for such a binding: the `Vec`-element deep clone, the
+    /// receive-inc, and the scope-exit dec. The caller's value owns the object
+    /// for the whole call and the escape check has proved the alias cannot
+    /// outlive it, so the binding is a pure borrow — taking the counts instead
+    /// would put non-atomic refcount traffic back into exactly the `par`
+    /// branches this mode exists to admit. Empty for every program with no
+    /// `frozen` parameter, which is every program that does not use the mode.
+    pub frozen_alias_bindings: HashSet<SpanKey>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -1052,6 +1063,11 @@ pub struct OwnershipChecker<'a> {
     /// `heap_type_uses_atomic_rc`, which is the single funnel all four
     /// refcount dispatchers share.
     pub(crate) atomic_promoted_types: std::collections::HashSet<String>,
+    /// B-2026-08-01-33 mechanism 3, stage 2.5 — initializer spans of the `let`
+    /// bindings the frozen-escape walk admitted as non-counting aliases.
+    /// Accumulated across functions (spans are unique program-wide) and
+    /// surfaced via `OwnershipCheckResult::frozen_alias_bindings`.
+    pub(crate) frozen_alias_bindings: HashSet<SpanKey>,
     /// Type name of each binding in scope for the current function.
     /// Used so RC trigger sites can look up `@no_rc` on the type.
     pub(crate) binding_type_names: HashMap<String, String>,
@@ -1290,6 +1306,7 @@ impl<'a> OwnershipChecker<'a> {
             headerless_reshaper_dummies: HashMap::new(),
             error_fix_diffs: HashMap::new(),
             atomic_promoted_types: std::collections::HashSet::new(),
+            frozen_alias_bindings: HashSet::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
             immutable_lets: HashMap::new(),
@@ -1433,6 +1450,7 @@ impl<'a> OwnershipChecker<'a> {
             headerless_reshaper_dummies: self.headerless_reshaper_dummies,
             error_fix_diffs: self.error_fix_diffs,
             atomic_promoted_types: self.atomic_promoted_types,
+            frozen_alias_bindings: self.frozen_alias_bindings,
         }
     }
 

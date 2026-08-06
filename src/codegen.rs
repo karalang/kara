@@ -3561,6 +3561,13 @@ pub(super) struct Codegen<'ctx> {
     /// funnel all four refcount dispatchers share. Empty unless a multi-branch
     /// capture was admitted, so nothing changes by default.
     pub(crate) atomic_promoted_types: HashSet<String>,
+    /// B-2026-08-01-33 mechanism 3, stage 2.5 — initializer spans of the `let`
+    /// bindings the ownership pass admitted as non-counting aliases of a place
+    /// rooted at a `frozen` parameter. A hit means: skip the `Vec`-element
+    /// clone, skip the receive-inc, and register NO scope-exit cleanup — the
+    /// caller's value stays the sole owner. Empty unless the program uses the
+    /// `frozen` mode.
+    pub(crate) frozen_alias_bindings: HashSet<SpanKey>,
     /// Per-function parallelization decisions populated from `ConcurrencyAnalysis`.
     /// Function name → `FunctionConcurrency` (parallel groups + total stmt count).
     /// Threaded in by `load_concurrency_analysis`; consumed in slice 2 by the
@@ -7992,6 +7999,7 @@ impl<'ctx> Codegen<'ctx> {
             closure_capture_paths: HashMap::new(),
             par_capture_modes: HashMap::new(),
             atomic_promoted_types: HashSet::new(),
+            frozen_alias_bindings: HashSet::new(),
             concurrency_decisions: HashMap::new(),
             current_fn_name: String::new(),
             track_caller_fns: std::collections::HashSet::new(),
@@ -8164,6 +8172,11 @@ impl<'ctx> Codegen<'ctx> {
         // multi-branch `par {}` capture could be admitted.
         self.atomic_promoted_types
             .extend(ow.atomic_promoted_types.iter().cloned());
+        // B-2026-08-01-33 mechanism 3, stage 2.5 — `let` bindings admitted as
+        // non-counting aliases of a frozen place. Consumed by the let-stmt
+        // shared arm; empty unless the program uses the `frozen` mode.
+        self.frozen_alias_bindings
+            .extend(ow.frozen_alias_bindings.iter().cloned());
         // RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`): consume the ownership
         // pass's *sound* elidability set — `Ref` params that no call site
         // passes a fresh rvalue and whose function never escapes as a value

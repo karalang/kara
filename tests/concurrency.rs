@@ -2677,6 +2677,77 @@ fn test_disjoint_write_admitted_for_frozen_param() {
     );
 }
 
+/// B-2026-08-01-33 mechanism 3, **stage 2.5** — the auto-par arm still admits
+/// the body once the child is BOUND to a local instead of projected inline.
+///
+/// Recorded because the mechanism is not the obvious one, and the difference
+/// matters if this ever regresses. `spans_rooted_at` whitelists places rooted
+/// at a `frozen` parameter, and the alias `k` is rooted at ITSELF, so it is
+/// not in that whitelist. Measured: the loop body's only cross-task-unsafe
+/// span is the bare `s`, which the whitelist does cover — neither `s.items[0]`
+/// nor `k` carries an `expr_types` entry the gate sees.
+///
+/// So this admission rests on codegen emitting NO refcount traffic for the
+/// alias, which `frozen_alias_binding_emits_no_refcount_traffic`
+/// (tests/par_codegen.rs) pins directly, and which was confirmed here on the
+/// emitted worker itself: `__karac_disjoint_worker_*` for this shape contains
+/// zero `rc_inc` / `rc_dec` / `atomicrmw`. The `ref` control below is what
+/// keeps the pair from passing on a gate that admits everything.
+#[test]
+fn test_disjoint_write_admitted_for_frozen_alias_binding() {
+    let program = |mode: &str| {
+        format!(
+            r#"
+        shared struct Inner {{ v: i64 }}
+        shared struct S {{ items: Vec[Inner] }}
+        fn run(s: {mode}S, out: mut ref Vec[i64]) {{
+            for i in 0..2048 {{
+                let k = s.items[0];
+                let mut acc: i64 = 0;
+                let mut t: i64 = 0;
+                while t < 200 {{ acc = acc + k.v * i + t; t = t + 1; }}
+                out[i] = acc;
+            }}
+        }}
+        fn main() {{
+            let s = S {{ items: [Inner {{ v: 3 }}] }};
+            let mut out: Vec[i64] = Vec.filled(2048, 0);
+            run(s, mut out);
+            println(out[10]);
+        }}
+        "#
+        )
+    };
+    let decline_of = |src: &str| {
+        let analysis = analyze_typed(src);
+        let run_fc = get_function(&analysis, "run");
+        run_fc
+            .disjoint_write_loops
+            .iter()
+            .find(|d| d.loop_var == "i")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a disjoint-write candidate for loop `i`, got {:?}",
+                    run_fc.disjoint_write_loops
+                )
+            })
+            .decline
+    };
+    assert_eq!(
+        decline_of(&program("frozen ")),
+        None,
+        "a loop body that BINDS a child off a `frozen` root must pass the \
+         cross-task-safety gate — explicit `par` admits the same alias, and \
+         the alias emits no refcount traffic to race"
+    );
+    assert_eq!(
+        decline_of(&program("ref ")),
+        Some(karac::index_disjoint::DisjointDecline::NotCrossTaskSafe),
+        "the byte-identical body written `ref` must STILL decline — without \
+         this the assertion above would pass on a gate that admits everything"
+    );
+}
+
 /// The companion that keeps the admission honest, and the reason the whitelist
 /// is built from PLACE ROOTS rather than from types.
 ///

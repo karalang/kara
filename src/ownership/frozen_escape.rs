@@ -53,8 +53,9 @@
 //!    place** — `n.kids.len()`. A narrow, explicitly-enumerated exception,
 //!    justified below.
 //!
-//! **Why places and not bindings.** Measured per-function refcount traffic in
-//! the emitted IR, borrow-mode receiver, `outer`'s own frame:
+//! **Why places and not bindings — and what changed.** Measured per-function
+//! refcount traffic in the emitted IR, borrow-mode receiver, `outer`'s own
+//! frame:
 //!
 //! | body | `rc_inc` | `rc_dec` |
 //! |---|---|---|
@@ -63,15 +64,36 @@
 //! | `o.kids.len()` | 0 | 0 |
 //! | `let k = o.inner; k.v` — **bound to a local** | **2** | **3** |
 //!
-//! A projection is a deref; a *binding* materialises a counted handle. That is
-//! the boundary this stage draws, and it is drawn where the measurement puts
-//! it, not where it would be convenient. `let`-binding a projection, `for
-//! k in n.kids`, and every other form that introduces a new name for a handle
-//! stay reported — admitting them needs the retain removed first, which is
-//! mechanism 1 proper. The measurement is pinned from the codegen side by
+//! A projection is a deref; a *binding* materialised a counted handle. Stage 2
+//! drew its boundary there, on that measurement, and refused every binding
+//! form. Stage 2.5 does not move the boundary by argument — it **removes the
+//! traffic**, which is the only thing that was ever in the way:
+//!
+//! 4. **Binding a frozen place to an immutable local** — `let k = n.kids[i];`.
+//!    Admitted, and compiled as a NON-COUNTING ALIAS: codegen skips the
+//!    element clone, the receive-inc, and the scope-exit dec, so the row above
+//!    reads 0/0 for this shape too. The local then becomes a frozen root
+//!    itself, so every later use of it is judged by exactly the rules that
+//!    govern the parameter — it can be read, projected, passed to another
+//!    `frozen` slot, and aliased again, and it can no more escape than the
+//!    parameter can.
+//!
+//! This is the "codegen binding class whose slot aliases an existing owner
+//! without retaining" that `docs/spikes/freeze-point-design.md` § "Stage 3"
+//! identifies as the capability the freeze *statement* needs; stage 2.5 builds
+//! it for the parameter-rooted case, where the owner is the caller and its
+//! lifetime is the whole call. What licenses it is not new: the freeze-site
+//! check (E0512) has already proved every reachable type is free of `mut`
+//! fields, so no branch can write the payload, and this walk has already
+//! proved the root cannot escape, so no alias of it can outlive the owner.
+//!
+//! What is still refused, and why it is not a widening of this rule: `for k in
+//! n.kids` (the loop lowers an element copy, not an alias), a `mut` alias, and
+//! any binding whose place this pass cannot resolve to a `shared struct`. Both
+//! directions are pinned from the codegen side by
 //! `frozen_place_projection_emits_no_refcount_traffic` (tests/par_codegen.rs),
-//! so a codegen change that starts retaining across a projection turns that
-//! test red instead of silently invalidating this rule.
+//! so a codegen change that starts retaining across a projection or an alias
+//! turns that test red instead of silently invalidating this rule.
 //!
 //! **Why `len` / `is_empty` are carved out.** Without a length there is no
 //! bounded traversal, so the rest of stage 2 would be unreachable for the
@@ -106,6 +128,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
+use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{types::Type, TypeCheckResult};
 
@@ -138,6 +161,17 @@ enum Reason {
     Captured,
 }
 
+/// One rejected use, with enough to word the diagnostic. `is_alias`
+/// distinguishes a stage-2.5 LOCAL alias from the parameter it was derived
+/// from: both obey the same rule, but calling a `let` binding a "parameter"
+/// sends the reader to the wrong line to fix it.
+struct Rejection {
+    name: String,
+    span: Span,
+    reason: Reason,
+    is_alias: bool,
+}
+
 /// Walk state. `frozen` maps each in-scope frozen parameter name to the *type*
 /// its place chain starts from; every projection resolves one step further
 /// through [`place_type`], so a chain of any depth is answerable from here.
@@ -158,7 +192,19 @@ struct Cx<'a, 't> {
     /// closure the handle itself has already left. Same argument, and the same
     /// flag, as `result_escape.rs`'s `in_closure`.
     in_closure: bool,
-    found: Vec<(String, Span, Reason)>,
+    /// Names in `frozen` that are stage-2.5 LOCAL ALIASES rather than
+    /// parameters. Diagnostics only — the rule is identical for both.
+    aliases: HashSet<&'a str>,
+    found: Vec<Rejection>,
+    /// Stage 2.5 — the initializer span of every `let` admitted as a
+    /// NON-COUNTING ALIAS of a frozen place. Handed to codegen (through
+    /// `OwnershipCheckResult::frozen_alias_bindings`) as the instruction to
+    /// skip the element clone, the receive-inc, and the scope-exit dec for
+    /// that binding. Keyed by the initializer rather than the statement
+    /// because that is the span codegen already has in hand at the decision
+    /// point, and the one `vec_index_borrow_spans` — the existing
+    /// alias-instead-of-own channel — is keyed by.
+    alias_spans: HashSet<SpanKey>,
 }
 
 impl<'a> Cx<'a, '_> {
@@ -212,6 +258,21 @@ impl<'a> Cx<'a, '_> {
         }
     }
 
+    /// The type of a frozen place when it names a **`shared struct` handle** —
+    /// the only thing stage 2.5 will alias to a local.
+    ///
+    /// Narrower than "not a scalar" on purpose. A place typed `Vec[T]` or
+    /// `String` is a `{ptr,len,cap}` aggregate whose binding codegen registers
+    /// as a buffer owner, and a place on a GENERIC type resolves its fields
+    /// through unsubstituted parameter names — neither is a single refcounted
+    /// pointer, which is what the alias class is. Both yield `None` here and
+    /// are reported by the ordinary walk.
+    fn shared_handle_type(&self, e: &Expr) -> Option<Type> {
+        let ty = self.place_type(e)?;
+        let info = self.tc.struct_info.get(head_type_name(&ty)?)?;
+        (info.is_shared && info.generic_params.is_empty()).then_some(ty)
+    }
+
     /// Whether a frozen place reads through to a SCALAR — the register-copy
     /// case, which no position can turn into an escape because no handle
     /// exists to escape.
@@ -241,7 +302,12 @@ impl<'a> Cx<'a, '_> {
     }
 
     fn flag(&mut self, name: &str, span: &Span, reason: Reason) {
-        self.found.push((name.to_string(), span.clone(), reason));
+        self.found.push(Rejection {
+            is_alias: self.aliases.contains(name),
+            name: name.to_string(),
+            span: span.clone(),
+            reason,
+        });
     }
 }
 
@@ -295,27 +361,53 @@ impl super::OwnershipChecker<'_> {
         // Computed through a free function so the immutable borrow of
         // `typecheck_result` / `program` the walk needs is finished before the
         // errors are pushed through `&mut self`.
-        let found = collect_frozen_escapes(f, self.program, self.typecheck_result);
+        let (found, aliases) = collect_frozen_escapes(f, self.program, self.typecheck_result);
 
-        for (name, span, reason) in found {
+        // Stage 2.5 alias bindings, surfaced to codegen. Recorded even when
+        // this function also produced errors — the program will not compile in
+        // that case, so the set is never read, and gating on `found.is_empty()`
+        // would just add a state the tests cannot reach.
+        self.frozen_alias_bindings.extend(aliases);
+
+        for Rejection {
+            name,
+            span,
+            reason,
+            is_alias,
+        } in found
+        {
+            // A stage-2.5 local alias obeys the parameter's rule but is not a
+            // parameter; naming it one would point the reader at the signature
+            // when the line to change is the `let`.
+            let noun = if is_alias { "alias" } else { "parameter" };
+            // Only the `Materialized` help offers "take it by value instead",
+            // which is advice about a SIGNATURE — so an alias needs the extra
+            // sentence saying which signature.
+            let alias_note = if is_alias {
+                format!(
+                    " `{name}` is a non-counting alias of a `frozen` parameter and inherits its \
+                     restrictions, so the declaration to change is that parameter's."
+                )
+            } else {
+                String::new()
+            };
             let (what, fix) = match &reason {
                 Reason::Materialized => (
-                    format!("`frozen` parameter `{name}` escapes here"),
+                    format!("`frozen` {noun} `{name}` escapes here"),
                     format!(
                         "a `frozen` handle is non-counting, so it must not outlive the call. \
                          The permitted uses are: reading a place off `{name}` whose type is a \
                          SCALAR (`{name}.field`, `{name}.a.b`, `{name}.items[i].n`), passing \
                          such a place whole to another parameter that is also declared \
-                         `frozen`, and `len()` / `is_empty()` on a container reached through \
-                         one. Binding it to a local materialises a counted handle and is not \
-                         permitted — to store, return, or capture it, take the parameter by \
-                         value instead of `frozen`"
+                         `frozen`, `len()` / `is_empty()` on a container reached through one, \
+                         and binding one to an IMMUTABLE local when it names a `shared struct` \
+                         (`let k = {name}.items[i];` — `k` is then an alias of `{name}` and \
+                         carries the same restrictions). To store, return, or capture the \
+                         handle, take the parameter by value instead of `frozen`.{alias_note}"
                     ),
                 ),
                 Reason::Projection { field } => (
-                    format!(
-                        "`frozen` parameter `{name}` cannot be projected through `.{field}` yet"
-                    ),
+                    format!("`frozen` {noun} `{name}` cannot be projected through `.{field}` yet"),
                     format!(
                         "a place off a `frozen` handle may be READ when it resolves to a \
                          scalar, or passed whole to another `frozen` parameter — both lower to \
@@ -325,7 +417,7 @@ impl super::OwnershipChecker<'_> {
                     ),
                 ),
                 Reason::Element => (
-                    format!("`frozen` parameter `{name}` cannot be used through this element yet"),
+                    format!("`frozen` {noun} `{name}` cannot be used through this element yet"),
                     format!(
                         "indexing a place off a `frozen` handle yields a value that may be READ \
                          when it is a scalar, or passed whole to another `frozen` parameter. \
@@ -335,7 +427,7 @@ impl super::OwnershipChecker<'_> {
                     ),
                 ),
                 Reason::Captured => (
-                    format!("`frozen` parameter `{name}` is captured by a closure"),
+                    format!("`frozen` {noun} `{name}` is captured by a closure"),
                     format!(
                         "the closure's environment holds the handle and can outlive the call \
                          — returned, stored, or handed to `spawn` — so a non-counting handle \
@@ -346,7 +438,7 @@ impl super::OwnershipChecker<'_> {
                     ),
                 ),
                 Reason::NonFrozenArgument => (
-                    format!("`frozen` parameter `{name}` is passed to a non-`frozen` slot"),
+                    format!("`frozen` {noun} `{name}` is passed to a non-`frozen` slot"),
                     "the callee could store the handle, so the guarantee has to hold on its \
                      side too. Declare the receiving parameter `frozen` as well, and the check \
                      composes across the call. Method calls are not resolved by this pass and \
@@ -366,14 +458,15 @@ impl super::OwnershipChecker<'_> {
     }
 }
 
-/// Run the walk over `f` and return every rejected use. Free-standing so the
-/// shared borrows of `program` / `tc` it holds end before the caller pushes
-/// diagnostics through `&mut self`.
+/// Run the walk over `f` and return every rejected use, plus the initializer
+/// spans of the `let` bindings admitted as non-counting aliases. Free-standing
+/// so the shared borrows of `program` / `tc` it holds end before the caller
+/// pushes diagnostics through `&mut self`.
 fn collect_frozen_escapes<'a>(
     f: &'a Function,
     program: &'a Program,
     tc: &TypeCheckResult,
-) -> Vec<(String, Span, Reason)> {
+) -> (Vec<Rejection>, HashSet<SpanKey>) {
     let mut frozen: HashMap<&str, Type> = HashMap::new();
     for p in f.params.iter().filter(|p| p.is_frozen) {
         let Some(root) = frozen_root_type(&p.ty) else {
@@ -384,7 +477,7 @@ fn collect_frozen_escapes<'a>(
         }
     }
     if frozen.is_empty() {
-        return Vec::new();
+        return (Vec::new(), HashSet::new());
     }
 
     let mut cx = Cx {
@@ -393,10 +486,12 @@ fn collect_frozen_escapes<'a>(
         fn_frozen_params: collect_fn_frozen_params(program),
         user_impl_types: collect_user_impl_types(program),
         in_closure: false,
+        aliases: HashSet::new(),
         found: Vec::new(),
+        alias_spans: HashSet::new(),
     };
     walk_block(&f.body, &mut cx);
-    cx.found
+    (cx.found, cx.alias_spans)
 }
 
 /// The type a `frozen` parameter's place chain starts from.
@@ -496,7 +591,20 @@ fn walk_block<'a>(b: &'a Block, cx: &mut Cx<'a, '_>) {
 
 fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
     match &s.kind {
-        StmtKind::Let { value, .. } => walk_expr(value, cx),
+        StmtKind::Let {
+            is_mut,
+            pattern,
+            value,
+            ..
+        } => {
+            // Stage 2.5: a `let` whose initializer is a frozen place naming a
+            // `shared` handle becomes a non-counting ALIAS rather than an
+            // escape. `try_admit_frozen_alias` consumes the initializer when it
+            // takes it; otherwise the ordinary walk judges it as before.
+            if !try_admit_frozen_alias(*is_mut, pattern, value, cx) {
+                walk_expr(value, cx);
+            }
+        }
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
             value, else_block, ..
@@ -524,6 +632,62 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
         }
         StmtKind::Expr(e) => walk_expr(e, cx),
     }
+}
+
+/// Stage 2.5 — `let k = <frozen place>;`, where the place names a `shared`
+/// handle. Returns `true` when the binding was admitted as a NON-COUNTING
+/// ALIAS, which has two consequences: the initializer's span goes to codegen
+/// as "skip the clone, the inc, and the dec", and `k` joins the frozen set, so
+/// every later use of it is judged by exactly the rules that govern the
+/// parameter it aliases.
+///
+/// Every rejection here is a fall-through to the ordinary walk, which reports
+/// the initializer as it always did. So a shape this function declines to
+/// admit is refused, never silently allowed.
+fn try_admit_frozen_alias<'a>(
+    is_mut: bool,
+    pattern: &'a Pattern,
+    value: &'a Expr,
+    cx: &mut Cx<'a, '_>,
+) -> bool {
+    // Inside a closure the handle has already left, whatever is done with it.
+    if cx.in_closure {
+        return false;
+    }
+    // `let mut k = …` could be repointed at a handle from anywhere. The
+    // assignment itself would be reported by the ordinary walk (a `mut` alias
+    // in target position is a handle, not a scalar read), but refusing the
+    // DECLARATION makes the alias immutable by construction instead of by a
+    // second argument that a later change to the assignment walk could break.
+    if is_mut {
+        return false;
+    }
+    // One name only. A destructuring pattern spreads the handle across
+    // bindings whose modes are not defined — the same reason
+    // `binding_names_of` takes only `Binding`.
+    let PatternKind::Binding(name) = &pattern.kind else {
+        return false;
+    };
+    if cx.frozen_place_root(value).is_none() {
+        return false;
+    }
+    // A scalar place is a register copy and the local it makes is an `i64`,
+    // not a handle: already permitted, already 0/0. Leaving it out keeps the
+    // alias set to bindings that actually alias.
+    if cx.reads_as_scalar(value) {
+        return false;
+    }
+    let Some(ty) = cx.shared_handle_type(value) else {
+        return false;
+    };
+    // The projection chain is consumed by the admission; any index OPERAND
+    // inside it is an ordinary expression and still has to be walked, exactly
+    // as in the permitted argument position (`let k = n.kids[g(x)];`).
+    walk_place_indices(value, cx);
+    cx.alias_spans.insert(SpanKey::from_span(&value.span));
+    cx.frozen.insert(name.as_str(), ty);
+    cx.aliases.insert(name.as_str());
+    true
 }
 
 /// Walk the sub-expressions a frozen place contains that are NOT part of the

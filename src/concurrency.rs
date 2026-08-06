@@ -2840,9 +2840,22 @@ impl<'a> ConcurrencyChecker<'a> {
     /// reduction (cli.rs `concurrencycheck`) runs the typed form.
     /// Names of `func`'s `frozen` parameters — the roots
     /// [`Self::loop_body_types_cross_task_safe`] may exempt from the
-    /// cross-task-safety gate. Stage 1 has no `freeze` expression, so a
-    /// parameter is the only way a binding becomes frozen and this is the
-    /// complete list.
+    /// cross-task-safety gate.
+    ///
+    /// PARAMETERS ONLY, and that is now a deliberate narrowing rather than an
+    /// exhaustive list. Stage 2.5 (B-2026-08-01-33) also makes a `let` bound
+    /// from a frozen place a frozen root, but that admission lives in the
+    /// ownership pass, which this analysis does not receive — re-deriving it
+    /// here would be a second opinion about what "frozen" means, the drift
+    /// hazard that entry already paid for once. Leaving aliases out only
+    /// SHRINKS the whitelist, so the gate's decline stands and the failure
+    /// direction is a sequential loop.
+    ///
+    /// In practice an alias body is still admitted, because the gate's sweep
+    /// records no cross-task-unsafe span for the alias itself — the only
+    /// unsafe span in such a body is the frozen ROOT, which this list does
+    /// cover. Measured and pinned by
+    /// `test_disjoint_write_admitted_for_frozen_alias_binding`.
     fn frozen_param_names(&self, func: &Function) -> HashSet<String> {
         func.params
             .iter()

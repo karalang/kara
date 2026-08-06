@@ -490,6 +490,135 @@ fn main() {
         }
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 2.5** — a frozen place BOUND to a
+    /// local emits no refcount traffic either.
+    ///
+    /// This is the measurement the ownership relaxation rests on, and the one
+    /// stage 2 recorded going the other way: `let k = o.inner` was `rc_inc=2 /
+    /// rc_dec=3` even in borrow mode, which is why every binding form was
+    /// refused. Codegen now compiles such a binding as a non-counting ALIAS —
+    /// no `Vec`-element clone, no receive-inc, no scope-exit dec — so two
+    /// branches holding one have nothing to race.
+    ///
+    /// Pinned in BOTH directions, so neither a codegen change that starts
+    /// retaining nor one that stops counting everywhere can pass:
+    /// the `frozen` bodies must be `(0, 0)` and the byte-identical `ref`
+    /// siblings must still take counts. The `ref` leg is the discriminator —
+    /// without it, a build that emitted no refcount traffic at all would look
+    /// like a pass.
+    #[test]
+    fn frozen_alias_binding_emits_no_refcount_traffic() {
+        /// `(rc_inc, rc_dec)` inside one `define`, user functions only.
+        fn traffic_in(ir: &str, func: &str) -> (usize, usize) {
+            let mut inside = false;
+            let (mut inc, mut dec) = (0, 0);
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside {
+                    inc += line.matches("rc_inc").count();
+                    dec += line.matches("rc_dec").count();
+                }
+            }
+            (inc, dec)
+        }
+        // `outer`'s own frame only: `main` and the synthesized drop helpers
+        // carry traffic in every variant, so a module-wide count cannot see
+        // this difference at all.
+        let program = |mode: &str, body: &str| {
+            format!(
+                "shared struct Inner {{ v: i64 }}\n\
+                 shared struct Outer {{ a: i64, inner: Inner, kids: Vec[Inner] }}\n\
+                 fn readi(i: {mode}Inner) -> i64 {{ i.v }}\n\
+                 fn outer(o: {mode}Outer) -> i64 {{ {body} }}\n\
+                 fn main() {{\n\
+                     let g = Outer {{ a: 1, inner: Inner {{ v: 7 }}, kids: [Inner {{ v: 9 }}] }};\n\
+                     println(f\"{{outer(g)}}\");\n\
+                 }}"
+            )
+        };
+        let bodies: &[(&str, &str)] = &[
+            ("a field place bound to a local", "let k = o.inner; k.v"),
+            ("an element bound to a local", "let k = o.kids[0]; k.v"),
+            (
+                "a bound alias passed on to a frozen slot",
+                "let k = o.inner; readi(k)",
+            ),
+        ];
+        for (label, body) in bodies {
+            assert_eq!(
+                traffic_in(&ir_for_analyzed(&program("frozen ", body)), "outer"),
+                (0, 0),
+                "[{label}] a `frozen` alias binding must emit NO refcount \
+                 traffic — that zero is the whole reason the stage-2.5 \
+                 ownership rule may admit a binding into a `par` branch"
+            );
+            let borrowed = traffic_in(&ir_for_analyzed(&program("ref ", body)), "outer");
+            assert!(
+                borrowed.0 > 0 && borrowed.1 > 0,
+                "[{label}] the same body written `ref` must STILL take counts \
+                 — otherwise the assertion above passes on a build that emits \
+                 no refcount traffic anywhere; got inc={} dec={}",
+                borrowed.0,
+                borrowed.1
+            );
+        }
+    }
+
+    /// B-2026-08-01-33 mechanism 3, **stage 2.5** — the same traversal as the
+    /// stage-2 test above, written the way a person writes one: the child is
+    /// bound to a name before it is recursed into.
+    ///
+    /// Asserted as a COMPUTED VALUE for the reason stage 2 recorded — this
+    /// family shipped a miscompile (B-2026-08-05-10) that a traffic count
+    /// could not see, where a borrowed capture read zero and the program just
+    /// printed a wrong answer. Skipping the retain on a binding is exactly the
+    /// kind of change that could reintroduce it, so the arithmetic is checked,
+    /// not just the IR.
+    #[test]
+    fn frozen_alias_traversal_computes_correctly_across_par_branches() {
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, kids: Vec[Node] }
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val;
+    let mut i: i64 = 0;
+    while i < n.kids.len() {
+        let k = n.kids[i];
+        s = s + sum(k);
+        i = i + 1;
+    }
+    s
+}
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = sum(root);
+        let b = sum(root);
+        (a, b)
+    };
+    a + b
+}
+fn main() {
+    let l1 = Node { val: 3, kids: [] };
+    let l2 = Node { val: 4, kids: [] };
+    let mid = Node { val: 2, kids: [l1, l2] };
+    let root = Node { val: 1, kids: [mid] };
+    println(driver(root));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "20",
+                "two branches traversing one `frozen` graph through BOUND \
+                 child aliases must each total 1+2+3+4"
+            );
+        }
+    }
+
     /// B-2026-08-01-33 mechanism 3, stage 1 — RC SUPPRESSION, and the
     /// measurement that made it a ten-line change instead of a new pass.
     ///

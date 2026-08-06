@@ -3817,6 +3817,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self
                         .vec_index_borrow_spans
                         .contains(&crate::resolver::SpanKey::from_span(&value.span));
+                // B-2026-08-01-33 mechanism 3, stage 2.5 — `let k = n.kids[i];`
+                // where `n` is a `frozen` parameter. The ownership pass proved
+                // the alias cannot outlive the caller's value (E0511) and that
+                // nothing reachable through it is mutable (E0512), so the
+                // binding is a pure borrow: no element clone, no receive-inc,
+                // and no scope-exit cleanup. Those last two are handled at the
+                // shared arm below; the clone is what `borrow_elided` gates —
+                // and its OTHER two consumers (the `Option[shared]` dec
+                // registration and the `track_vec_*` owner registration) mean
+                // exactly the same thing here, "this binding owns nothing", so
+                // folding the flag in covers all three with one predicate.
+                //
+                // Why this is not the general mechanism-1 elision: the owner
+                // whose count is being skipped is the CALLER'S, its lifetime is
+                // the whole call by construction, and the alias is confined to
+                // the positions the frozen whitelist permits. Nothing here
+                // reasons about an owner that could end first.
+                let frozen_alias = self
+                    .frozen_alias_bindings
+                    .contains(&crate::resolver::SpanKey::from_span(&value.span));
+                let borrow_elided = borrow_elided || frozen_alias;
                 // B-2026-07-14-15: `let r = m.get(k).unwrap()` on a Map with a
                 // NON-shared heap value (`Vec`/`String`) — `map.get` returns a
                 // BORROW of the bucket's value, so `r`'s `{ptr,len,cap}` shallow-
@@ -4562,7 +4583,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // that single ref. Taking the inc anyway strands the count
                     // at 1 and leaks the box once per evaluation.
                     let transferred = std::mem::take(&mut self.block_tail_shared_transfer);
-                    if !is_fresh_construction && !b2_skip && !transferred {
+                    if !is_fresh_construction && !b2_skip && !transferred && !frozen_alias {
                         // Copying a shared pointer — increment refcount.
                         let ptr = val.into_pointer_value();
                         self.emit_refcount_inc(var_name, info.heap_type, ptr);
@@ -4575,7 +4596,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // struct-literal births, so the `!is_fresh` inc arm
                     // above never fires for them.
                     let ptr = val.into_pointer_value();
-                    if self.is_elided_binding(var_name) {
+                    if frozen_alias {
+                        // B-2026-08-01-33 stage 2.5 — a non-counting alias of a
+                        // frozen place: no inc above, so no dec here. The
+                        // object is owned by the caller's value for the whole
+                        // call; releasing it from the alias would drop a count
+                        // this binding never took.
+                    } else if self.is_elided_binding(var_name) {
                         self.track_elided_shared_var(var_name, ptr);
                     } else if let Some((member_type, link_idx, returned)) =
                         self.cluster_root_info(var_name)

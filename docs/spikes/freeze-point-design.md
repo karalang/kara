@@ -567,6 +567,114 @@ the binding case too, which is mechanism 1. Stage 2 makes *recursive
 traversals over deeply-immutable graphs* work; it does not make every
 traversal work.
 
+## Stage 2.5: bindings (landed) — the boundary moved by removing the traffic
+
+Stage 2 refused every binding form, on the measurement in its own table: `let
+k = o.inner` was `rc_inc=2 / rc_dec=3` even in borrow mode, and two branches
+racing that non-atomic refcount is B-2026-07-28-13's SIGSEGV. It recorded the
+fix as "admitting them needs the retain *removed*, which is mechanism 1
+proper".
+
+That was half right. Removing the retain **is** what was needed, but not
+mechanism 1's interprocedural elision — for a place rooted at a `frozen`
+parameter the owner is known without any analysis at all: it is the caller's
+value, and its lifetime is the whole call. So codegen compiles such a binding
+as a **non-counting alias** — no `Vec`-element clone, no receive-inc, no
+scope-exit dec — and the ownership pass adds the local to the frozen set, so
+it inherits every restriction the parameter has.
+
+**A frozen place may now be bound to an immutable local**, and the local is a
+frozen root in its own right: it can be read, projected further, passed to
+another `frozen` slot, queried with `len`/`is_empty`, and aliased again.
+
+Re-measured, same method (per-function traffic in `outer`'s own frame):
+
+| body | `rc_inc` | `rc_dec` |
+|---|---|---|
+| `let k = o.inner; k.v` — **frozen** | **0** | **0** |
+| `let k = o.kids[0]; k.v` — **frozen** | **0** | **0** |
+| `let k = o.inner; readi(k)` — **frozen** | **0** | **0** |
+| the same three written `ref` | 2 | 3 |
+
+The `ref` row is the discriminator, not decoration: without it the zeros would
+also be produced by a build that emitted no refcount traffic anywhere. Pinned
+by `frozen_alias_binding_emits_no_refcount_traffic` (tests/par_codegen.rs),
+mutation-checked — disabling the codegen guard turns it red with `left: (2,
+3)`.
+
+### What is still refused, and why each is not a widening
+
+- **`let mut k = …`** — a mutable alias could be repointed at a handle from
+  anywhere. The assignment would report on its own, but refusing the
+  *declaration* makes the alias immutable by construction rather than by an
+  argument a later change to the assignment walk could break.
+- **`for k in n.kids`** — the loop lowers an element copy, not an alias.
+- **a place that is not a `shared struct`** — a `Vec[T]` / `String` place is a
+  `{ptr,len,cap}` aggregate whose binding codegen registers as a buffer owner,
+  and a generic type resolves its fields through unsubstituted parameter
+  names. Neither is a single refcounted pointer, which is what the alias class
+  is; both fail closed.
+- **every escape** — returning the alias, storing it in a struct/tuple/Vec,
+  a user method receiver, a non-`frozen` slot, a closure capture. This is the
+  half that pays for the non-counting representation, and it is unchanged:
+  the alias is in the frozen set, so the same whitelist judges it. Its
+  diagnostics say "`frozen` **alias** `k`" rather than "parameter", since the
+  line to change is the `let`, not the signature.
+
+### The auto-par surface needed no change — but the reason is not the obvious one
+
+`spans_rooted_at` whitelists places rooted at a `frozen` *parameter*, and an
+alias is rooted at itself, so it is **not** in that whitelist. Measured
+anyway: a loop body that binds a child off a frozen root gates `proven`, and
+the byte-identical body written `ref` still declines.
+
+The reason is that the gate's span sweep records no cross-task-unsafe entry
+for the alias at all — in the probed body the only unsafe span is the bare
+`s`, which the root whitelist does cover. So the admission rests entirely on
+codegen emitting no traffic for the alias, which the IR test above pins
+directly and which was confirmed on the emitted worker itself:
+`__karac_disjoint_worker_*` for that shape contains zero `rc_inc` / `rc_dec` /
+`atomicrmw`. `frozen_param_names` is left parameter-only deliberately — the
+alias admission lives in the ownership pass, which the concurrency analysis
+does not receive, and re-deriving it there would be a second opinion about
+what "frozen" means. Pinned by
+`test_disjoint_write_admitted_for_frozen_alias_binding`, with the `ref`
+control.
+
+### What it buys
+
+Not a new parallel win — the same traversal was already expressible with
+inline projections, and stage 2 measured that at 3.7x. What stage 2.5 adds is
+that the *natural* spelling compiles: a walk that binds the node it is about
+to recurse into, which is how a person writes one and how every iterative
+traversal must.
+
+Timed anyway, since a new binding class could plausibly cost something.
+Four `par` branches x 400 repeats over a 2^16-node tree, 4 cores, linear
+scaling verified first (200 → 400 repeats: 0.113s → 0.233s, 2.06x), three runs
+each, identical answers:
+
+| spelling | real | user |
+|---|---|---|
+| `let k = n.kids[i]; sum(k)` | **0.221s** | 0.80s |
+| `sum(n.kids[i])` | 0.352s | 1.26s |
+
+So the alias form does not cost anything — it is *faster*, by ~1.6x, and the
+cause is **not identified**. It is not instruction count: `sum`'s emitted body
+is larger for the alias spelling (81 IR lines vs 42), so this is an optimizer
+interaction downstream of codegen. Filed as its own observation
+(B-2026-08-06-30) rather than claimed as a benefit of this stage; nothing here
+depends on it.
+
+### Why this matters for stage 3
+
+Stage 3 below sizes the freeze *statement* as codegen work, because it needs
+"a binding class whose slot aliases an existing owner without retaining".
+Stage 2.5 **is** that binding class, built for the case where the owner is
+known by construction. What stage 3 still has to add is the harder half: a
+frozen local whose owner is an ordinary local in the same frame, where the
+owner's lifetime is a real question rather than a given.
+
 ## Stage 3: the obvious route is refuted, and this sizes the work
 
 Stage 3 needs the **`freeze` statement**, not just a relaxed E0512. With

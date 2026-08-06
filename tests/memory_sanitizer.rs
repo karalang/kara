@@ -14951,6 +14951,81 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 2.5** — the same 255-node
+    /// two-branch traversal as the stage-2 fixture above, but written so that
+    /// every child is BOUND to a local before it is recursed into.
+    ///
+    /// This is the shape stage 2 refused and stage 2.5 admits, and it is the
+    /// one that most needs the gate. A binding used to take a retain and a
+    /// scope-exit release; codegen now emits NEITHER, so the alias points at an
+    /// object whose count it never touched. If the escape check has a hole, or
+    /// if the skip fires on a binding whose root is not really the caller's,
+    /// the symptom here is a use-after-free (ASAN) or a leak (LSan on Linux CI)
+    /// — not a wrong answer, which is why the arithmetic tests cannot cover it.
+    /// The 255-node tree bounds the alias count: 254 aliases per traversal, x2
+    /// branches, all live concurrently.
+    ///
+    /// NOT VACUOUS, on the same three legs as its stage-2 sibling
+    /// (B-2026-08-04-17): the seed is `env.args().len()`, every tag is an
+    /// f-string built from it at runtime, and `main` reads those bytes back
+    /// with `contains` after the traversal.
+    ///
+    /// The expected output is computed independently rather than read off a
+    /// run: 255 nodes x (val 1 + tag length 19) = 5100 per traversal, x2
+    /// branches = 10200, +1 for the `contains` check = 10201 — the same total
+    /// as the sibling, since binding the child changes how the walk is spelled
+    /// and nothing about what it sums.
+    #[test]
+    fn asan_frozen_alias_traversal_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { tag: String, val: i64, kids: Vec[Node] }
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 {
+        return Node { tag: f"leaf-{seed}-runtime-heap", val: seed, kids: [] };
+    }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { tag: f"node-{seed}-runtime-heap", val: seed, kids: [a, b] };
+}
+
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val + n.tag.len();
+    let mut i: i64 = 0;
+    while i < n.kids.len() {
+        let k = n.kids[i];
+        s = s + sum(k);
+        i = i + 1;
+    }
+    return s;
+}
+
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = sum(root);
+        let b = sum(root);
+        (a, b)
+    };
+    return a + b;
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(7, seed);
+    let total = driver(root);
+    let mut w: i64 = 0;
+    if root.tag.contains("runtime-heap") { w = 1; }
+    println(total + w);
+}
+"#,
+            &["10201"],
+            "frozen_alias_traversal_across_par_branches_no_leak",
+            // Same tree as the sibling: 255 tag Strings plus 127 kids buffers.
+            200,
+        );
+    }
+
     /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
     /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
     /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec
