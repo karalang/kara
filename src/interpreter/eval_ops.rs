@@ -510,8 +510,20 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::BitAnd, Value::Int(a), Value::Int(b)) => Value::Int(a & b),
             (BinOp::BitOr, Value::Int(a), Value::Int(b)) => Value::Int(a | b),
             (BinOp::BitXor, Value::Int(a), Value::Int(b)) => Value::Int(a ^ b),
-            (BinOp::Shl, Value::Int(a), Value::Int(b)) => Value::Int(a << b),
-            (BinOp::Shr, Value::Int(a), Value::Int(b)) => Value::Int(a >> b),
+            // Shifts run at the operand's DECLARED width and trap on an
+            // out-of-range amount — design.md § 2142. B-2026-08-06-7.
+            (BinOp::Shl, Value::Int(a), Value::Int(b)) => {
+                match self.shift_at_width(true, a, b, span) {
+                    Some(v) => Value::Int(v),
+                    None => self.record_runtime_error("shift amount out of range", span),
+                }
+            }
+            (BinOp::Shr, Value::Int(a), Value::Int(b)) => {
+                match self.shift_at_width(false, a, b, span) {
+                    Some(v) => Value::Int(v),
+                    None => self.record_runtime_error("shift amount out of range", span),
+                }
+            }
 
             // Structural equality on aggregates — enum variants and structs.
             // `Value`'s hand-written `PartialEq` already compares these
@@ -905,6 +917,105 @@ impl<'a> super::Interpreter<'a> {
             _ => return false,
         };
         v < lo || v > hi
+    }
+
+    /// The DECLARED bit width of the integer type the typechecker assigned at
+    /// `span`, and whether it is unsigned — `(64, _)` for `i64`/`u64`/`usize`/
+    /// `isize`, for a non-integer type, and for an untyped span (`karac run`
+    /// populates `expr_types` sparsely, so degrading to the i64 default keeps
+    /// it graceful, exactly as [`Self::narrow_oob`] does). B-2026-08-06-7.
+    ///
+    /// Shifts need the width that `narrow_oob` only needs a range for, so this
+    /// is deliberately a sibling rather than a rewrite of it: `narrow_oob`
+    /// answers "does this result fit", this answers "how wide is the type",
+    /// and the shift arms need the second question answered even for i64,
+    /// where the first is always yes.
+    fn span_int_width(&self, span: &Span) -> (u32, bool) {
+        use crate::typechecker::types::{IntSize, Type, UIntSize};
+        let key = crate::resolver::SpanKey::from_span(span);
+        let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
+            return (64, false);
+        };
+        // Same container peel as `narrow_oob`, for the element-wise
+        // `Column[T] ⊕ x` / `Tensor[T, S] ⊕ x` arms that recurse with the
+        // CONTAINER expression's span (B-2026-07-01-3).
+        let ty = match ty {
+            Type::Named { name, args }
+                if (name == "Column" || name == "Tensor") && !args.is_empty() =>
+            {
+                &args[0]
+            }
+            other => other,
+        };
+        match ty {
+            Type::Int(IntSize::I8) => (8, false),
+            Type::Int(IntSize::I16) => (16, false),
+            Type::Int(IntSize::I32) => (32, false),
+            Type::UInt(UIntSize::U8) => (8, true),
+            Type::UInt(UIntSize::U16) => (16, true),
+            Type::UInt(UIntSize::U32) => (32, true),
+            Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize) => (64, true),
+            _ => (64, false),
+        }
+    }
+
+    /// `a << b` / `a >> b` at the operand's DECLARED width — design.md § 2142
+    /// ("Shift by the bit width or more traps"; `(x: i32) << 31` is legal
+    /// "regardless of whether it flips the sign bit"). B-2026-08-06-7.
+    ///
+    /// `Err` carries the already-recorded error value for an out-of-range
+    /// amount, so the caller simply propagates it.
+    ///
+    /// Before this, both arms were a bare Rust `a << b` / `a >> b` on the
+    /// i64 carrier. That is TWO defects: a shift amount >= 64 panicked the
+    /// interpreter process outright ("attempt to shift left with overflow"),
+    /// and a narrow shift computed at i64 so `1i32 << 31` yielded 2147483648
+    /// — a value an `i32` cannot represent — instead of the specified
+    /// -2147483648. Codegen had the matching pair, the first leg as LLVM
+    /// poison.
+    fn shift_at_width(&self, left: bool, a: i64, b: i64, span: &Span) -> Option<i64> {
+        let (bits, is_unsigned) = self.span_int_width(span);
+        if b < 0 || b >= bits as i64 {
+            return None;
+        }
+        let sh = b as u32;
+        // Compute on the u64 carrier and re-narrow, so `<<` is a bit shift at
+        // the declared width (bits shifted past it are dropped, and the
+        // declared width's sign bit is whatever landed there). Truncation is
+        // what makes the result representable in the declared type — the
+        // invariant every other narrow arm maintains.
+        let raw = if left {
+            (a as u64) << sh
+        } else if is_unsigned {
+            (a as u64) >> sh
+        } else {
+            // Arithmetic shift: sign-extend from the DECLARED width first, so
+            // a narrow negative value smears its own sign bit rather than the
+            // i64 carrier's.
+            let sext = if bits == 64 {
+                a
+            } else {
+                (a << (64 - bits)) >> (64 - bits)
+            };
+            (sext >> sh) as u64
+        };
+        Some(Self::truncate_to_width(raw, bits, is_unsigned))
+    }
+
+    /// Reinterpret the low `bits` of a u64 carrier as a value of the declared
+    /// integer type, returned in the i64 carrier every `Value::Int` uses:
+    /// sign-extended for a signed type, zero-extended for an unsigned one.
+    /// A 64-bit width is already the carrier's own shape and passes through.
+    fn truncate_to_width(raw: u64, bits: u32, is_unsigned: bool) -> i64 {
+        if bits >= 64 {
+            return raw as i64;
+        }
+        let masked = raw & ((1u64 << bits) - 1);
+        if is_unsigned {
+            masked as i64
+        } else {
+            ((masked << (64 - bits)) as i64) >> (64 - bits)
+        }
     }
 
     /// True when the type recorded at `span` is an unsigned 64-bit integer

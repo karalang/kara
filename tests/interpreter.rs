@@ -20579,6 +20579,89 @@ fn main() {
     assert_eq!(out, "28\n0\n3\n5\n7\n");
 }
 
+// B-2026-08-06-7 — an out-of-range shift AMOUNT is a structured diagnostic,
+// not a process panic. Reaching the assertions at all proves the no-panic
+// half: before the fix this exact program aborted the interpreter with
+// "attempt to shift left with overflow" from Rust's own shift operator, so
+// the test binary would have died before it could inspect `errors`.
+//
+// Both directions and both a narrow and a 64-bit width, because the amount
+// is checked against the DECLARED width — 32 for `i32`, 64 for `i64` — and a
+// single hard-coded 64 would silently let every narrow over-shift through.
+#[test]
+fn test_shift_amount_out_of_range_is_runtime_error_not_panic() {
+    for (src, what) in [
+        (
+            "let a: i32 = 1i32; let s: i32 = 32i32; println(a << s);",
+            "i32 <<",
+        ),
+        (
+            "let a: i32 = 1i32; let s: i32 = 32i32; println(a >> s);",
+            "i32 >>",
+        ),
+        (
+            "let a: i64 = 1i64; let s: i64 = 64i64; println(a << s);",
+            "i64 <<",
+        ),
+        (
+            "let a: i64 = 1i64; let s: i64 = -1i64; println(a << s);",
+            "i64 << negative",
+        ),
+    ] {
+        let errors = runtime_errors(&format!("fn main() {{\n    {src}\n}}\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("shift amount out of range")),
+            "{what}: expected a `shift amount out of range` runtime error, got: {errors:?}"
+        );
+    }
+}
+
+// A shift amount BELOW the width stays legal at every width — the guard must
+// not over-trap. `31` on an i32 and `63` on an i64 are the boundary values the
+// spec explicitly calls legal.
+#[test]
+fn test_shift_amount_at_width_minus_one_is_legal() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let a: i32 = 1i32; let s: i32 = 31i32; println(a << s);\n\
+             \x20   let b: i64 = 1i64; let t: i64 = 63i64; println(b << t);\n\
+             }\n"),
+        "-2147483648\n-9223372036854775808\n"
+    );
+}
+
+// B-2026-08-06-7 — the interpreter half of the shift rules (design.md
+// § 2141-2142). Kept in step with the codegen twin
+// `e2e_shift_runs_at_declared_width` (same arms, same expected output).
+//
+// Before the fix, both arms of the interpreter's shift dispatch were a bare
+// Rust `a << b` / `a >> b` on the i64 carrier. That gave the same
+// out-of-declared-width results codegen gave — `1i32 << 31` was 2147483648 —
+// and, for an amount >= 64, PANICKED THE INTERPRETER PROCESS outright
+// ("attempt to shift left with overflow" from eval_ops.rs), which is both a
+// crash and a violation of the repo standard that every phase emits a
+// structured diagnostic rather than panicking.
+#[test]
+fn test_shift_runs_at_declared_width() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let a: i32 = 1i32;\n\
+             \x20   println(a << 31i32);\n\
+             \x20   let b: i32 = 1000000i32;\n\
+             \x20   let s: i32 = b << 20i32;\n\
+             \x20   println(s);\n\
+             \x20   println(s > 2147483647i32);\n\
+             \x20   let u: u8 = 200u8;\n\
+             \x20   println(u << 4u8);\n\
+             \x20   let n: i32 = -8i32;\n\
+             \x20   println(n >> 1i32);\n\
+             }\n"),
+        "-2147483648\n603979776\nfalse\n128\n-4\n"
+    );
+}
+
 #[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors

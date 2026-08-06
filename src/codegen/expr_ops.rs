@@ -4792,14 +4792,100 @@ impl<'ctx> super::Codegen<'ctx> {
             BinOp::BitAnd => self.builder.build_and(lv, rv, "bitand").unwrap(),
             BinOp::BitOr => self.builder.build_or(lv, rv, "bitor").unwrap(),
             BinOp::BitXor => self.builder.build_xor(lv, rv, "bitxor").unwrap(),
-            BinOp::Shl => self.builder.build_left_shift(lv, rv, "shl").unwrap(),
-            BinOp::Shr => self
-                .builder
-                .build_right_shift(lv, rv, !is_unsigned, "shr")
-                .unwrap(),
+            // The width here is the OPERAND's own LLVM width — 64 for the
+            // i64/u64/usize path that reaches this arm directly. A narrow
+            // shift never gets here: `compile_narrow_int_binop` intercepts it
+            // above so the check uses the declared width, not the carrier's.
+            // B-2026-08-06-7.
+            BinOp::Shl => {
+                self.emit_shift_amount_check(rv, lv.get_type().get_bit_width());
+                self.builder.build_left_shift(lv, rv, "shl").unwrap()
+            }
+            BinOp::Shr => {
+                self.emit_shift_amount_check(rv, lv.get_type().get_bit_width());
+                self.builder
+                    .build_right_shift(lv, rv, !is_unsigned, "shr")
+                    .unwrap()
+            }
             _ => return Err(format!("Unsupported binary op: {:?}", op)),
         };
         Ok(result.into())
+    }
+
+    /// Trap `shift amount out of range` when `amount` is negative or at least
+    /// `bits` — design.md § 2142 ("Shift by the bit width or more traps …
+    /// Same rule for `>>`"). B-2026-08-06-7.
+    ///
+    /// LLVM's `shl` / `lshr` / `ashr` are POISON at or above the operand
+    /// width, and codegen emitted them raw. That is not a wrong answer but an
+    /// unstable one: measured, a single `let`-bound variable printed two
+    /// different values in consecutive `println`s of the same run, a different
+    /// value on the next run, and different values again under the JIT. Only a
+    /// check in front of the shift makes the operator defined at all.
+    ///
+    /// ONE unsigned compare covers both halves: a negative amount reinterpreted
+    /// as unsigned is enormous, so `icmp uge amount, bits` catches `< 0` and
+    /// `>= bits` together. The amount arrives on the i64 carrier at every call
+    /// site, so `bits` is compared there too — for a narrow shift that is the
+    /// DECLARED width, not the carrier's 64.
+    fn emit_shift_amount_check(&mut self, amount: inkwell::values::IntValue<'ctx>, bits: u32) {
+        let width_c = amount.get_type().const_int(bits as u64, false);
+        let oob = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGE, amount, width_c, "sh.amt.oob")
+            .unwrap();
+        let fn_val = self.current_fn.unwrap();
+        let trap_bb = self.context.append_basic_block(fn_val, "sh.amt.trap");
+        let ok_bb = self.context.append_basic_block(fn_val, "sh.amt.ok");
+        self.builder
+            .build_conditional_branch(oob, trap_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(trap_bb);
+        self.emit_panic("shift amount out of range");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+    }
+
+    /// Reinterpret the low `bits` of an i64-carrier shift result as a value of
+    /// the declared narrow type, still on the i64 carrier: mask to the width,
+    /// then sign-extend (signed) or leave zero-extended (unsigned).
+    /// B-2026-08-06-7.
+    ///
+    /// This is what makes narrow `<<` a bit shift AT THE DECLARED WIDTH, per
+    /// design.md § 2141 — `(1i32) << 31` is -2147483648, "legal regardless of
+    /// whether it flips the sign bit". Without it the shift ran at i64 and
+    /// handed back a value the declared type cannot represent: `let s: i32 =
+    /// 1000000i32 << 20i32` produced 1048576000000, and `s > 2147483647i32`
+    /// was true for a binding typed `i32`.
+    ///
+    /// It is also what makes "a narrow-typed value always fits its declared
+    /// width" a real invariant — the precondition B-2026-08-05-38's widening
+    /// half needs before narrow ops can compute at native width.
+    fn truncate_to_narrow_width(
+        &mut self,
+        v: inkwell::values::IntValue<'ctx>,
+        bits: u32,
+        is_unsigned: bool,
+    ) -> inkwell::values::IntValue<'ctx> {
+        if bits >= 64 {
+            return v;
+        }
+        let i64_t = self.context.i64_type();
+        let mask = i64_t.const_int((1u64 << bits) - 1, false);
+        let masked = self.builder.build_and(v, mask, "sh.narrow.mask").unwrap();
+        if is_unsigned {
+            return masked;
+        }
+        // Sign-extend from the declared width: shift the width's top bit up to
+        // the carrier's sign position and arithmetic-shift it back down.
+        let sh = i64_t.const_int((64 - bits) as u64, false);
+        let up = self
+            .builder
+            .build_left_shift(masked, sh, "sh.narrow.up")
+            .unwrap();
+        self.builder
+            .build_right_shift(up, sh, true, "sh.narrow.sx")
+            .unwrap()
     }
 
     /// Widen a narrow integer value to i64 for canonical computation —
@@ -4846,6 +4932,25 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let l = self.widen_int_to_i64(lhs, is_unsigned);
         let r = self.widen_int_to_i64(rhs, is_unsigned);
+        // Shifts are the one family whose width is the DECLARED one rather
+        // than the i64 carrier's, so they are handled before the generic
+        // dispatch below — which would check the amount against 64 and shift
+        // at 64. B-2026-08-06-7.
+        if matches!(op, BinOp::Shl | BinOp::Shr) {
+            self.emit_shift_amount_check(r, bits);
+            let raw = if matches!(op, BinOp::Shl) {
+                self.builder.build_left_shift(l, r, "ni.shl").unwrap()
+            } else {
+                // The operand reached the carrier sign- or zero-extended from
+                // its declared width, so an i64 shift already smears the right
+                // bit; only the amount needed checking. The truncate below is
+                // a no-op for `>>` and is what re-narrows `<<`.
+                self.builder
+                    .build_right_shift(l, r, !is_unsigned, "ni.shr")
+                    .unwrap()
+            };
+            return Ok(self.truncate_to_narrow_width(raw, bits, is_unsigned).into());
+        }
         let result = self.compile_binop_typed(op, l.into(), r.into(), is_unsigned)?;
         // Comparisons / logical ops produce an `i1`, not a narrow integer —
         // return as-is (no range-check, no truncate-back).

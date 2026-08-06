@@ -4652,6 +4652,82 @@ mod codegen_tests {
         }
     }
 
+    /// B-2026-08-06-7, behaviour — the shift rules design.md § 2141-2142
+    /// specifies, on the surface users actually run.
+    ///
+    /// Two rules, both previously unimplemented:
+    ///   * `(1i32) << 31` is LEGAL and yields -2147483648 — "legal regardless
+    ///     of whether it flips the sign bit". It used to yield 2147483648,
+    ///     because the shift ran on the i64 carrier and handed back a value an
+    ///     `i32` cannot represent.
+    ///   * shifting by >= the DECLARED width traps. It used to emit raw LLVM
+    ///     `shl`, which is poison there.
+    ///
+    /// Arm (c) is the one that made the old behaviour a soundness hole rather
+    /// than a cosmetic wrong answer: a binding typed `i32` compared GREATER
+    /// than `i32::MAX`. Arm (d) pins the unsigned narrow case, where the
+    /// re-narrowing is a mask rather than a sign-extend.
+    #[test]
+    fn e2e_shift_runs_at_declared_width() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   // (a) sign-bit flip at the declared width — legal, per spec\n\
+             \x20   let a: i32 = 1i32;\n\
+             \x20   println(a << 31i32);\n\
+             \x20   // (b) a narrow shift stays inside the declared width\n\
+             \x20   let b: i32 = 1000000i32;\n\
+             \x20   let s: i32 = b << 20i32;\n\
+             \x20   println(s);\n\
+             \x20   // (c) …so an `i32` binding can no longer exceed i32::MAX\n\
+             \x20   println(s > 2147483647i32);\n\
+             \x20   // (d) unsigned narrow: re-narrowing is a mask\n\
+             \x20   let u: u8 = 200u8;\n\
+             \x20   println(u << 4u8);\n\
+             \x20   // (e) right shift keeps its arithmetic/logical split\n\
+             \x20   let n: i32 = -8i32;\n\
+             \x20   println(n >> 1i32);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "-2147483648\n603979776\nfalse\n128\n-4\n");
+    }
+
+    /// B-2026-08-06-7 — every shift is guarded by an amount check.
+    ///
+    /// LLVM's `shl`/`lshr`/`ashr` are POISON at or above the operand width and
+    /// codegen emitted them raw, so shifting by a runtime amount that could
+    /// reach the width was undefined behaviour in shipped binaries — measured,
+    /// one `let`-bound variable printed two different values in consecutive
+    /// `println`s of the same run and a different value on the next run.
+    /// design.md § 2142 specifies the trap and it was simply unimplemented:
+    /// the string "shift amount out of range" appeared nowhere in src/.
+    ///
+    /// Pinned at the IR level rather than only by behaviour, because the
+    /// E2E twin below can only prove the trap fires for the amounts it
+    /// names — the guard has to be there for EVERY shift, including ones
+    /// whose amount no test happens to pick.
+    #[test]
+    fn test_ir_shift_emits_amount_check() {
+        for (src, width) in [
+            ("fn f(a: i64, b: i64) -> i64 { a << b }", 64),
+            ("fn f(a: i64, b: i64) -> i64 { a >> b }", 64),
+            ("fn f(a: u64, b: u64) -> u64 { a >> b }", 64),
+            ("fn f(a: i32, b: i32) -> i32 { a << b }", 32),
+            ("fn f(a: u8, b: u8) -> u8 { a << b }", 8),
+        ] {
+            let ir = ir_for(src);
+            assert!(
+                ir.contains("sh.amt.oob") || ir.contains("sh.amt.trap"),
+                "`{src}` must emit the shift-amount guard:\n{ir}"
+            );
+            assert!(
+                ir.contains(&format!("i64 {width}")) || ir.contains(&format!(", {width}")),
+                "`{src}` must compare the amount against its DECLARED width {width}:\n{ir}"
+            );
+        }
+    }
+
     #[test]
     fn test_ir_signed_right_shift_is_arithmetic() {
         let ir = ir_for("fn shift(a: i64, b: i64) -> i64 { a >> b }");
