@@ -71,6 +71,60 @@ fn test_cstr_as_ptr_rejects_with_runtime_error_not_panic() {
     );
 }
 
+#[test]
+fn test_extern_call_rejects_with_guidance_not_internal_error() {
+    // B-2026-08-06-24: calling a foreign import under `--interp` used to fall
+    // through to bare identifier evaluation and report
+    //
+    //   internal: name 'abs' resolved but has no binding at run time. This is a
+    //   compiler bug (the resolver should have rejected or bound it) — please
+    //   report it with the source.
+    //
+    // for a program that is not buggy, about a limitation that is a deliberate
+    // design property (the tree-walk interpreter has no FFI boundary), while
+    // blaming the resolver — which is right to bind a declared import. Every
+    // FFI program hit it, and `karac run` is the first thing anyone following
+    // the FFI docs reaches for.
+    //
+    // The assertions pin the three properties that made the old message wrong,
+    // not its exact prose: the callee is NAMED, `karac build` is offered, and
+    // the "compiler bug / report it" framing is gone.
+    let errors = runtime_errors(
+        "unsafe extern \"C\" { fn abs(n: i32) -> i32; }\n\
+         fn main() { println(unsafe { abs(-5i32) }); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("abs")
+            && e.message.contains("foreign import")
+            && e.message.contains("karac build")),
+        "an extern call must name the callee and point at `karac build`, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("compiler bug") || e.message.contains("internal:")),
+        "an extern call is not a compiler bug and must not ask for a report, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_binding_shadowing_an_extern_name_still_runs() {
+    // The refusal above is gated on the name not being bound, exactly like the
+    // sibling MMIO-intrinsic arm. A local closure that shadows an imported name
+    // is a real (if unwise) program and must still execute — otherwise the fix
+    // would trade a bad diagnostic for a broken program.
+    assert_eq!(
+        run("unsafe extern \"C\" { fn abs(n: i32) -> i32; }\n\
+             fn main() {\n\
+                 let abs = |x| x + 100;\n\
+                 println(abs(5));\n\
+             }"),
+        "105\n"
+    );
+}
+
 // ── Arithmetic & Expressions ───────────────────────────────────
 
 #[test]

@@ -100,6 +100,55 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // A FOREIGN IMPORT (`unsafe extern "C" { fn abs(n: i32) -> i32; }`).
+        // The tree-walk interpreter has no FFI boundary — there is no library
+        // loaded and no calling convention to cross — so this is a designed
+        // limitation, not a failure.
+        //
+        // B-2026-08-06-24: without this arm the callee fell through to bare
+        // identifier evaluation, found no binding, and reported "internal:
+        // name 'abs' resolved but has no binding at run time. This is a
+        // compiler bug (the resolver should have rejected or bound it) —
+        // please report it with the source." Wrong on three counts: it calls a
+        // deliberate design property internal, it tells the author of a
+        // perfectly good program to file a compiler bug, and it blames the
+        // resolver, which is right to bind a declared import. Every FFI
+        // program hit it, and `karac run` is the first thing anyone reaching
+        // for the FFI docs tries.
+        //
+        // The wording matches the sibling refusals on this same boundary —
+        // `CStr.as_ptr()` (method_call_seq.rs), `CStr.from_ptr` below, and the
+        // MMIO intrinsics just above — so the FFI surface answers with one
+        // voice: name the construct, say why interpreted mode cannot do it,
+        // point at `karac build`.
+        //
+        // Guarded on the name not being shadowed by a user binding, exactly
+        // like the MMIO arm: a local closure named after an import is a real
+        // (if unwise) program, and it should still run.
+        //
+        // Arguments are deliberately NOT evaluated first, where `CStr.from_ptr`
+        // below does evaluate its one argument for effects. The difference is
+        // which message the user should get: FFI arguments are themselves
+        // usually pointer producers, so `strlen(msg.as_ptr())` would hit
+        // `as_ptr`'s own refusal and report THAT — pointing at the argument
+        // when the thing that cannot work is the call. Refusing first names the
+        // construct the author actually wrote. The program is ending either
+        // way, so no side effect is owed.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if self.env.get(name).is_none() && self.is_declared_extern_fn(name) {
+                return self.record_runtime_error(
+                    format!(
+                        "`{name}(..)` is a foreign import (`extern`) and cannot be called \
+                         under `karac run --interp`: the tree-walk interpreter has no FFI \
+                         boundary — no foreign library is loaded and no calling convention \
+                         is crossed. Compile with `karac build` (or run without `--interp`, \
+                         which uses the JIT) instead."
+                    ),
+                    span,
+                );
+            }
+        }
+
         // Layout-query intrinsics `size_of[T]()` / `align_of[T]()`
         // (design.md § Field Offsets family). Intercepted before normal
         // dispatch — like codegen's `compile_call` twin — so the `{ 0 }`

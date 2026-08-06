@@ -84,6 +84,27 @@ impl Interpreter<'_> {
             || self.typecheck_result.union_info.contains_key(name)
     }
 
+    /// True if `name` is a FOREIGN IMPORT declared by this program — either a
+    /// standalone `extern "C" fn name(..);` item or an entry in an
+    /// `unsafe extern "ABI" { .. }` block.
+    ///
+    /// Used to refuse a call to one with an honest diagnostic (B-2026-08-06-24)
+    /// instead of letting it fall through to bare identifier evaluation, which
+    /// reports the generic "resolved but has no binding — this is a compiler
+    /// bug" internal error. Imports are declarations with no body, so the
+    /// interpreter never binds one; that is by design, not a hole.
+    pub(crate) fn is_declared_extern_fn(&self, name: &str) -> bool {
+        use crate::ast::{ExternItem, Item};
+        self.program.items.iter().any(|item| match item {
+            Item::ExternFunction(f) => f.name == name,
+            Item::ExternBlock(b) => b.items.iter().any(|it| match it {
+                ExternItem::Function(f) => f.name == name,
+                ExternItem::OpaqueType(_) => false,
+            }),
+            _ => false,
+        })
+    }
+
     /// Dispatch a reflection method on a `Type` pseudovalue named `type_name`.
     /// The typechecker has already validated the method name + arity for a
     /// `Type` receiver, so unknown methods here are a defensive fallback.
