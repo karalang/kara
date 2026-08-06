@@ -4884,6 +4884,40 @@ fn main() {
         }
     }
 
+    /// B-2026-08-06-16: the upper half of u64 is writable as a literal, and
+    /// the compiled backends agree with the interpreter on its value.
+    ///
+    /// It rides the i64 carrier as a wrapped bit pattern, so this is really a
+    /// check that the pattern survives codegen and renders UNSIGNED at the
+    /// print sink. Deliberately prints the binding rather than an inline
+    /// expression: an inline BINOP whose result exceeds i64::MAX renders signed
+    /// on this surface (B-2026-08-06-18, pre-existing and separate), and mixing
+    /// that in would make this test fail for an unrelated reason.
+    #[test]
+    fn e2e_u64_upper_half_literal_round_trips() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let a: u64 = 18446744073709551615u64;\n\
+             \x20   println(a);\n\
+             \x20   let b: u64 = 9223372036854775808u64;\n\
+             \x20   println(b);\n\
+             \x20   let c: u64 = 0xFFFFFFFFFFFFFFFFu64;\n\
+             \x20   println(c);\n\
+             \x20   println(a == u64.MAX);\n\
+             \x20   println(b > 9223372036854775807u64);\n\
+             \x20   let d: u64 = a / 2u64;\n\
+             \x20   println(d);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "18446744073709551615\n9223372036854775808\n18446744073709551615\n\
+             true\ntrue\n9223372036854775807\n"
+        );
+    }
+
     #[test]
     fn test_ir_signed_right_shift_is_arithmetic() {
         let ir = ir_for("fn shift(a: i64, b: i64) -> i64 { a >> b }");

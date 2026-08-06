@@ -118,16 +118,43 @@ fn test_magnitude_above_i64_max_without_unary_minus_is_an_error() {
             "fn main() { let y: i64 = 5i64; let x: i64 = y - 9223372036854775808i64; }",
             "binary minus, not unary",
         ),
-        (
-            "fn main() { let x: u64 = 18446744073709551615u64; }",
-            "u64 upper half (still unsupported — B-2026-08-06-16)",
-        ),
     ] {
         let (_, errors) = parse_with_errors(src);
         assert!(
             errors.iter().any(|e| e.message.contains("out of range")),
             "{what}: expected an out-of-range parse error, got: {errors:?}"
         );
+    }
+}
+
+// B-2026-08-06-16: an UNSIGNED-suffixed magnitude past i64::MAX is legal — the
+// whole upper half of u64 lives there. It rides the i64 carrier as the wrapped
+// bit pattern, so the node is `Integer` with a NEGATIVE payload, and the
+// typechecker reads it back through the suffix.
+#[test]
+fn test_unsigned_suffixed_upper_half_of_u64_parses_to_the_bit_pattern() {
+    for (src, want) in [
+        ("fn main() { let x: u64 = 18446744073709551615u64; }", -1i64),
+        (
+            "fn main() { let x: u64 = 9223372036854775808u64; }",
+            i64::MIN,
+        ),
+        ("fn main() { let x: u64 = 0xFFFFFFFFFFFFFFFFu64; }", -1i64),
+    ] {
+        let prog = parse_ok(src);
+        let Item::Function(f) = &prog.items[0] else {
+            panic!("expected a function");
+        };
+        let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+            panic!("expected a let");
+        };
+        match value.kind {
+            ExprKind::Integer(n, Some(_)) => assert_eq!(
+                n, want,
+                "`{src}` must carry the wrapped bit pattern on the i64 carrier"
+            ),
+            ref other => panic!("`{src}` expected a suffixed Integer, got {other:?}"),
+        }
     }
 }
 

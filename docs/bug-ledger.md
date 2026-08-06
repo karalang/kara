@@ -96,8 +96,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 141 | 2 |
 | double-free | 99 | 0 |
 | codegen-gap | 92 | 0 |
-| run-vs-build | 82 | 1 |
-| missing-feature | 80 | 2 |
+| run-vs-build | 83 | 2 |
+| missing-feature | 80 | 1 |
 | false-positive | 56 | 0 |
 | perf | 51 | 3 |
 | diagnostics | 41 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 700 | 7 |
+| codegen | 701 | 8 |
 | interp | 126 | 0 |
-| typecheck | 126 | 3 |
+| typecheck | 126 | 2 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **969 surfaced · 10 open · 950 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **970 surfaced · 10 open · 951 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -138,12 +138,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **969 surfaced 
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
 | B-2026-08-06-12 | 2026-08-06 | codegen | high | a GENERIC struct LITERAL used directly as a METHOD RECEIVER cannot be built: `Box { v: <String> }.take()` passes `karac check`, runs correctly under the interpreter, and then fails `karac build` with an LLVM verifier error -- the literal lowers at the ERASED base layout `{ i64 }` because the outer method call's span CLOBBERS the literal's instantiation record | ROOT CAUSE IS DEEPER THAN THE SPAN CLOBBER — see the ATTEMPTED FIX section. `impl[T] Box[T]` methods are declared ONCE at the erased layout (`@Box.take({ i64 }) -> i64`), so they are not monomorphized per instantiation the way `fn take[T]` free functions are. The span-clobbered literal layout (src/codegen/types_lowering.rs::struct_inst_mono_type_for_expr) is only the first of two mismatches. |
 | B-2026-08-06-15 | 2026-08-06 | codegen | low | a `shared` handle escaping a VALUE-POSITION BLOCK is never rc-dec'd by its consumer binding: `let x = { let b = Box { .. }; b.v };` leaks 1,280 B / 40 blocks at -O0 (clean at -O2), IDENTICALLY in the generic and concrete spellings -- the leak half of the shape whose use-after-free half B-2026-08-06-8 fixed | ORDERING: src/codegen/stmts.rs::compile_naked_block drains the block frame (running the owner's struct drop) BEFORE the consumer's let-site rc-inc can run. Fix by emitting that inc pre-drain for a direct-`shared` tail and dropping the `suppress_block_tail_cleanup` null-store for that shape. NOT an accounting gap and NOT `clone_on_extract_view_field` -- both refuted in the detail. |
-| B-2026-08-06-16 | 2026-08-06 | typecheck | low | the upper half of u64 is unwritable as a literal -- `18446744073709551615u64` (and any magnitude above i64::MAX, in any radix) is a parse error, because every integer rides an i64 CARRIER and the literal arrives wrapped NEGATIVE, which the typechecker rejects with `negative integer literal -1 cannot initialize unsigned type 'u64'`. The parser half is already done (B-2026-08-06-13 carries the magnitude); this is the typechecker half. | — |
 | B-2026-08-06-17 | 2026-08-06 | typecheck+codegen | medium | `ref CStr` as an `unsafe extern "C"` PARAMETER type is accepted by the typechecker and then dies at codegen with a raw LLVM module-verification error (`Call parameter type does not match function signature! {ptr, i64} ... ptr`) — the fat two-word CStr reference is passed where the extern lowering expects a thin pointer. Identical failure under `karac run` (JIT) and `karac build`; `--interp` works, so it is also a latent run-vs-build divergence. | — |
+| B-2026-08-06-18 | 2026-08-06 | codegen | high | a u64 ARITHMETIC RESULT above i64::MAX renders SIGNED under both compiled backends but unsigned under the interpreter -- `println(u64.MAX - 1u64)` prints -2 on JIT/AOT and 18446744073709551614 on interp. Binding the expression to a `let` first is correct on every surface, so the wrong spelling sits next to a working one. PRE-EXISTING and independent of B-2026-08-06-16 (reproduces entirely through `u64.MAX`, no literal required) | — |
 
-### Fixed (950)
+### Fixed (951)
 
-<details><summary>950 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>951 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1119,6 +1119,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-11 | codegen | high | an owned boxed-payload enum param that ESCAPES -- returned, or forwarded to another by-value param -- is freed by the callee anyway: `fn id(o: Opt[St… | 05005aae |
 | B-2026-08-06-13 | lexer+parser | low | `i64::MIN` cannot be WRITTEN as a literal in any spelling -- `-9223372036854775808i64` is a parse error (`Invalid integer literal`), because a negati… | <this commit> |
 | B-2026-08-06-14 | codegen | high | a `shared` field RETURNED out of a BY-VALUE struct param is a use-after-free on a DEFAULT -O2 build: `fn giveback(b: Holder) -> Node { return b.v; }`… | 257630a (src/codegen/call_dispatch.rs — the new `share_direct_shared_field_ref_for_return`, which gates on the caller-retains regime using the SAME name-only predicate the param_own.rs arm gates on so the two cannot drift; src/codegen/exprs.rs — the explicit-`return` hook; src/codegen/stmts.rs — the tail hook, on the early-return side of `compile_tail_final_expr`'s `tail_inner` gate). Pins e2e_shared_field_returned_from_a_caller_retains_param_keeps_its_ref and test_shared_field_returned_from_a_param_transfers_the_handle. |
+| B-2026-08-06-16 | typecheck | low | the upper half of u64 is unwritable as a literal -- `18446744073709551615u64` (and any magnitude above i64::MAX, in any radix) is a parse error, beca… | <this commit> |
 
 </details>
 

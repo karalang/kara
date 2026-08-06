@@ -2906,13 +2906,19 @@ impl<'a> super::TypeChecker<'a> {
 
     /// B-2026-07-02-7: the inclusive `i64`-literal range of a narrow scalar
     /// int type. `None` for types a decimal `i64` literal can never overflow
-    /// (i64/i128; u64/u128 above the negative check baked into the min of 0)
+    /// (i128; u64/u128 above the negative check baked into the min of 0)
     /// and for every non-int type.
     fn int_literal_range(ty: &Type) -> Option<(i128, i128)> {
         Some(match ty {
             Type::Int(IntSize::I8) => (i8::MIN as i128, i8::MAX as i128),
             Type::Int(IntSize::I16) => (i16::MIN as i128, i16::MAX as i128),
             Type::Int(IntSize::I32) => (i32::MIN as i128, i32::MAX as i128),
+            // i64 was absent here while it was VACUOUS — every literal was an
+            // i64, so it fit by construction. B-2026-08-06-16 makes the row
+            // load-bearing: an unsigned-suffixed literal now carries a value up
+            // to u64::MAX, and `let x: i64 = 18446744073709551615u64` silently
+            // bound -1 without it.
+            Type::Int(IntSize::I64) => (i64::MIN as i128, i64::MAX as i128),
             Type::UInt(UIntSize::U8) => (0, u8::MAX as i128),
             Type::UInt(UIntSize::U16) => (0, u16::MAX as i128),
             Type::UInt(UIntSize::U32) => (0, u32::MAX as i128),
@@ -2921,6 +2927,34 @@ impl<'a> super::TypeChecker<'a> {
             Type::UInt(UIntSize::U128) => (0, i128::MAX),
             _ => return None,
         })
+    }
+
+    /// A literal's `i64` payload widened to `i128` — read as an UNSIGNED bit
+    /// pattern when the suffix is unsigned. B-2026-08-06-16.
+    ///
+    /// The upper half of `u64` lives past `i64::MAX`, so `18446744073709551615u64`
+    /// cannot ride the i64 carrier as itself; the parser stores the wrapped bit
+    /// pattern (`-1`), which is exactly how `u64.MAX` is already represented at
+    /// runtime. Widening that with a plain `as i128` would sign-extend it back
+    /// to `-1` and the range check would reject a legal literal with "negative
+    /// integer literal -1 cannot initialize unsigned type 'u64'".
+    ///
+    /// Safe to apply to EVERY unsigned-suffixed literal, not just the wrapped
+    /// ones: the lexer only ever produces a non-negative payload from digits, so
+    /// a negative `n` under an unsigned suffix can only have come from the
+    /// parser's out-of-range arm. A genuinely negative literal is
+    /// `Neg(Integer(n))` with `n` positive — a different AST shape entirely,
+    /// validated on its own path — so `-5u64` still reports correctly.
+    fn literal_as_i128(n: i64, sfx: Option<crate::token::IntSuffix>) -> i128 {
+        use crate::token::IntSuffix;
+        match sfx {
+            Some(IntSuffix::U8)
+            | Some(IntSuffix::U16)
+            | Some(IntSuffix::U32)
+            | Some(IntSuffix::U64)
+            | Some(IntSuffix::U128) => (n as u64) as i128,
+            _ => n as i128,
+        }
     }
 
     /// Emit the out-of-range diagnostic when `value` does not fit `ty`'s
@@ -2983,11 +3017,19 @@ impl<'a> super::TypeChecker<'a> {
     /// unsuffixed check at `check_expr` closes for bare literals.
     fn suffixed_int_literal_value(expr: &Expr) -> Option<i128> {
         match &expr.kind {
-            ExprKind::Integer(n, Some(_)) => Some(*n as i128),
+            // B-2026-08-06-16: read through `literal_as_i128` rather than a
+            // bare `as i128`, so an unsigned-suffixed literal carrying a
+            // wrapped bit pattern (the upper half of u64) widens back to its
+            // unsigned value instead of sign-extending to a negative one.
+            ExprKind::Integer(n, sfx @ Some(_)) => Some(Self::literal_as_i128(*n, *sfx)),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,
             } => match &operand.kind {
+                // The negated form keeps the signed reading: the operand of a
+                // unary minus is a positive magnitude by construction, so there
+                // is no bit pattern to recover, and `-5u64` must still report
+                // as negative.
                 ExprKind::Integer(n, Some(_)) => Some(-(*n as i128)),
                 _ => None,
             },
@@ -3064,7 +3106,7 @@ impl<'a> super::TypeChecker<'a> {
                     .neg_validated_suffixed_literal
                     .is_some_and(|k| k == (expr.span.offset, expr.span.length));
                 if sfx.is_some() && !neg_validated {
-                    self.check_int_literal_fits(*n as i128, &ty, &expr.span);
+                    self.check_int_literal_fits(Self::literal_as_i128(*n, *sfx), &ty, &expr.span);
                 }
                 ty
             }

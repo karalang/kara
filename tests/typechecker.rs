@@ -35445,3 +35445,54 @@ fn tuple_literal_threads_expected_elem_types() {
         "wrong non-constructor element must still be rejected"
     );
 }
+
+// B-2026-08-06-16: the upper half of u64 is a legal literal.
+//
+// It cannot ride the i64 carrier as itself, so the parser stores the wrapped
+// bit pattern and the typechecker reads it back as unsigned when the suffix is
+// unsigned. Without that, the range check sign-extends `-1` and rejects a legal
+// literal with "negative integer literal -1 cannot initialize unsigned type".
+#[test]
+fn unsigned_suffixed_upper_half_of_u64_typechecks() {
+    for src in [
+        "fn main() { let x: u64 = 18446744073709551615u64; println(x); }",
+        "fn main() { let x: u64 = 9223372036854775808u64; println(x); }",
+        "fn main() { let x: u64 = 0xFFFFFFFFFFFFFFFFu64; println(x); }",
+        // no annotation — the suffix alone carries the type
+        "fn main() { let x = 18446744073709551615u64; println(x); }",
+    ] {
+        // `typecheck_ok` panics on any error, which is the assertion here.
+        typecheck_ok(src);
+    }
+}
+
+// …and the guard must not become a blanket "unsigned suffix means anything
+// goes". These are the cases that must STILL be rejected, and the middle two
+// are the ones a sloppy bit-pattern reading would wave through.
+#[test]
+fn unsigned_suffixed_out_of_range_is_still_rejected() {
+    for (src, what) in [
+        (
+            "fn main() { let x: u8 = 18446744073709551615u8; }",
+            "u64-sized magnitude with a u8 suffix",
+        ),
+        (
+            "fn main() { let x: u64 = -5u64; }",
+            "genuinely negative literal into unsigned",
+        ),
+        (
+            "fn main() { let x: u32 = 5000000000u32; }",
+            "in-i64-range but past u32",
+        ),
+        (
+            "fn main() { let x: i64 = 18446744073709551615u64; }",
+            "u64 upper half into an i64 binding",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            !errors.is_empty(),
+            "{what}: `{src}` must still be a type error, got none"
+        );
+    }
+}
