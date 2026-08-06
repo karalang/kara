@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 217 | 0 |
-| leak | 137 | 1 |
+| leak | 138 | 2 |
 | double-free | 97 | 1 |
 | codegen-gap | 91 | 0 |
 | run-vs-build | 81 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 686 | 6 |
+| codegen | 687 | 7 |
 | interp | 125 | 0 |
 | typecheck | 122 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **953 surfaced · 8 open · 937 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **954 surfaced · 9 open · 937 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **953 surfaced 
 | B-2026-08-05-38 | 2026-08-05 | codegen | medium | The narrow-int width trap is emitted UNCONDITIONALLY on every `i8/i16/i32/u8/u16/u32` arithmetic op -- zext/sext to i64, two icmps, an or, and a conditional branch per op -- costing 1.06x-1.12x on narrow-int-dense loops (kata #9 palindrome, #8 atoi) with no range analysis to elide provably in-range checks | docs/implementation_checklist/phase-7-codegen.md -- optimization follow-on to a12a1a69; blocked on nothing, but should be measured on x86 first to confirm it is not arm64-specific |
 | B-2026-08-05-41 | 2026-08-05 | typecheck+codegen | medium | a `shared struct` field reached through a `mut ref` ARGUMENT bypasses the immutable-field write gate that rejects the assignment spelling, and the write is lost under AOT — `n.val = 5` is refused, `bump(mut n.val)` is accepted and does nothing | — |
 | B-2026-08-06-1 | 2026-08-06 | codegen | medium | a generic wrapper's bare `T` field bound to a MAP leaks its whole handle tree: `fn sink(b: Box[Map[i64, String]])` loses 25,830 B / 40 blocks on a DEFAULT -O2 build, because the mono struct drop's bare-`T` reclassification recognises String/Vec/VecDeque heads only -- the concrete twin `Gmap[T] { m: Map[i64, T] }` is clean, since its DECLARED field name is `Map` | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which promotes only to FieldDrop::VecOrString and never to FieldDrop::MapOrSet |
+| B-2026-08-06-2 | 2026-08-06 | codegen | high | a struct LITERAL passed to a GENERIC by-value param whose heap field the callee MOVES OUT leaks that field on a DEFAULT -O2 build -- `take(Box { v: <String> })` where `fn take[T](b: Box[T]) -> T { b.v }`; needs all three of generic-param + literal-arg + move-out, and is NOT B-2026-08-05-33 (whose control has both argument forms leaking alike) nor B-2026-08-06-1 (whose defect is the Map head, and a String is already classified) | — |
 
 ### Fixed (937)
 
