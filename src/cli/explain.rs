@@ -477,6 +477,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0801", ty("GpuNotSafe", None)),
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),
+    ("E0805", ty("ExternSignatureInvalid", None)),
 ];
 
 const fn ty(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {

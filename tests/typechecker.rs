@@ -34193,6 +34193,130 @@ fn repr_transparent_single_variant_enum_accepts() {
     typecheck_ok("#[repr(transparent)] enum Wrap { V(i32) } fn main() {}");
 }
 
+/// B-2026-08-06-17 — a Kāra borrow in a foreign-import signature.
+///
+/// `unsafe extern "C" { fn strlen(s: ref CStr) -> usize; }` is the natural
+/// first spelling an FFI newcomer writes. It type-checked cleanly and died in
+/// the backend with a raw LLVM module-verification error (`Call parameter type
+/// does not match function signature! {ptr, i64} … ptr`): a `ref` to an UNSIZED
+/// type is a fat two-word value and the extern lowering expects a thin pointer.
+/// The sanctioned form is `*const u8` + `.as_ptr()`.
+fn extern_ffi_err(src: &str) -> String {
+    typecheck_errors(src)
+        .iter()
+        .find_map(|e| {
+            let m = e.to_string();
+            m.contains("E_EXTERN_REF_").then_some(m)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected an E_EXTERN_REF_* diagnostic, got: {:?}",
+                typecheck_errors(src)
+            )
+        })
+}
+
+#[test]
+fn extern_ref_cstr_param_rejected_with_as_ptr_remedy() {
+    let m =
+        extern_ffi_err(r#"unsafe extern "C" { fn strlen(s: ref CStr) -> usize; } fn main() {}"#);
+    assert!(m.contains("E_EXTERN_REF_PARAM"), "{m}");
+    // The remedy has to name the actual fix, not just the rule — this
+    // diagnostic exists because the backend error taught the user nothing.
+    assert!(m.contains("as_ptr"), "{m}");
+    assert!(m.contains("*const u8"), "{m}");
+}
+
+#[test]
+fn extern_ref_return_rejected() {
+    let m = extern_ffi_err(
+        r#"unsafe extern "C" { fn getenv(n: *const u8) -> ref CStr; } fn main() {}"#,
+    );
+    assert!(m.contains("E_EXTERN_REF_RETURN"), "{m}");
+}
+
+#[test]
+fn extern_mut_ref_param_rejected() {
+    let m = extern_ffi_err(
+        r#"unsafe extern "C" { fn fill(buf: mut ref String) -> i64; } fn main() {}"#,
+    );
+    assert!(m.contains("E_EXTERN_REF_PARAM"), "{m}");
+    assert!(m.contains("mut ref"), "{m}");
+}
+
+/// A non-`CStr`/`String` referent gets the generic raw-pointer remedy rather
+/// than the `.as_ptr()` one, and a SIZED referent is rejected too: a borrow is
+/// a Kāra ownership form with no C representation, and keying the rule on
+/// whether the referent happens to lower fat would put a codegen layout
+/// question in the typechecker.
+#[test]
+fn extern_ref_sized_param_rejected_with_pointer_remedy() {
+    let m = extern_ffi_err(r#"unsafe extern "C" { fn peek(p: ref i64) -> i64; } fn main() {}"#);
+    assert!(m.contains("E_EXTERN_REF_PARAM"), "{m}");
+    assert!(m.contains("*const i64"), "{m}");
+}
+
+/// FFI-safety is visibility-independent, unlike the private-type-leak check
+/// next to it — an unrepresentable foreign signature is wrong whether or not
+/// anyone outside can see it.
+#[test]
+fn extern_ref_param_rejected_inside_non_pub_block() {
+    let m = extern_ffi_err(
+        r#"unsafe extern "C" { fn strlen(s: ref CStr) -> usize; } pub fn main() {}"#,
+    );
+    assert!(m.contains("E_EXTERN_REF_PARAM"), "{m}");
+}
+
+/// The exemption is per-REFERENT, not per-block: an opaque foreign type
+/// reached by `ref` is the sanctioned handle form and stays clean, while a
+/// `ref CStr` in the very same block is still rejected. Guards the boundary
+/// between the two — an earlier blanket form of this rule rejected both, which
+/// `test_opaque_type_through_ref_accepted` caught.
+#[test]
+fn extern_ref_opaque_exempt_but_ref_cstr_still_rejected_in_same_block() {
+    let src = r#"unsafe extern "C" {
+    type Handle;
+    fn use_it(h: ref Handle);
+    fn strlen(s: ref CStr) -> usize;
+}
+fn main() {}"#;
+    let hits: Vec<String> = typecheck_errors(src)
+        .iter()
+        .map(|e| e.to_string())
+        .filter(|m| m.contains("E_EXTERN_REF_"))
+        .collect();
+    assert_eq!(hits.len(), 1, "only the CStr one: {hits:?}");
+    assert!(hits[0].contains("strlen"), "{hits:?}");
+}
+
+/// `host fn` owns its own boundary rule with host-specific remedies, so this
+/// one must stay out of its way rather than double-report the same mistake.
+#[test]
+fn extern_ffi_rule_does_not_fire_for_host_fns() {
+    let src = r#"#[derive(Copy, Clone)]
+struct Point { x: f64, y: f64 }
+host fn bad_ref(p: ref Point) with reads(Clock);
+fn main() {}"#;
+    let hits: Vec<String> = typecheck_errors(src)
+        .iter()
+        .map(|e| e.to_string())
+        .filter(|m| m.contains("E_EXTERN_REF_"))
+        .collect();
+    assert!(
+        hits.is_empty(),
+        "host fn is not this rule's business: {hits:?}"
+    );
+}
+
+/// The sanctioned spelling from design.md § C-String Literals stays clean, as
+/// do ordinary scalar and raw-pointer foreign signatures.
+#[test]
+fn extern_pointer_and_scalar_signatures_accepted() {
+    typecheck_ok(r#"unsafe extern "C" { fn strlen(s: *const u8) -> usize; } fn main() {}"#);
+    typecheck_ok(r#"unsafe extern "C" { fn abs(n: i32) -> i32; } fn main() {}"#);
+    typecheck_ok(r#"unsafe extern "C" { fn memset(p: *mut u8, c: i32, n: usize); } fn main() {}"#);
+}
+
 #[test]
 fn repr_transparent_multi_field_struct_rejected() {
     let m = repr_transparent_err("#[repr(transparent)] struct M { a: i32, b: i32 } fn main() {}");

@@ -420,6 +420,103 @@ impl<'a> super::TypeChecker<'a> {
     /// a single-module compilation unit, every access is "same project" per
     /// design.md § Three-level visibility, so the field rule has no firing
     /// sites today.
+    /// Reject a Kāra BORROW in a foreign-import signature, with the raw-pointer
+    /// spelling the design contract actually calls for. B-2026-08-06-17.
+    ///
+    /// `unsafe extern "C" { fn strlen(s: ref CStr) -> usize; }` is the natural
+    /// first spelling an FFI newcomer writes, and it type-checked cleanly and
+    /// then died in the backend with a raw LLVM module-verification error
+    /// (`Call parameter type does not match function signature! {ptr, i64} …
+    /// ptr`) — a `ref` to an UNSIZED type is a fat two-word `{ptr, len}` value
+    /// and the extern lowering expects a thin pointer. The sanctioned form is
+    /// `*const u8` + `.as_ptr()` (design.md § C-String Literals, FFI handoff).
+    ///
+    /// Rejects EVERY `ref` / `mut ref`, not just the fat ones. Two reasons: a
+    /// borrow is a Kāra-side ownership concept with no C meaning, so the thin
+    /// cases build only by coincidence of layout; and the alternative — a rule
+    /// keyed on whether the referent happens to lower fat — would put a codegen
+    /// layout question in the typechecker, which is exactly the coupling
+    /// `docs/design.md § Codegen architecture` forbids. Nothing in-tree spells
+    /// an extern parameter or return with `ref` (checked).
+    ///
+    /// Visibility-independent, like the C-unwind panics rule and unlike
+    /// [`Self::check_type_expr_visibility`]: an unrepresentable foreign
+    /// signature is wrong whether or not anyone outside can see it.
+    ///
+    /// TWO EXEMPTIONS, both load-bearing and both found by the suite when an
+    /// earlier blanket form of this rule broke them:
+    ///
+    /// * `host fn` (`abi == "host"`) has its OWN boundary rule with
+    ///   host-specific remedies ("pass an opaque handle or a (pointer, length)
+    ///   pair"). Firing here too just double-reports one mistake with a worse
+    ///   second message.
+    /// * `ref Foo` where `Foo` is an OPAQUE foreign type (`type Foo;` in an
+    ///   extern block) is the canonical Kāra-side handle form — design.md §
+    ///   Opaque Foreign Types, and a positive control in
+    ///   `test_opaque_type_through_ref_accepted`. It is exactly the shape this
+    ///   rule otherwise recommends: an opaque type has no Kāra-visible body, so
+    ///   a reference to it IS the thin pointer, with nothing that could make it
+    ///   fat. The rule is therefore "a borrow of a KĀRA-REPRESENTABLE type has
+    ///   no C meaning", not "a borrow is never FFI-safe".
+    fn check_extern_signature_ffi_safe(&mut self, e: &ExternFunction) {
+        if e.abi == "host" {
+            return;
+        }
+        for p in &e.params {
+            self.check_extern_type_expr_ffi_safe(&p.ty, &e.name, false);
+        }
+        if let Some(ref rt) = e.return_type {
+            self.check_extern_type_expr_ffi_safe(rt, &e.name, true);
+        }
+    }
+
+    /// One position of an extern signature. Reports the OUTERMOST borrow only —
+    /// recursing into the referent after reporting would stack a second
+    /// diagnostic on the same span for one authoring mistake.
+    fn check_extern_type_expr_ffi_safe(&mut self, ty: &TypeExpr, owner: &str, is_return: bool) {
+        let (TypeKind::Ref(inner) | TypeKind::MutRef(inner)) = &ty.kind else {
+            return;
+        };
+        let mutable = matches!(&ty.kind, TypeKind::MutRef(_));
+        let spelled = if mutable { "mut ref" } else { "ref" };
+        let (code, position) = if is_return {
+            ("E_EXTERN_REF_RETURN", "return type")
+        } else {
+            ("E_EXTERN_REF_PARAM", "parameter")
+        };
+        // `CStr` and `String` are the two the FFI docs walk through, and the
+        // shapes that produced the backend crash, so name their exact fix.
+        let referent = match &inner.kind {
+            TypeKind::Path(p) => p.segments.last().map(|s| s.as_str()).unwrap_or(""),
+            _ => "",
+        };
+        // An opaque foreign type has no Kāra-visible body, so `ref Foo` IS the
+        // thin handle pointer — the sanctioned form, not a violation.
+        if self.env.opaque_foreign_types.contains(referent) {
+            return;
+        }
+        let remedy = match referent {
+            "CStr" | "String" => format!(
+                "pass `*const u8` and hand over the data pointer at the call site with `.as_ptr()` \
+                 — `fn {}(s: *const u8) …` called as `{}(x.as_ptr())`",
+                owner, owner
+            ),
+            _ => format!(
+                "use a raw pointer (`*const {r}` / `*mut {r}`) — a borrow is a Kāra ownership \
+                 form with no C representation",
+                r = if referent.is_empty() { "T" } else { referent }
+            ),
+        };
+        self.type_error(
+            format!(
+                "error[{}]: `{}` is not a valid {} type for the foreign import '{}': {}",
+                code, spelled, position, owner, remedy
+            ),
+            ty.span.clone(),
+            TypeErrorKind::ExternSignatureInvalid,
+        );
+    }
+
     fn check_type_expr_visibility(
         &mut self,
         ty: &TypeExpr,
@@ -582,6 +679,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 Item::ExternFunction(e) if e.is_pub => {
+                    self.check_extern_signature_ffi_safe(e);
                     for p in &e.params {
                         self.check_type_expr_visibility(
                             &p.ty,
@@ -601,10 +699,14 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
+                // Non-`pub` top-level foreign import: no private-type leak to
+                // check, but FFI-safety still applies.
+                Item::ExternFunction(e) => self.check_extern_signature_ffi_safe(e),
                 Item::ExternBlock(b) => {
                     for it in &b.items {
                         match it {
                             ExternItem::Function(e) if e.is_pub => {
+                                self.check_extern_signature_ffi_safe(e);
                                 for p in &e.params {
                                     self.check_type_expr_visibility(
                                         &p.ty,
@@ -624,7 +726,13 @@ impl<'a> super::TypeChecker<'a> {
                                     );
                                 }
                             }
-                            ExternItem::Function(_) => {}
+                            // FFI-safety is visibility-independent (see
+                            // `check_extern_signature_ffi_safe`), so the
+                            // non-`pub` arm still runs it — only the
+                            // private-type-leak check above is `pub`-gated.
+                            ExternItem::Function(e) => {
+                                self.check_extern_signature_ffi_safe(e);
+                            }
                             // Opaque foreign type declarations have no
                             // type-expression surface to visibility-check
                             // — the declaration *is* the type.

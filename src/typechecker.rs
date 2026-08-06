@@ -504,6 +504,21 @@ pub enum TypeErrorKind {
     /// `E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR`), matching the `E_REPR_TRANSPARENT_*`
     /// code-in-message convention.
     DiscriminantInvalid,
+    /// A foreign-import signature names a type that has no C representation —
+    /// today, a Kāra BORROW (`ref T` / `mut ref T`) in an `unsafe extern "ABI"`
+    /// parameter or return position (design.md § FFI; § C-String Literals sets
+    /// the handoff contract as `*const u8` + `.as_ptr()`). One kind for the
+    /// family; the specific rule is named by the symbolic code embedded in the
+    /// message (`E_EXTERN_REF_PARAM` / `E_EXTERN_REF_RETURN`), matching the
+    /// `E_REPR_TRANSPARENT_*` code-in-message convention.
+    ///
+    /// Run-fatal, and not because codegen merely declines it: a `ref` to an
+    /// UNSIZED type is a fat two-word `{ptr, len}` value, so passing one where
+    /// the extern lowering expects a thin pointer produced a raw LLVM
+    /// module-verification error rather than a diagnostic (B-2026-08-06-17).
+    /// The interpreter cannot call foreign functions at all, so there is no
+    /// downgrade-and-run path to preserve.
+    ExternSignatureInvalid,
     /// A return-position `impl Trait` whose body yields two or more distinct
     /// concrete witness types (design.md § `impl Trait`: "one concrete return
     /// per monomorphization"). Codegen rejects it (no single type to
@@ -998,7 +1013,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::CrossTaskUnsafeCapture
         | TypeErrorKind::GpuNotSafe
         | TypeErrorKind::ReprTransparentInvalid
-        | TypeErrorKind::DiscriminantInvalid => None,
+        | TypeErrorKind::DiscriminantInvalid
+        | TypeErrorKind::ExternSignatureInvalid => None,
     }
 }
 
