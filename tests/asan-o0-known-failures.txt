@@ -52,9 +52,16 @@
 # `Option[Option[String]]` whose let-site box drop does own its box — not the
 # same value left unmatched.
 
-# ── B-2026-08-05-7 (open) — the one it triaged and reduced but did not fix ──
-# An `Option[H]` field read out of a shared-enum payload and passed BY VALUE to
-# a free fn. 64 bytes in 2 allocations. Re-check against B-2026-08-05-33's
-# caller-retains law before diagnosing it fresh — that row is now fixed, and
-# this one did not move with it.
+# ── B-2026-08-06-10 (open) — reduced, not yet fixed ──
+# A callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans
+# the box the caller's struct drop owns. 64 bytes in 2 allocations.
+#
+# Re-attributed here from B-2026-08-05-7 after isolation, and the old line is
+# worth remembering as a caution: it read "an `Option[H]` field read out of a
+# shared-enum payload and passed BY VALUE to a free fn", which named three
+# things that all turn out to be irrelevant. Measured one variable at a time,
+# the FIELD form is clean, the shared-enum wrapper is irrelevant (identical leak
+# without it), and the payload's heap-ness is irrelevant. The only variable that
+# moves the result is whether the CALLEE's arm returns `x.label` (leaks) or
+# `x.k` (clean).
 memory_sanitizer_tests::asan_shared_payload_view_optres_field_call_arg_copy_no_leak_no_double_free
