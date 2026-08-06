@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 80 | 2 |
 | false-positive | 56 | 0 |
 | perf | 51 | 4 |
-| diagnostics | 40 | 0 |
+| diagnostics | 41 | 1 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
 | other | 17 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 699 | 7 |
+| codegen | 700 | 8 |
 | interp | 126 | 0 |
-| typecheck | 125 | 2 |
+| typecheck | 126 | 3 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **968 surfaced · 10 open · 950 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **969 surfaced · 11 open · 950 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,6 +140,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **968 surfaced 
 | B-2026-08-06-12 | 2026-08-06 | codegen | high | a GENERIC struct LITERAL used directly as a METHOD RECEIVER cannot be built: `Box { v: <String> }.take()` passes `karac check`, runs correctly under the interpreter, and then fails `karac build` with an LLVM verifier error -- the literal lowers at the ERASED base layout `{ i64 }` because the outer method call's span CLOBBERS the literal's instantiation record | ROOT CAUSE IS DEEPER THAN THE SPAN CLOBBER — see the ATTEMPTED FIX section. `impl[T] Box[T]` methods are declared ONCE at the erased layout (`@Box.take({ i64 }) -> i64`), so they are not monomorphized per instantiation the way `fn take[T]` free functions are. The span-clobbered literal layout (src/codegen/types_lowering.rs::struct_inst_mono_type_for_expr) is only the first of two mismatches. |
 | B-2026-08-06-15 | 2026-08-06 | codegen | low | a `shared` handle escaping a VALUE-POSITION BLOCK is never rc-dec'd by its consumer binding: `let x = { let b = Box { .. }; b.v };` leaks 1,280 B / 40 blocks at -O0 (clean at -O2), IDENTICALLY in the generic and concrete spellings -- the leak half of the shape whose use-after-free half B-2026-08-06-8 fixed | the let-site that consumes a value-position BLOCK's result -- it does not `track_rc_var` a `shared` handle arriving that way; check whether src/codegen/stmts.rs::clone_on_extract_view_field's bare-`shared` arm is the intended owner and simply is not reached |
 | B-2026-08-06-16 | 2026-08-06 | typecheck | low | the upper half of u64 is unwritable as a literal -- `18446744073709551615u64` (and any magnitude above i64::MAX, in any radix) is a parse error, because every integer rides an i64 CARRIER and the literal arrives wrapped NEGATIVE, which the typechecker rejects with `negative integer literal -1 cannot initialize unsigned type 'u64'`. The parser half is already done (B-2026-08-06-13 carries the magnitude); this is the typechecker half. | — |
+| B-2026-08-06-17 | 2026-08-06 | typecheck+codegen | medium | `ref CStr` as an `unsafe extern "C"` PARAMETER type is accepted by the typechecker and then dies at codegen with a raw LLVM module-verification error (`Call parameter type does not match function signature! {ptr, i64} ... ptr`) — the fat two-word CStr reference is passed where the extern lowering expects a thin pointer. Identical failure under `karac run` (JIT) and `karac build`; `--interp` works, so it is also a latent run-vs-build divergence. | — |
 
 ### Fixed (950)
 

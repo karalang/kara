@@ -1,8 +1,42 @@
-# Kāra as a Library: Additive Interop
+# FFI and Interop: Kāra as a Library
 
 A new language has a bootstrapping problem: no ecosystem yet, and no team wants to rewrite a working system to get one feature. Kāra's answer is to be **additive, not a replacement.** Write the hot loop, the parallel kernel, the one function that has to be fast, in Kāra — build it as a linkable library with a plain C ABI — and drop it into a program that keeps everything else. This is the Rust-in-Firefox, Zig-alongside-C playbook, and Kāra is built to be the guest.
 
 This chapter walks one kernel from `.kara` source into both a C and a Rust host, side by side. Every command and every line of output below is real — the two hosts print the same numbers, which is the whole point.
+
+## Calling C from Kāra
+
+Before the main event, the other direction in one screen — importing C functions *into* Kāra. Declare them in an `unsafe extern "C"` block and call them inside `unsafe`:
+
+```kara
+/// # Safety
+/// `sqrt` is pure math from libm; `strlen` reads only the NUL-terminated
+/// bytes behind the pointer, which `c"..."` literals guarantee.
+unsafe extern "C" {
+    fn sqrt(x: f64) -> f64;
+    fn strlen(s: *const u8) -> usize;
+}
+
+fn main() {
+    // Safety: finite input; sqrt has no preconditions.
+    let root = unsafe { sqrt(2.0) };
+    println(root);                        // 1.4142135623730951
+    let msg = c"hello from C land";
+    // Safety: msg is a static NUL-terminated literal.
+    let n = unsafe { strlen(msg.as_ptr()) };
+    println(n as i64);                    // 17
+}
+```
+
+This works identically under `karac run` and `karac build` — the JIT resolves the symbols in-process, the AOT build links them from libc/libm.
+
+Three rules carry most of the weight:
+
+- **The declaration block is `unsafe extern`, and every call site is `unsafe`.** The compiler can't check what's on the other side of the boundary, so both the block and each call carry a `# Safety` / `// Safety:` comment stating the trust contract — the `undocumented_unsafe` lint warns when they're missing.
+- **C strings cross as `*const u8`.** A `c"..."` literal is a `ref CStr` (NUL-terminated, in rodata); hand it to C with `.as_ptr()`. Declaring an extern parameter as `ref CStr` directly is not the FFI form — `CStr` is a Kāra type, not a C one.
+- **Effects still apply.** An extern fn that writes somewhere declares it: `fn puts(s: *const u8) -> i32 with writes(Console);` — foreign code doesn't get to dodge the effect system (see [Effects](./ch11-effects.md)).
+
+That's the import direction. The rest of this chapter is the export direction — the one that answers "can I actually use this next to my existing code?"
 
 ## The kernel
 
