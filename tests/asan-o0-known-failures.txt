@@ -1,0 +1,43 @@
+# Fixtures that FAIL the memory_sanitizer suite at KARAC_OPT_LEVEL=0 and PASS
+# at the default -O2. Consumed by scripts/asan-o0-leg.sh. B-2026-08-04-17.
+#
+# Every entry names the bug row that owns it. Nothing goes on this list without
+# one — an unattributed entry is indistinguishable from a fixture someone
+# silenced.
+#
+# THE LIST ONLY SHRINKS. scripts/asan-o0-leg.sh fails both when an unlisted
+# fixture starts failing (a regression) and when a listed one starts PASSING
+# (the owning bug got fixed and the line is now stale). That second direction is
+# what keeps this from decaying into a permanent allowlist.
+#
+# These are NOT -O0-only curiosities dismissible as debug-build noise. At -O0 no
+# pass pipeline runs, so the allocations the fixture intends actually happen;
+# at -O2 the same buffers are provably dead and LLVM deletes them, which is why
+# the fixture passes there. The leak is in the emitted code either way — -O2
+# just deletes the evidence along with the allocation.
+#
+# Measured 2026-08-06 at 225a4553, x86_64 Linux, both archives rebuilt
+# lean-then-full: 942 passed / 4 failed / 10 ignored in 92s.
+
+# ── B-2026-08-06-2 (open) — predicate (B), the GENERIC by-value struct param ──
+# `fn take[T](b: Box[T]) -> T { b.v }` entry-deep-copies the field and nobody
+# frees the caller's original. Predicate (A), the concrete spelling, was a
+# double free and is fixed (933b859); this is the surviving half.
+# Leaks 1 byte in 1 allocation.
+memory_sanitizer_tests::asan_generic_struct_heap_field_move_out_no_double_free
+
+# ── B-2026-08-05-7 (open) — the three it triaged and reduced but did not fix ──
+# A fresh-temp Tensor passed as an owned argument: `first(make())` leaks where
+# `let m = make(); …` is clean. 56 bytes in 1 allocation.
+memory_sanitizer_tests::asan_tensor_lifecycle_clean
+
+# An `Option[H]` field read out of a shared-enum payload and passed BY VALUE to
+# a free fn. 64 bytes in 2 allocations. Re-check against B-2026-08-05-33's
+# caller-retains law before diagnosing it fresh — that row is now fixed, and
+# this one did not move with it.
+memory_sanitizer_tests::asan_shared_payload_view_optres_field_call_arg_copy_no_leak_no_double_free
+
+# A boxed payload matched out through a NESTED pattern —
+# `Wrap.W(Option.Some(s))` orphans the 32-byte box; the control that never
+# matches it out is clean. 96 bytes in 3 allocations.
+memory_sanitizer_tests::asan_nested_option_pattern_boxed_payload_lifecycle_clean
