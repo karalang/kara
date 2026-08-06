@@ -3415,6 +3415,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         .map(|s| is_uint_name(s.as_str()))
                         .unwrap_or(false);
                 }
+                // `u64.sub(a, b)` — a lowered BINOP. B-2026-08-06-18.
+                //
+                // This is the arm that actually matters for `println(a - b)`:
+                // `rewrite_binary` (lowering.rs) turns every primitive binop
+                // into `Call(Path([<type>, <method>]), args)` BEFORE codegen
+                // sees it, so an inline `a - b` never arrives as
+                // `ExprKind::Binary` at all. Without this, the print path fell
+                // through to signed and `println(u64.MAX - 1u64)` rendered -2
+                // where the interpreter rendered 18446744073709551614 — while
+                // the same value bound to a `let` printed correctly, because
+                // the identifier arm above resolves it.
+                //
+                // The RECEIVER TYPE is authoritative: `u64.sub` returns u64 by
+                // construction. Comparisons are excluded — they return `bool`,
+                // which never takes the integer print path.
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if segments.len() == 2 && is_uint_name(segments[0].as_str()) {
+                        return !matches!(
+                            segments[1].as_str(),
+                            "eq" | "ne" | "lt" | "le" | "gt" | "ge"
+                        );
+                    }
+                }
                 false
             }
             // Method-call result — impl methods register their return
@@ -3594,8 +3617,6 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => false,
         }
     }
-
-    // ── Cast ──────────────────────────────────────────────────────
 
     /// Lower a Kāra `expr as Target` cast.
     ///

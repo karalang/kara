@@ -4918,6 +4918,57 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-18: an INLINE u64 binop whose result exceeds `i64::MAX`
+    /// prints unsigned, matching the interpreter.
+    ///
+    /// `println(u64.MAX - 1u64)` rendered -2 under both compiled backends while
+    /// the interpreter rendered 18446744073709551614 — and the SAME value bound
+    /// to a `let` first printed correctly on every surface, so the broken
+    /// spelling sat next to a working one with nothing to distinguish them.
+    ///
+    /// The cause was not the print path being unaware of `u64`: it was that
+    /// `a - b` never reaches codegen as `ExprKind::Binary` at all.
+    /// `rewrite_binary` lowers every primitive binop to `u64.sub(a, b)`, and
+    /// `expr_is_unsigned_int`'s `Call` arm only understood an `Identifier`
+    /// callee, so the `Path` callee fell through to the signed default.
+    ///
+    /// Covers the ops whose results can exceed i64::MAX (`-`, `&`, `|`, `^`,
+    /// `~`) plus the ones that cannot (`/`, `>>`) as controls, and a signed
+    /// binop to pin that signed rendering is untouched.
+    #[test]
+    fn e2e_inline_u64_binop_prints_unsigned() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let a: u64 = u64.MAX;\n\
+             \x20   let one: u64 = 1u64;\n\
+             \x20   println(a - one);\n\
+             \x20   println(a & a);\n\
+             \x20   println(a | one);\n\
+             \x20   println(a ^ one);\n\
+             \x20   println(~one);\n\
+             \x20   println(f\"{a - one}\");\n\
+             \x20   println(a / 2u64);\n\
+             \x20   println(a >> 1u64);\n\
+             \x20   let s: i64 = -5i64;\n\
+             \x20   println(s - 1i64);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "18446744073709551614\n\
+             18446744073709551615\n\
+             18446744073709551615\n\
+             18446744073709551614\n\
+             18446744073709551614\n\
+             18446744073709551614\n\
+             9223372036854775807\n\
+             9223372036854775807\n\
+             -6\n"
+        );
+    }
+
     #[test]
     fn test_ir_signed_right_shift_is_arithmetic() {
         let ir = ir_for("fn shift(a: i64, b: i64) -> i64 { a >> b }");
