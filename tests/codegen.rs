@@ -38350,6 +38350,82 @@ fn main() {
         }
     }
 
+    /// B-2026-08-05-38 — the narrow-width trap is now ELIDED for `/` and `%`,
+    /// whose results provably fit. These are the two boundary cases the
+    /// elision must NOT swallow, plus the value parity it must not disturb.
+    ///
+    /// `%` is elided for every divisor (a remainder's magnitude never exceeds
+    /// its dividend, which already fits the width) and `/` only for a CONSTANT
+    /// divisor that is not `-1`. `INT_MIN / -1` is the sole division that
+    /// overflows in two's complement, so both spellings of it must still trap:
+    /// a runtime `-1` (which the rule cannot prove anything about) and a
+    /// constant `-1` (which the rule explicitly excludes).
+    ///
+    /// A regression that dropped either exclusion would be SILENT — the
+    /// program would print `-2147483648` instead of faulting — which is why
+    /// this asserts the trap fires rather than just that the elision happened.
+    #[test]
+    fn test_e2e_narrow_div_int_min_by_neg_one_still_traps() {
+        // (a) RUNTIME -1 divisor: not a constant, so the check is kept.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   let lo: i32 = -2147483648i32;\n\
+             \x20   let d: i32 = 0i32 - (n as i32);\n\
+             \x20   println(lo / d);\n\
+             }",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "runtime -1 divisor must still trap, got stdout={:?}",
+                c.stdout
+            );
+            assert!(
+                !c.stdout.contains("-2147483648"),
+                "the overflowing quotient must not print, got stdout={:?}",
+                c.stdout
+            );
+        }
+        // (b) CONSTANT -1 divisor: the rule excludes exactly this value.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   let lo: i32 = -2147483648i32 + ((n as i32) - (n as i32));\n\
+             \x20   println(lo / (0i32 - 1i32));\n\
+             }",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("integer overflow"),
+                "constant -1 divisor must still trap, got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_narrow_div_mod_values_unchanged_by_trap_elision() {
+        // The value half: `/` and `%` must keep computing exactly what they
+        // did with the check in place, including at `INT_MIN` and across the
+        // sign boundary (a remainder carries the DIVIDEND's sign, so the
+        // negative rows are the ones a mis-elision would disturb).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   let x: i32 = -2147483648i32 + ((n as i32) - (n as i32));\n\
+             \x20   println(x % 10i32);\n\
+             \x20   println(x / 10i32);\n\
+             \x20   println((0i32 - 37i32) % 10i32);\n\
+             \x20   println((0i32 - 37i32) / 10i32);\n\
+             \x20   println(37i32 % 10i32);\n\
+             \x20   println(37i32 / 10i32);\n\
+             }",
+        ) {
+            assert_eq!(out, "-8\n-214748364\n-7\n-3\n7\n3\n");
+        }
+    }
+
     #[test]
     fn test_e2e_abs_int_min_traps() {
         // `iN::MIN.abs()` is the one input with no representable result —

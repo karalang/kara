@@ -4870,7 +4870,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(
             op,
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
-        ) {
+        ) && !Self::narrow_binop_result_provably_fits(op, r, is_unsigned)
+        {
             let (lo, hi) = if is_unsigned {
                 (0i64, ((1u64 << bits) - 1) as i64)
             } else {
@@ -4906,6 +4907,61 @@ impl<'ctx> super::Codegen<'ctx> {
         // for any future representation change without an unused-arg warning.
         let _ = bits;
         Ok(result)
+    }
+
+    /// Can this narrow-int arithmetic op's result be proved to fit the declared
+    /// width WITHOUT any range analysis, purely from the operator and the
+    /// divisor? B-2026-08-05-38.
+    ///
+    /// `a12a1a69` emits the width trap unconditionally on every `+ - * / %`.
+    /// For `/` and `%` that check is provably dead, because neither can produce
+    /// a magnitude LARGER than its dividend — and the dividend is already a
+    /// value of the declared width, so it fits by construction:
+    ///
+    /// * `%` — the remainder's magnitude never exceeds the dividend's
+    ///   (`|srem(x, y)| <= |x|`, and it carries `x`'s sign; `urem(x, y) <= x`).
+    ///   True for EVERY divisor, so no constant is required and the check is
+    ///   always dead. Division by zero is a separate trap and is unaffected.
+    /// * `/` — `|x / y| <= |x|` whenever `|y| >= 1`, with exactly ONE exception
+    ///   in two's complement: `INT_MIN / -1`, whose true quotient is `2^(n-1)`
+    ///   and does not fit. Unsigned division has no such case and is always
+    ///   safe. So the signed form is elided only when the divisor is a
+    ///   CONSTANT that is not `-1`; a runtime divisor keeps its check, since
+    ///   nothing here can rule out `-1`.
+    ///
+    /// Deliberately NOT a range analysis. `+`, `-` and `*` need one — the sum
+    /// of two in-width values needs one more bit, and a product needs twice as
+    /// many — so they keep the check unconditionally. This is the subset that
+    /// needs no analysis pass to be sound, which is what makes it auditable in
+    /// one sitting.
+    ///
+    /// Worth recording for whoever takes the analysis: the row's OTHER cheap
+    /// suggestion — collapsing the two `icmp`s plus `or` into one biased
+    /// unsigned compare — is ALREADY DONE, by LLVM. At `-O2` the emitted x86
+    /// for a checked narrow add is `movslq` / `lea` / `add $-0x80000000` /
+    /// `cmp` / `jb`: InstCombine folds the range-check idiom on its own, so
+    /// re-spelling it in codegen would win nothing above `-O0`.
+    fn narrow_binop_result_provably_fits(
+        op: &BinOp,
+        rhs: inkwell::values::IntValue<'ctx>,
+        is_unsigned: bool,
+    ) -> bool {
+        match op {
+            BinOp::Mod => true,
+            BinOp::Div => {
+                if is_unsigned {
+                    return true;
+                }
+                // Signed: safe for any constant divisor except -1 (the
+                // `INT_MIN / -1` overflow). A non-constant divisor is not
+                // provable here and keeps its check.
+                match rhs.get_sign_extended_constant() {
+                    Some(c) => c != -1,
+                    None => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Checked integer `+` / `-` / `*` via the
