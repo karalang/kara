@@ -2352,6 +2352,32 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
         arg_flows_into_return: bool,
     ) {
+        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_flows_into_return, None)
+    }
+
+    /// [`Self::track_inline_owned_aggregate_arg`] with the struct-literal arg's
+    /// resolved generic INSTANTIATION (`Box[String]`), supplied ONLY by the
+    /// monomorph call path and ONLY when the callee provably entry-copies the
+    /// param (`mono_entry_copies_aggregate_param`, evaluated under the callee's
+    /// own substitution). It exists because a generic struct whose heap sits
+    /// behind a bare `T` has no name-keyed drop to register, so the caller's
+    /// temp was orphaned — B-2026-08-06-2 defect (B). `None` — every other call
+    /// site — reproduces the previous behavior exactly.
+    ///
+    /// The gate is deliberately the CALLEE's predicate rather than a caller-side
+    /// look-alike: the same struct reaches its param as own-by-transfer through
+    /// a CONCRETE fn (`fn take(b: Box[String])`) and through a monomorph whose
+    /// fn-level type param is named differently from the struct's
+    /// (`fn take[U](b: Box[U])`, where `mono_struct_type_from_active_subst`
+    /// finds no binding for `T` and falls back to the base layout). In both the
+    /// callee TAKES the buffer, so a caller drop here would be a double free.
+    pub(super) fn track_inline_owned_aggregate_arg_inst(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        arg: &Expr,
+        arg_flows_into_return: bool,
+        mono_inst: Option<TypeExpr>,
+    ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
         };
@@ -2769,7 +2795,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     // only the push order separates them. Reversed, the body
                     // reads a freed `String` and prints garbage.
                     if needs_memory_drop {
-                        self.track_struct_var(&name, slot);
+                        // B-2026-08-06-2 defect (B) — a GENERIC struct whose heap
+                        // sits behind a bare `T` (`Box[T] { v: T }`) has no
+                        // name-keyed drop: `emit_struct_drop_synthesis_mono` reads
+                        // the erased field, classifies it as no-heap, and
+                        // `track_struct_var` silently registers NOTHING. The
+                        // caller's temp was then orphaned for exactly the callees
+                        // that entry-copy it — one leaked buffer per call. The
+                        // monomorph call path resolves the instantiation and hands
+                        // it down here (`mono_inst`); everyone else keeps the
+                        // name-keyed behavior byte-for-byte.
+                        match mono_inst {
+                            Some(inst) => self.track_struct_var_inst(&name, slot, Some(inst)),
+                            None => self.track_struct_var(&name, slot),
+                        }
                     }
                     if let Some(bodies_fn) = field_bodies_fn {
                         self.track_user_drop_var_with_fn(&name, "__owned_agg_tmp", slot, bodies_fn);

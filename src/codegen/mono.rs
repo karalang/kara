@@ -874,27 +874,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_let_elem_type_expr = saved_pending_elem_te;
         let arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
 
-        // B-2026-07-08-6 (generic/mono leg) — caller-side arg-temp drop, the
-        // twin of the mono param entry-copy above. The monomorph body now
-        // ENTRY-COPIES an owned heap struct/enum param and returns an
-        // INDEPENDENT copy, so — exactly as in the non-generic `compile_call`
-        // path — the caller must drop the ORIGINAL moved-in arg buffer of an
-        // inline aggregate temp (struct/tuple literal, enum-variant ctor), else
-        // it is orphaned. Same gate as `compile_call`: skip only when the
-        // callee FORWARDS the arg (`call_arg_flows_into_return`) AND does not
-        // entry-copy it — an entry-copied heap struct arg is registered even on
-        // the return-passthrough path. `track_inline_owned_aggregate_arg`
-        // self-restricts to inline temps (identifier args keep their binding's
-        // drop; the fstr→struct move is already suppressed inside
-        // `compile_expr`), so nothing is double-registered. Runs here in the
-        // CALLER's context (before the mono body is compiled inline below,
-        // which swaps `scope_cleanup_actions`).
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
-            let flows_into_return = self.call_arg_flows_into_return(name, i);
-            if !flows_into_return || self.arg_is_entry_copied_heap_struct(&a.value) {
-                self.track_inline_owned_aggregate_arg(val, &a.value, flows_into_return);
-            }
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
             // (`dup(mk())`, `passthru(mk())`, where `mk() -> String`) is
             // orphaned — the mono body CLONES a `String` generic param (both into
@@ -1142,6 +1123,71 @@ impl<'ctx> super::Codegen<'ctx> {
         // to before — the injection changes only the `type_subst` the body /
         // return lowering consults, never the mono cache key.
         self.augment_subst_from_handle_params(&generic_fn, args, &mut subst);
+
+        // B-2026-07-08-6 (generic/mono leg) — caller-side arg-temp drop, the
+        // twin of the mono param entry-copy. The monomorph body ENTRY-COPIES an
+        // owned heap struct/enum param and returns an INDEPENDENT copy, so —
+        // exactly as in the non-generic `compile_call` path — the caller must
+        // drop the ORIGINAL moved-in arg buffer of an inline aggregate temp
+        // (struct/tuple literal, enum-variant ctor), else it is orphaned. Same
+        // gate as `compile_call`: skip only when the callee FORWARDS the arg
+        // (`call_arg_flows_into_return`) AND does not entry-copy it — an
+        // entry-copied heap struct arg is registered even on the
+        // return-passthrough path. `track_inline_owned_aggregate_arg`
+        // self-restricts to inline temps (identifier args keep their binding's
+        // drop; the fstr→struct move is already suppressed inside
+        // `compile_expr`), so nothing is double-registered. Runs in the CALLER's
+        // context — before the mono body is compiled inline below, which swaps
+        // `scope_cleanup_actions`.
+        //
+        // B-2026-08-06-2 defect (B) — it sits HERE, after the substitution is
+        // built, rather than beside the arg compiles above, because deciding
+        // ownership of a GENERIC struct temp requires the CALLEE's view. A
+        // struct whose heap sits behind a bare `T` (`Box[T] { v: T }`) has no
+        // name-keyed drop, so `track_struct_var` silently registered nothing and
+        // the temp leaked one buffer per call. Supplying the instantiation fixes
+        // that — but only where the callee actually entry-copies: the same
+        // struct arrives as OWN-BY-TRANSFER both through a concrete fn
+        // (`fn take(b: Box[String])`) and through a monomorph whose fn-level
+        // param is named differently from the struct's (`fn take[U](b: Box[U])`,
+        // where `mono_struct_type_from_active_subst` finds no `T` binding and
+        // falls back to the base layout). There the callee TOOK the buffer and a
+        // caller drop is a double free. Installing the callee's subst and asking
+        // the callee's own predicate is what makes the two agree by
+        // construction; a caller-side look-alike cannot see that distinction.
+        let mono_agg_insts: Vec<Option<TypeExpr>> = {
+            let saved_names = std::mem::replace(&mut self.type_subst_names, subst_names.clone());
+            let saved_type_exprs =
+                std::mem::replace(&mut self.type_subst_type_exprs, subst_type_exprs.clone());
+            let insts = args
+                .iter()
+                .map(|a| {
+                    let ExprKind::StructLiteral { path, .. } = &a.value.kind else {
+                        return None;
+                    };
+                    let sname = path.last()?;
+                    if !self.mono_entry_copies_aggregate_param(sname) {
+                        return None;
+                    }
+                    self.enum_inst_type_from_span(&a.value)
+                })
+                .collect();
+            self.type_subst_names = saved_names;
+            self.type_subst_type_exprs = saved_type_exprs;
+            insts
+        };
+        for (i, a) in args.iter().enumerate() {
+            let val = arg_vals[i];
+            let flows_into_return = self.call_arg_flows_into_return(name, i);
+            if !flows_into_return || self.arg_is_entry_copied_heap_struct(&a.value) {
+                self.track_inline_owned_aggregate_arg_inst(
+                    val,
+                    &a.value,
+                    flows_into_return,
+                    mono_agg_insts[i].clone(),
+                );
+            }
+        }
 
         // Slice 8y: per-call-site decision on whether the caller
         // takes the state-machine intercept path or falls through to

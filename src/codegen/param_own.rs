@@ -854,6 +854,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Inner`'s own erased bare-`T` fields and bails — so a nested-generic
     /// field keeps the caller-retains behavior (a documented residual, same
     /// class as B-2026-07-15-11's single-field gate).
+    /// Will a by-value aggregate param of `struct_name` be ENTRY-COPIED by the
+    /// monomorph — i.e. take [`Self::try_make_generic_struct_param_callee_owned`]'s
+    /// arm rather than the own-by-transfer one below it? Asked by the CALLER
+    /// (`compile_generic_call`) with the callee's substitution installed, so the
+    /// two cannot disagree: an entry-copied param leaves the caller's original
+    /// buffer orphaned and the caller must free it (B-2026-08-06-2 defect (B)),
+    /// while an own-by-transfer param means the callee TOOK the buffer and a
+    /// caller-side drop would be a double free.
+    ///
+    /// Restricted to the not-base-copy-supported case, which is the only one
+    /// with a caller-side gap: a base-copy-supported struct is entry-copied on
+    /// the non-generic arm and its caller drop already resolves by name.
+    pub(super) fn mono_entry_copies_aggregate_param(&self, struct_name: &str) -> bool {
+        if !self.struct_types.contains_key(struct_name)
+            || self.shared_types.contains_key(struct_name)
+        {
+            return false;
+        }
+        if self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new()) {
+            return false;
+        }
+        self.mono_struct_type_from_active_subst(struct_name)
+            .is_some()
+            && self.aggregate_param_copy_supported_struct_mono(struct_name)
+    }
+
     fn aggregate_param_copy_supported_struct_mono(&self, struct_name: &str) -> bool {
         if self.shared_types.contains_key(struct_name) {
             return false;

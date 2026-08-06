@@ -17961,9 +17961,10 @@ fn main() {
         // the erased generic base, and the `held == st` comparison then failed.
         //
         // Both argument forms are exercised: the fresh struct LITERAL and a
-        // named local. The literal form additionally still LEAKS (defect (B) of
-        // that row, the entry-deep-copy whose original nobody frees), so it is
-        // deliberately NOT in this fixture — this one pins the double free.
+        // named local. The literal form's separate LEAK is defect (B) of the
+        // same row, pinned next door by
+        // `asan_generic_struct_literal_arg_entry_copy_no_leak`; this fixture
+        // pins the double free.
         assert_clean_asan_run(
             r#"
 struct Box[T] { v: T }
@@ -17988,6 +17989,57 @@ fn main() {
 "#,
             &["34", "32", "34", "32", "34", "32", "34", "32"],
             "concrete_generic_struct_field_move_out",
+        );
+    }
+
+    #[test]
+    fn asan_generic_struct_literal_arg_entry_copy_no_leak() {
+        // B-2026-08-06-2 (B). `take(Box { v: <fresh String> })` where
+        // `fn take[T](b: Box[T]) -> T`. The monomorph ENTRY-DEEP-COPIES its
+        // by-value param and returns the COPY, so the caller's struct-literal
+        // temp is orphaned — and the caller registered no drop for it, because
+        // a generic struct whose heap sits behind a bare `T` has no name-keyed
+        // struct drop for `track_struct_var` to find. One buffer leaked per
+        // call (140 B / 4 blocks on this fixture before the fix).
+        //
+        // The two spellings that must NOT gain a caller drop ride along, since
+        // both are indistinguishable at the call site and both would DOUBLE
+        // FREE if the caller took ownership:
+        //
+        //   * the NAMED argument, whose binding already owns the buffer;
+        //   * `takeu[U](b: Box[U])`, whose fn-level type param is named
+        //     differently from the struct's. `mono_struct_type_from_active_subst`
+        //     finds no `T` binding there, falls back to the base layout, and the
+        //     monomorph takes the OWN-BY-TRANSFER arm instead of entry-copying —
+        //     so the callee holds the only reference.
+        //
+        // That is why the caller asks the CALLEE's own predicate
+        // (`mono_entry_copies_aggregate_param`, under the callee's substitution)
+        // rather than a caller-side look-alike, which cannot see the difference.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] { v: T }
+fn take[T](b: Box[T]) -> T { b.v }
+fn takeu[U](b: Box[U]) -> U { b.v }
+fn main() {
+    // Runtime-derived payload — a constant-folded one is a dead allocation the
+    // optimizer deletes, and the fixture then passes vacuously against the
+    // unfixed compiler (B-2026-08-04-17).
+    let n: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 4 {
+        println(take(Box { v: "generic-literal-payload-past-inline".repeat(n) }).len());
+        let bx = Box { v: "generic-named-payload-past-inlin".repeat(n) };
+        println(take(bx).len());
+        println(takeu(Box { v: "diverging-param-name-payload-xy".repeat(n) }).len());
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "35", "32", "31", "35", "32", "31", "35", "32", "31", "35", "32", "31",
+            ],
+            "generic_struct_literal_arg_entry_copy",
         );
     }
 
