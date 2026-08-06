@@ -17873,6 +17873,50 @@ fn main() {
     }
 
     #[test]
+    fn asan_concrete_generic_struct_field_move_out_no_double_free() {
+        // B-2026-08-06-2 (A). `fn take(b: Box[String]) -> String { b.v }` — the
+        // CONCRETE spelling over a generic struct. The callee extracted the
+        // field, then called the struct drop with the field's cap still SET, so
+        // the drop freed the very buffer being returned and the caller freed it
+        // again: a double free on a DEFAULT -O2 build, in both argument forms.
+        //
+        // The generic monomorph of the same source was already safe — it emits
+        // the move-out cap-zero — because the gate resolved its GEP type from
+        // the ACTIVE MONOMORPH SUBST. A concrete fn has no subst, fell back to
+        // the erased generic base, and the `held == st` comparison then failed.
+        //
+        // Both argument forms are exercised: the fresh struct LITERAL and a
+        // named local. The literal form additionally still LEAKS (defect (B) of
+        // that row, the entry-deep-copy whose original nobody frees), so it is
+        // deliberately NOT in this fixture — this one pins the double free.
+        assert_clean_asan_run(
+            r#"
+struct Box[T] { v: T }
+struct Two[T] { v: T, n: i64 }
+fn take(b: Box[String]) -> String { b.v }
+fn take2(b: Two[String]) -> String { b.v }
+fn main() {
+    // Runtime-derived payload: a constant-folded one is a dead allocation the
+    // optimizer deletes, and the fixture then passes vacuously against the
+    // unfixed compiler (B-2026-08-04-17 — this pin was written that way first
+    // and had to be corrected).
+    let n: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 4 {
+        let bx = Box { v: "concrete-payload-past-inline-width".repeat(n) };
+        println(take(bx).len());
+        let tw = Two { v: "second-payload-past-inline-width".repeat(n), n: i };
+        println(take2(tw).len());
+        i = i + 1;
+    }
+}
+"#,
+            &["34", "32", "34", "32", "34", "32", "34", "32"],
+            "concrete_generic_struct_field_move_out",
+        );
+    }
+
+    #[test]
     fn asan_generic_struct_heap_field_move_out_no_double_free() {
         // B-2026-07-18-44: a generic struct's owned-by-value param/self whose
         // heap String field is returned (moved out). The monomorph analogue of

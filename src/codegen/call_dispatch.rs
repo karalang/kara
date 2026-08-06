@@ -5330,6 +5330,33 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         field: &str,
     ) {
+        self.zero_struct_field_move_cap_in(base_ptr, struct_name, field, None)
+    }
+
+    /// [`Self::zero_struct_field_move_cap`] with the struct's CONCRETE LLVM
+    /// type supplied by the caller.
+    ///
+    /// The no-override form resolves the GEP type as "active monomorph subst,
+    /// else the declared base". That is wrong for a CONCRETE function over a
+    /// generic struct — `fn take(b: Box[String]) -> String { b.v }` — which
+    /// has no active subst, so it fell back to the base, whose bare-`T` field
+    /// is an erased placeholder. The `held == st` caller gate then failed, no
+    /// cap-zero was emitted, and the struct drop freed the very buffer the
+    /// function was about to return: a DOUBLE FREE on a default -O2 build
+    /// (B-2026-08-06-2). The generic monomorph escaped it only because it DOES
+    /// have a subst — same gap B-2026-08-05-33(a) hit at its own site.
+    ///
+    /// A binding's slot type is that concrete layout by construction, so the
+    /// caller can just hand it over. Byte-identical for a non-generic struct
+    /// (slot type == base) and for a monomorph (slot type == the subst type);
+    /// only the concrete-instantiation case changes.
+    pub(super) fn zero_struct_field_move_cap_in(
+        &self,
+        base_ptr: inkwell::values::PointerValue<'ctx>,
+        struct_name: &str,
+        field: &str,
+        st_override: Option<inkwell::types::StructType<'ctx>>,
+    ) {
         let Some(field_names) = self.struct_field_names.get(struct_name) else {
             return;
         };
@@ -5344,8 +5371,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // the wrong offset. Outside a monomorph (empty subst) this returns the
         // base type, so non-generic callers are byte-identical to before.
         // B-2026-07-18-44.
-        let Some(st) = self
-            .mono_struct_type_from_active_subst(struct_name)
+        let Some(st) = st_override
+            .or_else(|| self.mono_struct_type_from_active_subst(struct_name))
             .or_else(|| self.struct_types.get(struct_name).copied())
         else {
             return;
@@ -5384,7 +5411,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let field_is_vecish = matches!(fname.as_str(), "Vec" | "VecDeque" | "String")
             || field_te
                 .as_ref()
-                .is_some_and(|te| self.llvm_type_for_type_expr(te) == vec_ty.into());
+                .is_some_and(|te| self.llvm_type_for_type_expr(te) == vec_ty.into())
+            // Concrete-layout fallback (B-2026-08-06-2): with no active subst
+            // a bare-`T` field's type-expr stays `T` and lowers to the erased
+            // placeholder, so both tests above miss a `Box[String]`. The GEP
+            // type we are about to use already carries the real field layout.
+            || st.get_field_type_at_index(idx as u32) == Some(vec_ty.into());
         if field_is_vecish {
             if let Ok(cap_ptr) =
                 self.builder
@@ -5537,10 +5569,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the caller freed the returned value — a double-free
                         // (B-2026-07-18-44; the monomorph analogue of the
                         // non-generic B-2026-07-18-37).
-                        if let (BasicTypeEnum::StructType(held), Some(st)) = (slot.ty, gep_st) {
-                            if held == st {
-                                self.zero_struct_field_move_cap(slot.ptr, &struct_name, field);
-                            }
+                        // The slot holding a StructType (not a pointer) is what
+                        // proves this is an OWNED inline struct rather than a
+                        // `ref Struct` borrow — that is the safety property this
+                        // gate exists for, and it does not need the type equality.
+                        // Hand the slot's own layout down as the GEP type: it is
+                        // the concrete one even when `gep_st` degraded to the
+                        // erased base (B-2026-08-06-2).
+                        let _ = gep_st;
+                        if let BasicTypeEnum::StructType(held) = slot.ty {
+                            self.zero_struct_field_move_cap_in(
+                                slot.ptr,
+                                &struct_name,
+                                field,
+                                Some(held),
+                            );
                         }
                     }
                 }
