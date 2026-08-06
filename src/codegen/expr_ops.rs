@@ -3083,7 +3083,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let recv_ty = self.type_name_of_expr(object)?;
                 let fn_name = format!("{recv_ty}.{method}");
-                self.fn_return_type_names.get(&fn_name).cloned()
+                if let Some(n) = self.fn_return_type_names.get(&fn_name) {
+                    return Some(n.clone());
+                }
+                // B-2026-08-06-19 — a GENERIC impl method returning a bare type
+                // PARAM: `impl[T] Box[T] { fn take(self) -> T }`. `w.take().f`
+                // failed `karac build` with "cannot resolve field 'f'" while the
+                // bound form `let x = w.take(); x.f` built and ran, because `x`
+                // gets a concrete `var_type_names` entry and the chain gets
+                // nothing.
+                //
+                // The lookup above cannot cover it: the declare loop
+                // (codegen.rs) deliberately SKIPS `fn_return_type_names` for a
+                // generic return — `-> T` has no static name, which is that
+                // map's contract — so it misses entirely rather than answering
+                // `"T"`. The non-generic twin `impl P { fn take(self) -> Wide }`
+                // registers `P.take -> Wide` and its chain has always worked;
+                // that asymmetry is the whole bug.
+                //
+                // `generic_method_return_inst` recovers it from the method AST
+                // the same declare arm keeps in `generic_fns`, substituting the
+                // receiver's instantiation. Its full-TypeExpr result is what
+                // also carries deeper chains.
+                let inst = self.generic_method_return_inst(object, method)?;
+                match &inst.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                }
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(n) => self.fn_return_type_names.get(n.as_str()).cloned(),
@@ -5507,7 +5533,69 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Some(t.clone());
             }
         }
+        // B-2026-08-06-19 — a generic impl method's RESULT carries an
+        // instantiation too, and it must be computed BEFORE the span fallback
+        // below. The parser gives a `MethodCall` its RECEIVER's span, so
+        // `enum_inst_type_from_span` on `w.take()` finds `w`'s own record and
+        // would answer `Box[Wide]` for an expression whose type is `Wide` —
+        // the same span collision B-2026-08-06-12 and B-2026-08-05-28 trace to.
+        // Resolving the call first makes the chain's own type win.
+        if let ExprKind::MethodCall { object, method, .. } = &expr.kind {
+            if let Some(t) = self.generic_method_return_inst(object, method) {
+                return Some(t);
+            }
+        }
         self.enum_inst_type_from_span(expr)
+    }
+
+    /// Concrete return-type *instantiation* of a generic impl method call,
+    /// substituting the RECEIVER's instantiation into the method's declared
+    /// return type. B-2026-08-06-19.
+    ///
+    /// `impl[T] Box[T] { fn take(self) -> T }` called on `w: Box[Wide]` yields
+    /// `Wide`; `fn wrap(self) -> Box[T]` yields `Box[Wide]`. Returning the full
+    /// `TypeExpr` rather than a bare name is what lets a CHAIN keep resolving —
+    /// `outer.take().take().f` and `w.wrap().v.f` both need the intermediate's
+    /// generic ARGS, not just its head.
+    ///
+    /// Gated on the declared return mentioning only the STRUCT's generic
+    /// params. A method with its own params (`fn map[U](self) -> U`) is not
+    /// determined by the receiver's instantiation, so it returns `None` and the
+    /// caller keeps its existing behaviour.
+    fn generic_method_return_inst(&self, object: &Expr, method: &str) -> Option<TypeExpr> {
+        let recv_ty = self.type_name_of_expr(object)?;
+        let fn_name = format!("{recv_ty}.{method}");
+        let ret_te = self.generic_fns.get(&fn_name)?.return_type.clone()?;
+        let params = self.struct_generic_params.get(recv_ty.as_str())?;
+        if params.is_empty() {
+            return None;
+        }
+        let inst_te = self.enum_inst_type_of_expr(object)?;
+        let TypeKind::Path(ip) = &inst_te.kind else {
+            return None;
+        };
+        let args = ip.generic_args.as_ref()?;
+        if params.len() != args.len() {
+            return None;
+        }
+        let mut subst: std::collections::HashMap<String, TypeExpr> =
+            std::collections::HashMap::new();
+        for (pp, aa) in params.iter().zip(args.iter()) {
+            if let GenericArg::Type(te) = aa {
+                subst.insert(pp.clone(), te.clone());
+            }
+        }
+        let concrete = super::helpers::subst_type_params_in_type_expr(&ret_te, &subst);
+        // Only answer when the substitution actually produced a type codegen
+        // knows; an unresolved param (a method-own generic) must not be
+        // reported as an instantiation.
+        let TypeKind::Path(cp) = &concrete.kind else {
+            return None;
+        };
+        let n = cp.segments.last()?;
+        (self.struct_field_names.contains_key(n.as_str())
+            || self.enum_layouts.contains_key(n.as_str()))
+        .then_some(concrete)
     }
 
     /// Recover the concrete generic-struct/enum *instantiation* of a

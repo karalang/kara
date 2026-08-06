@@ -6682,6 +6682,80 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("30\n18\n7\n20\n26\n42\n"));
     }
 
+    /// B-2026-08-06-19 — a chained FIELD ACCESS on a GENERIC method's return.
+    ///
+    /// `w.take().f` passed `karac check`, ran correctly under the interpreter,
+    /// and failed `karac build` with "cannot resolve field 'f' on this
+    /// receiver", while the one-condition-apart `let x = w.take(); x.f` built
+    /// and ran. A run-vs-build divergence, so it belongs on the default
+    /// codegen leg.
+    ///
+    /// The cause is NOT the span collision its parent row (B-2026-08-06-12)
+    /// traces to. The declare loop deliberately SKIPS `fn_return_type_names`
+    /// for a generic return — `-> T` has no static name, which is that map's
+    /// contract — so the chain's lookup misses entirely rather than returning a
+    /// wrong answer. The bound form works because `x` gets a concrete
+    /// `var_type_names` entry that the chain never gets. The fix recovers the
+    /// erased `-> T` from the method AST the same declare arm keeps in
+    /// `generic_fns` and substitutes the RECEIVER's instantiation.
+    ///
+    /// The NON-generic twin (`impl P { fn take(self) -> Wide }`) is carried as
+    /// a live control: it registers `P.take -> Wide` and its chain always
+    /// worked, and that asymmetry is what localized the bug. So is the bound
+    /// form, which must keep working.
+    ///
+    /// `wrap` covers the row's related note — a method returning `Box[T]`
+    /// rather than bare `T`, chained through the wrapper's own field
+    /// (`w.wrap().v.f`). That shape needs the intermediate's generic ARGS, not
+    /// just its head, which is why the fix resolves a full `TypeExpr` rather
+    /// than a bare name.
+    ///
+    /// The enum arm pins that a `-> T` at `T = <enum>` resolves too — the
+    /// substitution gate accepts `enum_layouts` as well as structs, and a match
+    /// on the chained result is what would mis-bind if it did not.
+    ///
+    /// `env.args().len()` seeds every payload so nothing is a compile-time
+    /// constant (B-2026-08-04-17).
+    #[test]
+    fn e2e_chained_field_access_on_generic_method_return() {
+        let src = r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+struct Box[T] { v: T }
+struct P { v: Wide }
+enum Col { Red, Green, Blue }
+impl[T] Box[T] {
+    fn take(self) -> T { self.v }
+    fn wrap(self) -> Box[T] { Box { v: self.v } }
+}
+impl P { fn take(self) -> Wide { self.v } }
+fn main() {
+    let n: i64 = env.args().len();
+    // (a) the reported shape — chained field on a bare-`T` return.
+    let w = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 6 } };
+    println(w.take().f);
+    // (b) the one-condition-apart bound form, which always worked.
+    let w2 = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 7 } };
+    let x = w2.take();
+    println(x.f);
+    // (c) NON-generic control: `P.take` registers a concrete return name.
+    let p = P { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 8 } };
+    println(p.take().f);
+    // (d) the row's related note — a `Box[T]` return, chained through the
+    // wrapper's own field, which needs the intermediate's generic ARGS.
+    let w3 = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 9 } };
+    println(w3.wrap().v.f);
+    // (e) a `-> T` at `T = <enum>`, matched on directly.
+    let c: Box[Col] = Box { v: if n > 0 { Col.Green } else { Col.Red } };
+    match c.take() {
+        Col.Red => println(1),
+        Col.Green => println(2),
+        Col.Blue => println(3),
+    }
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("6\n7\n8\n9\n2\n"));
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///
