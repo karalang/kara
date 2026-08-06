@@ -68,6 +68,69 @@ fn test_integer_literal() {
     }
 }
 
+// B-2026-08-06-13: `i64::MIN` is writable as a literal.
+//
+// A negative literal parses as `Neg(Integer(n))` with `n` POSITIVE, so the
+// positive half has to fit i64 — and i64::MIN's does not. Every spelling was a
+// LEXER error ("Invalid integer literal") before the magnitude was carried up
+// to the parser, which is the only place that knows the `-` is unary. The
+// parser folds it to a single already-negative `Integer` node, so nothing
+// downstream needs a special case.
+#[test]
+fn test_i64_min_literal_folds_to_a_single_integer_node() {
+    for src in [
+        "fn main() { let x: i64 = -9223372036854775808i64; }",
+        "fn main() { let x: i64 = -9223372036854775808; }",
+        "fn main() { let x = -9223372036854775808i64; }",
+        "fn main() { let x: i64 = (-9223372036854775808i64); }",
+        "fn main() { let x: i64 = -0x8000000000000000i64; }",
+    ] {
+        let prog = parse_ok(src);
+        let Item::Function(f) = &prog.items[0] else {
+            panic!("expected a function");
+        };
+        let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+            panic!("expected a let");
+        };
+        // The fold matters as much as the value: a surviving `Unary { Neg, .. }`
+        // would re-negate i64::MIN downstream and overflow again.
+        assert!(
+            matches!(value.kind, ExprKind::Integer(i64::MIN, _)),
+            "`{src}` must fold to a single Integer(i64::MIN) node, got {:?}",
+            value.kind
+        );
+    }
+}
+
+// …and a magnitude past i64::MAX that is NOT under a unary minus stays an
+// error. The lexer cannot tell unary from binary minus, so it hands the
+// magnitude up unconditionally; these are the cases the parser must still
+// reject, including the binary-minus one that only differs by context.
+#[test]
+fn test_magnitude_above_i64_max_without_unary_minus_is_an_error() {
+    for (src, what) in [
+        ("fn main() { let x: i64 = 9223372036854775808i64; }", "bare"),
+        (
+            "fn main() { let x: i64 = -9223372036854775809i64; }",
+            "one past the negative bound",
+        ),
+        (
+            "fn main() { let y: i64 = 5i64; let x: i64 = y - 9223372036854775808i64; }",
+            "binary minus, not unary",
+        ),
+        (
+            "fn main() { let x: u64 = 18446744073709551615u64; }",
+            "u64 upper half (still unsupported — B-2026-08-06-16)",
+        ),
+    ] {
+        let (_, errors) = parse_with_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains("out of range")),
+            "{what}: expected an out-of-range parse error, got: {errors:?}"
+        );
+    }
+}
+
 #[test]
 fn test_float_literal() {
     let prog = parse_ok("fn main() { let x = 1.5; }");

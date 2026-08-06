@@ -20650,6 +20650,27 @@ fn test_narrow_negation_of_min_is_runtime_error() {
     }
 }
 
+// B-2026-08-06-13: the i64::MIN literal evaluates to i64::MIN — the value, not
+// a trap. It reaches the interpreter as a plain already-negative `Integer` node
+// (the parser folds it), so the Neg arm's range check never sees it; the
+// arithmetic identity is the check that the fold produced the RIGHT value
+// rather than merely a parseable one.
+#[test]
+fn test_i64_min_literal_evaluates_to_i64_min() {
+    let out = run_no_errors(
+        "fn main() {\n\
+         \x20   let a: i64 = -9223372036854775808i64;\n\
+         \x20   println(a);\n\
+         \x20   println(a == -9223372036854775807i64 - 1i64);\n\
+         \x20   println(a + 1i64);\n\
+         }\n",
+    );
+    assert_eq!(
+        out.trim(),
+        "-9223372036854775808\ntrue\n-9223372036854775807"
+    );
+}
+
 // …and the guard must not over-trap: `-(iN::MIN + 1)` is representable at
 // every width and must stay legal.
 #[test]

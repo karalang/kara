@@ -483,6 +483,23 @@ impl super::Parser {
             // Unary operators
             Token::Minus => {
                 self.advance();
+                // `-9223372036854775808` is the ONE literal whose positive
+                // half does not fit i64, so `Neg(Integer(n))` — the shape
+                // every other negative literal takes — cannot represent it.
+                // Fold it here, where the minus is known to be unary, into a
+                // single already-negative `Integer` node. Downstream
+                // (typechecker range-validation, codegen's constant fold, the
+                // interpreter's Neg arm) sees a plain literal and needs no
+                // special case. B-2026-08-06-13.
+                if let Token::IntegerOutOfRange(m, sfx) = self.peek_token() {
+                    if m == (i64::MAX as u64) + 1 {
+                        self.advance();
+                        return Some(Expr {
+                            span: self.span_from(&start),
+                            kind: ExprKind::Integer(i64::MIN, sfx),
+                        });
+                    }
+                }
                 let operand = self.parse_expr_bp(24)?; // Unary has high precedence
                 Some(Expr {
                     span: self.span_from(&start),
@@ -615,6 +632,38 @@ impl super::Parser {
                     span: self.span_from(&start),
                     kind: ExprKind::Integer(n, sfx),
                 })
+            }
+            // A magnitude past i64::MAX that reached here WITHOUT a unary
+            // minus in front of it (the `Token::Minus` prefix arm folds that
+            // case). Nothing can represent it, so report it with the range in
+            // the message rather than the lexer's old bare "Invalid integer
+            // literal". B-2026-08-06-13.
+            // A magnitude past i64::MAX that reached here WITHOUT a unary
+            // minus in front of it (the `Token::Minus` prefix arm folds that
+            // case). B-2026-08-06-13.
+            //
+            // This covers an UNSIGNED-suffixed literal too — the upper half of
+            // u64 is equally unwritable, and deliberately still an error here.
+            // The parser can carry the magnitude, but every integer rides an
+            // i64 carrier downstream, so a `u64` literal past i64::MAX would
+            // arrive as a wrapped NEGATIVE value and the typechecker rejects it
+            // ("negative integer literal -1 cannot initialize unsigned type
+            // 'u64'"). Making that work is a typechecker change, not a parser
+            // one; filed as its own row rather than half-built here. The
+            // message stays accurate about what is and is not accepted.
+            Token::IntegerOutOfRange(m, _) => {
+                self.advance();
+                let span = self.span_from(&start);
+                self.error_at(
+                    &format!(
+                        "integer literal `{m}` is out of range for i64 \
+                         (max 9223372036854775807); `-9223372036854775808` is \
+                         legal as the negative bound, but values above i64::MAX \
+                         are not yet supported, including with a `u64` suffix"
+                    ),
+                    span,
+                );
+                None
             }
             Token::Float(n, sfx) => {
                 self.advance();

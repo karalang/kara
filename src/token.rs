@@ -281,6 +281,17 @@ pub enum Token {
         raw: bool,
     },
     Integer(i64, Option<IntSuffix>),
+    /// A decimal / hex / binary / octal integer literal whose MAGNITUDE does
+    /// not fit `i64` but does fit `u64`. B-2026-08-06-13.
+    ///
+    /// The lexer cannot decide whether the `-` before a literal is unary or
+    /// binary, so it cannot fold the sign itself. It hands the magnitude up
+    /// instead and the PARSER decides: under a unary minus, exactly
+    /// `9223372036854775808` folds to `i64::MIN`; anywhere else this is an
+    /// out-of-range error. That is what makes `i64::MIN` writable at all —
+    /// its positive half is one past `i64::MAX`, so a plain `Neg(Integer(n))`
+    /// with `n` positive can never represent it.
+    IntegerOutOfRange(u64, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     CharLiteral(char),
     /// `b'A'` byte char literal — type `u8` (design.md § Byte and

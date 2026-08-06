@@ -516,6 +516,21 @@ fn render_rust(t: &SpannedToken) -> String {
         // discards the message and emits a bare `ERROR`, so only the SPAN is
         // compared — each error path must consume the identical byte extent.
         Token::Error(_) => "ERROR",
+        // B-2026-08-06-13. The seed lexer now hands an out-of-i64-range
+        // magnitude to the PARSER (which folds `-9223372036854775808` to
+        // i64::MIN and rejects everything else) instead of erroring in the
+        // lexer. Rendered as `ERROR` because that is what the KĀRA port
+        // genuinely emits for the same bytes — its `lex_all` still parses
+        // straight into i64 and fails — and the span is identical either way,
+        // since only the token variant changed on the seed side.
+        //
+        // Stated plainly rather than left implicit: the port does NOT model
+        // this variant. No CORPUS entry reaches it today (nothing there has a
+        // 19+ digit literal), so nothing is currently masked; but a corpus
+        // entry with an out-of-range literal would agree only because both
+        // sides spell it `ERROR`, not because the port learned the new token.
+        // Teaching the port is a self-host change, tracked separately.
+        Token::IntegerOutOfRange(..) => "ERROR",
         Token::EOF => "EOF",
         // The match is now exhaustive over every Token the seed lexer emits — the
         // port models the full token set (slices A–E). A new seed variant fails

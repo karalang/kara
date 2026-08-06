@@ -496,7 +496,17 @@ impl<'a> Lexer<'a> {
             let suffix = self.try_int_suffix();
             match text.parse::<i64>() {
                 Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
-                Err(_) => self.make_spanned(Token::Error("Invalid integer literal".to_string())),
+                // Magnitude past i64::MAX but inside u64: hand it up rather
+                // than rejecting it here. Only the PARSER knows whether the
+                // preceding `-` is unary (making `9223372036854775808` the
+                // legal spelling of i64::MIN) or binary (making it an
+                // out-of-range error). B-2026-08-06-13.
+                Err(_) => match text.parse::<u64>() {
+                    Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
+                    Err(_) => {
+                        self.make_spanned(Token::Error("Invalid integer literal".to_string()))
+                    }
+                },
             }
         }
     }
@@ -513,7 +523,11 @@ impl<'a> Lexer<'a> {
         let suffix = self.try_int_suffix();
         match i64::from_str_radix(&text, 16) {
             Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
-            Err(_) => self.make_spanned(Token::Error("Invalid hex literal".to_string())),
+            // See the decimal arm — the parser folds a unary-minus magnitude.
+            Err(_) => match u64::from_str_radix(&text, 16) {
+                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
+                Err(_) => self.make_spanned(Token::Error("Invalid hex literal".to_string())),
+            },
         }
     }
 
@@ -529,7 +543,11 @@ impl<'a> Lexer<'a> {
         let suffix = self.try_int_suffix();
         match i64::from_str_radix(&text, 2) {
             Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
-            Err(_) => self.make_spanned(Token::Error("Invalid binary literal".to_string())),
+            // See the decimal arm — the parser folds a unary-minus magnitude.
+            Err(_) => match u64::from_str_radix(&text, 2) {
+                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
+                Err(_) => self.make_spanned(Token::Error("Invalid binary literal".to_string())),
+            },
         }
     }
 
@@ -545,7 +563,11 @@ impl<'a> Lexer<'a> {
         let suffix = self.try_int_suffix();
         match i64::from_str_radix(&text, 8) {
             Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
-            Err(_) => self.make_spanned(Token::Error("Invalid octal literal".to_string())),
+            // See the decimal arm — the parser folds a unary-minus magnitude.
+            Err(_) => match u64::from_str_radix(&text, 8) {
+                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
+                Err(_) => self.make_spanned(Token::Error("Invalid octal literal".to_string())),
+            },
         }
     }
 
