@@ -3102,6 +3102,76 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
+    /// Ad-hoc IR probe — prints the LLVM IR for an ARBITRARY `.kara` file, or
+    /// just the functions matching a filter. Ignored by default; it asserts
+    /// nothing, because the program under inspection changes every iteration.
+    ///
+    /// The `memory_sanitizer` sibling (`asan_probe_from_env`) answers "does this
+    /// shape leak"; this one answers "what did codegen actually emit", which is
+    /// the question every leak reduction ends on — B-2026-08-06-10's next step
+    /// is literally "does the callee write through the box pointer, or retract
+    /// an action", and those have opposite fixes. Reading the source from the
+    /// environment rebuilds this ~200 MB test binary once instead of per edit.
+    ///
+    ///   KARAC_PROBE_SRC=/path/to/probe.kara KARAC_PROBE_FN=hname \
+    ///     cargo test --features llvm --test codegen -- \
+    ///     --ignored --exact codegen_tests::ir_probe_from_env --nocapture
+    ///
+    /// `KARAC_PROBE_FN` is optional: unset prints the whole module; set, it
+    /// prints only `define`s whose line contains that substring (plus their
+    /// bodies), which is usually the one callee under investigation.
+    ///
+    /// IT RUNS THE FULL PIPELINE, NOT [`ir_for`], and that distinction is the
+    /// whole point of the helper existing separately. `ir_for` calls
+    /// `compile_to_ir(program, None, None)` — ownership is `None` — so every
+    /// ownership-derived decision (parameter modes, RC elision, borrow
+    /// classification, and therefore most drop/move emission) differs from what
+    /// `karac build` and the ASAN harness actually compile. Reading a
+    /// drop-ownership question out of `ir_for`'s output is reading a different
+    /// program: it cost one wrong mechanism on B-2026-08-06-10, where the
+    /// dumped IR showed the caller zeroing a tag and nothing freeing a box in
+    /// BOTH variants, while the built binaries measurably differed. This probe
+    /// mirrors `memory_sanitizer`'s `run_under_asan_opts` sequence exactly —
+    /// desugar, gated-stdlib expansion, resolve, typecheck, lower,
+    /// ownershipcheck — so what it prints is what runs.
+    #[test]
+    #[ignore = "inspection aid: needs KARAC_PROBE_SRC"]
+    fn ir_probe_from_env() {
+        let path = std::env::var("KARAC_PROBE_SRC")
+            .expect("set KARAC_PROBE_SRC to the .kara file to inspect");
+        let src = std::fs::read_to_string(&path).expect("KARAC_PROBE_SRC unreadable");
+        let mut parsed = karac::parse(&src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::desugar_program(&mut parsed.program);
+        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed");
+        match std::env::var("KARAC_PROBE_FN") {
+            Ok(filter) if !filter.is_empty() => {
+                let mut printing = false;
+                for line in ir.lines() {
+                    if line.starts_with("define") {
+                        printing = line.contains(&filter);
+                    }
+                    if printing {
+                        println!("{line}");
+                    }
+                    if line == "}" {
+                        printing = false;
+                    }
+                }
+            }
+            _ => println!("{ir}"),
+        }
+    }
+
     fn ir_for(src: &str) -> String {
         let mut parsed = karac::parse(src);
         assert!(
