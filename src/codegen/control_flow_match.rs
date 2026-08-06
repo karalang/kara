@@ -6129,11 +6129,20 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // B-2026-08-06-29 — follow the passthrough ownership alias, so the
         // suppression lands on the binding that actually owns the payload.
-        let name = &self.moved_arg_owner_name(name);
-        if !self.boxed_enum_payload_vars.contains(name.as_str()) {
+        self.suppress_boxed_enum_payload_cleanup_for_owner(&self.moved_arg_owner_name(name));
+    }
+
+    /// The body of [`Self::suppress_boxed_enum_payload_cleanup_for_moved_arg`],
+    /// keyed by an already-resolved OWNER name. Zeroes the box word (w0) alone,
+    /// so the `BoxedEnumDrop`'s null check skips while every other channel
+    /// sharing the slot keeps its own guard — which is why B-2026-08-06-9 leg A
+    /// disarms a passthrough source through here rather than through the
+    /// whole-slot zero.
+    pub(super) fn suppress_boxed_enum_payload_cleanup_for_owner(&self, name: &str) {
+        if !self.boxed_enum_payload_vars.contains(name) {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()) else {
+        let Some(slot) = self.variables.get(name) else {
             return;
         };
         let BasicTypeEnum::StructType(enum_ty) = slot.ty else {
@@ -6504,8 +6513,48 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Boxed-ONLY: an inline payload's caller-retains behaviour on this path is
     /// correct and tested, and must not be disturbed.
-    pub(super) fn call_passes_armed_boxed_binding_through(&self, value: &Expr) -> bool {
-        self.call_passes_armed_binding_through(value, &self.boxed_enum_payload_vars)
+    ///
+    /// Returns the SOURCE binding's name, so the let site can record the
+    /// ownership alias as well as skip its own registration — the boxed peer of
+    /// [`Self::call_passthrough_armed_inline_source`]. B-2026-08-06-9 leg A:
+    /// -21 introduced the boxed skip and -27 the inline one, but only the
+    /// inline site recorded an alias. That asymmetry was invisible while
+    /// nothing else freed a boxed passthrough result — the source binding was
+    /// the sole owner and its own cleanup balanced. Once the CALLEE owns a
+    /// non-struct boxed payload (leg A), consuming the alias (`let r = id(b);
+    /// classify(r);`) freed the box in the callee and again in the source's
+    /// cleanup, an abort at `-O0`.
+    ///
+    /// CHAINED passthroughs resolve here rather than at lookup time. `let r1 =
+    /// id(b); let r2 = id(r1);` hands `id` an argument that is not itself armed
+    /// — `r1` is an alias — so the shared test above returns `None` and `r2`
+    /// registers a drop of a box it does not own. Following the alias one hop
+    /// at the RECORD site keeps every stored value a genuinely armed owner, so
+    /// `moved_arg_owner_name` stays the single-hop lookup -29 built and no walk
+    /// over a possibly-cyclic map is needed: a self-alias is impossible because
+    /// a name that is its own owner is armed and takes the direct branch.
+    pub(super) fn call_passthrough_armed_boxed_source(&self, value: &Expr) -> Option<String> {
+        let ExprKind::Call { callee, args, .. } = &value.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(callee_name) = &callee.kind else {
+            return None;
+        };
+        args.iter().enumerate().find_map(|(i, a)| {
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                return None;
+            };
+            if !self.call_arg_flows_into_return(callee_name, i) {
+                return None;
+            }
+            if self.boxed_enum_payload_vars.contains(n.as_str()) {
+                return Some(n.clone());
+            }
+            let owner = self.boxed_passthrough_owner_alias.get(n.as_str())?;
+            self.boxed_enum_payload_vars
+                .contains(owner.as_str())
+                .then(|| owner.clone())
+        })
     }
 
     /// INLINE sibling of [`Self::call_passes_armed_boxed_binding_through`].
@@ -6546,20 +6595,13 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Shared shape test: is `value` a direct call to a named function, passing
     /// a binding that is present in `armed` in a position the callee returns?
+    /// Returns the SOURCE binding's name so a caller can record the ownership
+    /// alias as well as skip its own registration.
+    ///
     /// `call_arg_flows_into_return` is conservative-TRUE on a mixed-path callee,
     /// so a callee that sometimes returns something else leaves the value
     /// unregistered here — a leak, the side this file errs toward over a double
     /// free.
-    fn call_passes_armed_binding_through(
-        &self,
-        value: &Expr,
-        armed: &std::collections::HashSet<String>,
-    ) -> bool {
-        self.call_passthrough_armed_source(value, armed).is_some()
-    }
-
-    /// The shared shape test, returning the SOURCE binding's name so a caller
-    /// can record the ownership alias as well as skip its own registration.
     fn call_passthrough_armed_source(
         &self,
         value: &Expr,

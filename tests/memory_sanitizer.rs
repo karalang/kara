@@ -34702,14 +34702,12 @@ fn main() {
     ///
     /// `Option.None` is the null-box direction — nothing to free.
     ///
-    /// NOT covered here, and deliberately so: passing a NAMED `Option` binding
-    /// by value (`let bound = Some(Some(1)); classify(bound);`) still leaks its
-    /// box. That is a DIFFERENT owner problem — the call site's
-    /// `suppress_inline_option_result_binding_move` zeroes the source slot as a
-    /// move, which disarms the let-site `BoxedEnumDrop`, while the callee's
-    /// param registers no drop to take it over. Measured 320 B / 10 both before
-    /// and after this fix, so it is pre-existing and untouched; filed as
-    /// B-2026-08-06-9 with the reduction.
+    /// NOT covered here when this landed: passing a NAMED `Option` binding by
+    /// value (`let bound = Some(Some(1)); classify(bound);`), which leaked its
+    /// box for a different owner reason. Closed as B-2026-08-06-9 leg A, which
+    /// MOVED the owner of this fixture's shape too — the box is now the
+    /// callee's, not the caller's, so this fixture is the over-suppression
+    /// control for that change. Its sibling below carries the rest.
     #[test]
     fn asan_freshtemp_boxed_option_arg_no_leak() {
         assert_clean_asan_run(
@@ -34738,6 +34736,141 @@ fn main() {
 "#,
             &["1560"],
             "freshtemp_boxed_option_arg",
+        );
+    }
+
+    /// B-2026-08-06-9 leg A — a NAMED `Option` binding whose payload is
+    /// heap-BOXED, passed BY VALUE to a callee that consumes it.
+    ///
+    /// `Option[Option[i64]]`'s inner value is 4 LLVM words against the seeded
+    /// 3-word payload area, so `coerce_to_payload_words` boxes it. The caller
+    /// then runs `suppress_inline_option_result_binding_move`, which zeroes the
+    /// whole source slot — correct for the INLINE payload it was written for,
+    /// but for a BOXED one it disarms the let site's `BoxedEnumDrop` while the
+    /// callee registered nothing. Neither frame owned the box: 32 B per call.
+    ///
+    /// The fix gives the CALLEE the box, which is the only frame that can own
+    /// it here, and every arm below exists because moving that ownership broke
+    /// something a narrower reading missed. Each was measured, not assumed:
+    ///
+    ///   * NAMED binding consumed — the headline leak.
+    ///   * FRESH temp — the caller-side arm that used to own this
+    ///     (B-2026-08-05-7) is retracted for non-struct payloads in the same
+    ///     change, so this is the double-free control for the retraction and
+    ///     the leak control for going too far.
+    ///   * BOUND PASSTHROUGH then consumed (`let a = idnest(src);
+    ///     classify(a);`). The result binding owns nothing — B-2026-08-06-21
+    ///     skips its registration and leaves the source sole owner — so the
+    ///     consume has to disarm the SOURCE's box. Without that this aborts
+    ///     with a glibc double free.
+    ///   * CHAINED passthrough (two bindings deep), because the alias is
+    ///     resolved at the record site rather than walked at lookup; a version
+    ///     that resolved only one hop aborted here.
+    ///   * DISCARDED passthrough (`idnest(d);`) — the source IS the only owner
+    ///     there, and B-2026-08-06-21 measured a 320-byte leak from zeroing it.
+    ///     This is the over-suppression control for the disarm above.
+    ///   * `None` sources, the direction where an over-eager disarm strands a
+    ///     payload rather than double-freeing it.
+    ///
+    /// Each consuming arm runs TWICE over the same shape: once with a SCALAR
+    /// inner (`Option[Option[i64]]`, the row's own reduction) and once with a
+    /// HEAP-BEARING one (`Option[Option[String]]`). The box-only free this
+    /// registers is identical for both, but only the second can show an
+    /// interior that the box drop wrongly took with it.
+    ///
+    /// NOT COVERED, and deliberately: a boxed payload that is a user STRUCT.
+    /// Its box already has a callee-side owner (B-2026-08-06-10's move-out
+    /// mirror), and registering for it too double-frees
+    /// `asan_boxed_option_param_payload_move_out`,
+    /// `asan_owned_struct_optres_field_call_arg_move` and
+    /// `asan_shared_payload_view_optres_field_call_arg_copy` at both opt
+    /// levels — those three ARE the exclusion, written as programs. A NAMED
+    /// `Option[StructWide]` binding consumed by a read-only callee still leaks
+    /// its box; that is filed separately rather than papered over here.
+    ///
+    /// COVERAGE, stated because it is weaker than the assertion looks. Against
+    /// the PRE-FIX compiler this leaks 2,560 B in 80 allocations at
+    /// `KARAC_OPT_LEVEL=0` and is CLEAN at the default `-O2`, where every box
+    /// folds away — so the memory half is carried entirely by the `-O0` leg
+    /// (`scripts/asan-o0-leg.sh`, B-2026-08-04-17), which is what that leg
+    /// exists for. What the `-O2` run still asserts is the accumulated total
+    /// and the allocation floor, so a leak traded for a wrong value, or a
+    /// fixture optimized into nothing, fails there.
+    ///
+    /// The expected value is COMPUTED, not read off a run: every payload is
+    /// seeded from the opaque `env.args().len()`, each scalar arm subtracts the
+    /// seed back out to leave `i`, and each String arm contributes 1 for a
+    /// successful byte read — `4i + 5` per iteration, so
+    /// `4 * (0+…+39) + 40 * 5 = 3320`.
+    #[test]
+    fn asan_named_boxed_option_binding_consumed_by_callee_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn classify(v: Option[Option[i64]]) -> i64 {
+    match v {
+        Option.Some(Option.Some(x)) => x,
+        Option.Some(Option.None) => -1,
+        Option.None => -2,
+    }
+}
+fn idnest(o: Option[Option[i64]]) -> Option[Option[i64]] { o }
+
+fn classifys(v: Option[Option[String]]) -> i64 {
+    match v {
+        Option.Some(Option.Some(s)) => { if s.contains("row") { 1 } else { 0 } }
+        Option.Some(Option.None) => -1,
+        Option.None => -2,
+    }
+}
+fn idnests(o: Option[Option[String]]) -> Option[Option[String]] { o }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // A — the headline: a named binding consumed by a callee.
+        let bound: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        acc = acc + classify(bound) - n;
+        // B — fresh temp; the caller-side owner was retracted for this shape.
+        acc = acc + classify(Option.Some(Option.Some(n + i))) - n;
+        // C — bound passthrough, then consumed.
+        let src: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let aka: Option[Option[i64]] = idnest(src);
+        acc = acc + classify(aka) - n;
+        // D — chained passthrough, then consumed.
+        let s2: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let a1: Option[Option[i64]] = idnest(s2);
+        let a2: Option[Option[i64]] = idnest(a1);
+        acc = acc + classify(a2) - n;
+        // E — discarded passthrough: the source stays sole owner.
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        idnest(d);
+        acc = acc + 1;
+        // F — None source: nothing to free on either side.
+        let z: Option[Option[i64]] = Option.None;
+        acc = acc + classify(z) + 2;
+        // A' .. D' — the same four consuming arms over a HEAP-BEARING inner,
+        // so a box drop that took the interior with it shows up as a
+        // double free and one that never ran shows up as a leak.
+        let hb: Option[Option[String]] = Option.Some(Option.Some("row-" + (n + i).to_string()));
+        acc = acc + classifys(hb);
+        acc = acc + classifys(Option.Some(Option.Some("row-" + (n + i).to_string())));
+        let hs: Option[Option[String]] = Option.Some(Option.Some("row-" + (n + i).to_string()));
+        let hk: Option[Option[String]] = idnests(hs);
+        acc = acc + classifys(hk);
+        let h2: Option[Option[String]] = Option.Some(Option.Some("row-" + (n + i).to_string()));
+        let g1: Option[Option[String]] = idnests(h2);
+        let g2: Option[Option[String]] = idnests(g1);
+        acc = acc + classifys(g2);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["3320"],
+            "named_boxed_option_binding_consumed_by_callee",
+            30,
         );
     }
 

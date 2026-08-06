@@ -1974,6 +1974,56 @@ impl<'ctx> super::Codegen<'ctx> {
                             None,
                         );
                     }
+                    // B-2026-08-06-9 leg A — the SEEDED pair (`Option` /
+                    // `Result`) reaches the same shape by a different route:
+                    // the payload outgrows a HARDCODED area (3 / 5 words)
+                    // rather than an erased one. `classify(bound)` over
+                    // `Option[Option[i64]]` boxes its 4-word inner, and the
+                    // caller's `suppress_inline_option_result_binding_move`
+                    // then zeroes the source tag — disarming the let site's
+                    // box drop while the callee registered nothing. 32 B per
+                    // call, nobody's.
+                    //
+                    // `Option` ONLY, for the reason
+                    // `is_owned_boxed_option_param` gives: `Result` boxes PER
+                    // VARIANT against a 5-word area, so the caller-side disarm
+                    // this registration needs on the passthrough shape would
+                    // have to know which tag is live before it can zero the
+                    // right word. `Result` keeps its existing ownership
+                    // untouched.
+                    //
+                    // ONLY when the boxed payload is NOT a user struct, and
+                    // that gate is the whole content of this arm. Registering
+                    // for EVERY seeded-pair boxed param was measured and is
+                    // WRONG: it double-frees
+                    // `asan_boxed_option_param_payload_move_out`,
+                    // `asan_owned_struct_optres_field_call_arg_move`, and
+                    // `asan_shared_payload_view_optres_field_call_arg_copy` at
+                    // both opt levels. Those three are precisely the
+                    // struct-payload shapes, and their box already HAS a
+                    // callee-side owner: B-2026-08-06-10's move-out mirror,
+                    // which frees the box when an arm moves the struct (or out
+                    // of) the payload. A non-struct payload has no such
+                    // mirror — there is no struct interior to move — so the
+                    // box is genuinely unowned, which is why the gate is
+                    // `inner_struct.is_none()` rather than a shape list.
+                    //
+                    // BOX-ONLY, like both siblings: an arm that binds the
+                    // payload out owns the interior.
+                    for (enum_lit, variant, inner_struct) in
+                        self.boxed_enum_payload_variants(&mono_ty)
+                    {
+                        if enum_lit != "Option" || inner_struct.is_some() {
+                            continue;
+                        }
+                        self.track_boxed_enum_var_with_inner_drop(
+                            &param_name,
+                            alloca,
+                            enum_lit,
+                            variant,
+                            None,
+                        );
+                    }
                 }
                 // RC-fallback boxing for non-shared, non-Vec parameters flagged by the
                 // ownership checker. The param value is boxed in {i64 rc, T} on the heap

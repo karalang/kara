@@ -2002,6 +2002,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 // borrowed roots and on payload shapes whose drop it cannot
                 // neutralize.
                 self.suppress_place_optres_field_whole_move_source(&a.value);
+                // B-2026-08-06-9 leg A — the argument is a PASSTHROUGH RESULT
+                // binding, which owns nothing: its source does
+                // (B-2026-08-06-21 skips the result's registration). The
+                // suppressor above zeroes the named slot and so found nothing
+                // to disarm, while the callee — which now owns a boxed
+                // non-struct `Option` payload — freed the box, and the source's
+                // own cleanup freed it again.
+                //
+                // Retract the SOURCE's box with the word-scoped suppressor
+                // rather than by forwarding the whole-slot zero above: the
+                // source may carry an inline payload on the other side of the
+                // same slot (`Result[Wide, String]`), and zeroing all of it
+                // strands that. Only the box word moves owner here.
+                if let ExprKind::Identifier(n) = &a.value.kind {
+                    if let Some(owner) = self.boxed_passthrough_owner_alias.get(n.as_str()).cloned()
+                    {
+                        self.suppress_boxed_enum_payload_cleanup_for_owner(&owner);
+                    }
+                }
             }
         }
         // Restore the pending-let hint cleared above for the arg loop.
@@ -2120,6 +2139,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// to know which tag is live before it can name the variant that carries a
     /// box; `Option` has one such tag. The Option case is also the measured
     /// leak — `classify(Some(Some(42)))`, 32 bytes per call.
+    ///
+    /// STRUCT payloads only, as of B-2026-08-06-9 leg A. The callee now
+    /// registers its own box-only drop for a non-escaping owned param whose
+    /// seeded-pair payload is boxed and is NOT a user struct
+    /// (`functions.rs`), which is the only frame that can own the box for a
+    /// NAMED argument — the caller's move suppressor has already zeroed the
+    /// binding's tag by then. Keeping this arm for those payloads too would
+    /// free the same box twice for the fresh-temp form. A STRUCT payload keeps
+    /// the caller-side arm: there the callee's owner is B-2026-08-06-10's
+    /// move-out mirror, which only fires on an arm that actually moves, so a
+    /// read-only callee (`take_key`, inferred `ref`) leaves a fresh temp with
+    /// no owner anywhere else.
     pub(super) fn is_owned_boxed_option_param(&self, name: &str, i: usize) -> bool {
         let flagged = |table: &HashMap<String, Vec<bool>>| {
             table
@@ -2150,7 +2181,14 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
-        self.option_payload_is_boxed(payload_te)
+        let payload_is_user_struct = match &payload_te.kind {
+            TypeKind::Path(pp) => pp
+                .segments
+                .last()
+                .is_some_and(|s| self.struct_types.contains_key(s.as_str())),
+            _ => false,
+        };
+        payload_is_user_struct && self.option_payload_is_boxed(payload_te)
     }
 
     /// Would an `Option[T]` payload of type `T` be HEAP-BOXED — i.e. does `T`'s

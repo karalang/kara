@@ -4946,8 +4946,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // where zeroing it turned a clean program into a
                                 // 320-byte leak. Narrowing a registration is the
                                 // safe direction here; widening a free is not.
-                                if self.call_passes_armed_boxed_binding_through(value) {
+                                //
+                                // B-2026-08-06-9 leg A — RECORD the ownership
+                                // alias while skipping. Skipping alone leaves
+                                // the source armed and unreachable from a later
+                                // consume of the RESULT: `let r = id(b);
+                                // classify(r);` has the callee free the box (it
+                                // owns a non-struct `Option` payload as of leg
+                                // A) and `b`'s cleanup free it again.
+                                //
+                                // Into the BOX-channel map, and only for the
+                                // population the callee actually takes over:
+                                // `Option` with a non-struct payload. The
+                                // general `passthrough_owner_alias` was tried
+                                // and breaks two shapes — see that field's doc.
+                                // Recording nothing for the rest leaves them
+                                // exactly as -21 left them, which is correct
+                                // there because the source stays sole owner.
+                                //
+                                // The alias zeroes nothing by itself, so the
+                                // discarded-result case this rule was built for
+                                // (`id(bound);`) is unchanged.
+                                if let Some(src) = self.call_passthrough_armed_boxed_source(value) {
+                                    let callee_owns_box = boxed
+                                        .iter()
+                                        .all(|(e, _, inner)| *e == "Option" && inner.is_none());
                                     boxed.clear();
+                                    if callee_owns_box {
+                                        self.boxed_passthrough_owner_alias
+                                            .insert(var_name.to_string(), src);
+                                    }
                                 }
                                 for (enum_name, variant, inner) in &boxed {
                                     let nested_opt_drop = payload_te
