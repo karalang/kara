@@ -29737,6 +29737,80 @@ fn main() {
     );
 }
 
+/// B-2026-08-05-40 — the ORACLE half. The interpreter has always accepted a
+/// PLACE argument where a `Slice[T]` parameter is expected; codegen had no
+/// place arm in `coerce_to_slice`, so `f(g.a)` / `f(t.0)` / `f(vv[0])` /
+/// `f(o.q.a)` failed LLVM module verification and the program did not build.
+///
+/// Passes before and after the fix, which is its job: it is the reference
+/// answer the codegen twin `e2e_slice_param_from_a_place_argument` is measured
+/// against. Seed is the literal 1 here rather than `env.args().len()` for the
+/// usual reason — an in-process interpreter test would see the TEST binary's
+/// argv.
+#[test]
+fn test_slice_param_from_a_place_argument() {
+    assert_eq!(
+        run(r#"struct P { a: Vec[i64], tag: String }
+struct Inner { a: Vec[i64] }
+struct Outer { q: Inner }
+
+fn mkv(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(k);
+    v.push(k + 1i64);
+    v.push(k + 2i64);
+    return v;
+}
+
+fn total(s: Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn rtotal(s: ref Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn bumpall(s: mut Slice[i64]) {
+    let mut i: i64 = 0;
+    while i < s.len() { s[i] = s[i] + 1i64; i = i + 1i64; }
+}
+
+fn main() {
+    let n: i64 = 1i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n + 199i64 {
+        let mut g: P = P { a: mkv(i), tag: f"tag-{i}-payload" };
+        bumpall(mut g.a);
+        acc = acc + total(g.a);
+        if g.tag.contains("payload") { acc = acc + 1i64; }
+        let mut g2: P = P { a: mkv(i), tag: f"tag2-{i}-payload" };
+        bumpall(mut g2.a);
+        acc = acc + rtotal(g2.a);
+        let mut t: (Vec[i64], i64) = (mkv(i), 0i64);
+        bumpall(mut t.0);
+        acc = acc + total(t.0);
+        let mut vv: Vec[Vec[i64]] = Vec.new();
+        vv.push(mkv(i));
+        bumpall(mut vv[0i64]);
+        acc = acc + total(vv[0i64]);
+        let mut o: Outer = Outer { q: Inner { a: mkv(i) } };
+        bumpall(mut o.q.a);
+        acc = acc + total(o.q.a);
+        i = i + 1i64;
+    }
+    println(acc);
+}"#),
+        "304700\n"
+    );
+}
+
 #[test]
 fn test_mut_ref_place_argument_writes_back() {
     // B-2026-08-05-37 — the interpreter half. A `mut ref` parameter given a

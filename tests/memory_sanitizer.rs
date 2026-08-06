@@ -14134,6 +14134,87 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-40 — the MEMORY half of the place → `Slice[T]` coercion.
+    ///
+    /// The header the fix synthesizes points INTO the caller's Vec buffer: no
+    /// copy, no ownership transfer, and the callee only borrows. That is the
+    /// claim worth a leak/UAF gate, because the same path could equally have
+    /// been written to materialize a temp — which would compile, read
+    /// correctly, silently drop every write through a `mut Slice`, and either
+    /// leak the temp or free a buffer the place still owns.
+    ///
+    /// NOT VACUOUS (B-2026-08-04-17): opaque `env.args().len()` seed, every
+    /// Vec and tag built from it at runtime, byte-level `contains` read, and
+    /// 200 iterations so nothing unrolls away.
+    #[test]
+    fn asan_slice_param_from_a_place_argument_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"struct P { a: Vec[i64], tag: String }
+struct Inner { a: Vec[i64] }
+struct Outer { q: Inner }
+
+fn mkv(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(k);
+    v.push(k + 1i64);
+    v.push(k + 2i64);
+    return v;
+}
+
+fn total(s: Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn rtotal(s: ref Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn bumpall(s: mut Slice[i64]) {
+    let mut i: i64 = 0;
+    while i < s.len() { s[i] = s[i] + 1i64; i = i + 1i64; }
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n + 199i64 {
+        let mut g: P = P { a: mkv(i), tag: f"tag-{i}-payload" };
+        bumpall(mut g.a);
+        acc = acc + total(g.a);
+        if g.tag.contains("payload") { acc = acc + 1i64; }
+        let mut g2: P = P { a: mkv(i), tag: f"tag2-{i}-payload" };
+        bumpall(mut g2.a);
+        acc = acc + rtotal(g2.a);
+        let mut t: (Vec[i64], i64) = (mkv(i), 0i64);
+        bumpall(mut t.0);
+        acc = acc + total(t.0);
+        let mut vv: Vec[Vec[i64]] = Vec.new();
+        vv.push(mkv(i));
+        bumpall(mut vv[0i64]);
+        acc = acc + total(vv[0i64]);
+        let mut o: Outer = Outer { q: Inner { a: mkv(i) } };
+        bumpall(mut o.q.a);
+        acc = acc + total(o.q.a);
+        i = i + 1i64;
+    }
+    println(acc);
+}"#,
+            &["304700"],
+            "slice_param_from_a_place_argument_no_leak",
+            // 200 iterations x (5 Vecs + 2 tag Strings) is well over a
+            // thousand allocations; the floor sits far above the 3 of a
+            // folded-away run.
+            400,
+        );
+    }
+
     /// B-2026-08-05-39 — the MEMORY half of the `mut ref` aggregate
     /// reassignment fix, which the value assertion cannot see.
     ///

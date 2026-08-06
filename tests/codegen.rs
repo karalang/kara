@@ -6185,6 +6185,99 @@ fn main() {
         assert_eq!(out, "41400\n");
     }
 
+    /// B-2026-08-05-40 — a `Slice[T]` parameter fed from a PLACE.
+    ///
+    /// `coerce_to_slice` understood a bare identifier, a range index, a
+    /// collection literal and a fresh rvalue, but no PLACE. So `f(g.a)`,
+    /// `f(g.q.a)`, `f(t.0)` and `f(vv[0])` reached the call as a raw 3-word
+    /// `{ptr,len,cap}` against a 2-word `{ptr,i64}` slot and LLVM module
+    /// verification hard-failed with `Call parameter type does not match
+    /// function signature!` — the program did not compile at all, on a shape
+    /// the interpreter runs correctly.
+    ///
+    /// Both by-value `Slice[T]` and `mut Slice[T]` were refused; read-only
+    /// `ref Slice[T]` was not, because its argument takes the borrow path in
+    /// `call_dispatch.rs` and never reaches the coercion. That asymmetry is
+    /// what makes the `rtotal` arm here load-bearing: it is the spelling that
+    /// already worked, and the fix has to leave it working — a ref slot takes
+    /// a POINTER, so letting the value-producing place arm win there would
+    /// reintroduce the same verification failure one slot-shape over.
+    ///
+    /// Four place spellings, each MUTATED through `mut Slice` before it is
+    /// read: a header built over a COPY would compile and read fine while
+    /// silently dropping every write, so the mutation is what proves the
+    /// header points at the caller's real buffer.
+    ///
+    /// Expected total is DERIVED, not read off a run: `mkv(i)` is
+    /// `[i, i+1, i+2]`, `bumpall` makes it `[i+1, i+2, i+3]` summing to
+    /// `3i + 6`; five such rounds plus the tag check give `15i + 31`, and
+    /// `sum(15i for i in 0..=199) + 31 * 200 = 298500 + 6200 = 304700`.
+    #[test]
+    fn e2e_slice_param_from_a_place_argument() {
+        let Some(out) = run_program(
+            r#"struct P { a: Vec[i64], tag: String }
+struct Inner { a: Vec[i64] }
+struct Outer { q: Inner }
+
+fn mkv(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(k);
+    v.push(k + 1i64);
+    v.push(k + 2i64);
+    return v;
+}
+
+fn total(s: Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn rtotal(s: ref Slice[i64]) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1i64; }
+    return t;
+}
+
+fn bumpall(s: mut Slice[i64]) {
+    let mut i: i64 = 0;
+    while i < s.len() { s[i] = s[i] + 1i64; i = i + 1i64; }
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n + 199i64 {
+        let mut g: P = P { a: mkv(i), tag: f"tag-{i}-payload" };
+        bumpall(mut g.a);
+        acc = acc + total(g.a);
+        if g.tag.contains("payload") { acc = acc + 1i64; }
+        let mut g2: P = P { a: mkv(i), tag: f"tag2-{i}-payload" };
+        bumpall(mut g2.a);
+        acc = acc + rtotal(g2.a);
+        let mut t: (Vec[i64], i64) = (mkv(i), 0i64);
+        bumpall(mut t.0);
+        acc = acc + total(t.0);
+        let mut vv: Vec[Vec[i64]] = Vec.new();
+        vv.push(mkv(i));
+        bumpall(mut vv[0i64]);
+        acc = acc + total(vv[0i64]);
+        let mut o: Outer = Outer { q: Inner { a: mkv(i) } };
+        bumpall(mut o.q.a);
+        acc = acc + total(o.q.a);
+        i = i + 1i64;
+    }
+    println(acc);
+}"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "304700\n");
+    }
+
     /// B-2026-08-05-8 — `contains` on a PATTERN-BOUND `String` payload.
     ///
     /// This was a run-vs-build divergence, not a diagnostics nit: `karac check`

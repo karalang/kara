@@ -1470,10 +1470,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // Slice[T] / mut Slice[T] and the argument is an Array[T, N],
             // Vec[T], or already a slice, synthesize the `{ptr, i64}`
             // slice header at the call site. See design.md § Slices.
+            //
+            // B-2026-08-05-40 carve-out: a `ref Slice[T]` / `mut ref Slice[T]`
+            // slot takes a POINTER, and the field/tuple arms below already pass
+            // a pointer to the argument's Vec header — correct because
+            // `{ptr,len,cap}` starts with `{ptr,len}`, so the callee reads the
+            // right two words. `coerce_to_slice`'s place arm produces a VALUE,
+            // and pushing that into a `ptr` slot is the same verification
+            // failure this fix removes, one slot-shape over. A ref slot's
+            // OTHER argument shapes still coerce here as before.
             if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
-                if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
-                    compiled_args.push(slice_val.into());
-                    continue;
+                if !(is_ref && self.arg_is_vec_header_place(&a.value)) {
+                    if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
+                        compiled_args.push(slice_val.into());
+                        continue;
+                    }
                 }
             }
             if is_ref {

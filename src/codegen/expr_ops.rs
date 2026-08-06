@@ -6518,6 +6518,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-08-05-40: a PLACE argument whose storage IS a `Vec` header —
+        // `f(g.a)`, `f(g.q.a)`, `f(t.0)`, `f(vv[0])`. Only a bare identifier
+        // was understood, so every place spelling reached the call as a raw
+        // 3-word `{ptr,len,cap}` against a 2-word `{ptr,i64}` `Slice[T]` slot
+        // and LLVM module verification hard-failed with `Call parameter type
+        // does not match function signature!`. Same class as the literal and
+        // fresh-rvalue arms below, and the same rebuild as the Identifier
+        // `Vec` arm above — only the header's ADDRESS differs.
+        //
+        // A read-only `ref Slice[T]` param was unaffected (its argument takes
+        // the borrow path in `call_dispatch.rs` and never reaches here), which
+        // is why the gap looked narrower than it was: `Slice[T]` by value and
+        // `mut Slice[T]` were both refused for the same three place spellings.
+        if let Some(header) = self.place_vec_header_ptr(arg) {
+            return Ok(Some(self.slice_header_from_vec_header(header)));
+        }
+
         // Anonymous collection literal at a call boundary — `f([1, 2, 3])`.
         // Named arrays / Vecs hit the Identifier fast path above; a bare
         // literal has no alloca, so materialize it and build a slice header.
@@ -6683,6 +6700,103 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Assemble a two-field slice struct value from a data pointer and an
     /// i64 length.
+    /// Pointer to a `{ptr,len,cap}` header that lives INSIDE a place —
+    /// B-2026-08-05-40. `None` for anything else, so
+    /// [`Self::coerce_to_slice`] falls through to its remaining arms
+    /// unchanged.
+    ///
+    /// Positive evidence only, on both halves: the place's storage must be
+    /// verified to BE a Vec header (from the containing aggregate's LLVM
+    /// type), and [`Self::field_chain_place_ptr`] must be able to address it.
+    /// A shape either arm does not model contributes nothing.
+    ///
+    /// A `shared` / `par` struct receiver is refused explicitly: its binding
+    /// slot holds a HANDLE, not the aggregate, so GEPing it as the struct
+    /// would read past the 8-byte slot. Same guard, same reason, as the
+    /// `mut ref` place-argument arm in `call_dispatch.rs`.
+    fn place_vec_header_ptr(&mut self, arg: &Expr) -> Option<PointerValue<'ctx>> {
+        if !self.arg_is_vec_header_place(arg) {
+            return None;
+        }
+        self.field_chain_place_ptr(arg)
+    }
+
+    /// The type-check half of [`Self::place_vec_header_ptr`], emitting no IR.
+    ///
+    /// Exposed because `compile_call` has to ask the question BEFORE deciding
+    /// which coercion to run: a `ref Slice[T]` / `mut ref Slice[T]` slot takes
+    /// a POINTER, and its own field arm already passes a pointer to the Vec
+    /// header (`{ptr,len,cap}` starts with `{ptr,len}`, so the callee reads the
+    /// right two words). Letting the value-producing place arm win there would
+    /// push a `{ptr,i64}` VALUE into a `ptr` slot — the same verification
+    /// failure this fix removes, one slot-shape over.
+    pub(super) fn arg_is_vec_header_place(&self, arg: &Expr) -> bool {
+        let vec_ty: BasicTypeEnum<'ctx> = self.vec_struct_type().into();
+        let field_ty = match &arg.kind {
+            ExprKind::FieldAccess { object, field } => {
+                let Some(tn) = self.place_chain_type_name(object) else {
+                    return false;
+                };
+                // A `shared` / `par` struct binding's slot holds a HANDLE, not
+                // the aggregate, so GEPing it as the struct would read past the
+                // 8-byte slot. Same guard, same reason, as the `mut ref`
+                // place-argument arm in `call_dispatch.rs`.
+                if self.shared_types.contains_key(tn.as_str()) {
+                    return false;
+                }
+                let Some(st) = self.struct_types.get(tn.as_str()).copied() else {
+                    return false;
+                };
+                self.struct_field_names
+                    .get(tn.as_str())
+                    .and_then(|names| names.iter().position(|n| n == field))
+                    .and_then(|idx| st.get_field_type_at_index(idx as u32))
+            }
+            ExprKind::TupleIndex { object, index } => self
+                .place_chain_aggregate_llvm_type(object)
+                .and_then(|t| t.get_field_type_at_index(*index as u32)),
+            // A `Vec[Vec[T]]` element. Restricted to a plain Vec variable root
+            // for the same reason `field_chain_place_ptr`'s own Index arm is:
+            // the element pointer is recomputed from the subscript, and only a
+            // side-effect-free one makes that recomputation a no-op.
+            ExprKind::Index { object, .. } => match &object.kind {
+                ExprKind::Identifier(v) => self.vec_elem_types.get(v.as_str()).copied(),
+                _ => None,
+            },
+            _ => None,
+        };
+        field_ty == Some(vec_ty)
+    }
+
+    /// Rebuild a 2-word `{ptr,len}` slice header from a 3-word
+    /// `{ptr,len,cap}` Vec header at `header`. Shared by the Identifier and
+    /// place arms of [`Self::coerce_to_slice`] so the two cannot drift.
+    fn slice_header_from_vec_header(&mut self, header: PointerValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, header, 0, "coerce.place.data.ptr")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "coerce.place.data")
+            .unwrap()
+            .into_pointer_value();
+        let len_pp = self
+            .builder
+            .build_struct_gep(vec_ty, header, 1, "coerce.place.len.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_pp, "coerce.place.len")
+            .unwrap()
+            .into_int_value();
+        let slice_ty = self.slice_struct_type();
+        self.build_slice_header(slice_ty, data, len)
+    }
+
     pub(super) fn build_slice_header(
         &self,
         slice_ty: StructType<'ctx>,
