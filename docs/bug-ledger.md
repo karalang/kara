@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 141 | 1 |
 | double-free | 100 | 1 |
 | codegen-gap | 92 | 0 |
-| run-vs-build | 87 | 2 |
+| run-vs-build | 87 | 1 |
 | missing-feature | 80 | 1 |
 | false-positive | 56 | 0 |
 | perf | 51 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 706 | 6 |
+| codegen | 706 | 5 |
 | interp | 127 | 0 |
 | typecheck | 126 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **976 surfaced · 8 open · 958 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **976 surfaced · 7 open · 959 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,11 +137,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **976 surfaced 
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
 | B-2026-08-06-21 | 2026-08-06 | codegen | high | a boxed `Option`/`Result` binding passed by value to a PASSTHROUGH callee is freed TWICE at -O0: `fn id(o: Option[Option[i64]]) -> Option[Option[i64]] { o }` aborts with `free(): double free detected in tcache 2`, while the identical program is clean at the default -O2 | The `call_arg_flows_into_return` arm of the by-value arg loop in src/codegen/call_dispatch.rs, which SUPPRESSES the move-zeroing so the caller keeps its drop — correct for an inline payload, but the returned value owns the BOX as well, so both free it. |
 | B-2026-08-06-22 | 2026-08-06 | codegen | medium | a DOUBLY-nested generic chain `outer.take().take().f` at `Box[Box[Wide]]` cannot be built: type resolution SUCCEEDS (the field index resolves to Some(5)) but the chained call's value arrives as a POINTER, not a StructValue, so `compile_field_access`'s tail skips its arm and loud-fails with a message that misleadingly blames type recovery -- the fully-bound form of the same program builds and runs | src/codegen/expr_ops.rs::compile_field_access, the `if let BasicValueEnum::StructValue(sv) = obj_val` tail. Split out of B-2026-08-06-19 (fixed); NOT fixed by it — verified with that fix in place. |
-| B-2026-08-06-23 | 2026-08-06 | codegen | medium | a generic struct LITERAL in RECEIVER position whose field initializer type cannot be NAMED lowers at the ERASED `{i64}` layout: `Box { v: f * 2.0 }.take()` builds an `insertvalue { i64 } undef, double` and fails verification, while the interpreter is correct | `infer_arg_elem_te` (src/codegen/call_dispatch.rs) and the fail-closed field-initializer recovery B-2026-08-06-12 added to `struct_inst_mono_type_for_expr` |
 
-### Fixed (958)
+### Fixed (959)
 
-<details><summary>958 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>959 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1124,6 +1123,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-18 | codegen | high | a u64 ARITHMETIC RESULT above i64::MAX renders SIGNED under both compiled backends but unsigned under the interpreter -- `println(u64.MAX - 1u64)` pr… | ac3041ce |
 | B-2026-08-06-19 | codegen | medium | a chained FIELD ACCESS on a generic method's RETURN cannot be built: `w.take().f` fails `karac build` with "cannot resolve field 'f' on this receiver… | FIXED (src/codegen/expr_ops.rs: new `generic_method_return_inst` substitutes the RECEIVER's instantiation into the method's declared return TypeExpr, recovered from the AST the declare loop keeps in `generic_fns`; consulted from `enum_inst_type_of_expr`'s new MethodCall arm — placed BEFORE the span fallback — and from `type_name_of_expr`'s MethodCall tail). Pins tests/codegen.rs `e2e_chained_field_access_on_generic_method_return`, stash-proven RED. |
 | B-2026-08-06-20 | codegen | medium | two instantiations of ONE generic struct reached through a MIX of literal and named receivers collide on the unmangled `@Type.method` symbol, whose s… | 2fbf970d |
+| B-2026-08-06-23 | codegen | medium | a generic struct LITERAL in RECEIVER position whose field initializer type cannot be NAMED lowers at the ERASED `{i64}` layout: `Box { v: f * 2.0 }.t… | FIXED (src/codegen/call_dispatch.rs: new `scalar_type_name_of_expr` + `is_scalar_type_name`, chained onto `infer_arg_elem_te`'s namer). Pins tests/codegen.rs `e2e_generic_receiver_literal_with_arithmetic_field_initializer`, stash-proven RED. |
 | B-2026-08-06-24 | interp | medium | EVERY `extern` call under `--interp` reports an "internal .. | 3607c241 |
 
 </details>

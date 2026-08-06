@@ -3281,6 +3281,145 @@ impl<'ctx> super::Codegen<'ctx> {
     /// An unresolved name yields an empty Path, which `type_expr_has_drop_heap`
     /// treats as no-drop — safe (worst case a missed free degrades to the
     /// pre-existing enum-blind leak, never a double-free).
+    /// Name the SCALAR type of an expression `enum_name_of_expr` /
+    /// `type_name_of` cannot name — chiefly an ARITHMETIC expression, whose
+    /// type is its operands'. B-2026-08-06-23.
+    ///
+    /// `Box { v: f * 2.0 }.take()` built an `insertvalue { i64 } undef, double`
+    /// and failed module verification while the interpreter was correct.
+    /// B-2026-08-06-12's receiver-literal recovery reads a field initializer's
+    /// type through those two namers and is deliberately FAIL-CLOSED — an
+    /// unnameable initializer declines the recovery rather than guessing,
+    /// because a wrong instantiation silently lowers a struct at another type's
+    /// layout. Neither namer handles an arithmetic expression, so `f * 2.0`
+    /// yielded the empty string, the literal fell back to the erased base
+    /// layout `{ i64 }`, and the `double` store was invalid. `n + 41` survived
+    /// only by accident: the erased default IS i64, so the wrong answer
+    /// happened to be the right one.
+    ///
+    /// THE OPERATOR IS ALREADY LOWERED by the time codegen sees it. `f * 2.0`
+    /// is not an `ExprKind::Binary` here — `rewrite_binary` (src/lowering.rs)
+    /// has turned it into `Call { callee: Path(["f64", "mul"]), .. }`, and that
+    /// path's FIRST segment is the operand type name outright. So the name is
+    /// read from the callee rather than recovered by walking operands, which is
+    /// both simpler and exact: it is the same `type_name` channel
+    /// `compile_assoc_call` dispatches its own narrow-int lowering on.
+    ///
+    /// A comparison lowers through the same shape but yields `bool`, not the
+    /// operand type — naming it `f64` would be a silently wrong instantiation,
+    /// exactly what the fail-closed design guards against.
+    ///
+    /// The `Binary` arm below is NOT dead: `compile_expr` still has one, so a
+    /// shape lowering does not rewrite reaches codegen unlowered. It walks the
+    /// operands for the same answer.
+    ///
+    /// Deliberately conservative about LITERALS: a bare integer literal stays
+    /// unnamed. Its width is context-dependent and the erased fallback is
+    /// already i64, so naming it would swap a correct-by-accident result for a
+    /// guess. Returning `None` anywhere keeps the previous behaviour — the
+    /// caller declines the recovery and falls back — so nothing that worked
+    /// before can regress.
+    fn scalar_type_name_of_expr(&self, e: &Expr) -> Option<String> {
+        match &e.kind {
+            // The LOWERED operator form: `Type.op(lhs, rhs)` for a binary op,
+            // `Type.op(operand)` for a unary one (`rewrite_unary` emits `neg` /
+            // `not`). Both spellings put the operand type in `segments[0]`.
+            ExprKind::Call { callee, args } if args.len() == 1 || args.len() == 2 => {
+                let ExprKind::Path { segments, .. } = &callee.kind else {
+                    return None;
+                };
+                if segments.len() != 2 {
+                    return None;
+                }
+                let (ty, op) = (segments[0].as_str(), segments[1].as_str());
+                if !Self::is_scalar_type_name(ty) {
+                    return None;
+                }
+                match (args.len(), op) {
+                    // A comparison lowers through the same shape but yields
+                    // `bool`, not the operand type; so does logical `not`.
+                    (2, "eq" | "ne" | "lt" | "le" | "gt" | "ge") => Some("bool".to_string()),
+                    (1, "not") if ty == "bool" => Some("bool".to_string()),
+                    (
+                        2,
+                        "add" | "sub" | "mul" | "div" | "rem" | "bitand" | "bitor" | "bitxor"
+                        | "shl" | "shr",
+                    ) => Some(ty.to_string()),
+                    // `neg` on a numeric type, and `not` on an INTEGER (the
+                    // bitwise complement, which keeps its width).
+                    (1, "neg" | "not") => Some(ty.to_string()),
+                    _ => None,
+                }
+            }
+            // Unlowered spellings, for any path that reaches codegen without
+            // `rewrite_binary` having run over it.
+            ExprKind::Binary { op, left, right } => match op {
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or => Some("bool".to_string()),
+                BinOp::Range | BinOp::RangeInclusive => None,
+                _ => self
+                    .named_scalar_operand(left)
+                    .or_else(|| self.named_scalar_operand(right)),
+            },
+            ExprKind::Unary { op, operand } => match op {
+                crate::ast::UnaryOp::Not => Some("bool".to_string()),
+                crate::ast::UnaryOp::Neg | crate::ast::UnaryOp::BitNot => {
+                    self.named_scalar_operand(operand)
+                }
+                _ => None,
+            },
+            ExprKind::Cast { ty, .. } => match &ty.kind {
+                TypeKind::Path(p) => p.segments.last().cloned(),
+                _ => None,
+            },
+            ExprKind::Float(_, sfx) => Some(match sfx {
+                Some(f) => format!("{f:?}").to_lowercase(),
+                None => "f64".to_string(),
+            }),
+            ExprKind::Bool(_) => Some("bool".to_string()),
+            ExprKind::Integer(_, Some(sfx)) => Some(format!("{sfx:?}").to_lowercase()),
+            _ => None,
+        }
+    }
+
+    /// The scalar type names a lowered operator callee may legitimately carry.
+    /// Gated so a genuine 2-segment call (`Module.func`, an enum-variant
+    /// constructor) is never mistaken for a lowered operator.
+    fn is_scalar_type_name(n: &str) -> bool {
+        matches!(
+            n,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "char"
+        )
+    }
+
+    /// One operand of an unlowered arithmetic expression, named through the
+    /// ordinary namers first and then recursively — so a nested `(a + b) * c`
+    /// resolves from whichever leaf is nameable.
+    fn named_scalar_operand(&self, e: &Expr) -> Option<String> {
+        self.type_name_of(e)
+            .or_else(|| self.scalar_type_name_of_expr(e))
+    }
+
     pub(super) fn infer_arg_elem_te(&self, e: &Expr) -> TypeExpr {
         if let ExprKind::Tuple(inner) = &e.kind {
             return TypeExpr {
@@ -3291,6 +3430,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let name = self
             .enum_name_of_expr(e)
             .or_else(|| self.type_name_of(e))
+            .or_else(|| self.scalar_type_name_of_expr(e))
             .unwrap_or_default();
         TypeExpr {
             kind: TypeKind::Path(crate::ast::PathExpr {

@@ -6807,6 +6807,71 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("42\n21\n21\n7\n9\n9\n"));
     }
 
+    /// B-2026-08-06-23 — a generic struct LITERAL in RECEIVER position whose
+    /// field initializer is an ARITHMETIC expression.
+    ///
+    /// `Box { v: f * 2.0 }.take()` passed `karac check`, ran correctly under
+    /// the interpreter, and failed `karac build` with a module verification
+    /// error — `insertvalue { i64 } undef, double` — because the literal
+    /// lowered at the ERASED base layout.
+    ///
+    /// B-2026-08-06-12's receiver-literal recovery reads each field
+    /// initializer's type and is deliberately FAIL-CLOSED: an initializer it
+    /// cannot NAME declines the recovery rather than guessing, since a wrong
+    /// instantiation silently lowers a struct at another type's layout. Nothing
+    /// named an arithmetic expression, so `f * 2.0` came back empty.
+    ///
+    /// `n + 41` is carried as a live control BECAUSE IT ALWAYS "WORKED" — by
+    /// accident. The erased fallback layout is `{ i64 }`, so an i64 field's
+    /// wrong answer happened to be the right one, which is exactly why the
+    /// f64 case was the one that surfaced. It must keep working for the real
+    /// reason now.
+    ///
+    /// The arms cover both lowered spellings and the type-vs-bool split: an
+    /// operator reaches codegen already rewritten by `rewrite_binary` /
+    /// `rewrite_unary` into `Type.op(..)`, so the name comes off the callee
+    /// path — two args for a binary op, ONE for unary `neg` (which failed
+    /// after the binary arm alone was in place). A COMPARISON lowers through
+    /// the identical shape but yields `bool`, not the operand type; naming it
+    /// `i32` would be a silently wrong instantiation of the kind the
+    /// fail-closed design exists to prevent.
+    ///
+    /// The narrow widths are included because the row predicts them broken for
+    /// the same reason, and `String` because it is the non-scalar control.
+    ///
+    /// `env.args().len()` seeds the values so nothing is a compile-time
+    /// constant (B-2026-08-04-17).
+    #[test]
+    fn e2e_generic_receiver_literal_with_arithmetic_field_initializer() {
+        let src = r#"
+struct Box[T] { v: T }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn main() {
+    let n: i64 = env.args().len();
+    let f: f64 = 1.5;
+    let a: i32 = 3i32;
+    let b: i32 = 4i32;
+    let u: u8 = 200u8;
+    let s: String = "ab";
+    println(Box { v: f * 2.0 }.take());             // the reported shape
+    println(Box { v: n + 41 }.take());              // correct-by-accident control
+    println(Box { v: a + b }.take());               // narrow signed
+    println(Box { v: u / 2u8 }.take());             // narrow unsigned
+    println(Box { v: a < b }.take());               // comparison -> bool
+    println(Box { v: n as f64 }.take());            // cast
+    println(Box { v: (n + 1i64) * 2i64 }.take());   // nested
+    println(Box { v: -f }.take());                  // lowered UNARY
+    println(Box { v: s + "cd" }.take());            // non-scalar control
+    let g = Box { v: f * 3.0 };                     // non-receiver position
+    println(g.v);
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("3\n42\n7\n100\ntrue\n1\n4\n-1.5\nabcd\n4.5\n")
+        );
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///
