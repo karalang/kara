@@ -1893,6 +1893,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(slot, val).unwrap();
                 self.track_tensor_var(slot);
             }
+            // B-2026-08-05-7 — the same shape once more, now for an `Option[T]`
+            // whose payload `T` was HEAP-BOXED because its LLVM width exceeds
+            // Option's seeded 3-word area (`coerce_to_payload_words`). A NAMED
+            // binding gets its box drop at the let site (`track_boxed_enum_var`)
+            // and a fresh-temp SCRUTINEE gets one from
+            // `materialize_freshtemp_enum_scrutinee`; a fresh temp handed
+            // straight to an owned param — `classify(Some(Some(42)))` — had
+            // neither, so the box leaked once per call. Params register no drop
+            // of their own (see `track_enum_var`'s note), so the caller is the
+            // only frame that can own it.
+            //
+            // BOX-ONLY (`inner_struct_name = None`), the same choice the
+            // fresh-temp scrutinee path documents: if the callee's arm binds the
+            // payload out, that binding owns `T`'s interior and dropping `T`
+            // here would double-free it.
+            if !flows_into_return
+                && val.is_struct_value()
+                && self.expr_yields_fresh_owned_temp(&a.value)
+                && self.is_owned_boxed_option_param(&name, i)
+            {
+                let cur_fn = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|bb| bb.get_parent())
+                    .expect("compile_call inside a function context");
+                let slot =
+                    self.create_entry_alloca(cur_fn, &format!("optbox_arg_tmp{i}"), val.get_type());
+                self.builder.build_store(slot, val).unwrap();
+                self.track_boxed_enum_var(
+                    &format!("__optbox_arg_tmp{i}"),
+                    slot,
+                    "Option",
+                    "Some",
+                    None,
+                );
+            }
             if !flows_into_return
                 || self.arg_is_entry_copied_heap_struct(&a.value)
                 // B-2026-08-01-14 — enum ctor args are entry-copied too:
@@ -2071,6 +2107,54 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or(false)
         };
         is_tensor && !flagged(&self.fn_param_ref) && !flagged(&self.fn_param_mut_ref)
+    }
+
+    /// Does parameter `i` of free function `name` take a by-value `Option[T]`
+    /// whose payload `T` is HEAP-BOXED — i.e. `T`'s LLVM word count exceeds
+    /// `Option`'s seeded payload area, the exact predicate
+    /// `coerce_to_payload_words` boxes on and `reconstruct_payload_value`
+    /// deboxes on?
+    ///
+    /// `Option` only, deliberately. `Result` boxes PER VARIANT (`Ok` and `Err`
+    /// each measured against the 5-word area), so a caller-side free would have
+    /// to know which tag is live before it can name the variant that carries a
+    /// box; `Option` has one such tag. The Option case is also the measured
+    /// leak — `classify(Some(Some(42)))`, 32 bytes per call.
+    pub(super) fn is_owned_boxed_option_param(&self, name: &str, i: usize) -> bool {
+        let flagged = |table: &HashMap<String, Vec<bool>>| {
+            table
+                .get(name)
+                .and_then(|v| v.get(i))
+                .copied()
+                .unwrap_or(false)
+        };
+        if flagged(&self.fn_param_ref) || flagged(&self.fn_param_mut_ref) {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(param_te) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == name => f.params.get(i).map(|p| p.ty.clone()),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &param_te.kind else {
+            return false;
+        };
+        if p.segments.first().map(|s| s.as_str()) != Some("Option") {
+            return false;
+        }
+        let Some(GenericArg::Type(payload_te)) = p.generic_args.as_ref().and_then(|a| a.first())
+        else {
+            return false;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return false;
+        };
+        let area = (layout.llvm_type.count_fields() as usize).saturating_sub(1);
+        Self::llvm_type_word_count(self.llvm_type_for_type_expr(payload_te)) > area
     }
 
     /// The shared (RC) heap-box layout produced by a fresh-temp by-value call
@@ -5150,7 +5234,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             };
             for (kind, (start_word, num_words)) in kinds.iter().zip(offsets.iter()) {
-                if !kind.is_heap_bearing() {
+                // `!= None`, NOT `is_heap_bearing()` — B-2026-08-05-7. A
+                // `BoxedOptRes` field answers false to `is_heap_bearing` (see
+                // its doc: the entry-copy must not duplicate its box and the
+                // match-out suppression must not strand it), but a WHOLE-VALUE
+                // move is the one site where its word DOES have to be zeroed:
+                // the destination receives the box pointer verbatim, so leaving
+                // the source armed makes `let w2 = w;` free the same box twice
+                // (measured as an ASAN double-free the moment the drop existed).
+                // The match-out sibling keeps the `is_heap_bearing` gate — there
+                // the source still owns the box and only its interior moved.
+                if *kind == super::state::EnumDropKind::None {
                     continue;
                 }
                 // Zero every payload word of the moved-out field (not just the

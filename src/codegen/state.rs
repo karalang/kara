@@ -250,14 +250,45 @@ pub(crate) enum EnumDropKind {
     /// `deep_copy_enum_heap_payload_in_place` (via `emit_map_clone_fn`) so the
     /// callee copy and caller temp own independent kv-tables (no double-free).
     MapOrSet,
+    /// B-2026-08-05-7 — an `Option[T]` / `Result[T, E]` payload. The
+    /// enum-in-enum carve-out in `payload_word_count_for_type_expr` sizes it at
+    /// ONE word while its real LLVM width is four or six, so
+    /// `coerce_to_payload_words` ALWAYS heap-boxes it and stores the box
+    /// pointer in that word. Nothing owned the box: the drop switch classified
+    /// the field `None` and emitted no cleanup at all, the match debox in
+    /// `reconstruct_payload_value` only LOADS through the pointer, and `?`'s
+    /// free is a different carrier — so every construction of such a variant
+    /// leaked 32 bytes (`Option[_]`) or 48 (`Result[_, _]`), heap payload or
+    /// not.
+    ///
+    /// The drop arm frees the BOX ONLY, never its interior, and
+    /// [`Self::is_heap_bearing`] is deliberately FALSE for this kind. That is
+    /// what keeps this slice symmetric: every consumer of that predicate — the
+    /// by-value entry deep-copy, the callee-owned param decision, the
+    /// match-out cap-zeroing — keeps its current behaviour, so the enum stays
+    /// caller-retains and the box is freed exactly once, by the frame that
+    /// still owns the enum value. The interior stays the (pre-existing) leak it
+    /// already was rather than becoming a double-free. Reclaiming the interior
+    /// too needs the entry-copy to duplicate the box and the match-out
+    /// suppression to zero THROUGH it — a separate slice, and the one where the
+    /// symmetry rule above actually bites.
+    BoxedOptRes,
 }
 
 impl EnumDropKind {
     /// Whether this kind owns heap the variant cleanup must free — and that
     /// the deep-copy-on-entry must duplicate and the move-suppression must
-    /// neutralize. Every kind except `None` is heap-bearing.
+    /// neutralize. Every kind except `None` and `BoxedOptRes` is heap-bearing.
+    ///
+    /// `BoxedOptRes` answers false on purpose: the entry-copy does NOT
+    /// duplicate its box, and the MATCH-OUT suppression must not zero its word
+    /// — there the source still owns the box and only the interior moved, so
+    /// zeroing would strand it, which is the leak this kind exists to close.
+    /// The WHOLE-VALUE move is the one site that must zero it, and
+    /// `zero_enum_payload_caps` therefore gates on `!= None` rather than on
+    /// this predicate. See `BoxedOptRes`'s own doc.
     pub(crate) fn is_heap_bearing(self) -> bool {
-        self != EnumDropKind::None
+        !matches!(self, EnumDropKind::None | EnumDropKind::BoxedOptRes)
     }
 }
 

@@ -4776,6 +4776,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `deep_copy_one_aggregate_field` has no Map arm), a DIRECT
                     // Map/Set enum payload is deep-copyable via the map clone fn.
                     "Map" | "Set" | "SortedMap" | "SortedSet" => EnumDropKind::MapOrSet,
+                    // B-2026-08-05-7: an `Option`/`Result` payload. These are
+                    // the only types that reach the enum-in-enum carve-out in
+                    // `payload_word_count_for_type_expr` (a user enum payload is
+                    // rejected by the typechecker's E_ENUM_NESTED_ENUM_PAYLOAD),
+                    // and the carve-out's 1 word is always narrower than their
+                    // real LLVM width — so the pack side heap-boxes them,
+                    // unconditionally, and the box had no owner. Classified here
+                    // purely so `emit_enum_drop_switch` emits a drop fn at all:
+                    // its `any_heap` gate keys on `!= None`, while
+                    // `is_heap_bearing()` stays FALSE for this kind so the
+                    // entry-copy / move-suppression symmetry is unchanged.
+                    "Option" | "Result" => EnumDropKind::BoxedOptRes,
                     // B-2026-06-13-13: a named non-shared user struct laid out
                     // inline in the variant payload (e.g. the lexer's
                     // `CStringLiteral(CStr{Vec[u8]})`). Its own

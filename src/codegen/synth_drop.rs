@@ -246,6 +246,63 @@ impl<'ctx> super::Codegen<'ctx> {
 
                             self.builder.position_at_end(skip_bb);
                         }
+                        EnumDropKind::BoxedOptRes => {
+                            // B-2026-08-05-7 — free the heap box the pack side
+                            // minted for an `Option`/`Result` payload. Its
+                            // pointer is the field's single payload word;
+                            // `inttoptr` it, null-guard (never packed, or a
+                            // whole-value move already zeroed the slot), free,
+                            // and re-zero the word so a re-entrant drop is a
+                            // no-op — the same defensive re-zero the
+                            // `VecOrString` arm does to its cap.
+                            //
+                            // BOX ONLY, deliberately: the interior belongs to
+                            // whoever matched it out, and `is_heap_bearing()`
+                            // is false for this kind precisely so the entry
+                            // deep-copy never duplicates the box and the
+                            // match-out suppression never zeroes this word.
+                            // Freeing the interior here would double-free the
+                            // buffer a `W(Some(s))` arm's `s` already owns.
+                            let w_idx = (*start_word + 1) as u32;
+                            if let Ok(word_ptr) = self.builder.build_struct_gep(
+                                layout.llvm_type,
+                                p_arg,
+                                w_idx,
+                                "drop.optres.box.wp",
+                            ) {
+                                let w = self
+                                    .builder
+                                    .build_load(i64_t, word_ptr, "drop.optres.box.w")
+                                    .unwrap()
+                                    .into_int_value();
+                                let box_ptr = self
+                                    .builder
+                                    .build_int_to_ptr(w, ptr_ty, "drop.optres.box.p")
+                                    .unwrap();
+                                let is_null = self
+                                    .builder
+                                    .build_is_null(box_ptr, "drop.optres.box.isnull")
+                                    .unwrap();
+                                let free_bb = self
+                                    .context
+                                    .append_basic_block(drop_fn, "drop.optres.box.free");
+                                let skip_bb = self
+                                    .context
+                                    .append_basic_block(drop_fn, "drop.optres.box.skip");
+                                self.builder
+                                    .build_conditional_branch(is_null, skip_bb, free_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(free_bb);
+                                self.builder
+                                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                                    .unwrap();
+                                self.builder
+                                    .build_store(word_ptr, i64_t.const_int(0, false))
+                                    .unwrap();
+                                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                                self.builder.position_at_end(skip_bb);
+                            }
+                        }
                         EnumDropKind::NestedStruct => {
                             // The inline struct payload starts at word
                             // `start_word`; its first LLVM field index is

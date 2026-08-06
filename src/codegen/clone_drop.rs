@@ -1054,6 +1054,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // by (variant, llvm field index). Done before any BB of this fn is
         // filled so the builder isn't yanked mid-block.
         let mut field_clones: Vec<(String, u32, FunctionValue<'ctx>)> = Vec::new();
+        // B-2026-08-05-7 — heap-BOXED `Option`/`Result` payload fields, kept out
+        // of `field_clones`: their payload word is a box POINTER, not the value,
+        // so handing it to `emit_owning_clone_fn_for_type_expr` would read the
+        // pointer as the Option's tag and clone garbage. Each gets its own box
+        // in the destination instead (see the apply loop below).
+        let mut boxed_fields: Vec<(String, u32, BasicTypeEnum<'ctx>)> = Vec::new();
         for (variant_name, _tag) in &tag_entries {
             let (Some(kinds), Some(offsets)) = (
                 layout.field_drop_kinds.get(variant_name),
@@ -1075,6 +1081,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(field_te) = field_tes.get(fi).cloned() else {
                     continue;
                 };
+                if *kind == EnumDropKind::BoxedOptRes {
+                    boxed_fields.push((
+                        variant_name.clone(),
+                        (*start_word + 1) as u32,
+                        self.llvm_type_for_type_expr(&field_te),
+                    ));
+                    continue;
+                }
                 let child_fn = self.emit_owning_clone_fn_for_type_expr(&field_te);
                 // Field index in `llvm_type`: data/struct word at `start_word
                 // + 1` (tag is field 0), matching `emit_enum_drop_switch`.
@@ -1142,6 +1156,85 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_call(*child_fn, &[src_field.into(), dst_field.into()], "")
                     .unwrap();
+            }
+            // B-2026-08-05-7 — give the clone its OWN box. The whole-value
+            // bitcopy above left `dst`'s word pointing at the SOURCE's box, and
+            // now that `emit_enum_drop_switch` frees that box per enum value,
+            // two values sharing one box would double-free it. Malloc a fresh
+            // box and copy the payload struct across.
+            //
+            // The INTERIOR stays shallow — the same shared-buffer semantics the
+            // shallow bitcopy already gave this payload before the drop existed.
+            // Deep-cloning it here would leave the clone's interior owned by
+            // nobody (the box free is box-only by construction), converting a
+            // shared buffer into a leak. Box ownership 1:1 with enum values is
+            // exactly what the new drop needs and no more.
+            for (vn, field_idx, payload_ty) in &boxed_fields {
+                if vn != variant_name {
+                    continue;
+                }
+                let src_word_ptr = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, src, *field_idx, "clone.optres.s.wp")
+                    .unwrap();
+                let dst_word_ptr = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, dst, *field_idx, "clone.optres.d.wp")
+                    .unwrap();
+                let src_word = self
+                    .builder
+                    .build_load(i64_t, src_word_ptr, "clone.optres.s.w")
+                    .unwrap()
+                    .into_int_value();
+                let src_box = self
+                    .builder
+                    .build_int_to_ptr(src_word, ptr_ty, "clone.optres.s.box")
+                    .unwrap();
+                let is_null = self
+                    .builder
+                    .build_is_null(src_box, "clone.optres.isnull")
+                    .unwrap();
+                let copy_bb = self
+                    .context
+                    .append_basic_block(clone_fn, "clone.optres.copy");
+                let join_bb = self
+                    .context
+                    .append_basic_block(clone_fn, "clone.optres.join");
+                self.builder
+                    .build_conditional_branch(is_null, join_bb, copy_bb)
+                    .unwrap();
+                self.builder.position_at_end(copy_bb);
+                let loaded = self
+                    .builder
+                    .build_load(*payload_ty, src_box, "clone.optres.ld")
+                    .unwrap();
+                let size = payload_ty
+                    .size_of()
+                    .map(|s| {
+                        if s.get_type().get_bit_width() == 64 {
+                            s
+                        } else {
+                            self.builder
+                                .build_int_z_extend(s, i64_t, "clone.optres.sz64")
+                                .unwrap()
+                        }
+                    })
+                    .unwrap_or_else(|| i64_t.const_int(32, false));
+                let new_box = self
+                    .builder
+                    .build_call(self.malloc_fn, &[size.into()], "clone.optres.box")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder.build_store(new_box, loaded).unwrap();
+                let new_word = self
+                    .builder
+                    .build_ptr_to_int(new_box, i64_t, "clone.optres.d.w")
+                    .unwrap();
+                self.builder.build_store(dst_word_ptr, new_word).unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
             }
             self.builder.build_unconditional_branch(exit_bb).unwrap();
         }

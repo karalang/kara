@@ -34244,6 +34244,141 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-7 — the heap BOX behind an `Option`/`Result` payload of a
+    /// USER enum. `payload_word_count_for_type_expr`'s enum-in-enum carve-out
+    /// sizes such a payload at ONE word while its real LLVM width is four
+    /// (`Option`) or six (`Result`), so `coerce_to_payload_words` ALWAYS boxes
+    /// it and parks the pointer in that word. Nothing owned the box: the drop
+    /// switch classified the field `None` and emitted no cleanup at all, the
+    /// match debox in `reconstruct_payload_value` only LOADS through the
+    /// pointer, and `?`'s free is a different carrier. So EVERY construction of
+    /// such a variant leaked 32 bytes (48 for `Result`) — heap payload or not,
+    /// matched out or not.
+    ///
+    /// String payloads here are LITERALS (cap 0, `.rodata`) on purpose. The new
+    /// drop is BOX-ONLY: the interior belongs to whoever matched it out, and
+    /// freeing it here would double-free the buffer a `W(Some(s))` arm's `s`
+    /// already owns. Reclaiming a heap interior that is NEVER matched out needs
+    /// the entry-copy to duplicate the box and is a separate slice — so this
+    /// fixture gates the box and says so rather than pretending otherwise.
+    ///
+    /// The whole-value MOVE (`let w2 = w;`) is the double-free direction and is
+    /// exercised deliberately: it hands the destination the same box pointer,
+    /// and until `zero_enum_payload_caps` learned this kind it aborted under
+    /// ASAN the moment the drop existed. The by-value call and the `Empty`
+    /// (no-box) variant are the other two directions — a param registers no
+    /// drop, and a null box must run nothing.
+    ///
+    /// NOT covered, deliberately: a fresh-temp ENUM passed by value
+    /// (`take(Wrap.N(Some(2)))`) still leaks its box — the temp has no binding,
+    /// so nothing registers `track_enum_var` for it. Measured 320 B / 10 both
+    /// before and after this fix, so it is pre-existing and untouched; filed as
+    /// B-2026-08-06-9 with the reduction. Every enum reaching `take` here is
+    /// either a named binding or box-free for that reason.
+    #[test]
+    fn asan_enum_boxed_optres_payload_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+enum Wrap {
+    W(Option[String]),
+    N(Option[i64]),
+    R(Result[String, i64]),
+    Empty,
+}
+
+fn take(w: Wrap) -> i64 {
+    match w {
+        Wrap.W(Option.Some(s)) => s.len(),
+        Wrap.W(Option.None) => -1,
+        Wrap.N(Option.Some(n)) => n,
+        Wrap.N(Option.None) => -2,
+        Wrap.R(Result.Ok(s)) => s.len(),
+        Wrap.R(Result.Err(e)) => e,
+        Wrap.Empty => -3,
+    }
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        // matched out
+        let a: Wrap = Wrap.W(Option.Some("boxed payload well past inline width"));
+        match a {
+            Wrap.W(Option.Some(s)) => { acc = acc + s.len(); },
+            _ => { acc = acc - 1; },
+        }
+        // NEVER matched out — the box must still be freed
+        let b: Wrap = Wrap.N(Option.Some(7));
+        match b {
+            Wrap.Empty => { acc = acc - 1; },
+            _ => { acc = acc + 1; },
+        }
+        // whole-value MOVE — source and destination share one box
+        let c: Wrap = Wrap.R(Result.Ok("boxed result payload past inline width"));
+        let c2 = c;
+        acc = acc + take(c2);
+        // no box at all — the null-box direction through the same callee
+        acc = acc + take(Wrap.Empty);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["2880"],
+            "enum_boxed_optres_payload",
+        );
+    }
+
+    /// B-2026-08-05-7 — the ARGUMENT leg of the same family: a fresh-temp
+    /// `Option[T]` with a heap-BOXED payload handed straight to an owned param.
+    /// A NAMED binding gets its box drop at the let site
+    /// (`track_boxed_enum_var`) and a fresh-temp SCRUTINEE gets one from
+    /// `materialize_freshtemp_enum_scrutinee`; `classify(Some(Some(42)))` had
+    /// neither, and a param registers no drop of its own, so the box leaked once
+    /// per call.
+    ///
+    /// `Option.None` is the null-box direction — nothing to free.
+    ///
+    /// NOT covered here, and deliberately so: passing a NAMED `Option` binding
+    /// by value (`let bound = Some(Some(1)); classify(bound);`) still leaks its
+    /// box. That is a DIFFERENT owner problem — the call site's
+    /// `suppress_inline_option_result_binding_move` zeroes the source slot as a
+    /// move, which disarms the let-site `BoxedEnumDrop`, while the callee's
+    /// param registers no drop to take it over. Measured 320 B / 10 both before
+    /// and after this fix, so it is pre-existing and untouched; filed as
+    /// B-2026-08-06-9 with the reduction.
+    #[test]
+    fn asan_freshtemp_boxed_option_arg_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn classify(v: Option[Option[i64]]) -> i64 {
+    match v {
+        Option.Some(Option.Some(x)) => x,
+        Option.Some(Option.None) => -1,
+        Option.None => -2,
+    }
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        // the leaking shape: fresh temp into an owned param
+        acc = acc + classify(Option.Some(Option.Some(42)));
+        acc = acc + classify(Option.Some(Option.None));
+        // null box — nothing to free
+        acc = acc + classify(Option.None);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["1560"],
+            "freshtemp_boxed_option_arg",
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words

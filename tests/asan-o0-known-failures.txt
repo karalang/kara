@@ -41,14 +41,20 @@
 # -O0-only. `asan_tensor_fresh_temp_owned_arg_no_leak` carries the summing form
 # so the default leg gates it too.
 
-# ── B-2026-08-05-7 (open) — the two it triaged and reduced but did not fix ──
+# B-2026-08-05-7's nested-Option entry
+# (asan_nested_option_pattern_boxed_payload_lifecycle_clean) was REMOVED
+# 2026-08-06: all three of its boxes now have owners. Its old line here read
+# "`Wrap.W(Option.Some(s))` orphans the box; the control that never matches it
+# out is clean" — that attribution was wrong and is worth recording, because it
+# pointed at the wrong site. The box leaks on CONSTRUCTION: the same value
+# matched with a bare `_` leaks identically (measured 288 B / 9 at HEAD before
+# the fix). The fixture's "clean control" is a different VALUE — a named
+# `Option[Option[String]]` whose let-site box drop does own its box — not the
+# same value left unmatched.
+
+# ── B-2026-08-05-7 (open) — the one it triaged and reduced but did not fix ──
 # An `Option[H]` field read out of a shared-enum payload and passed BY VALUE to
 # a free fn. 64 bytes in 2 allocations. Re-check against B-2026-08-05-33's
 # caller-retains law before diagnosing it fresh — that row is now fixed, and
 # this one did not move with it.
 memory_sanitizer_tests::asan_shared_payload_view_optres_field_call_arg_copy_no_leak_no_double_free
-
-# A boxed payload matched out through a NESTED pattern —
-# `Wrap.W(Option.Some(s))` orphans the 32-byte box; the control that never
-# matches it out is clean. 96 bytes in 3 allocations.
-memory_sanitizer_tests::asan_nested_option_pattern_boxed_payload_lifecycle_clean
