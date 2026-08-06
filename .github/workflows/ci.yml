@@ -9,6 +9,34 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# One CI run per ref at a time; a new push cancels the run it supersedes.
+#
+# WITHOUT THIS the workflow's 20 jobs are spawned per push with nothing
+# superseding anything, and at this repo's push rate the matrix multiplies
+# faster than the runner pool drains. Measured 2026-08-06 on `main`: six runs
+# queued simultaneously (oldest 1h45m), and in the last two runs to reach a
+# conclusion, ELEVEN of 25 jobs failed at "Set up job" as their only step (no
+# runner assigned) while six more were cancelled after 1-2 hours queued. Every
+# job that got a runner passed — so the red was starvation, not tests.
+#
+# THE TRADE, taken deliberately: `cancel-in-progress` on `main` means an
+# intermediate commit can be superseded before its jobs finish, so per-commit
+# signal is not guaranteed there. That is worth it only because the starved
+# alternative gave no signal at ALL — a cancelled job and a green one are not
+# distinguishable at a glance, which is how a red `main` can look tested. If
+# the push rate ever drops back to human pace, prefer
+# `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}` so `main` keeps
+# a result per commit.
+#
+# This is also the prerequisite for promoting any job here to a REQUIRED check
+# (B-2026-08-04-17 wants `memory-sanitizer-o0` required): required checks gate
+# direct pushes to a protected branch, not just PR merges, and this repo
+# commits straight to `main` — so a check that cannot get a runner would block
+# every contributor rather than merely delay them.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test (${{ matrix.os }})
@@ -661,6 +689,16 @@ jobs:
   #
   # Cheap: the suite itself is ~90s (the archive build dominates). Also a
   # SEPARATE, NON-required job, matching the other two sanitizer legs.
+  #
+  # STILL NON-REQUIRED, and as of 2026-08-06 that is a CI-capacity question
+  # rather than a leg-health one. The leg is green on `main` (961 passed / 0
+  # failed at c00ea51a, quarantine list empty), but this job did not actually
+  # EXECUTE in either of the two preceding runs to reach a conclusion — it was
+  # cancelled after 1h47m queued, then failed at "Set up job". Promoting it
+  # while that is true would block direct pushes to `main` on runner
+  # availability. The `concurrency` group added at the top of this file is the
+  # first half of the fix; the second is watching this job complete green a few
+  # times before flipping the branch-protection setting. B-2026-08-04-17.
   memory-sanitizer-o0:
     name: Memory sanitizer -O0 (unoptimized allocations)
     runs-on: ubuntu-latest
