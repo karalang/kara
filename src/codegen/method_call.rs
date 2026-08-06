@@ -13764,6 +13764,34 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         self.var_type_names.insert(synth.clone(), type_name.clone());
+        // B-2026-08-06-12 — the synth local needs the receiver's INSTANTIATION
+        // too, not just its base name. Re-entering with an Identifier routes
+        // through the generic-method mono arm, and that arm reads
+        // `enum_inst_var_types` to pick the monomorph; with only
+        // `var_type_names` seeded it sees a bare `Box` and emits ONE unmangled
+        // `@Box.take({ i64 })` at the erased base layout for every
+        // instantiation. `let b = Box { .. }; b.take()` works purely because
+        // the let-site seeds this same record (stmts.rs).
+        //
+        // Both halves of the bug key off this one record — the literal's own
+        // layout (`struct_inst_mono_type_for_expr`) and the callee selection —
+        // which is why fixing either alone just moves the verifier error:
+        // a correctly-shaped `{ { ptr, i64, i64 } }` receiver handed to a
+        // callee still declared `{ i64 }`.
+        //
+        // Span-keyed lookup first (correct wherever the span is uncontested),
+        // then the field-expression recovery for the receiver-position literal
+        // whose span the MethodCall clobbers.
+        if let Some(inst) = self
+            .enum_inst_type_from_span(object)
+            .filter(|te| {
+                self.is_generic_named_struct_type_expr(te)
+                    || self.is_generic_named_enum_type_expr(te)
+            })
+            .or_else(|| self.struct_literal_inst_from_fields(object))
+        {
+            self.enum_inst_var_types.insert(synth.clone(), inst);
+        }
 
         // Drop-track the materialized temp (for a fresh-owned receiver),
         // mirroring the `let`-binding path in `stmts.rs`. MEMORY tracking is

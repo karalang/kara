@@ -6572,6 +6572,65 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("31\n36\n40\n7\n"));
     }
 
+    /// B-2026-08-06-12 — a generic struct LITERAL in RECEIVER position.
+    ///
+    /// `Box { v: <String> }.take()` passed `karac check` and ran correctly
+    /// under the interpreter, then failed `karac build` with an LLVM verifier
+    /// error (`insertvalue { i64 } undef, { ptr, i64, i64 }`). A run-vs-build
+    /// divergence, so it belongs on the default codegen leg.
+    ///
+    /// The parser gives a `MethodCall` its RECEIVER's span, so the literal and
+    /// the call share one `expr_types` key and the call's type wins it; the
+    /// literal's instantiation record is dropped entirely. BOTH the literal's
+    /// layout and the callee's monomorph selection read that one missing
+    /// record, so fixing either alone only moves the error — a correctly
+    /// shaped `{ { ptr, i64, i64 } }` receiver handed to a callee still
+    /// declared `{ i64 }`. Recovery is from the literal's own field
+    /// initializers, whose spans are uncontested.
+    ///
+    /// Carries the whole isolation table, because four of these shapes already
+    /// worked and must keep working — the failure needs a GENERIC struct AND a
+    /// literal in receiver position AND a wide instantiated field. `peek` is a
+    /// `ref self` method whose body ignores the field: it failed too, so the
+    /// bug never depended on the body touching `T`. It is a NON-oracle for
+    /// layout on its own (it returns a constant), which is why every other arm
+    /// reads the payload back.
+    ///
+    /// `Num[i64]` is a SEPARATE struct rather than a second `Box`
+    /// instantiation on purpose. Two instantiations of one generic struct
+    /// reached through a mix of literal and named receivers hit a distinct,
+    /// PRE-EXISTING defect — the unmangled `@Box.take` slot takes whichever
+    /// signature gets there first — which reproduces identically without this
+    /// change and is filed separately. Mixing it in here would make this test
+    /// red for a reason it does not own.
+    ///
+    /// `env.args().len()` seeds the width so the payload is not a compile-time
+    /// constant (B-2026-08-04-17).
+    #[test]
+    fn e2e_generic_struct_literal_as_method_receiver() {
+        let src = r#"
+struct Box[T] { v: T }
+struct Pair[T] { a: T, b: i64 }
+struct Num[T] { n: T }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+impl[T] Box[T] { fn peek(ref self) -> i64 { 7 } }
+impl[T] Pair[T] { fn first(self) -> T { self.a } }
+impl[T] Num[T] { fn get(self) -> T { self.n } }
+fn takefn[T](b: Box[T]) -> T { b.v }
+fn main() {
+    let n: i64 = env.args().len();
+    println(Box { v: "payload-past-inline-width-here".repeat(n) }.take().len());
+    println(Pair { a: "second-field-shape".repeat(n), b: 7 }.first().len());
+    println(Box { v: "ignored-by-the-body".repeat(n) }.peek());
+    println(takefn(Box { v: "free-fn-arg-position".repeat(n) }).len());
+    let b = Box { v: "named-receiver-still-works".repeat(n) };
+    println(b.take().len());
+    println(Num { n: n + 41 }.get());
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("30\n18\n7\n20\n26\n42\n"));
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///

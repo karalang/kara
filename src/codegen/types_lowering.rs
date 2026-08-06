@@ -198,17 +198,132 @@ impl<'ctx> super::Codegen<'ctx> {
     /// instantiation record (`enum_inst_type_exprs`, which captures every
     /// `Named { args }` expr type — structs included). `None` when the expr has
     /// no recorded generic instantiation (B-2026-07-03-23).
+    ///
+    /// Falls back to the literal's own field expressions when the span-keyed
+    /// record is absent — a receiver-position literal shares its span with the
+    /// enclosing `MethodCall` and loses the record entirely. See
+    /// [`Self::struct_literal_inst_from_fields`]; B-2026-08-06-12.
     pub(super) fn struct_inst_mono_type_for_expr(
         &self,
         expr: &Expr,
     ) -> Option<inkwell::types::StructType<'ctx>> {
-        let te = self.enum_inst_type_from_span(expr)?;
+        let te = self
+            .enum_inst_type_from_span(expr)
+            .or_else(|| self.struct_literal_inst_from_fields(expr))?;
         if let TypeKind::Path(p) = &te.kind {
             let name = p.segments.last()?;
             let args = p.generic_args.as_ref()?;
             return self.mono_struct_type(name, args);
         }
         None
+    }
+
+    /// Recover a generic struct LITERAL's instantiation from its own FIELD
+    /// EXPRESSIONS, without consulting any span-keyed table for the literal
+    /// itself. B-2026-08-06-12.
+    ///
+    /// The parser gives a `MethodCall` its RECEIVER's span, so a literal in
+    /// receiver position (`Box { v: <String> }.take()`) shares one
+    /// `expr_types` key with the call, the call's type wins it, and
+    /// `enum_inst_type_exprs` ends up with no entry at all for the literal —
+    /// the lowering pass keeps only `Named { args }` types, and the call's
+    /// `i64` is not one. The same literal as a free-fn ARGUMENT is fine,
+    /// because a `Call` node has its own span. The literal's FIELD
+    /// initializers, though, are ordinary sub-expressions with uncontested
+    /// spans, and for a param that appears as a bare field type they pin the
+    /// instantiation directly.
+    ///
+    /// Fail-closed at every step, because a WRONG instantiation is worse than
+    /// none (it silently lowers a struct at another type's layout): struct
+    /// literals only, no spread, the struct must be generic, EVERY param must
+    /// be pinned by some field whose DECLARED type is exactly that bare param,
+    /// and every recovered argument must carry a non-empty type name. A param
+    /// reachable only through a container field (`xs: Vec[T]`) is deliberately
+    /// not inferred here — that is the annotation's job
+    /// (`is_generic_named_struct_type_expr`, B-2026-07-11-31).
+    pub(super) fn struct_literal_inst_from_fields(&self, expr: &Expr) -> Option<TypeExpr> {
+        let ExprKind::StructLiteral {
+            path,
+            fields,
+            spread,
+        } = &expr.kind
+        else {
+            return None;
+        };
+        if spread.is_some() {
+            return None;
+        }
+        let name = path.last()?;
+        let params = self.struct_generic_params.get(name.as_str())?;
+        if params.is_empty() {
+            return None;
+        }
+        let decl_names = self.struct_field_names.get(name.as_str())?;
+        let decl_tes = self.struct_field_type_exprs.get(name.as_str())?;
+        let mut args = Vec::with_capacity(params.len());
+        for param in params {
+            // A field whose declared type is EXACTLY the bare param — not
+            // `Vec[T]`, not `Option[T]`, whose element types this cannot read
+            // off the initializer.
+            let idx = decl_tes.iter().position(|te| match &te.kind {
+                TypeKind::Path(p) => {
+                    p.generic_args.is_none()
+                        && p.segments.len() == 1
+                        && p.segments[0].as_str() == param.as_str()
+                }
+                _ => false,
+            })?;
+            let fname = decl_names.get(idx)?;
+            let init = fields.iter().find(|f| &f.name == fname).map(|f| &f.value)?;
+            let te = self.concrete_type_expr_of_expr(init)?;
+            args.push(GenericArg::Type(te));
+        }
+        Some(TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec![name.clone()],
+                generic_args: Some(args),
+                span: expr.span.clone(),
+            }),
+            span: expr.span.clone(),
+        })
+    }
+
+    /// Best-effort concrete `TypeExpr` for an expression, span-keyed on the
+    /// expression ITSELF (so it is only sound where that span is uncontested —
+    /// see [`Self::struct_literal_inst_from_fields`], its only caller).
+    ///
+    /// Tries the instantiation record first (it carries generic args), then the
+    /// concrete-named table, then the String set, and only then falls back to
+    /// name inference. The order matters: `infer_arg_elem_te` alone returns an
+    /// EMPTY name for a METHOD CALL, and `Box { v: "…".repeat(n) }` — a fresh
+    /// heap value built inline — is exactly the shape this exists for, so the
+    /// fallback-first spelling resolves nothing. `None` rather than a nameless
+    /// `TypeExpr` when every source is silent.
+    fn concrete_type_expr_of_expr(&self, e: &Expr) -> Option<TypeExpr> {
+        let key = (e.span.offset, e.span.length);
+        if let Some(te) = self.enum_inst_type_from_span(e) {
+            return Some(te);
+        }
+        if let Some(te) = self.concrete_named_type_exprs.get(&key) {
+            return Some(te.clone());
+        }
+        if self.string_typed_exprs.contains(&key) {
+            return Some(TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec!["String".to_string()],
+                    generic_args: None,
+                    span: e.span.clone(),
+                }),
+                span: e.span.clone(),
+            });
+        }
+        let te = self.infer_arg_elem_te(e);
+        let named = match &te.kind {
+            TypeKind::Path(p) => p.segments.last().is_some_and(|s| !s.is_empty()),
+            TypeKind::Tuple(elems) => !elems.is_empty(),
+            _ => false,
+        };
+        named.then_some(te)
     }
 
     pub(super) fn llvm_type_for_type_expr(&self, ty: &TypeExpr) -> BasicTypeEnum<'ctx> {
