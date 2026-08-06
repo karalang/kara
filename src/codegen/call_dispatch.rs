@@ -2690,7 +2690,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or(false);
             let shared = self.shared_types.contains_key(&enum_name);
             let user_drop = has_user_drop && !shared;
-            let heap_payload = self.enum_has_heap_payload(&enum_name);
+            // B-2026-08-06-9 leg B — `enum_drop_switch_does_work`, not
+            // `enum_has_heap_payload`. A fresh enum TEMP whose only drop work is
+            // freeing an `Option`/`Result` payload BOX (`EnumDropKind::BoxedOptRes`,
+            // not heap-BEARING by design) still needs this caller-side owner: it
+            // has no binding, so nothing else registers `track_enum_var` for it
+            // and the box leaked once per call. The two predicates are separate
+            // because `enum_has_heap_payload` also selects `compile_enum_eq`'s
+            // variant-aware comparison, which this must not disturb.
+            let heap_payload = self.enum_drop_switch_does_work(&enum_name);
             // B-2026-08-01-14 — entry-copy passthrough (`pass2(E2.B(..))`
             // where the callee returns its param): the callee deep-copies
             // the payload at entry and the COPY flows out to the result's

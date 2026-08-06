@@ -34269,12 +34269,19 @@ fn main() {
     /// (no-box) variant are the other two directions — a param registers no
     /// drop, and a null box must run nothing.
     ///
-    /// NOT covered, deliberately: a fresh-temp ENUM passed by value
-    /// (`take(Wrap.N(Some(2)))`) still leaks its box — the temp has no binding,
-    /// so nothing registers `track_enum_var` for it. Measured 320 B / 10 both
-    /// before and after this fix, so it is pre-existing and untouched; filed as
-    /// B-2026-08-06-9 with the reduction. Every enum reaching `take` here is
-    /// either a named binding or box-free for that reason.
+    /// The FRESH-TEMP enum argument (`take(Wrap.N(Some(2)))`) is here because it
+    /// was the first casualty of the new drop and needed its own fix
+    /// (B-2026-08-06-9 leg B): the temp has no binding, and the call site's
+    /// registrar asked `enum_has_heap_payload`, which answers false for a kind
+    /// that is not heap-BEARING even though its drop switch frees a box. It now
+    /// asks `enum_drop_switch_does_work` instead. Measured 320 B / 10 before
+    /// that fix.
+    ///
+    /// STILL NOT COVERED: a NAMED `Option` binding passed by value
+    /// (`let bound = Some(Some(1)); classify(bound);`) leaks its box — the call
+    /// site's move-zeroing disarms the let-site `BoxedEnumDrop` and the callee
+    /// takes nothing over. Pre-existing and untouched here; B-2026-08-06-9
+    /// leg A.
     #[test]
     fn asan_enum_boxed_optres_payload_no_leak_no_double_free() {
         assert_clean_asan_run(
@@ -34318,6 +34325,9 @@ fn main() {
         let c: Wrap = Wrap.R(Result.Ok("boxed result payload past inline width"));
         let c2 = c;
         acc = acc + take(c2);
+        // a FRESH TEMP enum by value — no binding to hang a drop on, so the
+        // call site is the only frame that can own its box
+        acc = acc + take(Wrap.N(Option.Some(2)));
         // no box at all — the null-box direction through the same callee
         acc = acc + take(Wrap.Empty);
         i = i + 1;
@@ -34325,7 +34335,7 @@ fn main() {
     println(acc);
 }
 "#,
-            &["2880"],
+            &["2960"],
             "enum_boxed_optres_payload",
         );
     }

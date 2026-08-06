@@ -5356,6 +5356,29 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// Would `emit_enum_drop_switch` emit a fn for `enum_name` — i.e. does its
+    /// drop do any work at all? The DROP-REGISTRATION question, deliberately
+    /// separate from [`Self::enum_has_heap_payload`]: that predicate also picks
+    /// `compile_enum_eq`'s variant-aware comparison path, and widening it would
+    /// change `==` semantics for types that only needed an owner.
+    ///
+    /// B-2026-08-06-9 leg B / B-2026-08-05-7 — `EnumDropKind::BoxedOptRes` is
+    /// the difference between the two. It is not heap-BEARING (the by-value
+    /// entry-copy deliberately does not duplicate its box) yet the drop switch
+    /// does free that box, so a fresh enum TEMP carrying only that kind still
+    /// needs a caller-side owner: `take(Wrap.N(Some(2)))` leaked 32 bytes per
+    /// call because the temp has no binding and nothing registered
+    /// `track_enum_var` for it. Keyed on `!= None`, the same gate
+    /// `emit_enum_drop_switch` itself uses, so the two cannot drift.
+    pub(super) fn enum_drop_switch_does_work(&self, enum_name: &str) -> bool {
+        self.enum_layouts.get(enum_name).is_some_and(|l| {
+            l.field_drop_kinds
+                .values()
+                .flatten()
+                .any(|k| *k != super::state::EnumDropKind::None)
+        })
+    }
+
     /// Per-variant `(tag, name, field-type-exprs)` for `enum_name`, scanning the
     /// user program and the baked stdlib. Drives `compile_enum_eq`'s per-variant
     /// typed payload comparison (and the #14 enum-param entry deep-copy, which
