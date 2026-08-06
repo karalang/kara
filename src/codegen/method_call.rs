@@ -13810,8 +13810,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // Span-keyed lookup first (correct wherever the span is uncontested),
         // then the field-expression recovery for the receiver-position literal
         // whose span the MethodCall clobbers.
+        // B-2026-08-06-22 — resolve the receiver expression's OWN instantiation
+        // before consulting its span. A `MethodCall` inherits its RECEIVER's
+        // span from the parser, so for a chained `outer.take()` the span-keyed
+        // lookup finds `outer`'s record and answers `Box[Box[Wide]]` — the type
+        // being called ON, not the type the call RETURNS. It passes the generic
+        // filter, so the synth local was seeded one level too high and the next
+        // link in the chain selected its monomorph at the wrong instantiation
+        // (emitting a `take` over `{ i64 }` for `Box[Wide]`). Same span
+        // collision B-2026-08-06-19 fixed inside `enum_inst_type_of_expr`,
+        // which is exactly why calling THAT here is the fix: it tries the
+        // call's own return instantiation first and falls back to the span.
         if let Some(inst) = self
-            .enum_inst_type_from_span(object)
+            .enum_inst_type_of_expr(object)
             .filter(|te| {
                 self.is_generic_named_struct_type_expr(te)
                     || self.is_generic_named_enum_type_expr(te)

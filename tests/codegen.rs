@@ -6682,6 +6682,53 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("30\n18\n7\n20\n26\n42\n"));
     }
 
+    /// B-2026-08-06-22 — a DOUBLY-nested generic chain, `Box[Box[Wide]]`.
+    ///
+    /// `outer.take().take().f` passed `karac check`, ran correctly under the
+    /// interpreter, and failed `karac build` with "cannot resolve field 'f'",
+    /// while the fully-bound `let m = outer.take(); let q = m.take(); q.f`
+    /// built and ran. Its parent row B-2026-08-06-19 fixed the SINGLE-level
+    /// chain and did not reach this one.
+    ///
+    /// The cause is a SPAN COLLISION, not the value-representation mismatch the
+    /// original report guessed. A chained receiver is materialized into a synth
+    /// local by `try_compile_freshtemp_user_method`, and that local was seeded
+    /// from `enum_inst_type_from_span` — but the parser gives a `MethodCall`
+    /// its RECEIVER's span, so for `outer.take()` the span lookup answers
+    /// `Box[Box[Wide]]` (the type called ON) rather than `Box[Wide]` (the type
+    /// RETURNED). The next link then selected its monomorph one level too high
+    /// and emitted a `take` over `{ i64 }`, so the field read met an `i64`.
+    ///
+    /// The measured shape of the wrong answer is what pins this: the failing
+    /// build emitted a second `take` whose `self` was `{ i64 }` where the
+    /// working build emitted `{ i64 x6 }`.
+    #[test]
+    fn e2e_doubly_nested_generic_chain_builds() {
+        let Some(out) = run_program(
+            "struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }\n\
+             struct Box[T] { v: T }\n\
+             impl[T] Box[T] { fn take(self) -> T { self.v } }\n\
+             fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   let inner = Box { v: Wide { a: n, b: 2i64, c: 3i64, d: 4i64, e: 5i64, f: 6i64 } };\n\
+             \x20   let outer: Box[Box[Wide]] = Box { v: inner };\n\
+             \x20   println(outer.take().take().f);\n\
+             \x20   // the fully-bound twin, on its own value — `take(self)`\n\
+             \x20   // consumes, so it cannot re-use `outer`.\n\
+             \x20   let inner2 = Box { v: Wide { a: n, b: 2i64, c: 3i64, d: 4i64, e: 5i64, f: 6i64 } };\n\
+             \x20   let outer2: Box[Box[Wide]] = Box { v: inner2 };\n\
+             \x20   let m = outer2.take();\n\
+             \x20   let q = m.take();\n\
+             \x20   println(q.f);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        // The chained and the fully-bound spellings must agree — the bound one
+        // always worked, so it is the oracle here.
+        assert_eq!(out, "6\n6\n");
+    }
+
     /// B-2026-08-06-19 — a chained FIELD ACCESS on a GENERIC method's return.
     ///
     /// `w.take().f` passed `karac check`, ran correctly under the interpreter,
