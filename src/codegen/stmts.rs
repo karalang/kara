@@ -4840,7 +4840,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             })
                             .or_else(|| self.untyped_let_boxed_enum_te(value));
                         if let Some(te) = boxed_te.as_ref() {
-                            let boxed = self.boxed_enum_payload_variants(te);
+                            let mut boxed = self.boxed_enum_payload_variants(te);
                             if let Some(slot) = (!boxed.is_empty())
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
@@ -4902,6 +4902,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                     })
                                     .cloned()
                                     .map(|p| self.emit_drop_fn_for_type_expr(&p));
+                                // B-2026-08-06-21 — the RHS is a call that hands
+                                // one of its BOXED arguments straight back
+                                // (`fn id(o: Option[Option[i64]]) -> … { o }`).
+                                // Nothing entry-copies a box, so this binding
+                                // and the still-armed source binding hold ONE
+                                // pointer; registering here makes two owners and
+                                // both free it (confirmed in the emitted module:
+                                // one `@malloc`, two `@free`s). The source keeps
+                                // ownership and this binding registers nothing.
+                                //
+                                // Skipping the RESULT rather than suppressing
+                                // the SOURCE is deliberate, and measured: the
+                                // source is the sole owner when the result is
+                                // DISCARDED (`id(bound);` with no binding),
+                                // where zeroing it turned a clean program into a
+                                // 320-byte leak. Narrowing a registration is the
+                                // safe direction here; widening a free is not.
+                                if self.call_passes_armed_boxed_binding_through(value) {
+                                    boxed.clear();
+                                }
                                 for (enum_name, variant, inner) in &boxed {
                                     let nested_opt_drop = payload_te
                                         .as_ref()

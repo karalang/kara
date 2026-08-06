@@ -34863,6 +34863,72 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-21 — a boxed `Option`/`Result` binding passed by value to a
+    /// PASSTHROUGH callee was freed TWICE.
+    ///
+    /// The by-value arg loop deliberately skips its move-suppression when
+    /// `call_arg_flows_into_return` holds: the callee hands the same value
+    /// back, so the caller keeps its own cleanup. That is right for an INLINE
+    /// payload (an `Option[String]` passthrough is single-free, measured) and
+    /// for the entry-copied heap struct that path carves out, where two
+    /// allocations genuinely exist. It is wrong for a BOXED one — nothing
+    /// entry-copies a box, so the source binding and the result binding hold
+    /// ONE pointer and both `BoxedEnumDrop`s fire. Confirmed in the emitted
+    /// module before fixing: one `@malloc`, two `@free`s.
+    ///
+    /// The fix skips the RESULT binding's registration, leaving the source as
+    /// sole owner. The other direction — zeroing the source so the result owns
+    /// it — was tried and is wrong: when the result is DISCARDED the source is
+    /// the only owner there is, and zeroing it turned a clean program into a
+    /// 320-byte leak. The `idnest(d);` line below is that control and must stay
+    /// clean; narrowing a registration is the safe direction, widening a free
+    /// is not.
+    ///
+    /// `Option[Wide]` carries a heap-owning payload and aborted at the DEFAULT
+    /// -O2 as well as -O0, so this fixture is red on both legs rather than only
+    /// under `KARAC_OPT_LEVEL=0` — the row scoped the bug as -O0-only from its
+    /// single `Option[Option[i64]]` shape.
+    ///
+    /// Floored per B-2026-08-04-17 — opaque `env.args().len()` seed,
+    /// runtime-built payloads, `contains` byte reads (126 allocations at -O2).
+    #[test]
+    fn asan_boxed_enum_passthrough_arg_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, s: String }
+fn idnest(o: Option[Option[i64]]) -> Option[Option[i64]] { o }
+fn idwide(o: Option[Wide]) -> Option[Wide] { o }
+fn mk(n: i64, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let abk = idnest(a);
+        match abk { Option.Some(Option.Some(x)) => { acc = acc + x; } _ => { acc = acc - 1; } }
+        let w: Option[Wide] = Option.Some(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) });
+        let wbk = idwide(w);
+        match wbk { Option.Some(x) => { if x.s.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        idnest(d);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["860"],
+            "boxed_enum_passthrough_arg_single_owner",
+            100,
+        );
+    }
+
     #[test]
     fn asan_generic_mono_bare_t_local_reassign_no_leak() {
         // B-2026-07-15-6: inside a monomorphized generic fn, a bare-`T`

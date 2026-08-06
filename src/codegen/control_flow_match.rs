@@ -6429,6 +6429,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Surfaced by selfhost slice 3c-iv: `let mut body = Some(parse_block());
     /// TraitMethodNode { body, .. }` double-freed the boxed `Block` (the source
     /// binding's box drop + the returned node's downstream owner) → UAF.
+    /// Is `value` a CALL that hands one of its arguments — an already-armed
+    /// heap-BOXED `Option`/`Result` binding — straight back as its result?
+    /// B-2026-08-06-21.
+    ///
+    /// A by-value argument whose callee returns it (`call_arg_flows_into_return`)
+    /// deliberately keeps the CALLER's cleanup, because the callee handed the
+    /// same value back. That is right for an INLINE payload — measured, an
+    /// `Option[String]` passthrough is single-free — and for the entry-copied
+    /// heap struct that path carves out, where two allocations genuinely exist.
+    /// It is wrong for a BOXED one: nothing entry-copies a box, so the source
+    /// binding and the result binding hold the SAME pointer and both
+    /// `BoxedEnumDrop`s fire on it (confirmed in the emitted module — one
+    /// `@malloc`, two `@free`s).
+    ///
+    /// The caller uses this to skip the RESULT binding's registration, leaving
+    /// the source as sole owner. The other direction — zeroing the source and
+    /// letting the result own it — was tried and is WRONG: when the result is
+    /// discarded (`id(bound);`), the source is the only owner there is, and
+    /// zeroing it turned a clean program into a 320-byte leak.
+    ///
+    /// Boxed-ONLY: an inline payload's caller-retains behaviour on this path is
+    /// correct and tested, and must not be disturbed.
+    pub(super) fn call_passes_armed_boxed_binding_through(&self, value: &Expr) -> bool {
+        let ExprKind::Call { callee, args, .. } = &value.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(callee_name) = &callee.kind else {
+            return false;
+        };
+        args.iter().enumerate().any(|(i, a)| {
+            matches!(&a.value.kind, ExprKind::Identifier(n)
+                if self.boxed_enum_payload_vars.contains(n.as_str()))
+                && self.call_arg_flows_into_return(callee_name, i)
+        })
+    }
+
     pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {
         let ExprKind::Identifier(name) = &value.kind else {
             return;
