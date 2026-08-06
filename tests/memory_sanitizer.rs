@@ -11446,6 +11446,107 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-33 predicate (a) — a GENERIC wrapper passed by value at a
+    /// concrete argument, `fn sink(b: Box[String])` for `struct Box[T] { v: T }`.
+    ///
+    /// Same law as the (b) sibling above and the same own-by-transfer fix, but
+    /// it stayed live one commit longer for a reason worth pinning: the
+    /// ownership decision was already right, and the DROP SYNTHESIS emitted
+    /// nothing. Keyed by bare name it reads the declared `v: T`, classifies the
+    /// erased field as no-heap, and returns `None` — no `__karac_drop_struct_Box`
+    /// is defined at all, so `track_struct_var` registered nothing and the
+    /// (correct) transfer silently freed nothing. The concrete binding lives in
+    /// the param's own declared type, which a CONCRETE fn has no active
+    /// monomorph subst to supply; threading it makes the mono drop real.
+    ///
+    /// The paired double-free risk is `sink` MOVING the field out
+    /// (`asan_generic_wrapper_accessor_and_move_no_double_free`, B-2026-07-15-11)
+    /// — that test now runs against a param drop that actually fires, so the two
+    /// must be read together.
+    ///
+    /// Floored per B-2026-08-04-17: runtime-derived payload, read through
+    /// `len()` on the callee side so the entry is not a dead allocation at -O2.
+    #[test]
+    fn asan_generic_wrapper_by_value_param_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Box[T] { v: T }
+
+fn sink(b: Box[String]) -> i64 { b.v.len() }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut s: String = String.new();
+        s.push_str("payload-");
+        s.push_str(n.to_string());
+        s.push_str("-padded-out-to-force-heap");
+        let b = Box { v: s };
+        acc = acc + sink(b);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // "payload-" (8) + "1" (1) + "-padded-out-to-force-heap" (25) = 34,
+            // x 40 iterations.
+            &["1360"],
+            "generic_wrapper_by_value_param",
+            100,
+        );
+    }
+
+    /// B-2026-08-05-33 predicate (a), offset leg — the same by-value generic
+    /// param with the bare-`T` heap field in the MIDDLE of the struct.
+    ///
+    /// Separate from the single-field sibling because it fails differently. The
+    /// declared layout erases `v: T` to one i64 word while the instance is the
+    /// widened `{ptr,len,cap}`, so a drop synthesized against the declaration
+    /// GEPs the trailing `Vec[i64]` at the wrong offset — a wild free or a
+    /// SIGSEGV, not a leak. Resolving the param's declared instantiation is what
+    /// makes both the layout and the classification mono-correct (the same
+    /// widening B-2026-07-15-24 established for monomorph bodies), so a
+    /// regression that only restored the erased layout would still pass the
+    /// single-field test and abort here.
+    ///
+    /// Floored per B-2026-08-04-17: both heap fields are read through `len()` on
+    /// the callee side, so neither entry is a dead allocation at -O2.
+    #[test]
+    fn asan_generic_wrapper_mid_heap_field_by_value_param_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Multi[T] { a: i64, v: T, w: Vec[i64] }
+
+fn sink(m: Multi[String]) -> i64 { m.a + m.v.len() + m.w.len() }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut w: Vec[i64] = Vec.new();
+        w.push(i);
+        w.push(i + 1);
+        let mut s: String = String.new();
+        s.push_str("payload-");
+        s.push_str(n.to_string());
+        s.push_str("-padded-out-to-force-heap");
+        let m = Multi { a: 1, v: s, w: w };
+        acc = acc + sink(m);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // (1 + 34 + 2) x 40 iterations.
+            &["1480"],
+            "generic_wrapper_mid_heap_field_by_value_param",
+            100,
+        );
+    }
+
     #[test]
     fn asan_ref_param_option_field_consume_no_leak_no_double_free() {
         // B-2026-07-21-9 memory leg: the ref-chain Option clone. Double-free

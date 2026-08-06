@@ -1815,10 +1815,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         // callee-owned. This closes the by-value-aggregate-param
                         // transfer-out double-free without a caller-side move
                         // (which Kāra's non-rejecting move-checker can't make
-                        // sound). No-op for shared / Map-bearing aggregates
-                        // (left on caller-retains). See param_own.rs.
+                        // sound). A shared-owning aggregate stays on
+                        // caller-retains (the CALLER keeps its drop there,
+                        // B-2026-08-05-32); a Map-bearing one is owned by
+                        // TRANSFER since B-2026-08-05-33. See param_own.rs.
+                        // The param's recorded generic instantiation (seeded a
+                        // few lines above) rides along so the own-by-transfer
+                        // arm's drop resolves a bare-`T` field through it — a
+                        // concrete fn has no active monomorph subst to do that
+                        // (B-2026-08-05-33 predicate (a)).
+                        let param_inst = self.enum_inst_var_types.get(&param_name).cloned();
                         if matches!(&param.ty.kind, TypeKind::Path(_))
-                            && self.make_aggregate_param_callee_owned(type_name, alloca)
+                            && self.make_aggregate_param_callee_owned_inst(
+                                type_name, alloca, param_inst,
+                            )
                         {
                             // #17 gap 1 — the param is now a callee-owned local:
                             // its heap fields are INDEPENDENT (entry-copied) and

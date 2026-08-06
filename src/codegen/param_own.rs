@@ -82,6 +82,23 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         slot: PointerValue<'ctx>,
     ) -> bool {
+        self.make_aggregate_param_callee_owned_inst(type_name, slot, None)
+    }
+
+    /// [`Self::make_aggregate_param_callee_owned`] with the param's declared
+    /// generic INSTANTIATION (`Box[String]` for `fn sink(b: Box[String])`),
+    /// recorded per-binding in `enum_inst_var_types` at the param-registration
+    /// site. It is threaded to the own-by-transfer arm below, whose drop is
+    /// otherwise synthesized against the ERASED declaration and emits nothing
+    /// (B-2026-08-05-33 predicate (a)). `None` — a non-generic struct, or a
+    /// monomorph body, where the ACTIVE subst already resolves the fields —
+    /// reproduces the previous behavior exactly.
+    pub(super) fn make_aggregate_param_callee_owned_inst(
+        &mut self,
+        type_name: &str,
+        slot: PointerValue<'ctx>,
+        inst: Option<TypeExpr>,
+    ) -> bool {
         // #17 — the seeded std.tracing builder value types (`LogEvent` / `Span`
         // / `SpanField`) used to be name-excluded here. Their chained builder
         // methods (`info(..).with_field(..).with_field(..).in_span(..)`) move
@@ -144,10 +161,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // excluded as well: there the callee may store the alias into
                 // an owning container (B-2026-07-28-3), so a param drop could
                 // free what the container now owns. That leak stays, unchanged.
+                //
+                // The drop is registered at the param's DECLARED instantiation
+                // (`inst`), not by bare name. A generic wrapper taken at a
+                // concrete arg — `fn sink(b: Box[String])`, predicate (a) —
+                // sits in a CONCRETE fn, so there is no active monomorph subst
+                // for the synthesizer to resolve `T` through; keyed by name
+                // alone it classifies the erased field as no-heap, emits no
+                // `__karac_drop_struct_Box` at all, and `track_struct_var`
+                // silently registers nothing. The declared param type carries
+                // exactly the missing binding.
                 if !self.struct_owns_shared_field(type_name, &mut Vec::new())
                     && !self.struct_is_self_referential(type_name)
                 {
-                    self.track_struct_var(type_name, slot);
+                    self.track_struct_var_inst(type_name, slot, inst);
                     return true;
                 }
                 return false;
