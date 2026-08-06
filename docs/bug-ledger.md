@@ -1127,7 +1127,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-22 | codegen | medium | a DOUBLY-nested generic chain `outer.take().take().f` at `Box[Box[Wide]]` cannot be built: type resolution SUCCEEDS (the field index resolves to Some… | cfb149aa |
 | B-2026-08-06-23 | codegen | medium | a generic struct LITERAL in RECEIVER position whose field initializer type cannot be NAMED lowers at the ERASED `{i64}` layout: `Box { v: f * 2.0 }.t… | FIXED (src/codegen/call_dispatch.rs: new `scalar_type_name_of_expr` + `is_scalar_type_name`, chained onto `infer_arg_elem_te`'s namer). Pins tests/codegen.rs `e2e_generic_receiver_literal_with_arithmetic_field_initializer`, stash-proven RED. |
 | B-2026-08-06-24 | interp | medium | EVERY `extern` call under `--interp` reports an "internal .. | 3607c241 |
-| B-2026-08-06-26 | codegen | medium | a boxed `Result` passed through a passthrough callee and matched with a payload-BINDING arm still double-frees at -O0: `Result[Wide, i64]` where `Wid… | <this commit> |
+| B-2026-08-06-26 | codegen | medium | a boxed `Result` passed through a passthrough callee and matched with a payload-BINDING arm still double-frees at -O0: `Result[Wide, i64]` where `Wid… | d1aa4477 |
 
 </details>
 
