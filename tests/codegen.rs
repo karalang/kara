@@ -6604,6 +6604,125 @@ fn main() {
         assert_eq!(out, "480\n");
     }
 
+    /// B-2026-08-06-1 — a generic wrapper's bare-`T` field bound to a `Map` /
+    /// `Set` leaked its whole handle tree, because the drop classifier and the
+    /// move neutralizer disagreed about what the field IS.
+    ///
+    /// `emit_struct_drop_synthesis_impl`'s subst-driven rescue loop promoted a
+    /// bare generic-param field only when it resolved to a String / Vec /
+    /// VecDeque head, so a `Map` head stayed `FieldDrop::None` and nothing ever
+    /// freed it: `fn sink(b: Box[Map[i64, String]])` lost 25,830 bytes over 40
+    /// rounds on a default -O2 build, identically at -O0. The concrete twin
+    /// `Gmap[T] { m: Map[i64, T] }` was always clean — its DECLARED field type
+    /// is spelled `Map`, so the name-based classifier never needed the subst.
+    ///
+    /// Adding the Map/Set arm alone is what the row warned would trade a leak
+    /// for a double free, and it did. Both neutralizers classify a field by its
+    /// declared type name, which for a bare param is the erased `T`:
+    /// `zero_struct_field_move_cap` matched no arm (so a moved-out field left a
+    /// live handle) and `zero_struct_move_caps_mono` rescued only the
+    /// Vec/String heads (so `let c = b;` left one too). Both now resolve the
+    /// bare param the same way the drop synthesizer does — through the source
+    /// binding's recorded instantiation — which is the property that actually
+    /// matters: the free list and the neutralize list must agree.
+    ///
+    /// Eleven shapes in one program, because they reach those two helpers by
+    /// different routes: read via a by-value param, read via a plain local
+    /// (so this is NOT param-specific), read as the MID field of a multi-field
+    /// wrapper, the field RETURNED out of a by-value param, moved to a local,
+    /// passed to a consuming callee, a WHOLE-struct move, a `ref`-param read, a
+    /// `Set` instantiation, a struct-pattern destructure, and a control that
+    /// only reads the fields of a struct it never moves — that last one turns
+    /// red if a fix over-nulls and the owner stops freeing.
+    ///
+    /// Expected total is DERIVED, not read off a run: `mk` builds a 2-entry map
+    /// and `mkset` a 1-entry set, so a round is
+    /// 2+2+(2+3+1)+2+2+2+2+2+1+2+(1+2) = 26, and 26 x 40 = 1040.
+    #[test]
+    fn e2e_bare_generic_param_map_field_is_freed_and_neutralized() {
+        let Some(out) = run_program(
+            r#"struct Box[T] { v: T }
+struct Trip[T] { a: String, v: T, n: i64 }
+
+fn mk(i: i64, n: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(i, f"mapv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    m.insert(i + 100i64, f"mapw-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn mkset(i: i64, n: i64) -> Set[String] {
+    let mut s: Set[String] = Set.new();
+    s.insert(f"setv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return s;
+}
+
+fn sink(b: Box[Map[i64, String]]) -> i64 { return b.v.len(); }
+fn take(b: Box[Map[i64, String]]) -> Map[i64, String] { return b.v; }
+fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
+fn peek(b: ref Box[Map[i64, String]]) -> i64 { return b.v.len(); }
+fn sinkset(b: Box[Set[String]]) -> i64 { return b.v.len(); }
+fn sinkmid(t: Trip[Map[i64, String]]) -> i64 {
+    let mut r: i64 = t.v.len() + t.n;
+    if t.a.contains("padding") { r = r + 1i64; }
+    return r;
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) read through a by-value param — the reported leak
+        let b1 = Box { v: mk(i, n) };
+        acc = acc + sink(b1);
+        // (b) read through a plain LOCAL — not param-specific
+        let b2 = Box { v: mk(i, n) };
+        acc = acc + b2.v.len();
+        // (c) the MID field of a multi-field wrapper (offset-sensitive)
+        let t1 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
+        acc = acc + sinkmid(t1);
+        // (d) the field RETURNED out of a by-value param
+        let b3 = Box { v: mk(i, n) };
+        let m1 = take(b3);
+        acc = acc + m1.len();
+        // (e) the field moved into a local
+        let b4 = Box { v: mk(i, n) };
+        let m2 = b4.v;
+        acc = acc + m2.len();
+        // (f) the field passed to a consuming callee
+        let b5 = Box { v: mk(i, n) };
+        acc = acc + eat(b5.v);
+        // (g) a WHOLE-struct move
+        let b6 = Box { v: mk(i, n) };
+        let b7 = b6;
+        acc = acc + sink(b7);
+        // (h) a `ref` param read — the source keeps ownership
+        let b8 = Box { v: mk(i, n) };
+        acc = acc + peek(b8);
+        // (i) the Set instantiation
+        let b9 = Box { v: mkset(i, n) };
+        acc = acc + sinkset(b9);
+        // (j) a struct-pattern destructure
+        let ba = Box { v: mk(i, n) };
+        let Box { v } = ba;
+        acc = acc + eat(v);
+        // CONTROL, correct before and after: a struct that is never moved and
+        // whose fields are only READ, so it must still free everything itself.
+        let t2 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
+        if t2.a.contains("padding") { acc = acc + 1i64; }
+        acc = acc + t2.v.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "1040\n");
+    }
+
     /// B-2026-08-05-8 — `contains` on a PATTERN-BOUND `String` payload.
     ///
     /// This was a run-vs-build divergence, not a diagnostics nit: `karac check`

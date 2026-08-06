@@ -1351,32 +1351,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.is_string_type_expr(&cte) || is_vec_head {
                         kinds[idx] = FieldDrop::VecOrString;
                     }
-                    // B-2026-08-06-1 (the MAP/SET head) IS NOT CLASSIFIED HERE,
-                    // and the reason is measured rather than cautious. Adding
-                    // `FieldDrop::MapOrSet` does fix that row's 25,830-byte leak
-                    // on every read shape — by-value param, plain local, and a
-                    // MID field of a multi-field wrapper — but it turns
-                    // `fn take(b: Box[Map[i64, String]]) -> Map[i64, String] {
-                    // return b.v; }` into a SIGSEGV.
+                    // B-2026-08-06-1 — the MAP/SET head, the sibling gap to the
+                    // Vec/String promotion above. A `Box[T]` at `T = Map[i64,
+                    // String]` classified its erased field as no-heap and
+                    // NOTHING ever freed it: 25,830 bytes over 40 rounds, the
+                    // same at -O2 and -O0. The concrete twin `Gmap[T] { m:
+                    // Map[i64, T] }` was always clean, because its DECLARED
+                    // field type is spelled `Map` and the name-based classifier
+                    // never needed the subst at all.
                     //
-                    // WHY THAT SHAPE AND NOT THE STRING ONE. The field-return
-                    // path in `runtime.rs` does not neutralize the source; it
-                    // DEEP-CLONES, so the caller owns an independent buffer and
-                    // the owner's drop is free to run. Its `single_field_heap_
-                    // wrapper` gate admits only String / Vec / VecDeque heads,
-                    // so a Map head falls back to cloning through the bare
-                    // declared `T` — a shallow handle copy — and the returned
-                    // alias is then freed twice.
-                    //
-                    // Extending that gate does NOT work either: there is no
-                    // `karac_map_clone` in the runtime and no Map arm in
-                    // `emit_clone_fn_for_type_expr`, so a Map simply cannot be
-                    // deep-cloned at that site today. Closing B-2026-08-06-1
-                    // therefore needs one of — a runtime map clone, or that
-                    // return path switching from clone-the-value to null-the-
-                    // source. Both live in the by-value generic-param machinery,
-                    // which is why this is left to that row rather than bolted
-                    // on here.
+                    // ADDING THIS ARM ALONE IS A DOUBLE FREE, which is why the
+                    // row warned against it and why it lands with the two move
+                    // neutralizers rather than before them. Both of those
+                    // classify a field by its declared type NAME, which for a
+                    // bare param is the erased `T`:
+                    // `zero_struct_field_move_cap` matched no arm at all (so a
+                    // moved-out field left the source handle live) and
+                    // `zero_struct_move_caps_mono`'s bare-param rescue covered
+                    // only the Vec/String heads (so `let c = b;` left one live
+                    // too). Both now resolve the bare param through the same
+                    // instantiation this drop is synthesized against, which is
+                    // the invariant that actually matters: whatever the free
+                    // list frees, the neutralize list must be able to disarm.
+                    if matches!(
+                        &cte.kind,
+                        TypeKind::Path(p)
+                            if matches!(
+                                p.segments.last().map(|s| s.as_str()),
+                                Some("Map") | Some("HashMap") | Some("Set") | Some("HashSet")
+                                    | Some("SortedMap") | Some("SortedSet")
+                            )
+                    ) {
+                        kinds[idx] = FieldDrop::MapOrSet;
+                    }
                 }
             }
         }

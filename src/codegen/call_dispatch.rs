@@ -5186,31 +5186,36 @@ impl<'ctx> super::Codegen<'ctx> {
             // was single-field-only because the base layout mis-offset a mid
             // bare-T field). A no-op unless a real subst binds this field's bare
             // param to a direct heap type.
-            let bare_t_heap = subst
-                .and_then(|s| {
-                    let fte = field_tes.as_ref()?.get(i)?;
-                    let is_bare_param = matches!(
-                        &fte.kind,
-                        TypeKind::Path(p)
-                            if p.segments.len() == 1
-                                && p.generic_args.is_none()
-                                && s.contains_key(&p.segments[0])
-                    );
-                    if !is_bare_param {
-                        return None;
-                    }
-                    let cte = crate::codegen::helpers::subst_type_params_in_type_expr(fte, s);
-                    let is_vec_head = matches!(
-                        &cte.kind,
-                        TypeKind::Path(p)
-                            if matches!(
-                                p.segments.last().map(|s| s.as_str()),
-                                Some("Vec") | Some("VecDeque")
-                            )
-                    );
-                    (self.is_string_type_expr(&cte) || is_vec_head).then_some(())
-                })
-                .is_some();
+            // The field's CONCRETE type under this subst, when the declared type
+            // is a bare generic param. `None` for a concrete field (nothing to
+            // resolve) and outside a subst.
+            let bare_param_concrete = subst.and_then(|s| {
+                let fte = field_tes.as_ref()?.get(i)?;
+                let is_bare_param = matches!(
+                    &fte.kind,
+                    TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && p.generic_args.is_none()
+                            && s.contains_key(&p.segments[0])
+                );
+                if !is_bare_param {
+                    return None;
+                }
+                Some(crate::codegen::helpers::subst_type_params_in_type_expr(
+                    fte, s,
+                ))
+            });
+            let bare_t_heap = bare_param_concrete.as_ref().is_some_and(|cte| {
+                let is_vec_head = matches!(
+                    &cte.kind,
+                    TypeKind::Path(p)
+                        if matches!(
+                            p.segments.last().map(|s| s.as_str()),
+                            Some("Vec") | Some("VecDeque")
+                        )
+                );
+                self.is_string_type_expr(cte) || is_vec_head
+            });
             if bare_t_heap {
                 for word in [1u32, 2u32] {
                     if let Ok(wp) = self.builder.build_struct_gep(
@@ -5224,6 +5229,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 continue;
             }
+            // B-2026-08-06-1 — every arm below dispatches on `fname`, the
+            // DECLARED field type name, which for a bare generic-param field is
+            // the erased `T`: no arm matches and the source keeps a live handle.
+            // `bare_t_heap` above rescued only the Vec/String heads, so a Map /
+            // Set / shared / enum / nested-struct instantiation fell through and
+            // the moved-out source's drop double-freed against the destination's
+            // (`let c = b;` on a `Box[Map[i64, String]]` — 1880 valgrind errors,
+            // once the drop classifier learned to free that field at all).
+            // Substituting the head name puts these arms on the same type the
+            // drop synthesizer classifies by. Concrete fields resolve to `None`
+            // and keep their declared name, so this is inert outside a subst.
+            let bare_head = bare_param_concrete
+                .as_ref()
+                .and_then(|cte| match &cte.kind {
+                    TypeKind::Path(p) => p.segments.last().map(|s| s.as_str()),
+                    _ => None,
+                });
+            let fname = bare_head.unwrap_or(fname);
             if matches!(fname, "Vec" | "VecDeque" | "String") {
                 if let Ok(cap_ptr) =
                     self.builder
@@ -5380,6 +5403,36 @@ impl<'ctx> super::Codegen<'ctx> {
         self.zero_struct_field_move_cap_in(base_ptr, struct_name, field, None)
     }
 
+    /// [`Self::zero_struct_field_move_cap_in`] with the SOURCE BINDING's recorded
+    /// generic instantiation (`Box[Map[i64, String]]` for `fn take(b: Box[Map[i64,
+    /// String]])`), so a field declared as a bare type param is classified by what
+    /// the param actually binds to.
+    ///
+    /// Without it this helper resolves the field type through
+    /// `subst_monomorph_type_params` alone — the ACTIVE FUNCTION's monomorph
+    /// subst. A generic wrapper taken at concrete args sits in a CONCRETE
+    /// function, so there is no active subst and a bare-`T` field stays literally
+    /// `T`: every name arm below misses and the neutralizer emits nothing, while
+    /// the struct drop — synthesized against the same binding's instantiation via
+    /// `track_struct_var_inst` — DOES free the field. That disagreement is a
+    /// use-after-free the moment the field is moved out (B-2026-08-06-1).
+    ///
+    /// Threading the instantiation is what puts the two sides back on the same
+    /// type. It is the per-field sibling of the whole-struct
+    /// `zero_struct_move_caps_mono` call in
+    /// [`Self::suppress_source_vec_cleanup_for_arg_ex`], which has resolved its
+    /// source through `enum_inst_var_types` since B-2026-07-15-11.
+    pub(super) fn zero_struct_field_move_cap_inst(
+        &self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        field: &str,
+        st_override: Option<inkwell::types::StructType<'ctx>>,
+        inst: Option<&TypeExpr>,
+    ) {
+        self.zero_struct_field_move_cap_impl(base_ptr, struct_name, field, st_override, inst)
+    }
+
     /// [`Self::zero_struct_field_move_cap`] with the struct's CONCRETE LLVM
     /// type supplied by the caller.
     ///
@@ -5404,6 +5457,17 @@ impl<'ctx> super::Codegen<'ctx> {
         field: &str,
         st_override: Option<inkwell::types::StructType<'ctx>>,
     ) {
+        self.zero_struct_field_move_cap_impl(base_ptr, struct_name, field, st_override, None)
+    }
+
+    fn zero_struct_field_move_cap_impl(
+        &self,
+        base_ptr: inkwell::values::PointerValue<'ctx>,
+        struct_name: &str,
+        field: &str,
+        st_override: Option<inkwell::types::StructType<'ctx>>,
+        inst: Option<&TypeExpr>,
+    ) {
         let Some(field_names) = self.struct_field_names.get(struct_name) else {
             return;
         };
@@ -5426,11 +5490,39 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // Concrete field type, resolved through the active monomorph subst so a
         // bare-`T` field is seen as its real type (a no-op outside a monomorph).
+        //
+        // B-2026-08-06-1 — the active-subst resolution alone is blind to a
+        // generic wrapper instantiated at CONCRETE args, because that lives in a
+        // concrete function with no subst to consult. Fall back to the source
+        // BINDING's recorded instantiation, which is the same binding the struct
+        // drop was synthesized against (`track_struct_var_inst`), so the free
+        // list and the neutralize list classify the field identically. Applied
+        // only when the active-subst pass left the field a bare param, so a
+        // monomorph body is byte-identical to before.
         let field_te = self
             .struct_field_type_exprs
             .get(struct_name)
             .and_then(|v| v.get(idx))
-            .map(|te| self.subst_monomorph_type_params(te));
+            .map(|te| self.subst_monomorph_type_params(te))
+            .map(|te| {
+                let unresolved = matches!(
+                    &te.kind,
+                    TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && p.generic_args.is_none()
+                            && self
+                                .struct_generic_params
+                                .get(struct_name)
+                                .is_some_and(|ps| ps.contains(&p.segments[0]))
+                );
+                match (unresolved, inst) {
+                    (true, Some(inst)) => {
+                        let subst = self.generic_struct_subst_from_inst(struct_name, inst);
+                        crate::codegen::helpers::subst_type_params_in_type_expr(&te, &subst)
+                    }
+                    _ => te,
+                }
+            });
         let fname = field_te
             .as_ref()
             .and_then(|te| match &te.kind {
@@ -5661,11 +5753,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         // erased base (B-2026-08-06-2).
                         let _ = gep_st;
                         if let BasicTypeEnum::StructType(held) = slot.ty {
-                            self.zero_struct_field_move_cap_in(
+                            // B-2026-08-06-1 — hand down the receiver binding's
+                            // recorded instantiation as well. The slot type gives
+                            // the right OFFSETS; only the declared type-expr says
+                            // WHAT the field is, and for a bare-`T` field in a
+                            // concrete function nothing else can resolve it.
+                            let inst = self.enum_inst_var_types.get(s).cloned();
+                            self.zero_struct_field_move_cap_inst(
                                 slot.ptr,
                                 &struct_name,
                                 field,
                                 Some(held),
+                                inst.as_ref(),
                             );
                         }
                     }

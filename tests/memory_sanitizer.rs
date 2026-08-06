@@ -14339,6 +14339,116 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-1 — the MEMORY half of the bare-`T` Map/Set field fix, and
+    /// the half that matters, since the defect was a pure leak in most shapes
+    /// and the codegen twin cannot see a leak at all.
+    ///
+    /// The drop classifier's bare-generic-param rescue loop recognised only
+    /// String / Vec / VecDeque heads, so a `Box[Map[i64, String]]` field was
+    /// classified no-heap and NOTHING freed it — 25,830 bytes over 40 rounds,
+    /// identically at -O2 and -O0. Teaching it the Map/Set head is only half
+    /// the fix: both move neutralizers classify by the DECLARED field name,
+    /// which for a bare param is the erased `T`, so a freed-but-not-neutralized
+    /// field turns the leak into a double free the moment the field or its
+    /// owner is moved. Both sides now resolve the bare param through the same
+    /// instantiation the drop was synthesized against.
+    ///
+    /// This catches BOTH failure directions: under-freeing shows up as the
+    /// original leak, over-nulling as a leak in the never-moved control, and a
+    /// disagreement between the two as a use-after-free.
+    ///
+    /// NOT VACUOUS (B-2026-08-04-17): opaque `env.args().len()` seed, every map
+    /// key/value and every String built from it at runtime, a byte-level
+    /// `contains` read, and 40 iterations x eleven containers so nothing folds
+    /// away.
+    #[test]
+    fn asan_bare_generic_param_map_field_is_freed_and_neutralized() {
+        assert_clean_asan_run_min_allocs(
+            r#"struct Box[T] { v: T }
+struct Trip[T] { a: String, v: T, n: i64 }
+
+fn mk(i: i64, n: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(i, f"mapv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    m.insert(i + 100i64, f"mapw-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn mkset(i: i64, n: i64) -> Set[String] {
+    let mut s: Set[String] = Set.new();
+    s.insert(f"setv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return s;
+}
+
+fn sink(b: Box[Map[i64, String]]) -> i64 { return b.v.len(); }
+fn take(b: Box[Map[i64, String]]) -> Map[i64, String] { return b.v; }
+fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
+fn peek(b: ref Box[Map[i64, String]]) -> i64 { return b.v.len(); }
+fn sinkset(b: Box[Set[String]]) -> i64 { return b.v.len(); }
+fn sinkmid(t: Trip[Map[i64, String]]) -> i64 {
+    let mut r: i64 = t.v.len() + t.n;
+    if t.a.contains("padding") { r = r + 1i64; }
+    return r;
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) read through a by-value param — the reported leak
+        let b1 = Box { v: mk(i, n) };
+        acc = acc + sink(b1);
+        // (b) read through a plain LOCAL — not param-specific
+        let b2 = Box { v: mk(i, n) };
+        acc = acc + b2.v.len();
+        // (c) the MID field of a multi-field wrapper (offset-sensitive)
+        let t1 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
+        acc = acc + sinkmid(t1);
+        // (d) the field RETURNED out of a by-value param
+        let b3 = Box { v: mk(i, n) };
+        let m1 = take(b3);
+        acc = acc + m1.len();
+        // (e) the field moved into a local
+        let b4 = Box { v: mk(i, n) };
+        let m2 = b4.v;
+        acc = acc + m2.len();
+        // (f) the field passed to a consuming callee
+        let b5 = Box { v: mk(i, n) };
+        acc = acc + eat(b5.v);
+        // (g) a WHOLE-struct move
+        let b6 = Box { v: mk(i, n) };
+        let b7 = b6;
+        acc = acc + sink(b7);
+        // (h) a `ref` param read — the source keeps ownership
+        let b8 = Box { v: mk(i, n) };
+        acc = acc + peek(b8);
+        // (i) the Set instantiation
+        let b9 = Box { v: mkset(i, n) };
+        acc = acc + sinkset(b9);
+        // (j) a struct-pattern destructure
+        let ba = Box { v: mk(i, n) };
+        let Box { v } = ba;
+        acc = acc + eat(v);
+        // CONTROL, correct before and after: a struct that is never moved and
+        // whose fields are only READ, so it must still free everything itself.
+        let t2 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
+        if t2.a.contains("padding") { acc = acc + 1i64; }
+        acc = acc + t2.v.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["1040"],
+            "bare_generic_param_map_field_is_freed_and_neutralized",
+            // 40 rounds x eleven containers, each with heap keys/values plus
+            // the wrapper Strings — a real run measures ~2,240 allocations, so
+            // this floor sits far above anything a folded-away run could hit.
+            800,
+        );
+    }
+
     /// B-2026-08-05-40 — the MEMORY half of the place → `Slice[T]` coercion.
     ///
     /// The header the fix synthesizes points INTO the caller's Vec buffer: no
