@@ -6919,6 +6919,61 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-25 — TWO distinct NESTED generic instantiations in ONE
+    /// program must reach distinct monomorph symbols.
+    ///
+    /// The mono name mangled only the type argument's HEAD, so
+    /// `Box[Box[i64]]`, `Box[Box[String]]` and `Box[Box[Wide]]` all collided on
+    /// `Box.take$Box`: whichever was emitted first defined the signature and
+    /// every other call site was type-checked against it, failing module
+    /// verification with `Call parameter type does not match function
+    /// signature`. The interpreter was correct throughout.
+    ///
+    /// IT TAKES TWO DIFFERENTLY-INSTANTIATED NESTED CHAINS IN ONE PROGRAM.
+    /// Each of these builds and runs correctly ON ITS OWN, which is why every
+    /// single-chain probe — including the ones that closed B-2026-08-06-22 —
+    /// missed it. That is the whole reason this fixture is one program rather
+    /// than several focused ones.
+    ///
+    /// The three-level chain is here because `Box[Box[Box[i64]]]` must differ
+    /// from `Box[Box[i64]]` too: both mangle `$Box` at the head, so a fix that
+    /// only distinguished the INNER head would still collide these two.
+    ///
+    /// The last two arms are the load-bearing NEGATIVE controls: a
+    /// single-level `Box[Wide]` / `Box[i64]` must keep its existing symbol
+    /// untouched. The fix appends a suffix ONLY when the type argument is
+    /// itself a generic instantiation, so the whole pre-existing mono surface
+    /// stays byte-identical — verified directly in the emitted symbols, where
+    /// `Box.take$Wide`, `Box.take$i64` and `Box.take$struct$T_ct_String` are
+    /// unchanged and only the nested cases gain `$T_gi_…`.
+    ///
+    /// `env.args().len()` seeds the `Wide` payload (B-2026-08-04-17).
+    #[test]
+    fn e2e_two_nested_generic_instantiations_get_distinct_monos() {
+        let src = r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+struct Box[T] { v: T }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn main() {
+    let n: i64 = env.args().len();
+    let c2: Box[Box[i64]] = Box { v: Box { v: 41i64 } };
+    println(c2.take().take());
+    let c3: Box[Box[Box[i64]]] = Box { v: Box { v: Box { v: 7i64 } } };
+    println(c3.take().take().take());
+    let s2: Box[Box[String]] = Box { v: Box { v: "hi" } };
+    println(s2.take().take());
+    let w2: Box[Box[Wide]] = Box { v: Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 6 } } };
+    println(w2.take().take().f);
+    // Negative controls — single-level instantiations keep their symbols.
+    let p1: Box[Wide] = Box { v: Wide { a: n, b: 2, c: 3, d: 4, e: 5, f: 9 } };
+    println(p1.take().f);
+    let p2: Box[i64] = Box { v: 5i64 };
+    println(p2.take());
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("41\n7\nhi\n6\n9\n5\n"));
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///

@@ -755,6 +755,118 @@ impl<'ctx> super::Codegen<'ctx> {
         mangled
     }
 
+    /// Append the NESTED-INSTANTIATION axis to a mangled mono name:
+    /// `$<param>_gi_<token>`, where `<token>` is the FULL recursive spelling
+    /// (`Box_i64`, `Box_Box_Wide`, …). B-2026-08-06-25.
+    ///
+    /// `mangle_mono_name` disambiguates a user struct/enum type argument by its
+    /// concrete NAME, which is the HEAD segment only. Exact while the argument
+    /// is non-generic — `Box[Wide]` / `Box[i64]` / `Box[String]` give `Wide` /
+    /// `i64` / `String`, all distinct, which is why the whole single-level
+    /// generic surface works — but every `Box[Box[..]]` names `Box` regardless
+    /// of the inner box. So `Box[Box[i64]]`, `Box[Box[String]]` and
+    /// `Box[Box[Wide]]` all collided on `Box.take$Box`: the first emitted
+    /// defined the signature and the rest were type-checked against it, failing
+    /// module verification with `Call parameter type does not match function
+    /// signature`.
+    ///
+    /// THE INSTANTIATION COMES FROM THE RECEIVER, which is why this is a
+    /// separate axis rather than a change to the two existing ones. Both of
+    /// those read the typechecker's per-call tables, and for exactly the
+    /// colliding calls BOTH are empty — instrumented, not assumed:
+    /// `call_type_subs_mangle` has no entry for the call span and
+    /// `subst_type_exprs` is empty, so neither could supply the nested
+    /// spelling. What IS on record is the receiver binding's own
+    /// instantiation (`enum_inst_type_of_expr`, the channel B-2026-08-06-19 and
+    /// -22 made reliable): `c2` carries `Box[Box[i64]]` in full. An impl
+    /// method's type params map POSITIONALLY onto the receiver instantiation's
+    /// generic args — `impl[T] Box[T]` called on `Box[Box[i64]]` binds
+    /// `T = Box[i64]` — so the token is read from there.
+    ///
+    /// GATED so every existing symbol stays byte-identical: it fires only when
+    /// the bound argument is ITSELF a generic instantiation, which is precisely
+    /// the row's measured trigger. A non-generic argument appends nothing, so
+    /// the entire pre-existing mono surface is untouched.
+    ///
+    /// `mono_mangle_token_for_type_expr` already recurses (the collection axis
+    /// uses it), so `Box[Box[Wide]]` and `Box[Box[Box[Wide]]]` differ as the
+    /// row requires. It is a pure function of the TypeExpr — no hashing, no
+    /// iteration-order input — which answers the row's stability care point;
+    /// symbol length is bounded by source nesting depth and left unhashed,
+    /// because a readable symbol is worth more than the bytes and a hash would
+    /// reintroduce the determinism question the row flags.
+    fn append_nested_instantiation_mangle(
+        &self,
+        mut mangled: String,
+        func: &Function,
+        args: &[CallArg],
+    ) -> String {
+        use std::fmt::Write as _;
+        let Some(gp) = &func.generic_params else {
+            return mangled;
+        };
+        // The receiver is arg 0 for an impl-method mono; its recorded
+        // instantiation carries the concrete args the params bind to.
+        let Some(recv) = args.first() else {
+            return mangled;
+        };
+        let Some(inst) = self.enum_inst_type_of_expr(&recv.value) else {
+            return mangled;
+        };
+        let TypeKind::Path(ip) = &inst.kind else {
+            return mangled;
+        };
+        let Some(iargs) = ip.generic_args.as_ref() else {
+            return mangled;
+        };
+        let type_params: Vec<&String> = gp
+            .params
+            .iter()
+            .filter(|p| !p.is_const)
+            .map(|p| &p.name)
+            .collect();
+        if type_params.is_empty() || type_params.len() != iargs.len() {
+            return mangled;
+        }
+        for (pname, garg) in type_params.iter().zip(iargs.iter()) {
+            let GenericArg::Type(te) = garg else {
+                continue;
+            };
+            // Only a NESTED instantiation can collide; a plain type argument
+            // already mangles distinctly by its head name.
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            if p.generic_args.as_ref().is_none_or(|a| a.is_empty()) {
+                continue;
+            }
+            // And only a USER struct/enum head, which is the class
+            // `mangle_mono_name` disambiguates BY NAME and where the head-only
+            // collision therefore lives. A builtin collection head
+            // (`Box[Vec[i64]]` vs `Box[Vec[String]]`) is already separated by
+            // `append_collection_type_param_mangle`'s `$<param>_ct_<token>`
+            // axis, so suffixing it here would be redundant AND would rename
+            // symbols outside this bug — measured: without this gate a
+            // `mut Slice[T]` mono at `T = Vec[i64]` was renamed from
+            // `kara.state.driver` to `kara.state.driver$T_gi_Vec_i64`,
+            // breaking `test_slice_8af_mut_slice_t_composite_element_type`.
+            // That was the whole cost of the first, looser gate, and it is why
+            // "no existing symbol changes" is asserted by the suite rather than
+            // by inspection.
+            let Some(head) = p.segments.last() else {
+                continue;
+            };
+            if !self.struct_types.contains_key(head.as_str())
+                && !self.enum_layouts.contains_key(head.as_str())
+            {
+                continue;
+            }
+            let token = Self::mono_mangle_token_for_type_expr(te);
+            let _ = write!(mangled, "${pname}_gi_{token}");
+        }
+        mangled
+    }
+
     /// Append the handle-arg axis to a mangled mono name:
     /// `$<param>_col_<elem>` / `$<param>_ten_<elem>_<d0>_...` (dynamic
     /// dims mangle as `x`). Without this, `report[C](c: ref C)` called
@@ -1115,6 +1227,10 @@ impl<'ctx> super::Codegen<'ctx> {
             &subst_type_exprs,
             call_span,
         );
+        // B-2026-08-06-25 — a type argument that is ITSELF a generic
+        // instantiation (`Box[Box[i64]]` vs `Box[Box[String]]`) mangles only
+        // its HEAD above, so every `Box[Box[..]]` collided on one symbol.
+        let mangled = self.append_nested_instantiation_mangle(mangled, &generic_fn, args);
         // Bind handle-backed-container type params (`C` bound to a Column/Tensor
         // arg) to `ptr` so a bare-`C` RETURN (`map`/`zip_with` → `Self`) or a
         // `let d: C` local lowers to the pointer shape, not the `i64` default
