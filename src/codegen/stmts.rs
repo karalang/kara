@@ -318,7 +318,35 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
         let Some(inner) = tail_inner else {
-            return self.compile_expr(expr);
+            // B-2026-08-06-14 — everything past this gate is `Option[shared]`
+            // return compensation, so a plain `-> Node` tail used to leave here
+            // uncompensated. A direct `shared` field handed out of a
+            // CALLER-RETAINS struct param needs its own ref in BOTH spellings:
+            // the explicit `return b.v;` is hooked in `exprs.rs`, and this is
+            // the tail `{ b.v }` sibling. Without it the tail form stayed a
+            // use-after-free after the return form was fixed — the two paths
+            // diverge exactly here, which is why the fix has to touch both.
+            //
+            // The helper self-gates on the regime, so this is inert for every
+            // other tail shape; the RootLink structural-transfer exclusion is
+            // applied for the same reason the Option arm below applies it — that
+            // transfer hands out an rc==1 chain that must not be inflated.
+            let v = self.compile_expr(expr)?;
+            if let ExprKind::FieldAccess { object, field } = &expr.kind {
+                let structural_transfer = matches!(&object.kind, ExprKind::Identifier(n)
+                if self.cluster_root_info(n).is_some_and(|(member, link_idx, mode)| {
+                    mode == crate::ownership::ReturnedChain::RootLink
+                        && self
+                            .struct_field_names
+                            .get(&member)
+                            .and_then(|ns| ns.get(link_idx))
+                            .is_some_and(|ln| ln == field)
+                }));
+                if !structural_transfer {
+                    self.share_direct_shared_field_ref_for_return(object, field, v);
+                }
+            }
+            return Ok(v);
         };
         match &expr.kind {
             ExprKind::If { .. }
@@ -380,6 +408,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }));
                 if !structural_transfer {
                     self.share_option_shared_field_ref_for_arg(expr, v);
+                    self.share_direct_shared_field_ref_for_return(object, field, v);
                 }
                 Ok(v)
             }

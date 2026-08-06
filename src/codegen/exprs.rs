@@ -817,6 +817,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // fresh-temp slot so the drain below frees only the
                     // temp's unread remainder.
                     self.consume_freshtemp_field_move(e);
+                    // B-2026-08-06-14 — `return b.v;` handing out a direct
+                    // `shared` field of a CALLER-RETAINS struct param. The
+                    // caller's +1 is still live, so the returned handle is an
+                    // alias and needs its own ref. Hooked here as well as in
+                    // `compile_tail_final_expr` because the two paths diverge:
+                    // this arm only reaches that helper when the fn returns
+                    // `Option[shared]`, so a plain `-> Node` return never got
+                    // there. The helper self-gates on the caller-retains regime,
+                    // so the tail and return spellings behave identically.
+                    if let ExprKind::FieldAccess { object, field } = &e.kind {
+                        self.share_direct_shared_field_ref_for_return(object, field, v);
+                    }
                     if let ExprKind::Identifier(name) = &e.kind {
                         self.suppress_user_drop_for_var(name);
                         self.suppress_map_cleanup_for_tail_identifier(name);

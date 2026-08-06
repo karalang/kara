@@ -30032,6 +30032,57 @@ fn main() {
     );
 }
 
+/// B-2026-08-06-14 — the ORACLE half. The interpreter has no refcount to get
+/// wrong, so it has always handed a `shared` field out of a by-value or `ref`
+/// struct param correctly; codegen dec'd the rc box one below zero because the
+/// CALLER-RETAINS regime leaves the caller's ref live and the returned alias got
+/// none of its own.
+///
+/// Pins the reference value its codegen twin
+/// `e2e_shared_field_returned_from_a_caller_retains_param_keeps_its_ref` is
+/// measured against — that twin has to be an E2E rather than an ASAN fixture,
+/// because the defect is a use-after-free READ out of uninstrumented generated
+/// code and the sanitizer cannot see it.
+///
+/// Passes before and after, which is its job. Seed is a literal for the usual
+/// reason: an in-process interpreter test would see the TEST binary's argv.
+#[test]
+fn test_shared_field_returned_from_a_param_transfers_the_handle() {
+    assert_eq!(
+        run(r#"shared struct Node { s: String }
+struct Holder { v: Node }
+struct Box[T] { v: T }
+
+fn mk(i: i64) -> Node { return Node { s: f"crp-{i}-padded-out-to-force-a-real-heap-buffer" }; }
+
+fn ret_byval(b: Holder) -> Node { return b.v; }
+fn tail_byval(b: Holder) -> Node { b.v }
+fn ret_ref(b: ref Holder) -> Node { return b.v; }
+fn ret_generic(b: Box[Node]) -> Node { return b.v; }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // caller-retains: by-value return, by-value tail, and `ref`
+    let h1 = Holder { v: mk(1) };
+    let x1 = ret_byval(h1);
+    acc = acc + x1.s.len();
+    let h2 = Holder { v: mk(2) };
+    let x2 = tail_byval(h2);
+    acc = acc + x2.s.len();
+    let h3 = Holder { v: mk(3) };
+    let x3 = ret_ref(h3);
+    acc = acc + x3.s.len();
+    // owned-by-transfer control
+    let b4 = Box { v: mk(4) };
+    let x4 = ret_generic(b4);
+    acc = acc + x4.s.len();
+    println(acc);
+}
+"#),
+        "176\n"
+    );
+}
+
 /// B-2026-08-06-8 — the ORACLE half. The interpreter has always transferred a
 /// generic wrapper's bare-`T` `shared` field correctly; codegen's gate for "does
 /// this local need the shared-field rc-dec walker" read declared field types, so

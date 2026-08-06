@@ -6837,6 +6837,107 @@ fn main() {
     /// Expected total is DERIVED, not read off a run: `mk` builds a 2-entry map
     /// and `mkset` a 1-entry set, so a round is
     /// 2+2+(2+3+1)+2+2+2+2+2+1+2+(1+2) = 26, and 26 x 40 = 1040.
+    /// B-2026-08-06-14 — a direct `shared` field handed out of a CALLER-RETAINS
+    /// struct param, which was a use-after-free on a DEFAULT -O2 build.
+    ///
+    /// AN E2E TEST ON PURPOSE, and the reason is worth recording: the ASAN
+    /// harness CANNOT see this defect. It links a karac-emitted object that
+    /// carries no ASAN instrumentation, so the sanitizer catches allocator-level
+    /// faults (double free, invalid free, leaks) but not a use-after-free READ
+    /// out of generated code. An ASAN fixture over this program passes against
+    /// the broken compiler — written, measured green at HEAD, and discarded.
+    /// At scale the premature free corrupts the glibc heap instead, which the
+    /// plain run does catch: HEAD aborts with `malloc(): unaligned tcache chunk
+    /// detected` on every run, deterministically.
+    ///
+    /// The regime is what the fix turns on. A by-value struct param that
+    /// transitively owns a `shared` field stays CALLER-RETAINS
+    /// (B-2026-08-05-32) — the callee deliberately registers no drop — so the
+    /// caller's +1 is still live and a field handed back out is an ALIAS that
+    /// needs its own ref. A struct owning no shared field is owned BY TRANSFER
+    /// instead, and there the source null-store is correct and an inc would
+    /// leak. Both regimes are exercised so a fix that incs in the wrong one
+    /// shows up.
+    ///
+    /// Covers both return spellings deliberately: `return b.v;` and the tail
+    /// `{ b.v }` reach the return value through paths that diverge at
+    /// `compile_tail_final_expr`'s `tail_inner` gate, and the tail form stayed
+    /// broken after the return form was fixed.
+    ///
+    /// Expected total is DERIVED: `mk` builds a 43-byte payload, `score` adds 1
+    /// for the `contains` hit, so legs (a)-(d) contribute 44 each; (e) adds 1
+    /// and (f) adds its 38-byte plain string. 40 x (44 x 4 + 1 + 38) = 9350.
+    #[test]
+    fn e2e_shared_field_returned_from_a_caller_retains_param_keeps_its_ref() {
+        let Some(out) = run_program(
+            r#"shared struct Node { s: String }
+struct Holder { v: Node }
+struct Plain { t: String }
+struct Box[T] { v: T }
+
+fn mk(i: i64, n: i64) -> Node {
+    return Node { s: f"crp-{i}-padded-out-to-force-a-real-heap-buffer-{n}" };
+}
+
+fn score(x: Node) -> i64 {
+    let mut r: i64 = x.s.len();
+    if x.s.contains("padded") { r = r + 1i64; }
+    return r;
+}
+
+// CALLER-RETAINS regime: `Holder` transitively owns a shared field, so the
+// callee registers no drop and the caller keeps its ref.
+fn ret_byval(b: Holder) -> Node { return b.v; }
+fn tail_byval(b: Holder) -> Node { b.v }
+fn ret_ref(b: ref Holder) -> Node { return b.v; }
+
+// OWNED-BY-TRANSFER regime, the control an over-inc would turn into a leak:
+// `Box[Node]`'s gate is name-only, so it is owned by transfer and neutralized
+// via the source null-store instead.
+fn ret_generic(b: Box[Node]) -> Node { return b.v; }
+
+// A no-shared struct on the transfer path, unrelated to rc accounting.
+fn ret_plain(p: Plain) -> String { return p.t; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) by-value param, explicit return — the reported shape
+        let h1 = Holder { v: mk(i, n) };
+        let x1 = ret_byval(h1);
+        acc = acc + score(x1);
+        // (b) by-value param, TAIL spelling — a separate code path
+        let h2 = Holder { v: mk(i, n) };
+        let x2 = tail_byval(h2);
+        acc = acc + score(x2);
+        // (c) `ref` param — caller-retains by definition, and it reproduced too
+        let h3 = Holder { v: mk(i, n) };
+        let x3 = ret_ref(h3);
+        acc = acc + score(x3);
+        // (d) CONTROL, owned-by-transfer: an inc here would LEAK
+        let b4 = Box { v: mk(i, n) };
+        let x4 = ret_generic(b4);
+        acc = acc + score(x4);
+        // (e) CONTROL, a caller-retains struct whose field is NEVER handed out
+        let h5 = Holder { v: mk(i, n) };
+        acc = acc + 1i64;
+        // (f) CONTROL, a plain heap field on the transfer path
+        let p6 = Plain { t: f"plain-{i}-padded-out-to-force-a-real-heap-{n}" };
+        let s6 = ret_plain(p6);
+        acc = acc + s6.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out.trim(), "9350");
+    }
+
     /// B-2026-08-06-8 — the CORRECTNESS half of the bare-`T` shared-field fix.
     /// The defect itself is a leak, invisible here; what this pins is the
     /// use-after-free that fixing it exposes, which prints a WRONG ANSWER.

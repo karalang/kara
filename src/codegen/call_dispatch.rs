@@ -6400,6 +6400,107 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_option_inner_rc_inc_for_loaded(val, inner_info.heap_type);
     }
 
+    /// Direct-`shared` companion to [`Self::share_option_shared_field_ref_for_arg`],
+    /// for a field RETURNED out of a CALLER-RETAINS struct param (B-2026-08-06-14).
+    ///
+    /// `fn giveback(b: Holder) -> Node { return b.v; }` with
+    /// `struct Holder { v: Node }` over a `shared struct Node` was a
+    /// use-after-free on a DEFAULT -O2 build: valgrind `Invalid read of size 8`,
+    /// 0 bytes into a free'd 32-byte block, with the rc box's count driven one
+    /// dec below zero. It reproduces with the field never read by the caller, so
+    /// it is a scope-exit accounting bug, not a bad load.
+    ///
+    /// THE ROW FOR THIS BUG BLAMED THE WRONG THING — it read the generic
+    /// spelling being clean as "B-2026-08-06-8's null-store reaches that move
+    /// site and not this one". Instrumenting both shows the null-store fires
+    /// identically for `Holder` and `Box[Node]`. The real split is a REGIME
+    /// difference set one branch away, at the by-value-param arm in
+    /// `param_own.rs`:
+    ///
+    ///   * a struct that does NOT transitively own a `shared` field is owned BY
+    ///     TRANSFER (B-2026-08-05-33) — the callee registers the drop and the
+    ///     caller retracts its own, in lockstep. Returning a field then just
+    ///     needs the source neutralized, which the null-store does. This is the
+    ///     path `Box[T]` takes, because the gate there is NAME-ONLY and a bare
+    ///     `T` reads as non-shared — which is why the generic spelling looked
+    ///     clean and made the bug appear generics-related.
+    ///   * a struct that DOES own one stays CALLER-RETAINS (B-2026-08-05-32):
+    ///     the callee deliberately registers nothing, because rc-dec'ing here
+    ///     as well would dec twice. That is the regime `Holder` is in, and in it
+    ///     the caller's +1 is still live — so a field handed out of the callee
+    ///     is an ALIAS and needs its own ref, exactly as
+    ///     `clone_on_extract_view_field`'s bare-`shared` arm gives a view
+    ///     extract.
+    ///
+    /// So this is the one place the inc really is the right instrument, and
+    /// null-storing would be actively wrong: the source the caller still owns
+    /// must keep its handle. A `ref` param is the same regime by definition and
+    /// is covered by the same condition — it reproduced too.
+    ///
+    /// Narrow on purpose, since an over-inc is a leak and harder to attribute
+    /// than a crash:
+    ///   * only an Identifier object that is a PARAM of this function;
+    ///   * only a non-shared struct type in the caller-retains regime, tested
+    ///     with the SAME name-only predicate the param arm gates on, so the two
+    ///     cannot drift apart;
+    ///   * only a DIRECT `shared T` field, resolved through the active
+    ///     monomorph subst first.
+    pub(super) fn share_direct_shared_field_ref_for_return(
+        &self,
+        object: &Expr,
+        field: &str,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::Identifier(obj) = &object.kind else {
+            return;
+        };
+        // Params only: a LOCAL's field move-out is the same-scope case, where
+        // the null-store neutralizer already transfers the handle (measured
+        // clean both before and after this change).
+        if !self.current_fn_param_names.contains(obj.as_str()) {
+            return;
+        }
+        // A shared OBJECT's field read incs on its own path.
+        if self.shared_type_for_expr(object).is_some() {
+            return;
+        }
+        let Some(type_name) = self.var_type_names.get(obj).cloned() else {
+            return;
+        };
+        if self.shared_types.contains_key(type_name.as_str()) {
+            return;
+        }
+        // THE REGIME TEST, and the whole correctness argument: inc only where
+        // the callee did NOT take the param's drop, so the caller's ref is still
+        // live. Same predicate, same arguments as the `param_own.rs` gate.
+        if !self.struct_owns_shared_field(&type_name, &mut Vec::new()) {
+            return;
+        }
+        let Some(idx) = self
+            .struct_field_names
+            .get(&type_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(&type_name)
+            .and_then(|v| v.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        let field_te = self.subst_monomorph_type_params(&field_te);
+        let Some(heap_type) = self.shared_heap_type_for_type_expr(&field_te) else {
+            return;
+        };
+        let BasicValueEnum::PointerValue(ptr) = val else {
+            return;
+        };
+        self.emit_refcount_inc(&type_name, heap_type, ptr);
+    }
+
     /// Index companion to `share_option_shared_ref_for_arg` /
     /// `share_option_shared_field_ref_for_arg`: when the call arg is a plain
     /// (non-range) Vec-element index `v[i]` whose element type is
