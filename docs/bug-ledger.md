@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 217 | 0 |
 | leak | 137 | 1 |
 | double-free | 97 | 1 |
-| codegen-gap | 90 | 0 |
-| run-vs-build | 82 | 1 |
+| codegen-gap | 91 | 0 |
+| run-vs-build | 81 | 0 |
 | missing-feature | 78 | 1 |
 | false-positive | 56 | 0 |
 | perf | 50 | 3 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 686 | 7 |
+| codegen | 686 | 6 |
 | interp | 125 | 0 |
 | typecheck | 122 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **953 surfaced · 9 open · 936 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **953 surfaced · 8 open · 937 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,13 +136,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **953 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-05-38 | 2026-08-05 | codegen | medium | The narrow-int width trap is emitted UNCONDITIONALLY on every `i8/i16/i32/u8/u16/u32` arithmetic op -- zext/sext to i64, two icmps, an or, and a conditional branch per op -- costing 1.06x-1.12x on narrow-int-dense loops (kata #9 palindrome, #8 atoi) with no range analysis to elide provably in-range checks | docs/implementation_checklist/phase-7-codegen.md -- optimization follow-on to a12a1a69; blocked on nothing, but should be measured on x86 first to confirm it is not arm64-specific |
-| B-2026-08-05-40 | 2026-08-05 | codegen | medium | a `mut Slice[T]` parameter given a Vec-FIELD argument (`setz(mut g.a)`) writes into a copy under AOT — the caller's Vec is unchanged, while the interpreter mutates it and the bare-identifier spelling is correct on both | — |
 | B-2026-08-05-41 | 2026-08-05 | typecheck+codegen | medium | a `shared struct` field reached through a `mut ref` ARGUMENT bypasses the immutable-field write gate that rejects the assignment spelling, and the write is lost under AOT — `n.val = 5` is refused, `bump(mut n.val)` is accepted and does nothing | — |
 | B-2026-08-06-1 | 2026-08-06 | codegen | medium | a generic wrapper's bare `T` field bound to a MAP leaks its whole handle tree: `fn sink(b: Box[Map[i64, String]])` loses 25,830 B / 40 blocks on a DEFAULT -O2 build, because the mono struct drop's bare-`T` reclassification recognises String/Vec/VecDeque heads only -- the concrete twin `Gmap[T] { m: Map[i64, T] }` is clean, since its DECLARED field name is `Map` | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which promotes only to FieldDrop::VecOrString and never to FieldDrop::MapOrSet |
 
-### Fixed (936)
+### Fixed (937)
 
-<details><summary>936 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>937 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1104,6 +1103,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-35 | other | medium | the ASAN harness SKIPS on a CODEGEN failure ('setup failed -- skipping'), so a memory_sanitizer test written for a shape that does not yet compile re… | 1557d40 |
 | B-2026-08-05-37 | codegen+interp | high | a `mut ref` PARAMETER given a PLACE argument silently DISCARDS the callee's write on every backend — `bump(mut g.val)` / `bump(mut t.0)` / `bump(mut… | 1bf6175 (src/codegen.rs `fn_param_mut_ref`; src/codegen/call_dispatch.rs `mut_ref_place_arg_ptr` + the direct-call arm; src/codegen/mono.rs the generic-mono arm; src/codegen/functions.rs + mono.rs registration; src/interpreter/eval_call.rs the CICO write-back; src/interpreter.rs `place_is_writeback_safe`). Pins e2e_mut_ref_place_argument_writes_back, test_mut_ref_place_argument_writes_back, test_mut_ref_place_writeback_skips_impure_subscript. |
 | B-2026-08-05-39 | codegen | medium | a `mut ref` AGGREGATE parameter's whole-value REASSIGNMENT stored past its slot — `x = mk()` on a `mut ref String` wrote 24 bytes into the 8-byte all… | 559a8cc (src/codegen/stmts.rs — the aggregate arm beside the scalar `mut ref` assign-through, plus `reclaim_displaced_ref_param_pointee`). Pins e2e_mut_ref_aggregate_param_reassignment_writes_through, test_mut_ref_aggregate_param_reassignment_replaces_pointee, asan_mut_ref_aggregate_param_reassignment_no_leak. |
+| B-2026-08-05-40 | codegen | medium | a `Slice[T]` / `mut Slice[T]` parameter fed from a PLACE (`f(g.a)`, `f(g.q.a)`, `f(t.0)`, `f(vv[0])`) did not COMPILE — the Vec's 3-word `{ptr,len,ca… | 0949f9f (src/codegen/expr_ops.rs — the place arm in `coerce_to_slice`; src/codegen/call_dispatch.rs — the ref-slot guard). Pins e2e_slice_param_from_a_place_argument, test_slice_param_from_a_place_argument, asan_slice_param_from_a_place_argument_no_leak. |
 
 </details>
 
