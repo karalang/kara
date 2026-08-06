@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 141 | 3 |
+| leak | 141 | 2 |
 | double-free | 99 | 0 |
 | codegen-gap | 92 | 0 |
 | run-vs-build | 82 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 699 | 9 |
+| codegen | 699 | 8 |
 | interp | 126 | 0 |
 | typecheck | 124 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **967 surfaced · 12 open · 947 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **967 surfaced · 11 open · 948 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,15 +137,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **967 surfaced 
 | B-2026-08-05-38 | 2026-08-05 | codegen | medium | The narrow-int width trap is emitted UNCONDITIONALLY on every `i8/i16/i32/u8/u16/u32` arithmetic op -- zext/sext to i64, two icmps, an or, and a conditional branch per op -- costing 1.06x-1.12x on narrow-int-dense loops (kata #9 palindrome, #8 atoi) with no range analysis to elide provably in-range checks | src/codegen/expr_ops.rs::narrow_binop_result_provably_fits (the div/mod elision, ac79f284) + compile_narrow_int_binop (the widening, which is 79% of kata #9's cost and is NOT what this row's proposed fixes address). Cross-arch confirmed on x86 via B-2026-08-05-34; unblocked. |
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
-| B-2026-08-06-10 | 2026-08-06 | codegen | medium | a callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans the box the caller's struct drop owns: `fn f(h: Option[H]) { match h { Some(x) => x.label } }` leaks 32 B per call, while the same callee returning a SCALAR from the same payload is clean | the callee-side payload move-out suppressors in src/codegen/control_flow_match.rs, reached with a BOXED `Option` payload whose box the CALLER still owns |
 | B-2026-08-06-12 | 2026-08-06 | codegen | high | a GENERIC struct LITERAL used directly as a METHOD RECEIVER cannot be built: `Box { v: <String> }.take()` passes `karac check`, runs correctly under the interpreter, and then fails `karac build` with an LLVM verifier error -- the literal lowers at the ERASED base layout `{ i64 }` because the outer method call's span CLOBBERS the literal's instantiation record | ROOT CAUSE IS DEEPER THAN THE SPAN CLOBBER — see the ATTEMPTED FIX section. `impl[T] Box[T]` methods are declared ONCE at the erased layout (`@Box.take({ i64 }) -> i64`), so they are not monomorphized per instantiation the way `fn take[T]` free functions are. The span-clobbered literal layout (src/codegen/types_lowering.rs::struct_inst_mono_type_for_expr) is only the first of two mismatches. |
 | B-2026-08-06-13 | 2026-08-06 | lexer+parser | low | `i64::MIN` cannot be WRITTEN as a literal in any spelling -- `-9223372036854775808i64` is a parse error (`Invalid integer literal`), because a negative literal parses as `Neg(Integer(n))` and the POSITIVE half must fit i64, which i64::MIN's does not. The value is reachable only by arithmetic (`-9223372036854775807i64 - 1i64`). Same argument applies to every width's minimum, but only i64 is actually unreachable: a narrow minimum's positive half still fits the i64 carrier. | — |
 | B-2026-08-06-14 | 2026-08-06 | codegen | high | a `shared` field RETURNED out of a BY-VALUE struct param is a use-after-free on a DEFAULT -O2 build: `fn giveback(b: Holder) -> Node { return b.v; }` frees the 32-byte rc box at the param's scope-exit drop and hands the caller the freed handle -- CONCRETE spelling only, since B-2026-08-06-8's null-store already covers `Box[Node]` | the CONCRETE-spelling return site for a direct `shared` field of a by-value struct param -- src/codegen/call_dispatch.rs::zero_struct_field_move_cap_impl's `shared` arm (B-2026-08-06-8) is the neutralizer that covers the generic spelling and does not reach this one |
 | B-2026-08-06-15 | 2026-08-06 | codegen | low | a `shared` handle escaping a VALUE-POSITION BLOCK is never rc-dec'd by its consumer binding: `let x = { let b = Box { .. }; b.v };` leaks 1,280 B / 40 blocks at -O0 (clean at -O2), IDENTICALLY in the generic and concrete spellings -- the leak half of the shape whose use-after-free half B-2026-08-06-8 fixed | the let-site that consumes a value-position BLOCK's result -- it does not `track_rc_var` a `shared` handle arriving that way; check whether src/codegen/stmts.rs::clone_on_extract_view_field's bare-`shared` arm is the intended owner and simply is not reached |
 
-### Fixed (947)
+### Fixed (948)
 
-<details><summary>947 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>948 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1117,6 +1116,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-6 | codegen | high | a `Map`/`Set` field moved out INDIVIDUALLY left the source handle live, so the owner's struct drop freed storage the destination still owned — `fn ta… | 26b2176 (src/codegen/call_dispatch.rs — the Map/Set arm in `zero_struct_field_move_cap`, plus the Sorted variants in `zero_struct_move_caps_mono`'s existing arm). Pins e2e_map_field_move_out_neutralizes_the_source, test_map_field_move_out_transfers_the_handle, asan_map_field_move_out_neutralizes_the_source. |
 | B-2026-08-06-7 | codegen+interp | high | shift by >= the bit width is UNDEFINED BEHAVIOUR in AOT output — one `let` variable prints two different values in the same run and different values… | ee551b8 (shift legs) + <this commit> (negation leg) |
 | B-2026-08-06-8 | codegen | low | a generic wrapper's bare `T` field bound to a SHARED struct leaks 2,560 B / 80 blocks at -O0 (clean at -O2): `Box[T]` at `T = Node` where `Node` is a… | 0928227 (src/codegen/param_own.rs — `struct_owns_shared_field_subst`, the gate; src/codegen/synth_drop.rs — `emit_nested_struct_shared_rc_decs_ex_mono`, the walker; src/codegen/runtime.rs — `emit_vec_elem_struct_with_shared_drop_fn_mono` plus the `track_struct_var_inst` call site; src/codegen/call_dispatch.rs — the `shared` arm in `zero_struct_field_move_cap_impl`; src/codegen/stmts.rs — the FieldAccess arm in `suppress_block_tail_cleanup`). Pins asan_bare_generic_param_shared_field_is_rc_dec_and_neutralized, e2e_shared_field_moved_out_of_a_value_block_survives_the_frame_drain, test_bare_generic_param_shared_field_transfers_the_handle. |
+| B-2026-08-06-10 | codegen | medium | a callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans the box the caller's struct drop owns: `fn f(h: Option[H]) { match h {… | e6a0a5a1 |
 | B-2026-08-06-11 | codegen | high | an owned boxed-payload enum param that ESCAPES -- returned, or forwarded to another by-value param -- is freed by the callee anyway: `fn id(o: Opt[St… | 05005aae |
 
 </details>
