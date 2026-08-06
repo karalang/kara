@@ -101,8 +101,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 56 | 0 |
 | perf | 51 | 4 |
 | diagnostics | 40 | 0 |
+| soundness | 39 | 1 |
 | crash | 39 | 0 |
-| soundness | 38 | 0 |
 | other | 17 | 1 |
 | use-after-free | 13 | 0 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 691 | 7 |
-| interp | 125 | 0 |
+| codegen | 692 | 8 |
+| interp | 126 | 1 |
 | typecheck | 124 | 1 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **958 surfaced · 9 open · 941 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **959 surfaced · 10 open · 941 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **958 surfaced 
 | B-2026-08-06-1 | 2026-08-06 | codegen | medium | a generic wrapper's bare `T` field bound to a MAP leaks its whole handle tree: `fn sink(b: Box[Map[i64, String]])` loses 25,830 B / 40 blocks on a DEFAULT -O2 build, because the mono struct drop's bare-`T` reclassification recognises String/Vec/VecDeque heads only -- the concrete twin `Gmap[T] { m: Map[i64, T] }` is clean, since its DECLARED field name is `Map` | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which promotes only to FieldDrop::VecOrString and never to FieldDrop::MapOrSet |
 | B-2026-08-06-2 | 2026-08-06 | codegen | high | TWO defects on the by-value generic-struct param path, and THIS ROW'S OWN 'clean' CONTROL WAS THE WORSE ONE: (A) [FIXED 933b859] the CONCRETE spelling `fn take(b: Box[String]) -> String { b.v }` DOUBLE-FREED on a default -O2 build -- the callee's struct drop freed the field and the same buffer was then returned and freed again, because the move-out cap-zero the generic path emits was MISSING here; (B) [STILL OPEN] the GENERIC spelling leaks instead, because it entry-deep-copies and nobody frees the caller's original | (A) FIXED 933b859 — src/codegen/call_dispatch.rs, the caller-side move-out gate (~5540) now threads the slot's own layout down via zero_struct_field_move_cap_in instead of demanding equality against a no-active-subst fallback that erases to the generic base. (B) OPEN — the caller's `%__owned_agg_tmp` is stored to but never walked in `main`; suspected base-name-vs-mono mismatch where track_inline_owned_aggregate_arg registers under `Box` while the drop is `__karac_drop_struct_Box$String`. RE-MEASURE before resuming: (A) and (B) share the single-vs-copied-buffer accounting. |
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
+| B-2026-08-06-7 | 2026-08-06 | codegen+interp | high | shift by >= the bit width is UNDEFINED BEHAVIOUR in AOT output — one `let` variable prints two different values in the same run and different values across runs (LLVM shl poison), the JIT disagrees again, and the interpreter raises a raw Rust panic; design.md's `"shift amount out of range"` trap is unimplemented at every width, and narrow `<<` additionally computes at i64 so an `i32` binding can hold 1048576000000 | — |
 
 ### Fixed (941)
 
