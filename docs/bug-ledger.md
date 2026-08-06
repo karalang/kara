@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 138 | 1 |
+| leak | 139 | 2 |
 | double-free | 98 | 1 |
 | codegen-gap | 92 | 0 |
 | run-vs-build | 81 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 693 | 7 |
+| codegen | 694 | 8 |
 | interp | 126 | 1 |
 | typecheck | 124 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **960 surfaced · 9 open · 943 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **961 surfaced · 10 open · 943 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **960 surfaced 
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
 | B-2026-08-06-7 | 2026-08-06 | codegen+interp | high | shift by >= the bit width is UNDEFINED BEHAVIOUR in AOT output — one `let` variable prints two different values in the same run and different values across runs (LLVM shl poison), the JIT disagrees again, and the interpreter raises a raw Rust panic; design.md's `"shift amount out of range"` trap is unimplemented at every width, and narrow `<<` additionally computes at i64 so an `i32` binding can hold 1048576000000 | — |
 | B-2026-08-06-8 | 2026-08-06 | codegen | low | a generic wrapper's bare `T` field bound to a SHARED struct leaks 2,560 B / 80 blocks at -O0 (clean at -O2): `Box[T]` at `T = Node` where `Node` is a `shared struct` -- the third head the bare-param rescue loop does not recognise, after String/Vec (fixed B-2026-07-15-11) and Map/Set (fixed B-2026-08-06-1) | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which now promotes String/Vec/VecDeque and Map/Set heads but not a `shared` one |
+| B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) a fresh-temp user ENUM passed by value never registers `track_enum_var` at all. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
 
 ### Fixed (943)
 
