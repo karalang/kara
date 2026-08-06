@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 217 | 0 |
+| miscompile | 218 | 0 |
 | leak | 138 | 2 |
 | double-free | 97 | 1 |
 | codegen-gap | 92 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 689 | 8 |
+| codegen | 690 | 8 |
 | interp | 125 | 0 |
 | typecheck | 124 | 2 |
 | ownership | 39 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **956 surfaced · 10 open · 938 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **957 surfaced · 10 open · 939 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -141,9 +141,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **956 surfaced 
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
 | B-2026-08-06-4 | 2026-08-06 | typecheck+codegen | medium | a `shared struct`'s Vec field passed to a `mut Slice[T]` parameter does not COMPILE (LLVM module verification hard-fails) even when the field is declared `mut`, and the immutable case additionally passes `karac check` — the `SharedFieldNotMut` gate cannot see a `Type::Slice` formal | — |
 
-### Fixed (938)
+### Fixed (939)
 
-<details><summary>938 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>939 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1107,6 +1107,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-39 | codegen | medium | a `mut ref` AGGREGATE parameter's whole-value REASSIGNMENT stored past its slot — `x = mk()` on a `mut ref String` wrote 24 bytes into the 8-byte all… | 559a8cc (src/codegen/stmts.rs — the aggregate arm beside the scalar `mut ref` assign-through, plus `reclaim_displaced_ref_param_pointee`). Pins e2e_mut_ref_aggregate_param_reassignment_writes_through, test_mut_ref_aggregate_param_reassignment_replaces_pointee, asan_mut_ref_aggregate_param_reassignment_no_leak. |
 | B-2026-08-05-40 | codegen | medium | a `Slice[T]` / `mut Slice[T]` parameter fed from a PLACE (`f(g.a)`, `f(g.q.a)`, `f(t.0)`, `f(vv[0])`) did not COMPILE — the Vec's 3-word `{ptr,len,ca… | 0949f9f (src/codegen/expr_ops.rs — the place arm in `coerce_to_slice`; src/codegen/call_dispatch.rs — the ref-slot guard). Pins e2e_slice_param_from_a_place_argument, test_slice_param_from_a_place_argument, asan_slice_param_from_a_place_argument_no_leak. |
 | B-2026-08-05-41 | typecheck+codegen | medium | a `shared struct` field reached through a `mut ref` ARGUMENT bypasses the immutable-field write gate that rejects the assignment spelling, and the wr… | de799c3 (src/typechecker/fields.rs the `SharedFieldNotMut` gate's `mut ref` argument context; src/codegen/call_dispatch.rs `shared_mut_ref_place_arg_ptr` + `is_pure_field_chain`, replacing `mut_ref_place_arg_ptr`'s explicit shared bail). Pins e2e_mut_ref_place_argument_shared_receiver_writes_back, test_mut_ref_place_argument_shared_receiver_writes_back, asan_shared_field_mut_ref_arg_string_no_leak, and four typechecker gate tests. |
+| B-2026-08-06-5 | codegen | high | A cast TO `char` inside an f-string hole is DROPPED by both compiled backends -- `println(f"{b as char}")` prints the integer codepoint (98) where th… | 335540c9 |
 
 </details>
 
