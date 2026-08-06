@@ -1351,6 +1351,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.is_string_type_expr(&cte) || is_vec_head {
                         kinds[idx] = FieldDrop::VecOrString;
                     }
+                    // B-2026-08-06-1 (the MAP/SET head) IS NOT CLASSIFIED HERE,
+                    // and the reason is measured rather than cautious. Adding
+                    // `FieldDrop::MapOrSet` does fix that row's 25,830-byte leak
+                    // on every read shape — by-value param, plain local, and a
+                    // MID field of a multi-field wrapper — but it turns
+                    // `fn take(b: Box[Map[i64, String]]) -> Map[i64, String] {
+                    // return b.v; }` into a SIGSEGV.
+                    //
+                    // WHY THAT SHAPE AND NOT THE STRING ONE. The field-return
+                    // path in `runtime.rs` does not neutralize the source; it
+                    // DEEP-CLONES, so the caller owns an independent buffer and
+                    // the owner's drop is free to run. Its `single_field_heap_
+                    // wrapper` gate admits only String / Vec / VecDeque heads,
+                    // so a Map head falls back to cloning through the bare
+                    // declared `T` — a shallow handle copy — and the returned
+                    // alias is then freed twice.
+                    //
+                    // Extending that gate does NOT work either: there is no
+                    // `karac_map_clone` in the runtime and no Map arm in
+                    // `emit_clone_fn_for_type_expr`, so a Map simply cannot be
+                    // deep-cloned at that site today. Closing B-2026-08-06-1
+                    // therefore needs one of — a runtime map clone, or that
+                    // return path switching from clone-the-value to null-the-
+                    // source. Both live in the by-value generic-param machinery,
+                    // which is why this is left to that row rather than bolted
+                    // on here.
                 }
             }
         }

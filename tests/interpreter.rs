@@ -29811,6 +29811,76 @@ fn main() {
     );
 }
 
+/// B-2026-08-06-6 — the ORACLE half. The interpreter has always transferred a
+/// moved-out `Map` field correctly; codegen left the SOURCE handle live, so
+/// the owner's struct drop freed storage the destination still owned and the
+/// program segfaulted on a use-after-free.
+///
+/// Passes before and after, which is its job: it is the reference answer the
+/// codegen twin `e2e_map_field_move_out_neutralizes_the_source` is measured
+/// against. Seed is the literal 1 here rather than `env.args().len()` for the
+/// usual reason — an in-process interpreter test would see the TEST binary's
+/// argv.
+#[test]
+fn test_map_field_move_out_transfers_the_handle() {
+    assert_eq!(
+        run(r#"struct MapH { m: Map[i64, String], tag: String }
+struct SortH { s: SortedMap[i64, String] }
+
+fn mk(i: i64, n: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(i, f"mapv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    m.insert(i + 100i64, f"mapw-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn mks(i: i64, n: i64) -> SortedMap[i64, String] {
+    let mut m: SortedMap[i64, String] = SortedMap.new();
+    m.insert(i, f"sortv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn take(h: MapH) -> Map[i64, String] { return h.m; }
+fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
+fn eats(m: SortedMap[i64, String]) -> i64 { return m.len(); }
+
+fn main() {
+    let n: i64 = 1i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) field returned out of a by-value param — the SIGSEGV
+        let h1: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let m1 = take(h1);
+        acc = acc + m1.len();
+        // (b) field moved into a local
+        let h2: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let m2 = h2.m;
+        acc = acc + m2.len();
+        // (c) field passed to a consuming callee
+        let h3: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        acc = acc + eat(h3.m);
+        // (d) SortedMap field moved out
+        let h4: SortH = SortH { s: mks(i, n) };
+        acc = acc + eats(h4.s);
+        // CONTROLS, correct before and after: a field only READ, and a
+        // WHOLE-struct move (which retracts the source's StructDrop rather
+        // than neutralizing one field).
+        let h5: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        if h5.tag.contains("payload") { acc = acc + 1i64; }
+        acc = acc + h5.m.len();
+        let h6: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let h7 = h6;
+        acc = acc + h7.m.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#),
+        "480\n"
+    );
+}
+
 #[test]
 fn test_mut_ref_place_argument_writes_back() {
     // B-2026-08-05-37 — the interpreter half. A `mut ref` parameter given a

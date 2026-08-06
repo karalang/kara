@@ -5226,7 +5226,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     let result_ty = layout.llvm_type;
                     self.zero_result_payload_area(result_ty, field_ptr, "smv.res");
                 }
-            } else if matches!(fname, "Map" | "HashMap" | "Set" | "HashSet") {
+            } else if matches!(
+                fname,
+                "Map" | "HashMap" | "Set" | "HashSet" | "SortedMap" | "SortedSet"
+            ) {
                 // B-2026-07-15-23 — a Map/Set field is a single opaque `ptr`
                 // handle stored inline. The struct's `StructDrop` (`FieldDrop::
                 // MapOrSet`) frees it UNCONDITIONALLY via `karac_map_free_with_
@@ -5240,6 +5243,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the line-4350 comment flagged as "needs a separate runtime
                 // change" — stale: the runtime null-guard already exists, so it's
                 // a pure codegen null-store, exactly parallel to the Vec cap-zero.
+                //
+                // B-2026-08-06-6 added `SortedMap` / `SortedSet` to this list:
+                // B-2026-08-02-21 taught the drop classifier to free them, and a
+                // field the drop frees but the move does not neutralize is the
+                // same double-free this arm exists to prevent.
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
             } else if self.shared_types.contains_key(fname) {
@@ -5438,6 +5446,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 let result_ty = layout.llvm_type;
                 self.zero_result_payload_area(result_ty, field_ptr, "sfld.move.res");
             }
+        } else if matches!(
+            fname.as_str(),
+            "Map" | "HashMap" | "Set" | "HashSet" | "SortedMap" | "SortedSet"
+        ) {
+            // B-2026-08-06-6 — the PER-FIELD sibling of the whole-struct
+            // Map/Set null-store `zero_struct_move_caps_mono` has carried since
+            // B-2026-07-15-23. It was never added here, so a field moved out
+            // INDIVIDUALLY left the source handle live and the owner's
+            // `FieldDrop::MapOrSet` freed storage the destination still owns:
+            //
+            //     struct MapH { m: Map[i64, String] }
+            //     fn take(h: MapH) -> Map[i64, String] { return h.m; }
+            //
+            // segfaulted on a use-after-free (valgrind: `Invalid read of size
+            // 8` inside `karac_map_free_with_drop_vec`, into a block already
+            // freed by the callee's struct drop), while the interpreter printed
+            // the right answer — a run-vs-build divergence on a concrete,
+            // non-generic program.
+            //
+            // The convention is the runtime's, already: every map-free variant
+            // early-returns on `map.is_null()`, and both half-walks
+            // (`emit_map_key_drop_fn_walk`, `emit_map_shared_half_rc_dec_walk`)
+            // null-guard internally. So this is a pure codegen null-store,
+            // exactly parallel to the Vec cap-zero above.
+            //
+            // `SortedMap` / `SortedSet` are listed for SYMMETRY WITH THE DROP
+            // CLASSIFIER, which B-2026-08-02-21 taught to free them — leaving
+            // the two lists asymmetric is the exact shape of this bug. Stated
+            // honestly: that pair is NOT independently reproducible today. A
+            // `SortedMap` field moved out measures clean both before and after
+            // (166 allocs / 166 frees, 0 valgrind errors), so this is defensive
+            // symmetry rather than a measured fix, and adding a type to a
+            // NEUTRALIZER list is safe by construction — it nulls a handle the
+            // drop would otherwise free.
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
         } else {
             if let Some(layout) = self.enum_layouts.get(fname.as_str()).cloned() {
                 if !layout.is_shared {

@@ -6434,6 +6434,100 @@ fn main() {
         assert_eq!(out, "304700\n");
     }
 
+    /// B-2026-08-06-6 — a `Map`/`Set` field moved out INDIVIDUALLY must
+    /// neutralize the source handle.
+    ///
+    /// `zero_struct_move_caps_mono` has nulled a Map handle on a WHOLE-struct
+    /// move since B-2026-07-15-23; the per-FIELD neutralizer
+    /// `zero_struct_field_move_cap` never got the same arm. So the owner's
+    /// `FieldDrop::MapOrSet` freed storage the destination still owned:
+    ///
+    ///     struct MapH { m: Map[i64, String] }
+    ///     fn take(h: MapH) -> Map[i64, String] { return h.m; }
+    ///
+    /// segfaulted on a use-after-free — valgrind `Invalid read of size 8`
+    /// inside `karac_map_free_with_drop_vec`, into a block the callee's struct
+    /// drop had already freed — while the interpreter printed the right
+    /// answer. A concrete, non-generic program; nothing about it is exotic.
+    ///
+    /// Three move-out spellings, because they reach the neutralizer by
+    /// different routes: returned out of a by-value param, bound to a local,
+    /// and passed to a consuming callee. Two controls that were always correct
+    /// — a field only READ, and a whole-struct move (which retracts the
+    /// source's entire StructDrop rather than neutralizing one field) — so a
+    /// fix that over-nulls turns them red.
+    ///
+    /// The `SortedMap` arm is carried for symmetry with the drop classifier
+    /// (B-2026-08-02-21 taught it to free SortedMap/SortedSet). Stated
+    /// honestly: that leg measures clean both before and after, so it is
+    /// defensive symmetry rather than a measured fix — it is here so the shape
+    /// is covered if the routes ever converge.
+    ///
+    /// Expected total is DERIVED, not read off a run: `mk` builds a 2-entry
+    /// map and `mks` a 1-entry one, so a round is 2+2+2+1+1+2+2 = 12, and
+    /// 12 x 40 = 480.
+    #[test]
+    fn e2e_map_field_move_out_neutralizes_the_source() {
+        let Some(out) = run_program(
+            r#"struct MapH { m: Map[i64, String], tag: String }
+struct SortH { s: SortedMap[i64, String] }
+
+fn mk(i: i64, n: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(i, f"mapv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    m.insert(i + 100i64, f"mapw-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn mks(i: i64, n: i64) -> SortedMap[i64, String] {
+    let mut m: SortedMap[i64, String] = SortedMap.new();
+    m.insert(i, f"sortv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn take(h: MapH) -> Map[i64, String] { return h.m; }
+fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
+fn eats(m: SortedMap[i64, String]) -> i64 { return m.len(); }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) field returned out of a by-value param — the SIGSEGV
+        let h1: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let m1 = take(h1);
+        acc = acc + m1.len();
+        // (b) field moved into a local
+        let h2: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let m2 = h2.m;
+        acc = acc + m2.len();
+        // (c) field passed to a consuming callee
+        let h3: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        acc = acc + eat(h3.m);
+        // (d) SortedMap field moved out
+        let h4: SortH = SortH { s: mks(i, n) };
+        acc = acc + eats(h4.s);
+        // CONTROLS, correct before and after: a field only READ, and a
+        // WHOLE-struct move (which retracts the source's StructDrop rather
+        // than neutralizing one field).
+        let h5: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        if h5.tag.contains("payload") { acc = acc + 1i64; }
+        acc = acc + h5.m.len();
+        let h6: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let h7 = h6;
+        acc = acc + h7.m.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "480\n");
+    }
+
     /// B-2026-08-05-8 — `contains` on a PATTERN-BOUND `String` payload.
     ///
     /// This was a run-vs-build divergence, not a diagnostics nit: `karac check`

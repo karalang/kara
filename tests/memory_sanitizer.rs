@@ -14264,6 +14264,81 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-6 — the sanitizer gate on a moved-out `Map` field.
+    ///
+    /// The defect was a USE-AFTER-FREE, which is ASAN's own business: the
+    /// owner's struct drop freed the map storage and the destination then read
+    /// and freed it again. The codegen twin catches it as a segfault; this
+    /// catches it as the memory error it is, and would also catch the opposite
+    /// mistake (over-nulling, which leaks instead).
+    ///
+    /// NOT VACUOUS (B-2026-08-04-17): opaque `env.args().len()` seed, every map
+    /// value and tag built from it at runtime, byte-level `contains` read, and
+    /// 40 iterations x six maps so nothing folds away.
+    #[test]
+    fn asan_map_field_move_out_neutralizes_the_source() {
+        assert_clean_asan_run_min_allocs(
+            r#"struct MapH { m: Map[i64, String], tag: String }
+struct SortH { s: SortedMap[i64, String] }
+
+fn mk(i: i64, n: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(i, f"mapv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    m.insert(i + 100i64, f"mapw-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn mks(i: i64, n: i64) -> SortedMap[i64, String] {
+    let mut m: SortedMap[i64, String] = SortedMap.new();
+    m.insert(i, f"sortv-{i}-padded-out-to-force-a-real-heap-buffer-{n}");
+    return m;
+}
+
+fn take(h: MapH) -> Map[i64, String] { return h.m; }
+fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
+fn eats(m: SortedMap[i64, String]) -> i64 { return m.len(); }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) field returned out of a by-value param — the SIGSEGV
+        let h1: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let m1 = take(h1);
+        acc = acc + m1.len();
+        // (b) field moved into a local
+        let h2: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let m2 = h2.m;
+        acc = acc + m2.len();
+        // (c) field passed to a consuming callee
+        let h3: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        acc = acc + eat(h3.m);
+        // (d) SortedMap field moved out
+        let h4: SortH = SortH { s: mks(i, n) };
+        acc = acc + eats(h4.s);
+        // CONTROLS, correct before and after: a field only READ, and a
+        // WHOLE-struct move (which retracts the source's StructDrop rather
+        // than neutralizing one field).
+        let h5: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        if h5.tag.contains("payload") { acc = acc + 1i64; }
+        acc = acc + h5.m.len();
+        let h6: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
+        let h7 = h6;
+        acc = acc + h7.m.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["480"],
+            "map_field_move_out_neutralizes_the_source",
+            // 40 iterations x six maps, each with heap keys/values plus a tag
+            // String; the floor sits far above the 3 of a folded-away run.
+            400,
+        );
+    }
+
     /// B-2026-08-05-40 — the MEMORY half of the place → `Slice[T]` coercion.
     ///
     /// The header the fix synthesizes points INTO the caller's Vec buffer: no
