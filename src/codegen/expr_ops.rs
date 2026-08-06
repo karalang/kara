@@ -3227,6 +3227,23 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn expr_is_char(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::CharLit(_) => true,
+            // `b as char` — an explicit cast TO char. Without this arm the
+            // cast is invisible here and the value renders as its integer
+            // codepoint: `println(f"{b as char}")` printed `98` under both
+            // compiled backends while the interpreter printed `b`, a silent
+            // wrong answer on code the typechecker accepts (B-2026-07-24-3
+            // made `u8 as char` legal; nothing taught the renderer about it).
+            //
+            // Fourth instance of this function's recurring gap — the
+            // MethodCall arms below record the same symptom twice ("formats
+            // the i32 scalar as its integer codepoint (77 instead of 'M')").
+            // Every syntactic form that can YIELD a char needs an arm; a cast
+            // is the most direct such form and was simply never added.
+            ExprKind::Cast { ty, .. } => matches!(
+                &ty.kind,
+                TypeKind::Path(p)
+                    if p.segments.last().map(|s| s == "char").unwrap_or(false)
+            ),
             ExprKind::Identifier(n) => self
                 .var_type_names
                 .get(n.as_str())

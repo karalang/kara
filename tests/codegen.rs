@@ -16600,6 +16600,39 @@ fn main() {
         }
     }
 
+    /// B-2026-08-06-5: a cast TO `char` inside an f-string hole rendered the
+    /// integer codepoint under both compiled backends while the interpreter
+    /// rendered the glyph — a silent wrong answer on code the typechecker
+    /// accepts (B-2026-07-24-3 made `u8 as char` legal).
+    ///
+    /// The other casts are CONTROLS, not padding: truncation, sign wrap and
+    /// float→int were all honoured in the same position, which is what
+    /// localised the fault to `expr_is_char` rather than to f-string lowering
+    /// generally. A regression that re-broke every cast would look identical
+    /// on the char line alone.
+    #[test]
+    fn e2e_cast_to_char_in_fstring_renders_the_glyph() {
+        let src = r#"
+fn main() {
+    let n = 97i64;
+    let b = n as u8;
+    println(f"A:{b as char}");
+    println(f"B:{(n as u8) as char}");
+    let c = b as char;
+    println(f"C:{c}");
+    let big = 300i64;
+    println(f"D:{big as u8}");
+    let neg = 0i64 - 1i64;
+    println(f"E:{neg as u8}");
+    let f = 2.9f64;
+    println(f"F:{f as i64}");
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "A:a\nB:a\nC:a\nD:44\nE:255\nF:2\n");
+        }
+    }
+
     /// `pow` traps `integer overflow` at the receiver width (same as `*`):
     /// `u8 16^2 = 256` overflows u8 → exit 1, no silent widening to i64.
     #[test]
