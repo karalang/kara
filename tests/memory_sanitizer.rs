@@ -14542,6 +14542,84 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-15 — a `shared` handle escaping a VALUE-POSITION BLOCK
+    /// (`let x = { let b = mk(); b.v };`) leaked one ref per evaluation.
+    ///
+    /// An ASAN fixture rather than an E2E one, the OPPOSITE of its sibling
+    /// B-2026-08-06-14: the output is correct before and after, so only a
+    /// leak-detecting gate can see it. It is also -O0-only — at the default -O2
+    /// the escaping box is provably dead and LLVM deletes the allocation along
+    /// with the evidence — so the fixture that matters runs on the
+    /// `memory-sanitizer-o0` leg. At -O2 it still has to clear the vacuity
+    /// floor, which is what the byte-level `contains` reads are for.
+    ///
+    /// The defect was an ownership-protocol disagreement across the block
+    /// boundary. `suppress_block_tail_cleanup`'s null-store disarms the owner's
+    /// rc-dec, which TRANSFERS the box's single ref to the escaping value — but
+    /// the consumer's let-site receive-inc still fired, stranding the count at 1
+    /// forever. Reference arithmetic, from the emission trace:
+    /// `1 (alloc) -> 1 (owner dec skipped) -> 2 (receive-inc) -> 1 (consumer
+    /// dec)`. Dropping the receive-inc for a transferred tail closes it at 0.
+    ///
+    /// Both directions are covered: under-releasing shows up as the original
+    /// leak, and over-releasing — the trap here, since the neighbouring repair
+    /// that removes the null-store instead produces a double free — shows up as
+    /// an ASAN invalid-free on the same fixture.
+    #[test]
+    fn asan_shared_field_escaping_a_value_block_transfers_exactly_one_ref() {
+        assert_clean_asan_run_min_allocs(
+            r#"shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn mk(i: i64, n: i64) -> Node {
+    return Node { s: f"blk-{i}-padded-out-to-force-a-real-heap-buffer-{n}" };
+}
+
+fn score(x: Node) -> i64 {
+    let mut r: i64 = x.s.len();
+    if x.s.contains("padded") { r = r + 1i64; }
+    return r;
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40i64 {
+        // (a) the reported shape — GENERIC wrapper, field escaping a block
+        let x1 = { let b = Box { v: mk(i, n) }; b.v };
+        acc = acc + score(x1);
+        // (b) the CONCRETE spelling, which leaked identically
+        let x2 = { let h = Holder { v: mk(i, n) }; h.v };
+        acc = acc + score(x2);
+        // (c) a NESTED value block — the recursion arm of the same suppressor
+        let x3 = { { let b = Box { v: mk(i, n) }; b.v } };
+        acc = acc + score(x3);
+        // CONTROL, correct before and after: the non-block move-out, whose
+        // owner's dec DOES run and whose receive-inc must therefore stay.
+        let b4 = Box { v: mk(i, n) };
+        let x4 = b4.v;
+        acc = acc + score(x4);
+        // CONTROL, a String field through the same block shape — the buffer
+        // types were never affected and must not start being.
+        let s5 = { let b = Box { v: f"str-{i}-padded-out-to-force-a-real-heap-{n}" }; b.v };
+        acc = acc + s5.len();
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["9230"],
+            "shared_field_escaping_a_value_block_transfers_exactly_one_ref",
+            // A real -O2 run measures 166 allocations; 120 is what this program
+            // can honestly guarantee there. The -O0 leg — where this defect is
+            // actually visible, the -O2 build having deleted the escaping box —
+            // runs far above it.
+            120,
+        );
+    }
+
     /// B-2026-08-06-8 — the third head the bare-generic-param rescue could not
     /// see, after String/Vec (B-2026-07-15-11) and Map/Set (B-2026-08-06-1): a
     /// field bound to a `shared struct`.

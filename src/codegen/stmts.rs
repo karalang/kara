@@ -542,7 +542,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // tail gets exactly the neutralizer its type already defines: the
             // Vec/String cap-zero, the Map/Set null-store, the Option tag-zero,
             // or the shared null-store.
-            ExprKind::FieldAccess { .. } => {
+            ExprKind::FieldAccess { object, field } => {
+                // B-2026-08-06-15 — for a direct `shared` field this null-store
+                // is a TRANSFER, not just a double-free guard: it disarms the
+                // owner's rc-dec, so the single ref the box was created with
+                // leaves with the block's value. Record that, because the
+                // consumer's let-site receive-inc must then be skipped — taking
+                // one would strand the count at 1 forever.
+                //
+                // It has to be recorded HERE rather than decided at the let
+                // site: `rhs_yields_fresh_ref` runs before the RHS is compiled,
+                // when the block's inner binding is not yet in scope and the
+                // field's type cannot be resolved.
+                if self.tail_field_is_direct_shared(object, field) {
+                    self.block_tail_shared_transfer = true;
+                }
                 self.suppress_source_vec_cleanup_for_arg(tail);
             }
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
@@ -552,6 +566,49 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => {}
         }
+    }
+
+    /// Is `<object>.<field>` a DIRECT `shared` handle (B-2026-08-06-15)?
+    ///
+    /// Resolves the declared field type through the active monomorph subst and
+    /// then through the binding's recorded instantiation, so a generic
+    /// wrapper's bare `T` is seen as what it binds to — the same two-step the
+    /// move neutralizers use, and needed here because the generic and concrete
+    /// spellings leaked identically.
+    fn tail_field_is_direct_shared(&self, object: &Expr, field: &str) -> bool {
+        let ExprKind::Identifier(obj) = &object.kind else {
+            return false;
+        };
+        let Some(type_name) = self.var_type_names.get(obj).cloned() else {
+            return false;
+        };
+        if self.shared_types.contains_key(type_name.as_str()) {
+            return false;
+        }
+        let Some(idx) = self
+            .struct_field_names
+            .get(&type_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return false;
+        };
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(&type_name)
+            .and_then(|v| v.get(idx))
+            .cloned()
+        else {
+            return false;
+        };
+        let field_te = self.subst_monomorph_type_params(&field_te);
+        let field_te = match self.enum_inst_var_types.get(obj) {
+            Some(inst) if Self::type_expr_is_bare_param(&field_te) => {
+                let subst = self.generic_struct_subst_from_inst(&type_name, inst);
+                crate::codegen::helpers::subst_type_params_in_type_expr(&field_te, &subst)
+            }
+            _ => field_te,
+        };
+        self.shared_heap_type_for_type_expr(&field_te).is_some()
     }
 
     /// Compile a function's top-level body, dispatching inferred parallel
@@ -3629,6 +3686,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // fresh-ref source. Plain `Call` / `MethodCall` /
                 // `StructLiteral` match the base case directly.
                 let is_fresh_construction = self.rhs_yields_fresh_ref(value);
+                // B-2026-08-06-15 — clear before the RHS compiles so the flag
+                // can only ever describe THIS let's own block, never a stale one
+                // from an earlier statement.
+                self.block_tail_shared_transfer = false;
                 let rhs_is_fstring = self.rhs_stages_fstr_acc(value);
                 // Thread the binding's Vec element type through to
                 // `Vec.with_capacity(n)` in the RHS — the zero-arg
@@ -4494,7 +4555,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // scope exit in a b2 cluster (displacement-free
                     // shapes only), so count-free aliases never dangle.
                     let b2_skip = self.b2_skips_counts(var_name);
-                    if !is_fresh_construction && !b2_skip {
+                    // B-2026-08-06-15 — a value-position block that handed out a
+                    // direct `shared` field TRANSFERRED the owner's ref (the
+                    // block-tail null-store disarmed the owner's rc-dec), so
+                    // there is nothing to receive: this binding already holds
+                    // that single ref. Taking the inc anyway strands the count
+                    // at 1 and leaks the box once per evaluation.
+                    let transferred = std::mem::take(&mut self.block_tail_shared_transfer);
+                    if !is_fresh_construction && !b2_skip && !transferred {
                         // Copying a shared pointer — increment refcount.
                         let ptr = val.into_pointer_value();
                         self.emit_refcount_inc(var_name, info.heap_type, ptr);

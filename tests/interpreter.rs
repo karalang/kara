@@ -30032,6 +30032,50 @@ fn main() {
     );
 }
 
+/// B-2026-08-06-15 — the ORACLE half. The interpreter has no refcount to strand,
+/// so a `shared` handle escaping a value-position block has always been correct
+/// there; codegen transferred the box's only ref out via the block-tail
+/// null-store and then took a receive-inc for it anyway, leaving the count at 1
+/// forever.
+///
+/// Pins the reference value its codegen twin
+/// `asan_shared_field_escaping_a_value_block_transfers_exactly_one_ref` is
+/// measured against. That twin is an ASAN fixture rather than an E2E one — the
+/// opposite of B-2026-08-06-14's — because the output is right before and after
+/// and only a leak gate can see the defect.
+///
+/// Passes before and after, which is its job. Seed is a literal for the usual
+/// reason: an in-process interpreter test would see the TEST binary's argv.
+#[test]
+fn test_shared_field_escaping_a_value_block_transfers_the_handle() {
+    assert_eq!(
+        run(r#"shared struct Node { s: String }
+struct Box[T] { v: T }
+struct Holder { v: Node }
+
+fn mk(i: i64) -> Node { return Node { s: f"blk-{i}-padded-out-to-force-a-real-heap-buffer" }; }
+
+fn main() {
+    let mut acc: i64 = 0;
+    // generic and concrete spellings of the escaping block tail
+    let x1 = { let b = Box { v: mk(1) }; b.v };
+    acc = acc + x1.s.len();
+    let x2 = { let h = Holder { v: mk(2) }; h.v };
+    acc = acc + x2.s.len();
+    // a nested value block
+    let x3 = { { let b = Box { v: mk(3) }; b.v } };
+    acc = acc + x3.s.len();
+    // the non-block control, whose receive-inc must stay
+    let b4 = Box { v: mk(4) };
+    let x4 = b4.v;
+    acc = acc + x4.s.len();
+    println(acc);
+}
+"#),
+        "176\n"
+    );
+}
+
 /// B-2026-08-06-14 — the ORACLE half. The interpreter has no refcount to get
 /// wrong, so it has always handed a `shared` field out of a by-value or `ref`
 /// struct param correctly; codegen dec'd the rc box one below zero because the

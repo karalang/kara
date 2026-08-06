@@ -1924,6 +1924,22 @@ pub(super) struct Codegen<'ctx> {
     /// Symmetric to `suppress_source_vec_cleanup_for_arg`'s
     /// cap-zeroing for Identifier RHS aliasing.
     pub(crate) last_fstr_acc: Option<PointerValue<'ctx>>,
+    /// B-2026-08-06-15 — the value-position block just compiled handed out a
+    /// direct `shared` field as its tail (`let x = { let b = mk(); b.v };`), and
+    /// `suppress_block_tail_cleanup` null-stored the source, TRANSFERRING the
+    /// owner's single ref to the escaping value.
+    ///
+    /// The consumer must therefore NOT take a receive-inc: it already owns that
+    /// ref, and inc'ing leaves the count at 1 forever (measured 32 B leaked per
+    /// evaluation). It cannot be decided by `rhs_yields_fresh_ref`, which runs
+    /// BEFORE the RHS is compiled — the block's inner binding is not in scope
+    /// yet, so the field's type cannot be resolved there. Recorded at the point
+    /// the transfer actually happens and consumed at the let site, the same
+    /// shape as `last_fstr_acc` above.
+    ///
+    /// Cleared before each let RHS is compiled and again once consumed, so it
+    /// only ever describes the block immediately to its left.
+    pub(crate) block_tail_shared_transfer: bool,
     /// B-2026-07-22-2 — the most recent FRESH call-result struct temp
     /// materialized by a field access in expression position
     /// (`println(mk().s)` / `take(mk().s)` / `mkv().v.len()`):
@@ -7778,6 +7794,7 @@ impl<'ctx> Codegen<'ctx> {
             pending_map_insert_old_dec: false,
             pending_spawn_detach: false,
             last_fstr_acc: None,
+            block_tail_shared_transfer: false,
             freshtemp_field_access_slot: None,
             shared_types: HashMap::new(),
             malloc_fn,

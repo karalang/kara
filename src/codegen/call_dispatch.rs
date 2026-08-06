@@ -6400,6 +6400,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_option_inner_rc_inc_for_loaded(val, inner_info.heap_type);
     }
 
+    /// Is this type-expr still a bare, unresolved single-segment generic param?
+    pub(super) fn type_expr_is_bare_param(te: &TypeExpr) -> bool {
+        matches!(
+            &te.kind,
+            TypeKind::Path(p) if p.segments.len() == 1 && p.generic_args.is_none()
+        )
+    }
+
     /// Direct-`shared` companion to [`Self::share_option_shared_field_ref_for_arg`],
     /// for a field RETURNED out of a CALLER-RETAINS struct param (B-2026-08-06-14).
     ///
