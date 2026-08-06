@@ -6092,10 +6092,44 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (a runtime store on this path only). A heapless live variant's w0 is
     /// data, but its `BoxedEnumDrop` tag-guard never reads it and the
     /// container's copy already captured the real words.
+    /// Resolve a moved-arg name through the passthrough OWNERSHIP ALIAS before
+    /// the `_for_moved_arg` suppressors below look it up. B-2026-08-06-29.
+    ///
+    /// `let x = idopt(d); peek(x);` double-freed on a DEFAULT -O2 build. The
+    /// suppressors zero the named binding's payload so a callee that CONSUMES
+    /// the argument is its only owner — which works for `peek(d)`, where `d` is
+    /// itself armed. It found nothing for `peek(x)`, because B-2026-08-06-27
+    /// deliberately does NOT arm `x`: the passthrough result aliases `d`, so
+    /// `x` records `passthrough_owner_alias[x] = d` instead and `d` stays the
+    /// sole owner. Nothing then disarmed `d` when its alias was consumed, so
+    /// the callee freed the payload and `d`'s own cleanup freed it again.
+    ///
+    /// Resolving the alias makes the suppression land on the binding that
+    /// actually owns the payload. This is the SAME operation the direct case
+    /// already performs — ownership transferring to a consuming callee — not a
+    /// new blanket zeroing of a source, which is the move this family's rows
+    /// (-21, -27, -28) warn against. It fires only where a consume is already
+    /// happening.
+    ///
+    /// One hop, not a chain: the alias map records a binding's immediate
+    /// source, and a chained re-passthrough (`let y = idopt(x);`) records `y`
+    /// against `x` — resolving repeatedly would be the correct generalization
+    /// if that shape ever arms, but it does not today and an unbounded walk
+    /// over a map that could contain a cycle is not worth adding unmeasured.
+    fn moved_arg_owner_name(&self, name: &str) -> String {
+        self.passthrough_owner_alias
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
     pub(super) fn suppress_boxed_enum_payload_cleanup_for_moved_arg(&self, arg: &Expr) {
         let ExprKind::Identifier(name) = &arg.kind else {
             return;
         };
+        // B-2026-08-06-29 — follow the passthrough ownership alias, so the
+        // suppression lands on the binding that actually owns the payload.
+        let name = &self.moved_arg_owner_name(name);
         if !self.boxed_enum_payload_vars.contains(name.as_str()) {
             return;
         }
@@ -6118,6 +6152,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &arg.kind else {
             return;
         };
+        // B-2026-08-06-29 — follow the passthrough ownership alias, so the
+        // suppression lands on the binding that actually owns the payload.
+        let name = &self.moved_arg_owner_name(name);
         if !self.inline_option_payload_vars.contains(name.as_str()) {
             return;
         }
@@ -6149,6 +6186,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &arg.kind else {
             return;
         };
+        // B-2026-08-06-29 — follow the passthrough ownership alias, so the
+        // suppression lands on the binding that actually owns the payload.
+        let name = &self.moved_arg_owner_name(name);
         if !self.inline_result_payload_vars.contains(name.as_str()) {
             return;
         }
@@ -6544,6 +6584,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &value.kind else {
             return;
         };
+        // B-2026-08-06-29 — follow the passthrough ownership alias. This is the
+        // USER-FUNCTION arg path (the Map/Vec method sites use the
+        // `_for_moved_arg` suppressors above), and it is the one `peek(x)`
+        // reaches. `x` is not armed — B-2026-08-06-27 records it as an alias of
+        // `d` and leaves `d` the sole owner — so without this the consume
+        // suppressed nothing and `d`'s cleanup double-freed the payload the
+        // callee had already taken.
+        let name = &self.moved_arg_owner_name(name);
         let in_option = self.inline_option_payload_vars.contains(name.as_str());
         let in_result = self.inline_result_payload_vars.contains(name.as_str());
         // `boxed_enum_payload_vars` covers the heap-BOXED wide payload

@@ -35010,6 +35010,110 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-29 — a BOUND passthrough result, then CONSUMED by a callee.
+    ///
+    /// `let x = idopt(d); peek(x);` aborted with `free(): double free detected
+    /// in tcache 2` on a DEFAULT -O2 build. It is the third distinct arm of one
+    /// shape, and the three are worth reading together because each needed its
+    /// own fix:
+    ///   * bound then MATCHED — B-2026-08-06-27;
+    ///   * DISCARDED — B-2026-08-06-28;
+    ///   * bound then CONSUMED by a callee — this row.
+    ///
+    /// The alias record was already correct. B-2026-08-06-27 deliberately does
+    /// NOT arm `x`: the passthrough result aliases `d`, so `x` records
+    /// `passthrough_owner_alias[x] = d` and `d` stays sole owner. What was
+    /// missing is that consuming the ALIAS must disarm the binding it aliases —
+    /// the moved-arg suppressors zeroed the named binding, found `x` unarmed,
+    /// and did nothing, so the callee freed the payload and `d`'s own cleanup
+    /// freed it again.
+    ///
+    /// That makes this a NARROWING in the same sense the family's other rows
+    /// use: the suppression already existed for a directly-armed argument
+    /// (`peek(d)`), and it now lands on the binding that actually owns the
+    /// payload. It fires only where a consume is already happening — not a
+    /// blanket zeroing of a source, the move B-2026-08-06-21 showed leaks.
+    ///
+    /// Both SIBLING PAYLOADS are carried because each has its own suppressor
+    /// and each was measured broken: inline `Result[String, i64]` and heap-
+    /// BOXED `Option[Wide]`.
+    ///
+    /// THE PRIOR TWO ARMS ARE REGRESSION CONTROLS here — bound-then-matched
+    /// (-27) and discarded (-28) must both stay clean, since all three arms now
+    /// run through the same alias record. So are a directly-armed consumed
+    /// binding and a FRESH temp, which must still be freed: the fix is a
+    /// suppression, and over-suppressing shows up as a LEAK, which this file's
+    /// LSan harness reports on Linux.
+    ///
+    /// Every string is built at runtime from `env.args().len()` — a literal
+    /// payload is rodata and cannot fail (B-2026-08-04-17).
+    #[test]
+    fn asan_bound_passthrough_result_consumed_by_callee_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"struct Wide { a: String, b: String, c: i64, d: i64 }
+fn idopt(o: Option[String]) -> Option[String] { o }
+fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
+fn idbox(o: Option[Wide]) -> Option[Wide] { o }
+fn peek(o: Option[String]) -> i64 {
+    match o { Option.Some(s) => s.len(), Option.None => 0 }
+}
+fn peekr(r: Result[String, i64]) -> i64 {
+    match r { Result.Ok(s) => s.len(), Result.Err(e) => e }
+}
+fn peekb(o: Option[Wide]) -> i64 {
+    match o { Option.Some(w) => w.a.len() + w.c, Option.None => 0 }
+}
+fn mk(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-a-real-heap-buffer");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // (a) the reported shape — bound passthrough, then CONSUMED.
+        let d: Option[String] = Option.Some(mk(n + i));
+        let x = idopt(d);
+        acc = acc + peek(x);
+        // (b) the inline Result sibling.
+        let r: Result[String, i64] = Result.Ok(mk(n + i));
+        let rx = idres(r);
+        acc = acc + peekr(rx);
+        // (c) the heap-BOXED sibling.
+        let bw: Option[Wide] = Option.Some(Wide { a: mk(n + i), b: mk(n + i), c: 1, d: 2 });
+        let bx = idbox(bw);
+        acc = acc + peekb(bx);
+        // CONTROL (B-2026-08-06-27): bound, then MATCHED.
+        let d2: Option[String] = Option.Some(mk(n + i));
+        let y = idopt(d2);
+        acc = acc + match y { Option.Some(s) => s.len(), Option.None => 0 };
+        // CONTROL (B-2026-08-06-28): DISCARDED passthrough.
+        let d3: Option[String] = Option.Some(mk(n + i));
+        idopt(d3);
+        // CONTROL: a directly-armed binding consumed — always worked.
+        let d4: Option[String] = Option.Some(mk(n + i));
+        acc = acc + peek(d4);
+        // CONTROL: a FRESH temp has no named source and must still be freed.
+        idopt(Option.Some(mk(n + i)));
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // Oracle-checked, not pasted back from the compiler: `--interp`,
+            // `KARAC_AUTO_PAR=0` AOT and the default auto-par build all agree,
+            // and valgrind reports 0 errors / 0 bytes lost on the same program.
+            &["9195"],
+            "bound_passthrough_result_consumed_by_callee_frees_once",
+            // 40 rounds x eight runtime-built Strings (Wide carries two).
+            200,
+        );
+    }
+
     /// B-2026-08-06-28 — a DISCARDED passthrough call result must not free its
     /// argument's payload.
     ///
