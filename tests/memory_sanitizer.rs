@@ -34929,6 +34929,87 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-26 — a boxed `Result` payload must not ALSO get the
+    /// INLINE-payload cleanup.
+    ///
+    /// Split out of B-2026-08-06-21, which narrowed this shape (double free at
+    /// both opt levels -> -O0 only) without closing it. The residue was a
+    /// different mechanism entirely: `track_inline_result_payload_cleanup`
+    /// guards against a boxed payload by consulting `boxed_enum_payload_vars`,
+    /// a set keyed by BINDING NAME — and a binding introduced from a CALL
+    /// result (`let rbk = idres(r);`) is never in it. The inline action was
+    /// therefore registered for a heap-BOXED payload, and its drop ran
+    /// `__karac_drop_struct_Wide` over `&slot.w0` — the word holding the box
+    /// POINTER — reading the struct's `String` out of whatever followed and
+    /// calling `free` on it. Valgrind: `Invalid free()`.
+    ///
+    /// Found by the diff the row prescribed: `main` emitted TWO
+    /// `__karac_drop_struct_Wide` calls where the passing `Option` twin emits
+    /// exactly ONE, on the source binding that really does own the box.
+    ///
+    /// The fix gates on the payload TYPE — `llvm_type_word_count(T) > area`,
+    /// the same predicate `coerce_to_payload_words` boxes on — rather than on
+    /// the name set, so it closes the class rather than the one binding shape.
+    /// The two sides are gated INDEPENDENTLY, which the `Result[Wide, String]`
+    /// case below pins: a boxed `Ok` beside an inline-heap `Err` must keep the
+    /// `Err` drop it still needs.
+    ///
+    /// -O0-ONLY, deliberately noted: at `-O2` this program is clean before and
+    /// after, so THIS FIXTURE CANNOT CATCH THE BUG ON THE DEFAULT LEG. It is
+    /// red only under `KARAC_OPT_LEVEL=0` — i.e. it is gated by
+    /// `scripts/asan-o0-leg.sh` (B-2026-08-04-17), which is exactly the
+    /// population that leg exists to cover.
+    ///
+    /// Floored per B-2026-08-04-17 — opaque `env.args().len()` seed,
+    /// runtime-built payloads, `contains` byte reads.
+    #[test]
+    fn asan_boxed_result_payload_no_inline_cleanup() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, s: String }
+fn mk(n: i64, i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-");
+    s.push_str((n + i).to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn idres(r: Result[Wide, i64]) -> Result[Wide, i64] { r }
+fn iderr(r: Result[i64, Wide]) -> Result[i64, Wide] { r }
+fn idmix(r: Result[Wide, String]) -> Result[Wide, String] { r }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // boxed Ok payload, arm BINDS it — the headline shape
+        let r: Result[Wide, i64] = Result.Ok(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) });
+        let rbk = idres(r);
+        match rbk { Result.Ok(x) => { if x.s.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        // the same on the Err side
+        let e: Result[i64, Wide] = Result.Err(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) });
+        let ebk = iderr(e);
+        match ebk { Result.Err(x) => { if x.s.contains("payload") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+        // boxed Ok + INLINE-heap Err: the per-side gate must keep the Err drop
+        let m: Result[Wide, String] = if i % 2 == 0 {
+            Result.Ok(Wide { a: 1, b: 2, c: 3, d: 4, e: 5, s: mk(n, i) })
+        } else { Result.Err(mk(n, i)) };
+        let mbk = idmix(m);
+        match mbk {
+            Result.Ok(x) => { if x.s.contains("payload") { acc = acc + 1; } }
+            Result.Err(t) => { if t.contains("payload") { acc = acc + 1; } }
+        }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["120"],
+            "boxed_result_payload_no_inline_cleanup",
+            100,
+        );
+    }
+
     #[test]
     fn asan_generic_mono_bare_t_local_reassign_no_leak() {
         // B-2026-07-15-6: inside a monomorphized generic fn, a bare-`T`

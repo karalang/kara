@@ -2159,7 +2159,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `reconstruct_payload_value` deboxes on, in the one place callers can ask
     /// it of a payload type-expr alone.
     pub(super) fn option_payload_is_boxed(&self, payload_te: &TypeExpr) -> bool {
-        let Some(layout) = self.enum_layouts.get("Option") else {
+        self.enum_payload_is_boxed("Option", payload_te)
+    }
+
+    /// The same question for a `Result[T, E]` side. B-2026-08-06-26.
+    ///
+    /// `Result` seeds a different payload area than `Option`, so the predicate
+    /// has to read ITS layout — asking `option_payload_is_boxed` about a
+    /// `Result` payload would compare against the wrong width.
+    pub(super) fn result_payload_is_boxed(&self, payload_te: &TypeExpr) -> bool {
+        self.enum_payload_is_boxed("Result", payload_te)
+    }
+
+    /// Shared body of the two predicates above: does `payload_te` exceed
+    /// `enum_name`'s seeded payload area, so `coerce_to_payload_words` spills it
+    /// behind a pointer?
+    fn enum_payload_is_boxed(&self, enum_name: &str, payload_te: &TypeExpr) -> bool {
+        let Some(layout) = self.enum_layouts.get(enum_name) else {
             return false;
         };
         let area = (layout.llvm_type.count_fields() as usize).saturating_sub(1);

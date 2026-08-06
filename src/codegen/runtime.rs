@@ -4757,12 +4757,51 @@ impl<'ctx> super::Codegen<'ctx> {
         let (ok_payload_elem_ty, err_payload_elem_ty) = self
             .result_inline_payload_elems(result_te)
             .unwrap_or((None, None));
+        // B-2026-08-06-26 — the name-keyed guard above only knows bindings this
+        // compilation SAW being boxed. A binding introduced from a call result
+        // (`let rbk = idres(r);`, a passthrough returning the same box) is never
+        // in that set, so it fell through and got the INLINE action for a payload
+        // that is heap-BOXED: the drop then ran `__karac_drop_struct_Wide` over
+        // `&slot.w0` — the word holding the box POINTER — reading the struct's
+        // String field out of whatever followed it and calling `free` on it.
+        // Measured: `Invalid free()` under valgrind at -O0, and TWO
+        // `__karac_drop_struct_Wide` calls in `main` where the passing `Option`
+        // twin emits exactly one (on the source binding, which really does own
+        // the box).
+        //
+        // Boxed-ness is a property of the payload TYPE, not of how the binding
+        // was created — it is exactly `llvm_type_word_count(T) > area`, the same
+        // predicate `coerce_to_payload_words` boxes on and
+        // `reconstruct_payload_value` deboxes on. Asking the type closes the
+        // whole class rather than the one binding shape, and the two sides are
+        // gated INDEPENDENTLY so a boxed `Ok` beside an inline-heap `Err` keeps
+        // the `Err` drop it still needs.
+        let (ok_boxed, err_boxed) = Self::result_payload_tes(result_te)
+            .map(|(ok_te, err_te)| {
+                (
+                    self.result_payload_is_boxed(&ok_te),
+                    self.result_payload_is_boxed(&err_te),
+                )
+            })
+            .unwrap_or((false, false));
+        let ok_payload_elem_ty = if ok_boxed { None } else { ok_payload_elem_ty };
+        let err_payload_elem_ty = if err_boxed { None } else { err_payload_elem_ty };
         // Struct-with-heap payload drops (B-2026-07-12-2 gap 3) — the overlay
         // `_elems` above only covers a direct `String`/`Vec` (or transparent
         // wrapper of one); a multi-field struct-with-heap payload needs a full
         // drop. Register if either overlay OR struct-drop half has heap.
         let (ok_payload_struct_drop, err_payload_struct_drop) =
             self.result_inline_payload_struct_drops(result_te);
+        let ok_payload_struct_drop = if ok_boxed {
+            None
+        } else {
+            ok_payload_struct_drop
+        };
+        let err_payload_struct_drop = if err_boxed {
+            None
+        } else {
+            err_payload_struct_drop
+        };
         if ok_payload_elem_ty.is_none()
             && err_payload_elem_ty.is_none()
             && ok_payload_struct_drop.is_none()

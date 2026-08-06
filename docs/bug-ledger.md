@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 218 | 0 |
 | leak | 141 | 1 |
-| double-free | 102 | 2 |
+| double-free | 102 | 1 |
 | codegen-gap | 93 | 1 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 80 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 709 | 6 |
+| codegen | 709 | 5 |
 | interp | 127 | 0 |
 | typecheck | 126 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **979 surfaced · 8 open · 961 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **979 surfaced · 7 open · 962 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,12 +136,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **979 surfaced 
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
 | B-2026-08-06-25 | 2026-08-06 | codegen | medium | the generic-impl MONOMORPH NAME mangles only the type argument's HEAD, so `Box[Box[Wide]]` and `Box[Box[Box[Wide]]]` (and `Box[Box[i64]]`, `Box[Box[String]]`) all collide on `Box.take$Box`: whichever instantiation is emitted first wins and every other call site is type-checked against it, failing LLVM module verification with `Call parameter type does not match function signature`. Needs TWO distinct nested instantiations in one program, which is why single-chain probes miss it | — |
-| B-2026-08-06-26 | 2026-08-06 | codegen | medium | a boxed `Result` passed through a passthrough callee and matched with a payload-BINDING arm still double-frees at -O0: `Result[Wide, i64]` where `Wide` owns a `String`, with `Result.Ok(x) => x.s…` -- the `Option` twin and the non-binding `Result.Ok(_)` arm are both clean | — |
 | B-2026-08-06-27 | 2026-08-06 | codegen | high | an INLINE heap `Option[String]` payload passed by value to a passthrough callee is freed TWICE at the DEFAULT -O2 as well as -O0, when the payload is built at RUNTIME: `fn id(o: Option[String]) -> Option[String] { o }` aborts with `free(): double free detected in tcache 2` | — |
 
-### Fixed (961)
+### Fixed (962)
 
-<details><summary>961 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>962 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1128,6 +1127,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-22 | codegen | medium | a DOUBLY-nested generic chain `outer.take().take().f` at `Box[Box[Wide]]` cannot be built: type resolution SUCCEEDS (the field index resolves to Some… | cfb149aa |
 | B-2026-08-06-23 | codegen | medium | a generic struct LITERAL in RECEIVER position whose field initializer type cannot be NAMED lowers at the ERASED `{i64}` layout: `Box { v: f * 2.0 }.t… | FIXED (src/codegen/call_dispatch.rs: new `scalar_type_name_of_expr` + `is_scalar_type_name`, chained onto `infer_arg_elem_te`'s namer). Pins tests/codegen.rs `e2e_generic_receiver_literal_with_arithmetic_field_initializer`, stash-proven RED. |
 | B-2026-08-06-24 | interp | medium | EVERY `extern` call under `--interp` reports an "internal .. | 3607c241 |
+| B-2026-08-06-26 | codegen | medium | a boxed `Result` passed through a passthrough callee and matched with a payload-BINDING arm still double-frees at -O0: `Result[Wide, i64]` where `Wid… | <this commit> |
 
 </details>
 
