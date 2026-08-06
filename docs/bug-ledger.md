@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
 | other | 17 | 1 |
-| use-after-free | 14 | 1 |
+| use-after-free | 14 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 699 | 8 |
+| codegen | 699 | 7 |
 | interp | 126 | 0 |
 | typecheck | 125 | 2 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **968 surfaced · 11 open · 949 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **968 surfaced · 10 open · 950 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,13 +138,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **968 surfaced 
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
 | B-2026-08-06-12 | 2026-08-06 | codegen | high | a GENERIC struct LITERAL used directly as a METHOD RECEIVER cannot be built: `Box { v: <String> }.take()` passes `karac check`, runs correctly under the interpreter, and then fails `karac build` with an LLVM verifier error -- the literal lowers at the ERASED base layout `{ i64 }` because the outer method call's span CLOBBERS the literal's instantiation record | ROOT CAUSE IS DEEPER THAN THE SPAN CLOBBER — see the ATTEMPTED FIX section. `impl[T] Box[T]` methods are declared ONCE at the erased layout (`@Box.take({ i64 }) -> i64`), so they are not monomorphized per instantiation the way `fn take[T]` free functions are. The span-clobbered literal layout (src/codegen/types_lowering.rs::struct_inst_mono_type_for_expr) is only the first of two mismatches. |
-| B-2026-08-06-14 | 2026-08-06 | codegen | high | a `shared` field RETURNED out of a BY-VALUE struct param is a use-after-free on a DEFAULT -O2 build: `fn giveback(b: Holder) -> Node { return b.v; }` frees the 32-byte rc box at the param's scope-exit drop and hands the caller the freed handle -- CONCRETE spelling only, since B-2026-08-06-8's null-store already covers `Box[Node]` | the CONCRETE-spelling return site for a direct `shared` field of a by-value struct param -- src/codegen/call_dispatch.rs::zero_struct_field_move_cap_impl's `shared` arm (B-2026-08-06-8) is the neutralizer that covers the generic spelling and does not reach this one |
 | B-2026-08-06-15 | 2026-08-06 | codegen | low | a `shared` handle escaping a VALUE-POSITION BLOCK is never rc-dec'd by its consumer binding: `let x = { let b = Box { .. }; b.v };` leaks 1,280 B / 40 blocks at -O0 (clean at -O2), IDENTICALLY in the generic and concrete spellings -- the leak half of the shape whose use-after-free half B-2026-08-06-8 fixed | the let-site that consumes a value-position BLOCK's result -- it does not `track_rc_var` a `shared` handle arriving that way; check whether src/codegen/stmts.rs::clone_on_extract_view_field's bare-`shared` arm is the intended owner and simply is not reached |
 | B-2026-08-06-16 | 2026-08-06 | typecheck | low | the upper half of u64 is unwritable as a literal -- `18446744073709551615u64` (and any magnitude above i64::MAX, in any radix) is a parse error, because every integer rides an i64 CARRIER and the literal arrives wrapped NEGATIVE, which the typechecker rejects with `negative integer literal -1 cannot initialize unsigned type 'u64'`. The parser half is already done (B-2026-08-06-13 carries the magnitude); this is the typechecker half. | — |
 
-### Fixed (949)
+### Fixed (950)
 
-<details><summary>949 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>950 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1119,6 +1118,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-10 | codegen | medium | a callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans the box the caller's struct drop owns: `fn f(h: Option[H]) { match h {… | e6a0a5a1 |
 | B-2026-08-06-11 | codegen | high | an owned boxed-payload enum param that ESCAPES -- returned, or forwarded to another by-value param -- is freed by the callee anyway: `fn id(o: Opt[St… | 05005aae |
 | B-2026-08-06-13 | lexer+parser | low | `i64::MIN` cannot be WRITTEN as a literal in any spelling -- `-9223372036854775808i64` is a parse error (`Invalid integer literal`), because a negati… | <this commit> |
+| B-2026-08-06-14 | codegen | high | a `shared` field RETURNED out of a BY-VALUE struct param is a use-after-free on a DEFAULT -O2 build: `fn giveback(b: Holder) -> Node { return b.v; }`… | 8d6ef36 (src/codegen/call_dispatch.rs — the new `share_direct_shared_field_ref_for_return`, which gates on the caller-retains regime using the SAME name-only predicate the param_own.rs arm gates on so the two cannot drift; src/codegen/exprs.rs — the explicit-`return` hook; src/codegen/stmts.rs — the tail hook, on the early-return side of `compile_tail_final_expr`'s `tail_inner` gate). Pins e2e_shared_field_returned_from_a_caller_retains_param_keeps_its_ref and test_shared_field_returned_from_a_param_transfers_the_handle. |
 
 </details>
 
