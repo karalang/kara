@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | crash | 39 | 0 |
 | soundness | 38 | 0 |
 | other | 17 | 1 |
-| use-after-free | 12 | 0 |
+| use-after-free | 13 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 690 | 7 |
+| codegen | 691 | 7 |
 | interp | 125 | 0 |
 | typecheck | 124 | 1 |
 | ownership | 39 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **957 surfaced · 9 open · 940 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **958 surfaced · 9 open · 941 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -140,9 +140,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **957 surfaced 
 | B-2026-08-06-2 | 2026-08-06 | codegen | high | TWO defects on the by-value generic-struct param path, and THIS ROW'S OWN 'clean' CONTROL WAS THE WORSE ONE: (A) [FIXED 933b859] the CONCRETE spelling `fn take(b: Box[String]) -> String { b.v }` DOUBLE-FREED on a default -O2 build -- the callee's struct drop freed the field and the same buffer was then returned and freed again, because the move-out cap-zero the generic path emits was MISSING here; (B) [STILL OPEN] the GENERIC spelling leaks instead, because it entry-deep-copies and nobody frees the caller's original | (A) FIXED 933b859 — src/codegen/call_dispatch.rs, the caller-side move-out gate (~5540) now threads the slot's own layout down via zero_struct_field_move_cap_in instead of demanding equality against a no-active-subst fallback that erases to the generic base. (B) OPEN — the caller's `%__owned_agg_tmp` is stored to but never walked in `main`; suspected base-name-vs-mono mismatch where track_inline_owned_aggregate_arg registers under `Box` while the drop is `__karac_drop_struct_Box$String`. RE-MEASURE before resuming: (A) and (B) share the single-vs-copied-buffer accounting. |
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
 
-### Fixed (940)
+### Fixed (941)
 
-<details><summary>940 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>941 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1108,6 +1108,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-41 | typecheck+codegen | medium | a `shared struct` field reached through a `mut ref` ARGUMENT bypasses the immutable-field write gate that rejects the assignment spelling, and the wr… | de799c3 (src/typechecker/fields.rs the `SharedFieldNotMut` gate's `mut ref` argument context; src/codegen/call_dispatch.rs `shared_mut_ref_place_arg_ptr` + `is_pure_field_chain`, replacing `mut_ref_place_arg_ptr`'s explicit shared bail). Pins e2e_mut_ref_place_argument_shared_receiver_writes_back, test_mut_ref_place_argument_shared_receiver_writes_back, asan_shared_field_mut_ref_arg_string_no_leak, and four typechecker gate tests. |
 | B-2026-08-06-4 | typecheck+codegen | medium | a `shared struct`'s Vec field passed to a `mut Slice[T]` parameter does not COMPILE (LLVM module verification hard-fails) even when the field is decl… | 28ceec6b |
 | B-2026-08-06-5 | codegen | high | A cast TO `char` inside an f-string hole is DROPPED by both compiled backends -- `println(f"{b as char}")` prints the integer codepoint (98) where th… | 335540c9 |
+| B-2026-08-06-6 | codegen | high | a `Map`/`Set` field moved out INDIVIDUALLY left the source handle live, so the owner's struct drop freed storage the destination still owned — `fn ta… | 26b2176 (src/codegen/call_dispatch.rs — the Map/Set arm in `zero_struct_field_move_cap`, plus the Sorted variants in `zero_struct_move_caps_mono`'s existing arm). Pins e2e_map_field_move_out_neutralizes_the_source, test_map_field_move_out_transfers_the_handle, asan_map_field_move_out_neutralizes_the_source. |
 
 </details>
 
