@@ -14033,6 +14033,76 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-39 — the MEMORY half of the `mut ref` aggregate
+    /// reassignment fix, which the value assertion cannot see.
+    ///
+    /// Storing the new value through the borrow makes the program print the
+    /// right answer; it also ORPHANS whatever the caller's storage held, once
+    /// per call. Mutation-checked: with the reclamation disabled this exact
+    /// program still prints 41400 while valgrind reports 200 definitely-lost
+    /// blocks per shape (13,780 bytes). So the codegen twin passes either way
+    /// and this is the only gate on that half.
+    ///
+    /// The f-string arm is the other direction and was found by running this:
+    /// `x = f"…"` stages its bytes in an accumulator slot whose own free is
+    /// armed, and the caller's storage then points at the same buffer —
+    /// leaving both armed aborted with `free(): double free detected in
+    /// tcache 2`. Every other RHS shape was clean, so the arm is specific.
+    ///
+    /// NOT VACUOUS (B-2026-08-04-17): opaque `env.args().len()` seed, every
+    /// payload's CONTENT built from it at runtime, byte-level reads via
+    /// `contains`, and 200 iterations so nothing unrolls away.
+    #[test]
+    fn asan_mut_ref_aggregate_param_reassignment_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"struct Q { s: String, v: Vec[i64] }
+
+fn mkv(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(k);
+    v.push(k + 1i64);
+    return v;
+}
+
+fn reps(x: mut ref String, k: i64) { x = f"fresh-{k}-payload"; }
+fn repsc(x: mut ref String) { x = x + "tail"; }
+fn repbind(x: mut ref String, k: i64) { let t: String = f"bind-{k}-payload"; x = t; }
+fn repv(v: mut ref Vec[i64], k: i64) { v = mkv(k); }
+fn repq(q: mut ref Q, k: i64) { q = Q { s: f"q-{k}-payload", v: mkv(k) }; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n + 199i64 {
+        let mut s: String = f"seed-{i}-payload";
+        reps(mut s, i);
+        if s.contains("fresh") { acc = acc + 1i64; }
+        repsc(mut s);
+        if s.contains("tail") { acc = acc + 1i64; }
+        repbind(mut s, i);
+        if s.contains("bind") { acc = acc + 1i64; }
+        let mut v: Vec[i64] = mkv(i);
+        repv(mut v, i + 1i64);
+        acc = acc + v[0i64] + v.len();
+        let mut q: Q = Q { s: f"orig-{i}-payload", v: mkv(i) };
+        repq(mut q, i);
+        if q.s.contains("payload") { acc = acc + 1i64; }
+        acc = acc + q.v[1i64];
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["41400"],
+            "mut_ref_aggregate_param_reassignment_no_leak",
+            // 200 iterations x (5 replaced payloads + their displaced
+            // originals) is well over a thousand allocations; the floor sits
+            // far above the 3 of a folded-away run.
+            400,
+        );
+    }
+
     /// B-2026-08-01-33 mechanism 3, stage 2 — a RECURSIVE traversal of a
     /// `shared` graph through a NON-COUNTING (`frozen`) handle, run from two
     /// `par` branches over one shared root.

@@ -25,6 +25,71 @@ use super::helpers::{
 use super::state::{B2Role, ReturnSlot, SharedTypeInfo, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// Reclaim the value a `mut ref` AGGREGATE parameter is about to have
+    /// overwritten — B-2026-08-05-39.
+    ///
+    /// `ptr` is the borrow pointer (the CALLER's storage), not this frame's
+    /// slot. Once the store lands, the caller's binding owns the new value and
+    /// nothing else references the old one, so the old one has to be released
+    /// here or it is a per-call leak. This is the same obligation the
+    /// local-variable reassign arms discharge against their own slot; only the
+    /// address differs.
+    ///
+    /// Handles the two classes measured broken:
+    ///
+    /// * a `{ptr,len,cap}` pointee (`String` / `Vec[T]`) — free the buffer,
+    ///   cap-guarded, so a borrowed-empty or already-moved value no-ops;
+    /// * a plain user struct — the field-heap synthesizer.
+    ///
+    /// Anything else (a `shared` handle, `Map`, `Tensor`, an enum) is left
+    /// alone: those slots hold a single `ptr`, so the store below is correctly
+    /// sized and lands, and reclaiming them needs their own release protocol
+    /// rather than a guess. That is a documented residual on the row, not a
+    /// silent gap — the write is correct, the old value may leak.
+    ///
+    /// MEMORY ONLY for the struct case, matching the "caller-retained
+    /// roundtrip" arm's choice below: a user `impl Drop` body is fired by the
+    /// NLL channel at the OWNER's site, and running the wrapper here would
+    /// double it.
+    fn reclaim_displaced_ref_param_pointee(
+        &mut self,
+        name: &str,
+        inner_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        ptr: PointerValue<'ctx>,
+    ) {
+        if inner_ty == self.vec_struct_type().into() {
+            // Recycling hint only — `emit_free_vec_buffer_if_owned` frees the
+            // data pointer regardless. 1 is exact for a `String` (cap IS
+            // bytes) and the registered element type for a `Vec`.
+            let elem_abi_size = match self.vec_elem_types.get(name).copied() {
+                Some(t) => self
+                    .ensure_target_data()
+                    .map(|td| td.get_abi_size(&t))
+                    .unwrap_or(0),
+                None => 1,
+            };
+            self.emit_free_vec_buffer_if_owned(ptr, elem_abi_size);
+            return;
+        }
+        // A GENERIC struct's cleanup is per-instantiation (B-2026-07-11-35), so
+        // a base-name synthesis could free through the wrong element type —
+        // the same carve-out the local struct-reassign arm makes.
+        let Some(tn) = self.var_type_names.get(name).cloned() else {
+            return;
+        };
+        if !self.struct_types.contains_key(tn.as_str())
+            || self.shared_types.contains_key(tn.as_str())
+            || !self
+                .struct_generic_params
+                .get(tn.as_str())
+                .is_none_or(|ps| ps.is_empty())
+        {
+            return;
+        }
+        if let Some(f) = self.emit_struct_drop_synthesis(&tn) {
+            self.builder.build_call(f, &[ptr.into()], "").unwrap();
+        }
+    }
     pub(super) fn compile_block(
         &mut self,
         block: &Block,
@@ -6702,11 +6767,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     // silent miscompile (the caller's value never changes; the
                     // interpreter, which mutates through the borrow, would then
                     // disagree with the built binary). `get_data_ptr` loads the
-                    // borrow pointer, giving the caller's storage address. Scalar
-                    // only: a `mut ref Vec`/`String`/struct mutates through
-                    // methods / field stores that already deref via
-                    // `get_data_ptr`, and routing their whole-value moves here
-                    // would bypass the heap move-tracking further down.
+                    // borrow pointer, giving the caller's storage address.
+                    //
+                    // B-2026-08-05-39 widened this past the scalar case. The
+                    // note that used to stand here said an aggregate `mut ref`
+                    // param "mutates through methods / field stores that
+                    // already deref via `get_data_ptr`" — true of
+                    // `x.push_str("c")` and `x.f = v`, which are correct, but
+                    // NOT of a whole-value REASSIGNMENT. `x = mk()` on a `mut
+                    // ref String` fell through to the generic
+                    // `build_store(slot.ptr, val)` below, which stores a
+                    // 24-byte `{ptr,len,cap}` into the 8-byte alloca holding
+                    // the borrow POINTER: the caller's value never changed
+                    // (AOT printed the pre-call length while the interpreter
+                    // printed the right one) and the store ran past the slot
+                    // into adjacent stack storage. A `mut ref Vec` reassign and
+                    // a `mut ref` STRUCT reassign had the same shape; only
+                    // scalars were routed correctly.
+                    //
+                    // The displaced pointee is reclaimed BEFORE the store,
+                    // exactly as the local-variable reassign arms below do for
+                    // their own slot — the caller's binding will free whatever
+                    // its storage holds at ITS scope exit, so the old buffer
+                    // has no other owner once overwritten. `val` is already
+                    // computed at this point, so freeing here is safe even for
+                    // a self-referential RHS (`x = x + "c"` has already built
+                    // its fresh buffer from the old one).
                     if let Some(&inner_ty) = self.ref_params.get(name) {
                         if inner_ty.is_int_type() || inner_ty.is_float_type() {
                             if let Some(ptr) = self.get_data_ptr(name) {
@@ -6714,6 +6800,41 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder.build_store(ptr, cval).unwrap();
                                 return Ok(());
                             }
+                        } else if let Some(ptr) = self.get_data_ptr(name) {
+                            // A self-assign (`x = x`) would free the very
+                            // buffer it is about to store back.
+                            let rhs_is_self =
+                                matches!(&value.kind, ExprKind::Identifier(r) if r == name);
+                            if !rhs_is_self {
+                                self.reclaim_displaced_ref_param_pointee(name, inner_ty, ptr);
+                            }
+                            self.builder.build_store(ptr, val).unwrap();
+                            // The value now lives in the CALLER's storage and
+                            // is owned by the caller's binding. A moved source
+                            // binding in THIS frame must not free it too —
+                            // same suppression the struct-var reassign arm
+                            // below applies, for the same reason.
+                            if !rhs_is_self {
+                                self.suppress_source_vec_cleanup_for_arg(value);
+                                if let ExprKind::Identifier(rhs_name) = &value.kind {
+                                    self.suppress_user_drop_for_var(rhs_name);
+                                }
+                            }
+                            // An f-string RHS built its bytes in a STAGING
+                            // accumulator whose own `FreeVecBuffer` is armed,
+                            // and the caller's storage now points at that same
+                            // buffer — leaving both armed is a double free
+                            // (measured: `x = f"…"` aborted with `free():
+                            // double free detected in tcache 2`, while every
+                            // other RHS shape was valgrind-clean). Zero the
+                            // acc's cap so its cleanup no-ops on the `cap > 0`
+                            // guard; the caller's binding stays the unique
+                            // owner. Same disarm, same reason, as the tail of
+                            // the local-variable reassign arm below.
+                            if let Some(acc) = staged_fstr_acc {
+                                self.zero_vec_alloca_cap(acc);
+                            }
+                            return Ok(());
                         }
                     }
                     // Slice 9: module-level `let mut BINDING = …;`

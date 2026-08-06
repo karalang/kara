@@ -6107,6 +6107,84 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
+    /// REASSIGNMENT must write through the borrow.
+    ///
+    /// `x = mk()` on a `mut ref String` used to store the 24-byte
+    /// `{ptr,len,cap}` into the 8-byte alloca that holds the borrow POINTER:
+    /// the caller's value never changed (AOT printed the pre-call length while
+    /// the interpreter printed the right one — a run/build divergence) and the
+    /// store ran past the slot into adjacent stack storage. `mut ref Vec` and a
+    /// `mut ref` STRUCT had the same shape. Only scalars were routed through
+    /// the borrow.
+    ///
+    /// IN-PLACE mutation was always correct — `x.push_str("c")`, `x.f = v` —
+    /// which is why the gap survived: the note at the fix site said an
+    /// aggregate `mut ref` "mutates through methods / field stores that already
+    /// deref", true of every shape anyone tested and false of reassignment.
+    ///
+    /// Five RHS classes, because they reclaim differently: an f-string (which
+    /// stages into an accumulator slot that must be disarmed — leaving it armed
+    /// aborts with `free(): double free detected`, measured), a
+    /// self-referential concat, a moved local binding, a call result, and a
+    /// struct literal with heap fields. Plus the displaced OLD value in every
+    /// one: overwriting the caller's storage orphans what it held, so the
+    /// pointee is reclaimed before the store. That half is invisible here —
+    /// disabling the reclamation still prints the right answer while leaking
+    /// 200 blocks per shape — so it is gated by the ASAN twin
+    /// `asan_mut_ref_aggregate_param_reassignment_no_leak`.
+    ///
+    /// The expected total is DERIVED, not read off a run: per iteration
+    /// `1 + 1 + 1 + (i + 3) + 1 + (i + 1) = 2i + 8`, and
+    /// `sum(2i for i in 0..=199) + 8 * 200 = 39800 + 1600 = 41400`.
+    #[test]
+    fn e2e_mut_ref_aggregate_param_reassignment_writes_through() {
+        let Some(out) = run_program(
+            r#"struct Q { s: String, v: Vec[i64] }
+
+fn mkv(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(k);
+    v.push(k + 1i64);
+    return v;
+}
+
+fn reps(x: mut ref String, k: i64) { x = f"fresh-{k}-payload"; }
+fn repsc(x: mut ref String) { x = x + "tail"; }
+fn repbind(x: mut ref String, k: i64) { let t: String = f"bind-{k}-payload"; x = t; }
+fn repv(v: mut ref Vec[i64], k: i64) { v = mkv(k); }
+fn repq(q: mut ref Q, k: i64) { q = Q { s: f"q-{k}-payload", v: mkv(k) }; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n + 199i64 {
+        let mut s: String = f"seed-{i}-payload";
+        reps(mut s, i);
+        if s.contains("fresh") { acc = acc + 1i64; }
+        repsc(mut s);
+        if s.contains("tail") { acc = acc + 1i64; }
+        repbind(mut s, i);
+        if s.contains("bind") { acc = acc + 1i64; }
+        let mut v: Vec[i64] = mkv(i);
+        repv(mut v, i + 1i64);
+        acc = acc + v[0i64] + v.len();
+        let mut q: Q = Q { s: f"orig-{i}-payload", v: mkv(i) };
+        repq(mut q, i);
+        if q.s.contains("payload") { acc = acc + 1i64; }
+        acc = acc + q.v[1i64];
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "41400\n");
+    }
+
     /// B-2026-08-05-8 — `contains` on a PATTERN-BOUND `String` payload.
     ///
     /// This was a run-vs-build divergence, not a diagnostics nit: `karac check`
