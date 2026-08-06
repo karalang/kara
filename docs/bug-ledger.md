@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 140 | 3 |
 | double-free | 99 | 0 |
 | codegen-gap | 92 | 0 |
-| run-vs-build | 81 | 0 |
+| run-vs-build | 82 | 1 |
 | missing-feature | 78 | 1 |
 | false-positive | 56 | 0 |
 | perf | 51 | 4 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 696 | 8 |
+| codegen | 697 | 9 |
 | interp | 126 | 1 |
 | typecheck | 124 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **963 surfaced · 10 open · 945 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **964 surfaced · 11 open · 945 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,6 +140,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **963 surfaced 
 | B-2026-08-06-8 | 2026-08-06 | codegen | low | a generic wrapper's bare `T` field bound to a SHARED struct leaks 2,560 B / 80 blocks at -O0 (clean at -O2): `Box[T]` at `T = Node` where `Node` is a `shared struct` -- the third head the bare-param rescue loop does not recognise, after String/Vec (fixed B-2026-07-15-11) and Map/Set (fixed B-2026-08-06-1) | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which now promotes String/Vec/VecDeque and Map/Set heads but not a `shared` one |
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
 | B-2026-08-06-10 | 2026-08-06 | codegen | medium | a callee arm that MOVES A FIELD OUT of a boxed `Option[Struct]` param orphans the box the caller's struct drop owns: `fn f(h: Option[H]) { match h { Some(x) => x.label } }` leaks 32 B per call, while the same callee returning a SCALAR from the same payload is clean | the callee-side payload move-out suppressors in src/codegen/control_flow_match.rs, reached with a BOXED `Option` payload whose box the CALLER still owns |
+| B-2026-08-06-12 | 2026-08-06 | codegen | medium | a GENERIC struct LITERAL used directly as a METHOD RECEIVER cannot be built: `Box { v: <String> }.take()` passes `karac check`, runs correctly under the interpreter, and then fails `karac build` with an LLVM verifier error -- the literal lowers at the ERASED base layout `{ i64 }` because the outer method call's span CLOBBERS the literal's instantiation record | src/codegen/types_lowering.rs::struct_inst_mono_type_for_expr — the span lookup that returns None here; the record itself is destroyed upstream, in lowering.rs's `Named { args } if !args.is_empty()` filter over `tc.expr_types`, because the parser gives a MethodCall its RECEIVER's span |
 
 ### Fixed (945)
 
