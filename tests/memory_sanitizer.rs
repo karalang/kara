@@ -11286,6 +11286,64 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-41 — the MEMORY leg of the shared-receiver `mut ref`
+    /// place-argument fix.
+    ///
+    /// This is NOT the value witness — a String field already produced the
+    /// right value before the fix, reaching the caller's storage through
+    /// B-2026-08-05-39's aggregate-reassignment path rather than through the
+    /// argument pointer. The scalar arms in
+    /// `e2e_mut_ref_place_argument_shared_receiver_writes_back` are what
+    /// witness the miscompile.
+    ///
+    /// What this test guards is the reclaim behaviour of the path the fix
+    /// newly takes. The callee now writes THROUGH the field's real address
+    /// inside the RC box, so the store must displace and free the old buffer
+    /// exactly ONCE — free it twice and the box's field is left dangling for
+    /// the reads below and for teardown; free it never and the buffer leaks
+    /// once per iteration. Neither failure is possible on the rvalue-copy path
+    /// the fix replaced, so the guarantee is new and needs its own evidence
+    /// rather than an assumption inherited from the value test.
+    ///
+    /// The RC header is why a scalar arm cannot stand in for this: the field
+    /// lives inside the shared node's box and its buffer is reclaimed by the
+    /// node teardown at refcount zero, not by a scope-exit struct drop. ASAN
+    /// catches either failure — LSan the leak, the use-after-free check the
+    /// dangling read.
+    ///
+    /// Written to B-2026-08-04-17's three rules — `env.args().len()` seed,
+    /// runtime-derived payload content, byte-level read — and floored, so a
+    /// regression to zero allocations fails loudly instead of passing.
+    #[test]
+    fn asan_shared_field_mut_ref_arg_string_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct T { mut s: String }
+fn app(x: mut ref String, tag: String) { x = x + tag; }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 200 {
+        let mut seed: String = String.new();
+        seed.push_str("payload-");
+        seed.push_str((n + i).to_string());
+        seed.push_str("-padding-to-force-heap");
+        let t = T { s: seed };
+        app(mut t.s, "-suffix-also-heap-sized".to_string());
+        if t.s.contains("payload") { acc = acc + 1; }
+        if t.s.ends_with("heap-sized") { acc = acc + 1; }
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["400"],
+            "shared_field_mut_ref_arg_string",
+            100,
+        );
+    }
+
     /// B-2026-08-05-27 — the BYTE-READING half of the surface-concat receiver.
     /// `("p:".to_string() + s).starts_with(..)` leaked the concat once per
     /// evaluation: the fresh-temp receiver materialization gate

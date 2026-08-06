@@ -2864,13 +2864,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 let obj_ty = self.place_chain_type_name(object)?;
                 // A `shared` / `par` struct binding's slot holds a HANDLE, not
                 // the aggregate, so GEPing it as the struct would write past
-                // the 8-byte slot into neighbouring stack storage. Bail
-                // EXPLICITLY rather than relying on the `struct_types` lookup
-                // happening to miss: a shared field's own write path goes
-                // through the RC header and its own mutability gate, and this
-                // arm has no business reproducing either.
+                // the 8-byte slot into neighbouring stack storage. The place
+                // is one load in, at the header-shifted offset — resolve it
+                // through the same `shared_gep_layout` funnel every other
+                // shared field site uses (B-2026-08-05-41 codegen half).
+                // Before this, the arm bailed and the write went to the
+                // rvalue COPY: `bump(mut g.val)` on a `shared struct N { mut
+                // val: i64 }` printed 7 instead of 8 under AOT and JIT while
+                // the interpreter printed 8.
+                //
+                // The write's LEGALITY is the typechecker's job, not this
+                // arm's: half 1 of the same row extended `SharedFieldNotMut`
+                // to a `mut`-marked argument, so an undeclared-`mut` shared
+                // field is refused before codegen ever sees it — exactly as
+                // the assignment spelling already was.
                 if self.shared_types.contains_key(obj_ty.as_str()) {
-                    return None;
+                    return self.shared_mut_ref_place_arg_ptr(object, &obj_ty, field);
                 }
                 let base = self.mut_ref_place_root_ptr(object)?;
                 let st = *self.struct_types.get(obj_ty.as_str())?;
@@ -2891,6 +2900,84 @@ impl<'ctx> super::Codegen<'ctx> {
                     .ok()
             }
             _ => None,
+        }
+    }
+
+    /// Place pointer for a `mut ref` argument that projects a field out of a
+    /// `shared` / `par` STRUCT receiver — the RC half of B-2026-08-05-41.
+    ///
+    /// The receiver compiles to the heap-node pointer (`load_variable` applies
+    /// the right number of loads for an owned local, a constructor binding and
+    /// a `ref self` param alike), and the user field sits at the
+    /// header-shifted offset [`Self::shared_gep_layout`] reports — base 1 for
+    /// a conventional headed box, 2 for a weak-targeted one, 0 for a
+    /// headerless member. `par` needs no separate handling: its layout is
+    /// identical and only the count ops differ, and none are emitted here (a
+    /// borrow is not an ownership transfer).
+    ///
+    /// Deliberately narrow, because this family's history is over-broad
+    /// widenings that had to be reverted:
+    /// * **Pure field chains only** — an identifier or `self` root, with
+    ///   `FieldAccess` hops above it (`g.val`, `self.val`, `o.inner.v`). Both
+    ///   call sites may have already compiled the argument, so re-evaluating
+    ///   an arbitrary receiver expression here would duplicate its side
+    ///   effects; a chain of variable loads and GEPs has none. An `Index` hop
+    ///   is excluded on the same rule — the subscript would be evaluated a
+    ///   second time.
+    /// * **No shared ENUM**, which has no named fields at all.
+    /// * **No `weak` field and no niche `Option[shared]` field.** Neither slot
+    ///   holds the value its source type names — one is a non-owning back-edge
+    ///   that reads as an upgrade, the other a bare pointer standing in for a
+    ///   four-word Option — so handing a callee a raw pointer to either would
+    ///   let it write a value of the wrong shape. Those fall back to the
+    ///   pre-existing rvalue path (no worse than before this fix).
+    fn shared_mut_ref_place_arg_ptr(
+        &mut self,
+        object: &Expr,
+        type_name: &str,
+        field: &str,
+    ) -> Option<PointerValue<'ctx>> {
+        if !Self::is_pure_field_chain(object) {
+            return None;
+        }
+        let info = self.shared_types.get(type_name)?.clone();
+        if info.is_enum {
+            return None;
+        }
+        let idx = self
+            .struct_field_names
+            .get(type_name)?
+            .iter()
+            .position(|n| n == field)?;
+        if self.struct_field_is_weak(type_name, idx)
+            || self.niche_field_inner_heap_type(type_name, idx).is_some()
+        {
+            return None;
+        }
+        let ptr = self.compile_expr(object).ok()?;
+        if !ptr.is_pointer_value() {
+            return None;
+        }
+        let (gep_ty, base) = self.shared_gep_layout(type_name, info.heap_type);
+        self.builder
+            .build_struct_gep(
+                gep_ty,
+                ptr.into_pointer_value(),
+                idx as u32 + base,
+                "mutref.arg.sh.field.p",
+            )
+            .ok()
+    }
+
+    /// A place expression built only from variable loads and field
+    /// projections, so compiling it a second time is free of side effects.
+    /// Used by [`Self::shared_mut_ref_place_arg_ptr`] to decide whether the
+    /// receiver may be re-compiled at the argument site.
+    fn is_pure_field_chain(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+            ExprKind::FieldAccess { object, .. } => Self::is_pure_field_chain(object),
+            _ => false,
         }
     }
 

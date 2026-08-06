@@ -27879,6 +27879,79 @@ fn plain_struct_field_reassign_not_gated() {
     );
 }
 
+// B-2026-08-05-41, typechecker half. The gate above fired on the ASSIGNMENT
+// spelling only. Handing the same field to a `mut ref` PARAMETER
+// (`bump(mut n.val)`) is the same write through the same shared handle, one
+// call frame down — and it checked CLEAN, then mutated the field at runtime.
+// The gate now keys on the `mut ref` argument context as well as the LHS
+// context, so both spellings are refused with the identical message.
+
+#[test]
+fn shared_struct_non_mut_field_mut_ref_argument_rejected() {
+    let errors = typecheck_errors(
+        "shared struct N { val: i64 }\n\
+         fn bump(x: mut ref i64) { x = x + 1; }\n\
+         fn main() {\n\
+         \x20   let n = N { val: 7 };\n\
+         \x20   bump(mut n.val);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::SharedFieldNotMut
+                && e.message.contains("N.val")
+                && e.message.contains("is not declared mut")),
+        "expected SharedFieldNotMut for `bump(mut n.val)`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn shared_struct_mut_field_mut_ref_argument_accepted() {
+    // The declared-`mut` field is the whole point of the carve-out — it must
+    // still pass, or the gate would make the legal spelling unwritable.
+    typecheck_ok(
+        "shared struct N { mut val: i64 }\n\
+         fn bump(x: mut ref i64) { x = x + 1; }\n\
+         fn main() {\n\
+         \x20   let n = N { val: 7 };\n\
+         \x20   bump(mut n.val);\n\
+         \x20   println(n.val);\n\
+         }",
+    );
+}
+
+#[test]
+fn shared_struct_non_mut_field_read_ref_argument_not_gated() {
+    // A read-only `ref` parameter borrows without writing, so it must NOT be
+    // gated — the discriminator is the parameter's MUTABILITY, not the fact
+    // that a borrow was taken. Widening to every borrow would make an
+    // immutable shared field unreadable through any `ref` callee.
+    typecheck_ok(
+        "shared struct N { val: i64 }\n\
+         fn peek(x: ref i64) -> i64 { return x; }\n\
+         fn main() {\n\
+         \x20   let n = N { val: 7 };\n\
+         \x20   println(peek(n.val));\n\
+         }",
+    );
+}
+
+#[test]
+fn plain_struct_field_mut_ref_argument_not_gated() {
+    // The gate must not bleed into value-semantic structs, which have no
+    // field-level `mut` declaration at all.
+    typecheck_ok(
+        "struct P { v: i64 }\n\
+         fn bump(x: mut ref i64) { x = x + 1; }\n\
+         fn main() {\n\
+         \x20   let mut p = P { v: 7 };\n\
+         \x20   bump(mut p.v);\n\
+         \x20   println(p.v);\n\
+         }",
+    );
+}
+
 #[test]
 fn shared_field_not_mut_is_run_fatal() {
     // `karac run` must reject the non-`mut` shared-field write at compile time

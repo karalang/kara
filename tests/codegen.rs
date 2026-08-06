@@ -6107,6 +6107,87 @@ fn main() {
         );
     }
 
+    /// B-2026-08-05-41, codegen half — the SHARED-receiver case B-2026-08-05-37
+    /// left behind.
+    ///
+    /// That fix taught the `mut ref` argument path to pass a pointer to the
+    /// PLACE, but bailed explicitly on a `shared` / `par` struct receiver: its
+    /// slot holds an RC HANDLE, not the aggregate, so GEPing it as the struct
+    /// would have written past the 8-byte slot. The bail was safe and wrong —
+    /// the argument fell back to the rvalue path, the callee's write landed on
+    /// a shallow COPY, and every arm below printed the PRE-call value under
+    /// both AOT and JIT while the INTERPRETER printed the post-call one. A
+    /// run/build divergence with no diagnostic at any phase.
+    ///
+    /// The place is one load in, at the header-shifted offset, so the arm now
+    /// resolves it through `shared_gep_layout` — the same funnel every other
+    /// shared field site uses, which is what keeps the headed / headerless /
+    /// weak-headed layouts from mixing on one object.
+    ///
+    /// Arms (a)–(d) are the witnesses, each a receiver shape that reaches the
+    /// arm differently: a bare shared local, a shared `ref` PARAMETER (whose
+    /// slot needs the extra deref), `self` inside a shared method, and a
+    /// NESTED shared chain (`o.inner.v` — two handle loads). All four printed
+    /// 7 against the unfixed compiler, measured.
+    ///
+    /// Arm (e) is a CONTROL, not a witness: a String field was already correct
+    /// before this fix (it prints `ab:2` either way), because an AGGREGATE
+    /// `mut ref` reassignment reaches the caller's storage through
+    /// B-2026-08-05-39's path rather than through the argument pointer. It is
+    /// kept because the fix newly routes it through the place pointer instead,
+    /// and a heap payload must keep reclaiming exactly once on that path —
+    /// the leak leg is `asan_shared_field_mut_ref_arg_string_no_leak`.
+    ///
+    /// The mutability gate is the typechecker's half of the same row and is
+    /// covered in `tests/typechecker.rs`: every field written here is declared
+    /// `mut`, which is what makes these programs legal at all.
+    ///
+    /// Seeded from `env.args().len()` so no arm folds away at `-O2`
+    /// (B-2026-08-04-17).
+    #[test]
+    fn e2e_mut_ref_place_argument_shared_receiver_writes_back() {
+        let Some(out) = run_program(
+            "shared struct N { mut val: i64 }\n\
+             shared struct T { mut s: String }\n\
+             shared struct Inner { mut v: i64 }\n\
+             shared struct Outer { mut inner: Inner }\n\
+             impl N {\n\
+             \x20   fn go(ref self) { bump(mut self.val); }\n\
+             }\n\
+             fn bump(x: mut ref i64) { x = x + 1i64; }\n\
+             fn app(x: mut ref String) { x = x + \"b\"; }\n\
+             fn viaref(n: ref N) -> i64 { bump(mut n.val); return n.val; }\n\
+             fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   // (a) bare shared local receiver\n\
+             \x20   let a = N { val: n + 6i64 };\n\
+             \x20   bump(mut a.val);\n\
+             \x20   println(f\"a:{a.val}\");\n\
+             \x20   // (b) shared `ref` PARAMETER receiver — the slot holds the\n\
+             \x20   //     borrow, so the handle is one extra load in\n\
+             \x20   let b = N { val: n + 6i64 };\n\
+             \x20   println(f\"b:{viaref(b)}\");\n\
+             \x20   // (c) `self` inside a shared method\n\
+             \x20   let c = N { val: n + 6i64 };\n\
+             \x20   c.go();\n\
+             \x20   println(f\"c:{c.val}\");\n\
+             \x20   // (d) NESTED shared chain — two handle loads\n\
+             \x20   let di = Inner { v: n + 6i64 };\n\
+             \x20   let d = Outer { inner: di };\n\
+             \x20   bump(mut d.inner.v);\n\
+             \x20   println(f\"d:{d.inner.v}\");\n\
+             \x20   // (e) HEAP payload — the displaced old value reclaims\n\
+             \x20   //     through a different path than a scalar\n\
+             \x20   let e = T { s: \"a\" };\n\
+             \x20   app(mut e.s);\n\
+             \x20   println(f\"e:{e.s}:{e.s.len()}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a:8\nb:8\nc:8\nd:8\ne:ab:2\n");
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///

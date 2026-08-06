@@ -283,7 +283,28 @@ impl<'a> super::TypeChecker<'a> {
                     // to a compile error, so `karac run`/`check`/`build` all
                     // reject rather than `build` silently accepting the write.
                     // B-2026-06-30-3.
-                    if is_lhs
+                    //
+                    // B-2026-08-05-41: assignment is not the only write
+                    // spelling. Passing the field to a `mut ref T` parameter
+                    // (`bump(mut n.val)`) hands the callee a mutable borrow of
+                    // it, which is the same write with a different syntax — and
+                    // it used to check clean while `n.val = 5` was correctly
+                    // refused, so the rule was enforced against the spelling
+                    // rather than against the operation. `borrow_kind` is
+                    // already the right signal: `borrow_context_for_param` sets
+                    // it to `mut ref` only for a `Type::MutRef` formal, so a
+                    // plain `ref T` argument (a read borrow) still does not
+                    // gate. Widening to every borrow would make an immutable
+                    // shared field unreadable through any `ref` callee.
+                    //
+                    // A `mut Slice[T]` formal is a `Type::Slice`, so it carries
+                    // no borrow context here at all and is out of reach of this
+                    // gate — deliberately left alone rather than papered over,
+                    // since closing it needs a signal this function does not
+                    // receive. Parity with the ASSIGNMENT spelling is what this
+                    // row asks for, and that is what this delivers.
+                    let mut_borrow_arg = borrow_kind == Some("mut ref");
+                    if (is_lhs || mut_borrow_arg)
                         && (struct_info.is_shared || struct_info.is_par)
                         && !struct_info.mut_fields.contains(field)
                     {

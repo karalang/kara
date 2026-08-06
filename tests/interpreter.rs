@@ -29890,6 +29890,53 @@ fn test_mut_ref_place_argument_writes_back() {
     );
 }
 
+/// B-2026-08-05-41, the interpreter side. The interpreter was ALREADY correct
+/// for a shared-struct receiver — it printed 8 for every arm below while AOT
+/// and JIT printed 7 — which is precisely how the codegen half was localized.
+/// Pinning it here keeps the reference leg from silently drifting to match a
+/// future codegen regression, and mirrors the arms of the codegen twin
+/// `e2e_mut_ref_place_argument_shared_receiver_writes_back`.
+///
+/// The mutability side of the same row (an undeclared-`mut` shared field
+/// handed to a `mut ref` parameter is now REFUSED at typecheck, as the
+/// assignment spelling already was) is covered in `tests/typechecker.rs`;
+/// every field written here is declared `mut`, which is what makes these
+/// programs legal at all.
+#[test]
+fn test_mut_ref_place_argument_shared_receiver_writes_back() {
+    assert_eq!(
+        run("shared struct N { mut val: i64 }\n\
+             shared struct T { mut s: String }\n\
+             shared struct Inner { mut v: i64 }\n\
+             shared struct Outer { mut inner: Inner }\n\
+             impl N {\n\
+                 fn go(ref self) { bump(mut self.val); }\n\
+             }\n\
+             fn bump(x: mut ref i64) { x = x + 1i64; }\n\
+             fn app(x: mut ref String, tag: String) { x = x + tag; }\n\
+             fn viaref(n: ref N) -> i64 { bump(mut n.val); return n.val; }\n\
+             fn main() {\n\
+                 let n: i64 = 1i64;\n\
+                 let a = N { val: n + 6i64 };\n\
+                 bump(mut a.val);\n\
+                 println(f\"a:{a.val}\");\n\
+                 let b = N { val: n + 6i64 };\n\
+                 println(f\"b:{viaref(b)}\");\n\
+                 let c = N { val: n + 6i64 };\n\
+                 c.go();\n\
+                 println(f\"c:{c.val}\");\n\
+                 let di = Inner { v: n + 6i64 };\n\
+                 let d = Outer { inner: di };\n\
+                 bump(mut d.inner.v);\n\
+                 println(f\"d:{d.inner.v}\");\n\
+                 let e = T { s: \"a\" };\n\
+                 app(mut e.s, \"b\");\n\
+                 println(f\"e:{e.s}:{e.s.len()}\");\n\
+             }\n"),
+        "a:8\nb:8\nc:8\nd:8\ne:ab:2\n"
+    );
+}
+
 /// B-2026-08-05-37, the conservative half: the write-back RE-EVALUATES the
 /// place after the callee's scope is popped, so a subscript that is not
 /// obviously pure is skipped rather than evaluated twice. `next(mut c)` must
