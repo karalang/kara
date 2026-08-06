@@ -19,12 +19,13 @@
 # Measured 2026-08-06 at 225a4553, x86_64 Linux, both archives rebuilt
 # lean-then-full: 942 passed / 4 failed / 10 ignored in 92s.
 
-# ── B-2026-08-06-2 (open) — predicate (B), the GENERIC by-value struct param ──
-# `fn take[T](b: Box[T]) -> T { b.v }` entry-deep-copies the field and nobody
-# frees the caller's original. Predicate (A), the concrete spelling, was a
-# double free and is fixed (933b859); this is the surviving half.
-# Leaks 1 byte in 1 allocation.
-memory_sanitizer_tests::asan_generic_struct_heap_field_move_out_no_double_free
+# B-2026-08-06-2's entry (asan_generic_struct_heap_field_move_out_no_double_free)
+# was REMOVED 2026-08-06: the list was measured at 225a4553 and `eefe88a` fixed
+# predicate (B) two commits later, so the line was stale on arrival. The ratchet
+# caught it on its first run against a rebuilt tree — working exactly as the
+# "a listed fixture that starts PASSING fails the leg too" direction intends.
+# Verified by attribution rather than assumed: the fixture passes at 7032a19,
+# i.e. WITHOUT the change that happened to be in flight when the leg was run.
 
 # ── B-2026-08-05-7 (open) — the three it triaged and reduced but did not fix ──
 # A fresh-temp Tensor passed as an owned argument: `first(make())` leaks where
