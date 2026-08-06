@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 51 | 4 |
 | diagnostics | 40 | 0 |
 | crash | 39 | 0 |
-| soundness | 38 | 1 |
+| soundness | 38 | 0 |
 | other | 17 | 1 |
 | use-after-free | 12 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 689 | 9 |
+| codegen | 689 | 8 |
 | interp | 125 | 0 |
-| typecheck | 124 | 3 |
+| typecheck | 124 | 2 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 3 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **956 surfaced · 11 open · 937 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **956 surfaced · 10 open · 938 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,15 +136,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **956 surfaced 
 | B-2026-08-05-7 | 2026-08-05 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the payload is read (SIGABRT, glibc `free(): double free detected in tcache 2`) -- it looked -O0-only because the fixture read it through `.len()` alone, which lets LLVM delete the allocation | — |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-05-38 | 2026-08-05 | codegen | medium | The narrow-int width trap is emitted UNCONDITIONALLY on every `i8/i16/i32/u8/u16/u32` arithmetic op -- zext/sext to i64, two icmps, an or, and a conditional branch per op -- costing 1.06x-1.12x on narrow-int-dense loops (kata #9 palindrome, #8 atoi) with no range analysis to elide provably in-range checks | docs/implementation_checklist/phase-7-codegen.md -- optimization follow-on to a12a1a69; blocked on nothing, but should be measured on x86 first to confirm it is not arm64-specific |
-| B-2026-08-05-41 | 2026-08-05 | typecheck+codegen | medium | a `shared struct` field reached through a `mut ref` ARGUMENT bypasses the immutable-field write gate that rejects the assignment spelling, and the write is lost under AOT — `n.val = 5` is refused, `bump(mut n.val)` is accepted and does nothing | — |
 | B-2026-08-06-1 | 2026-08-06 | codegen | medium | a generic wrapper's bare `T` field bound to a MAP leaks its whole handle tree: `fn sink(b: Box[Map[i64, String]])` loses 25,830 B / 40 blocks on a DEFAULT -O2 build, because the mono struct drop's bare-`T` reclassification recognises String/Vec/VecDeque heads only -- the concrete twin `Gmap[T] { m: Map[i64, T] }` is clean, since its DECLARED field name is `Map` | src/codegen/synth_drop.rs::emit_struct_drop_synthesis_impl -- the subst-driven bare-generic-param reclassification loop, which promotes only to FieldDrop::VecOrString and never to FieldDrop::MapOrSet |
 | B-2026-08-06-2 | 2026-08-06 | codegen | high | a struct LITERAL passed to a GENERIC by-value param whose heap field the callee MOVES OUT leaks that field on a DEFAULT -O2 build -- `take(Box { v: <String> })` where `fn take[T](b: Box[T]) -> T { b.v }`; needs all three of generic-param + literal-arg + move-out, and is NOT B-2026-08-05-33 (whose control has both argument forms leaking alike) nor B-2026-08-06-1 (whose defect is the Map head, and a String is already classified) | — |
 | B-2026-08-06-3 | 2026-08-06 | typecheck+codegen | low | a String method called on a `ref String` RECEIVER costs a FIXED +6.25 instructions per call since 32358cac -- 1.040x on kata #8 atoi (a hot `fn my_atoi(s: ref String)` doing `s.bytes()`), invariant to string length, and it is the whole of the residual B-2026-08-05-34 left unattributed | 32358cac (2026-06-14), parent a955c0c7 -- specifically its B-2026-06-14-18 leg in src/typechecker/expr_method_call.rs, which routes a `ref String` / `mut ref String` receiver through `infer_str_method` instead of the impl-block deref path. The StringSlice feature the commit is named for is NOT involved |
 | B-2026-08-06-4 | 2026-08-06 | typecheck+codegen | medium | a `shared struct`'s Vec field passed to a `mut Slice[T]` parameter does not COMPILE (LLVM module verification hard-fails) even when the field is declared `mut`, and the immutable case additionally passes `karac check` — the `SharedFieldNotMut` gate cannot see a `Type::Slice` formal | — |
 
-### Fixed (937)
+### Fixed (938)
 
-<details><summary>937 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>938 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1107,6 +1106,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-37 | codegen+interp | high | a `mut ref` PARAMETER given a PLACE argument silently DISCARDS the callee's write on every backend — `bump(mut g.val)` / `bump(mut t.0)` / `bump(mut… | 1bf6175 (src/codegen.rs `fn_param_mut_ref`; src/codegen/call_dispatch.rs `mut_ref_place_arg_ptr` + the direct-call arm; src/codegen/mono.rs the generic-mono arm; src/codegen/functions.rs + mono.rs registration; src/interpreter/eval_call.rs the CICO write-back; src/interpreter.rs `place_is_writeback_safe`). Pins e2e_mut_ref_place_argument_writes_back, test_mut_ref_place_argument_writes_back, test_mut_ref_place_writeback_skips_impure_subscript. |
 | B-2026-08-05-39 | codegen | medium | a `mut ref` AGGREGATE parameter's whole-value REASSIGNMENT stored past its slot — `x = mk()` on a `mut ref String` wrote 24 bytes into the 8-byte all… | 559a8cc (src/codegen/stmts.rs — the aggregate arm beside the scalar `mut ref` assign-through, plus `reclaim_displaced_ref_param_pointee`). Pins e2e_mut_ref_aggregate_param_reassignment_writes_through, test_mut_ref_aggregate_param_reassignment_replaces_pointee, asan_mut_ref_aggregate_param_reassignment_no_leak. |
 | B-2026-08-05-40 | codegen | medium | a `Slice[T]` / `mut Slice[T]` parameter fed from a PLACE (`f(g.a)`, `f(g.q.a)`, `f(t.0)`, `f(vv[0])`) did not COMPILE — the Vec's 3-word `{ptr,len,ca… | 0949f9f (src/codegen/expr_ops.rs — the place arm in `coerce_to_slice`; src/codegen/call_dispatch.rs — the ref-slot guard). Pins e2e_slice_param_from_a_place_argument, test_slice_param_from_a_place_argument, asan_slice_param_from_a_place_argument_no_leak. |
+| B-2026-08-05-41 | typecheck+codegen | medium | a `shared struct` field reached through a `mut ref` ARGUMENT bypasses the immutable-field write gate that rejects the assignment spelling, and the wr… | de799c3 (src/typechecker/fields.rs the `SharedFieldNotMut` gate's `mut ref` argument context; src/codegen/call_dispatch.rs `shared_mut_ref_place_arg_ptr` + `is_pure_field_chain`, replacing `mut_ref_place_arg_ptr`'s explicit shared bail). Pins e2e_mut_ref_place_argument_shared_receiver_writes_back, test_mut_ref_place_argument_shared_receiver_writes_back, asan_shared_field_mut_ref_arg_string_no_leak, and four typechecker gate tests. |
 
 </details>
 
