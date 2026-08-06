@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 80 | 1 |
 | false-positive | 56 | 0 |
 | perf | 51 | 2 |
-| diagnostics | 41 | 1 |
+| diagnostics | 42 | 1 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
 | other | 17 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 706 | 7 |
-| interp | 126 | 0 |
-| typecheck | 126 | 1 |
+| codegen | 706 | 6 |
+| interp | 127 | 1 |
+| typecheck | 126 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **975 surfaced · 9 open · 956 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **976 surfaced · 9 open · 957 fixed** (2026-05-20 → 2026-08-06). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -135,14 +135,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **975 surfaced 
 | B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled. The key-type gate this row prescribed is REFUTED on x86 by a tag-only A/B: dropping the tag on kata:170 `Map[i64,i64]` executes 13.1% FEWER instructions and runs 1.20x SLOWER (3763.7 -> 4513.2 ms), because the tag rejects a bucket without touching its key while removing it costs a kv load per occupied bucket. The i64-vs-String pair that decided the old shape straddles TWO implementations (`should_use_mono_map_for` admits only i32/i64 keys, so kata:170 is the inlined mono path and kata:127 the erased runtime path), so it never isolated key type. Holding path and key type FIXED, x86 gains 20% from the tag and arm64 loses 27% -- an ISA effect, which reinstates the arch framing this row had retired. Arch-conditional is the surviving candidate and is UNVALIDATED. Separately, arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338. | MECHANISM MEASURED 2026-08-05 on arm64 with exact libproc counters (scripts/pmc.c): the tag saves 14.7% instructions on Map[i64,i64] but costs 28.7% IPC, netting -10.9% cycles when removed; on Map[String,i64] removing it costs both instructions and cycles. One mechanism, two signs, decided by whether the avoided key compare was expensive. Branch mispredicts RULED OUT (<1% of the top-down breakdown in both configs). Fix shape unchanged: ARCH x KEY-TYPE. OPEN: x86 reports the OPPOSITE SIGN on instruction count (-13.1% vs arm64's +14.7%) for the same flag -- re-measure that lane with pmc.c / perf stat before acting on it. Unmeasured: the Set probe. |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-06-9 | 2026-08-06 | codegen | medium | TWO shapes where a heap-BOXED enum payload loses its owner AT A CALL BOUNDARY: (A) [OPEN] a NAMED `Option` binding passed by value has its let-site box drop disarmed by the call site's move-zeroing while the callee's param takes nothing over; (B) [FIXED] a fresh-temp user ENUM passed by value never registered `track_enum_var` at all, because the registrar's gate asked `enum_has_heap_payload` rather than whether the drop switch does any work. 320 B / 10 each | src/codegen/call_dispatch.rs -- the by-value arg loop: `suppress_inline_option_result_binding_move` (leg A) and the missing fresh-temp enum registration beside `track_inline_owned_aggregate_arg` (leg B) |
-| B-2026-08-06-17 | 2026-08-06 | typecheck+codegen | medium | `ref CStr` as an `unsafe extern "C"` PARAMETER type is accepted by the typechecker and then dies at codegen with a raw LLVM module-verification error (`Call parameter type does not match function signature! {ptr, i64} ... ptr`) — the fat two-word CStr reference is passed where the extern lowering expects a thin pointer. Identical failure under `karac run` (JIT) and `karac build`; `--interp` works, so it is also a latent run-vs-build divergence. | — |
 | B-2026-08-06-21 | 2026-08-06 | codegen | high | a boxed `Option`/`Result` binding passed by value to a PASSTHROUGH callee is freed TWICE at -O0: `fn id(o: Option[Option[i64]]) -> Option[Option[i64]] { o }` aborts with `free(): double free detected in tcache 2`, while the identical program is clean at the default -O2 | The `call_arg_flows_into_return` arm of the by-value arg loop in src/codegen/call_dispatch.rs, which SUPPRESSES the move-zeroing so the caller keeps its drop — correct for an inline payload, but the returned value owns the BOX as well, so both free it. |
 | B-2026-08-06-22 | 2026-08-06 | codegen | medium | a DOUBLY-nested generic chain `outer.take().take().f` at `Box[Box[Wide]]` cannot be built: type resolution SUCCEEDS (the field index resolves to Some(5)) but the chained call's value arrives as a POINTER, not a StructValue, so `compile_field_access`'s tail skips its arm and loud-fails with a message that misleadingly blames type recovery -- the fully-bound form of the same program builds and runs | src/codegen/expr_ops.rs::compile_field_access, the `if let BasicValueEnum::StructValue(sv) = obj_val` tail. Split out of B-2026-08-06-19 (fixed); NOT fixed by it — verified with that fix in place. |
 | B-2026-08-06-23 | 2026-08-06 | codegen | medium | a generic struct LITERAL in RECEIVER position whose field initializer type cannot be NAMED lowers at the ERASED `{i64}` layout: `Box { v: f * 2.0 }.take()` builds an `insertvalue { i64 } undef, double` and fails verification, while the interpreter is correct | `infer_arg_elem_te` (src/codegen/call_dispatch.rs) and the fail-closed field-initializer recovery B-2026-08-06-12 added to `struct_inst_mono_type_for_expr` |
+| B-2026-08-06-24 | 2026-08-06 | interp | medium | EVERY `extern` call under `--interp` reports an "internal ... This is a compiler bug ... please report it" runtime error for an operation the tree-walk interpreter cannot support BY DESIGN -- the sibling `CStr.as_ptr()` path on the same boundary already refuses cleanly and names `karac build`, so the honest message already exists one call away | — |
 
-### Fixed (956)
+### Fixed (957)
 
-<details><summary>956 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>957 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1121,6 +1121,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-14 | codegen | high | a `shared` field RETURNED out of a BY-VALUE struct param is a use-after-free on a DEFAULT -O2 build: `fn giveback(b: Holder) -> Node { return b.v; }`… | 257630a (src/codegen/call_dispatch.rs — the new `share_direct_shared_field_ref_for_return`, which gates on the caller-retains regime using the SAME name-only predicate the param_own.rs arm gates on so the two cannot drift; src/codegen/exprs.rs — the explicit-`return` hook; src/codegen/stmts.rs — the tail hook, on the early-return side of `compile_tail_final_expr`'s `tail_inner` gate). Pins e2e_shared_field_returned_from_a_caller_retains_param_keeps_its_ref and test_shared_field_returned_from_a_param_transfers_the_handle. |
 | B-2026-08-06-15 | codegen | medium | a `shared` handle escaping a VALUE-POSITION BLOCK is never rc-dec'd by its consumer binding: `let x = { let b = Box { . | e954652 (src/codegen/stmts.rs — `suppress_block_tail_cleanup`'s FieldAccess arm records the transfer via the new `tail_field_is_direct_shared`, and the let-site receive-inc consumes it; src/codegen.rs — the `block_tail_shared_transfer` channel). Pins asan_shared_field_escaping_a_value_block_transfers_exactly_one_ref and test_shared_field_escaping_a_value_block_transfers_the_handle. |
 | B-2026-08-06-16 | typecheck | low | the upper half of u64 is unwritable as a literal -- `18446744073709551615u64` (and any magnitude above i64::MAX, in any radix) is a parse error, beca… | <this commit> |
+| B-2026-08-06-17 | typecheck+codegen | medium | `ref CStr` as an `unsafe extern "C"` PARAMETER type is accepted by the typechecker and then dies at codegen with a raw LLVM module-verification error… | adaa9e34 |
 | B-2026-08-06-18 | codegen | high | a u64 ARITHMETIC RESULT above i64::MAX renders SIGNED under both compiled backends but unsigned under the interpreter -- `println(u64.MAX - 1u64)` pr… | ac3041ce |
 | B-2026-08-06-19 | codegen | medium | a chained FIELD ACCESS on a generic method's RETURN cannot be built: `w.take().f` fails `karac build` with "cannot resolve field 'f' on this receiver… | FIXED (src/codegen/expr_ops.rs: new `generic_method_return_inst` substitutes the RECEIVER's instantiation into the method's declared return TypeExpr, recovered from the AST the declare loop keeps in `generic_fns`; consulted from `enum_inst_type_of_expr`'s new MethodCall arm — placed BEFORE the span fallback — and from `type_name_of_expr`'s MethodCall tail). Pins tests/codegen.rs `e2e_chained_field_access_on_generic_method_return`, stash-proven RED. |
 | B-2026-08-06-20 | codegen | medium | two instantiations of ONE generic struct reached through a MIX of literal and named receivers collide on the unmangled `@Type.method` symbol, whose s… | 2fbf970d |
