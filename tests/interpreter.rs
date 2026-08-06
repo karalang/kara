@@ -29937,6 +29937,58 @@ fn test_mut_ref_place_argument_shared_receiver_writes_back() {
     );
 }
 
+/// B-2026-08-06-4, the interpreter side. The interpreter was ALREADY correct
+/// here — it ran every arm below and printed these values while `karac build`
+/// could not produce a binary at all (LLVM module verification hard-failed on
+/// the 3-word Vec header passed against a 2-word `Slice[T]` formal). That
+/// asymmetry is what localized the row to codegen's `coerce_to_slice`.
+///
+/// Pinning the reference leg here keeps it from drifting to match a future
+/// codegen regression, and mirrors the arms of the codegen twin
+/// `e2e_shared_struct_vec_field_coerces_to_slice`.
+///
+/// Arm (d) is the read-only one: a bare `Slice[T]` over a NON-`mut` field is
+/// legal because it does not write, and it was equally unbuildable before —
+/// the codegen gap was never limited to the mutating spelling, even though
+/// only the mutating one had a soundness question attached.
+///
+/// The mutability gate is this row's other half and lives in
+/// `tests/typechecker.rs`; every field WRITTEN here is declared `mut`, which
+/// is what makes these programs legal at all.
+#[test]
+fn test_shared_struct_vec_field_coerces_to_slice() {
+    assert_eq!(
+        run("shared struct H { mut v: Vec[i64] }\n\
+             shared struct M { tag: i64, mut v: Vec[i64], mut w: Vec[i64] }\n\
+             shared struct R { v: Vec[i64] }\n\
+             impl H {\n\
+                 fn go(ref self) { zap(mut self.v); }\n\
+             }\n\
+             fn zap(s: mut Slice[i64]) { s[0] = 99i64; }\n\
+             fn total(s: Slice[i64]) -> i64 {\n\
+                 let mut t = 0i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < s.len() { t = t + s[i]; i = i + 1i64; }\n\
+                 return t;\n\
+             }\n\
+             fn main() {\n\
+                 let n: i64 = 1i64;\n\
+                 let a = H { v: [n, n + 1i64, n + 2i64] };\n\
+                 zap(mut a.v);\n\
+                 println(f\"a:{a.v[0]}:{a.v[1]}\");\n\
+                 let b = M { tag: n + 6i64, v: [n, n], w: [n, n + 1i64, n + 2i64] };\n\
+                 zap(mut b.w);\n\
+                 println(f\"b:{b.tag}:{b.v[0]}:{b.w[0]}:{b.w[2]}\");\n\
+                 let c = H { v: [n, n + 1i64, n + 2i64] };\n\
+                 c.go();\n\
+                 println(f\"c:{c.v[0]}\");\n\
+                 let d = R { v: [n, n + 1i64, n + 2i64] };\n\
+                 println(f\"d:{total(d.v)}\");\n\
+             }\n"),
+        "a:99:2\nb:7:1:99:3\nc:99\nd:6\n"
+    );
+}
+
 /// B-2026-08-05-37, the conservative half: the write-back RE-EVALUATES the
 /// place after the callee's scope is popped, so a subscript that is not
 /// obviously pure is skipped rather than evaluated twice. `next(mut c)` must

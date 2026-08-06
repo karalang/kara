@@ -2931,7 +2931,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   four-word Option — so handing a callee a raw pointer to either would
     ///   let it write a value of the wrong shape. Those fall back to the
     ///   pre-existing rvalue path (no worse than before this fix).
-    fn shared_mut_ref_place_arg_ptr(
+    pub(super) fn shared_mut_ref_place_arg_ptr(
         &mut self,
         object: &Expr,
         type_name: &str,
@@ -2973,7 +2973,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// projections, so compiling it a second time is free of side effects.
     /// Used by [`Self::shared_mut_ref_place_arg_ptr`] to decide whether the
     /// receiver may be re-compiled at the argument site.
-    fn is_pure_field_chain(expr: &Expr) -> bool {
+    pub(super) fn is_pure_field_chain(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Identifier(_) | ExprKind::SelfValue => true,
             ExprKind::FieldAccess { object, .. } => Self::is_pure_field_chain(object),

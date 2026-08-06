@@ -1445,9 +1445,12 @@ impl<'a> super::TypeChecker<'a> {
                 // `infer_field_access` takes() on the first union access
                 // so nested non-borrow reads still fire slice 2a.
                 let saved_borrow_ctx = self.borrow_context;
+                let saved_mut_through = self.mut_through_param_arg;
                 self.borrow_context = borrow_context_for_param(param_ty);
+                self.mut_through_param_arg = param_mutates_through(param_ty);
                 let arg_ty = self.check_expr(&arg.value, param_ty);
                 self.borrow_context = saved_borrow_ctx;
+                self.mut_through_param_arg = saved_mut_through;
                 if apply_call_site_marker {
                     self.check_call_site_marker(arg, param_ty, &arg_ty);
                 }
@@ -1560,9 +1563,12 @@ impl<'a> super::TypeChecker<'a> {
                 // This is what makes a generic `fn foo[T](x: ref T)`
                 // called with a union-field arg fire slice 2b in pass 1.
                 let saved_borrow_ctx = self.borrow_context;
+                let saved_mut_through = self.mut_through_param_arg;
                 self.borrow_context = borrow_context_for_param(formal_param_ty);
+                self.mut_through_param_arg = param_mutates_through(formal_param_ty);
                 let inferred = self.infer_expr(&arg.value);
                 self.borrow_context = saved_borrow_ctx;
+                self.mut_through_param_arg = saved_mut_through;
                 arg_tys.push(Some(inferred));
             }
         }
@@ -1613,9 +1619,12 @@ impl<'a> super::TypeChecker<'a> {
                     // path that lowers into a non-closure here still
                     // routes through slice 2b correctly.
                     let saved_borrow_ctx = self.borrow_context;
+                    let saved_mut_through = self.mut_through_param_arg;
                     self.borrow_context = borrow_context_for_param(&resolved);
+                    self.mut_through_param_arg = param_mutates_through(&resolved);
                     let arg_ty = self.check_expr(&arg.value, &resolved);
                     self.borrow_context = saved_borrow_ctx;
+                    self.mut_through_param_arg = saved_mut_through;
                     // B-2026-07-11-4: a type param that appears ONLY inside a
                     // closure param's type — e.g. `spawn[T](f: OnceFn() -> T)`,
                     // where T is fixed solely by the thunk's return — is still
@@ -4551,6 +4560,25 @@ pub(super) fn borrow_context_for_param(param_ty: &Type) -> Option<&'static str> 
         Type::MutRef(_) => Some("mut ref"),
         _ => None,
     }
+}
+
+/// Does passing an argument to this formal parameter WRITE THROUGH it?
+///
+/// The two spellings that do — `mut ref T` and `mut Slice[T]` — are one
+/// operation with two syntaxes, so any rule about writing must see both.
+/// Deliberately separate from [`borrow_context_for_param`], which answers a
+/// different question (which union diagnostic applies) and for which
+/// `mut Slice[T]` correctly does NOT count.
+///
+/// `check_call_site_marker` computes the same predicate to decide whether a
+/// `mut` marker is required at the call site; this is that definition, shared
+/// so the marker rule and the shared-field write gate cannot drift apart
+/// (B-2026-08-06-4 — they had, and `mut Slice[T]` fell through the gap).
+pub(super) fn param_mutates_through(param_ty: &Type) -> bool {
+    matches!(
+        param_ty,
+        Type::MutRef(_) | Type::Slice { mutable: true, .. }
+    )
 }
 
 /// True if `ty` contains an `AssocProjection` node anywhere in its

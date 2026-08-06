@@ -206,6 +206,10 @@ impl<'a> super::TypeChecker<'a> {
         let is_lhs = self.assigning_lhs;
         self.assigning_lhs = false;
         let borrow_kind = self.borrow_context.take();
+        // Taken alongside `borrow_context` and for the same reason: the flag
+        // describes THIS argument's outermost place, so a nested field read
+        // inside the same argument must not inherit it (B-2026-08-06-4).
+        let mut_through_arg = std::mem::take(&mut self.mut_through_param_arg);
         let union_fields = self.env.unions.get(&type_name).map(|u| u.fields.clone());
         if let Some(fields) = union_fields {
             if !is_lhs && self.unsafe_depth == 0 {
@@ -290,21 +294,25 @@ impl<'a> super::TypeChecker<'a> {
                     // it, which is the same write with a different syntax — and
                     // it used to check clean while `n.val = 5` was correctly
                     // refused, so the rule was enforced against the spelling
-                    // rather than against the operation. `borrow_kind` is
-                    // already the right signal: `borrow_context_for_param` sets
-                    // it to `mut ref` only for a `Type::MutRef` formal, so a
-                    // plain `ref T` argument (a read borrow) still does not
-                    // gate. Widening to every borrow would make an immutable
-                    // shared field unreadable through any `ref` callee.
+                    // rather than against the operation. A plain `ref T`
+                    // argument (a read borrow) still does not gate; widening to
+                    // every borrow would make an immutable shared field
+                    // unreadable through any `ref` callee.
                     //
-                    // A `mut Slice[T]` formal is a `Type::Slice`, so it carries
-                    // no borrow context here at all and is out of reach of this
-                    // gate — deliberately left alone rather than papered over,
-                    // since closing it needs a signal this function does not
-                    // receive. Parity with the ASSIGNMENT spelling is what this
-                    // row asks for, and that is what this delivers.
-                    let mut_borrow_arg = borrow_kind == Some("mut ref");
-                    if (is_lhs || mut_borrow_arg)
+                    // B-2026-08-06-4 completes that. The signal was
+                    // `borrow_kind == Some("mut ref")`, which is once again the
+                    // SPELLING: a `mut Slice[T]` formal is a `Type::Slice`, so
+                    // it carries no borrow context at all and `zap(mut h.v)`
+                    // walked straight past a gate that refused both `h.v = …`
+                    // and `bump(mut h.v)`. `mut_through_param_arg` asks the
+                    // question the rule is actually about — does this parameter
+                    // WRITE THROUGH its argument — and `param_mutates_through`
+                    // answers it for both spellings from one definition, shared
+                    // with the `mut`-marker rule so the two cannot drift apart
+                    // again. `borrow_context` was the wrong channel for it:
+                    // that field's contract is about union diagnostics, where
+                    // `mut Slice[T]` correctly does not count.
+                    if (is_lhs || mut_through_arg)
                         && (struct_info.is_shared || struct_info.is_par)
                         && !struct_info.mut_fields.contains(field)
                     {

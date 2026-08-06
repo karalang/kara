@@ -11344,6 +11344,78 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-4 — the MEMORY leg of the shared-struct Vec-field slice
+    /// coercion.
+    ///
+    /// The value witness is the codegen twin; this guards the OWNERSHIP
+    /// question the new path raises, which no earlier test can cover because
+    /// no program of this shape could be built at all before the fix.
+    ///
+    /// The slice header the fix builds points INTO the Vec buffer that lives
+    /// inside the shared node's RC box, and the callee writes through it. So
+    /// the header must be a pure BORROW: it must not make the callee an owner
+    /// (freeing the box's buffer at the callee's scope exit, leaving the reads
+    /// after the call dangling and the node teardown double-freeing), and it
+    /// must not disarm the node's own reclaim (leaking one buffer per
+    /// iteration). Both failures are new to this path, and the RC header is
+    /// why a plain-struct slice coercion cannot stand in: there the buffer is
+    /// reclaimed by a scope-exit struct drop, here by node teardown at
+    /// refcount zero.
+    ///
+    /// Carries a `Vec[String]` field alongside so a mis-resolved field offset
+    /// shows up as a corrupted heap pointer under ASAN rather than as a merely
+    /// wrong integer, and exercises both spellings — a `mut Slice[T]` write
+    /// and a read-only `Slice[T]` — since both newly route through this arm.
+    ///
+    /// Floored per B-2026-08-04-17: the payload is runtime-derived and read
+    /// through `.len()` on a String the loop keeps live, so the entries are
+    /// not dead allocations at -O2.
+    #[test]
+    fn asan_shared_struct_vec_field_slice_coercion_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct H { tag: i64, mut v: Vec[String], mut w: Vec[i64] }
+
+fn zap(s: mut Slice[i64]) { s[0] = 99; }
+
+fn total(s: Slice[i64]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < s.len() { t = t + s[i]; i = i + 1; }
+    t
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut sv: Vec[String] = Vec.new();
+        let mut s: String = String.new();
+        s.push_str("payload-");
+        s.push_str(n.to_string());
+        s.push_str("-padded-out-to-force-heap");
+        sv.push(s);
+        let mut wv: Vec[i64] = Vec.new();
+        wv.push(i);
+        wv.push(i + 1);
+        wv.push(i + 2);
+        let h = H { tag: i, v: sv, w: wv };
+        zap(mut h.w);
+        acc = acc + total(h.w) + h.v[0].len();
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            // Per iteration `w` is [99, i+1, i+2] (summing to 102 + 2i) plus a
+            // 34-char payload. Over i = 0..39: 40*(102 + 34) + 2*780 = 7000.
+            &["7000"],
+            "shared_struct_vec_field_slice_coercion",
+            100,
+        );
+    }
+
     /// B-2026-08-05-27 — the BYTE-READING half of the surface-concat receiver.
     /// `("p:".to_string() + s).starts_with(..)` leaked the concat once per
     /// evaluation: the fresh-temp receiver materialization gate

@@ -6188,6 +6188,81 @@ fn main() {
         assert_eq!(out, "a:8\nb:8\nc:8\nd:8\ne:ab:2\n");
     }
 
+    /// B-2026-08-06-4, codegen half — a `shared` struct's Vec field coerced to
+    /// `Slice[T]`.
+    ///
+    /// `coerce_to_slice`'s place arm (B-2026-08-05-40) refused a shared
+    /// receiver for the right reason — its slot holds an RC HANDLE, not the
+    /// aggregate — but returning `None` for it is not fail-closed: the caller
+    /// reads `None` as "carry on", forwards the raw 3-word `{ptr,len,cap}`
+    /// against the 2-word `Slice[T]` formal, and LLVM module verification
+    /// hard-fails. EVERY program of this shape failed to build, on both the
+    /// mutable and the read-only spelling. Same structure as B-2026-08-05-41's
+    /// codegen half; the outcome here is loud rather than a silent miscompile,
+    /// which is the only reason it was not worse.
+    ///
+    /// Arms (a)–(d) each reach the arm differently: a bare shared local, a
+    /// field at a NON-ZERO index behind both a scalar and another Vec (so an
+    /// offset error shows as a wrong value rather than a crash), `self` inside
+    /// a shared method, and a READ-ONLY `Slice[T]` on a NON-`mut` field —
+    /// which is legal precisely because it does not write, and which was
+    /// equally unbuildable before.
+    ///
+    /// Arm (b) is the offset witness and the reason this test is not a
+    /// one-liner: the shared box lays fields out past a refcount header, so a
+    /// field resolved at the plain-struct offset would read the neighbouring
+    /// word. It writes `w` and prints `tag` and `v` alongside, so a
+    /// mis-resolved GEP corrupts something visible.
+    ///
+    /// The mutability gate is this row's typechecker half and lives in
+    /// `tests/typechecker.rs`: every field WRITTEN here is declared `mut`,
+    /// which is what makes these programs legal. The two halves must ship
+    /// together — this one alone would turn a compile failure into a silently
+    /// accepted unsound write.
+    ///
+    /// Seeded from `env.args().len()` so no arm folds away at `-O2`
+    /// (B-2026-08-04-17).
+    #[test]
+    fn e2e_shared_struct_vec_field_coerces_to_slice() {
+        let Some(out) = run_program(
+            "shared struct H { mut v: Vec[i64] }\n\
+             shared struct M { tag: i64, mut v: Vec[i64], mut w: Vec[i64] }\n\
+             shared struct R { v: Vec[i64] }\n\
+             impl H {\n\
+             \x20   fn go(ref self) { zap(mut self.v); }\n\
+             }\n\
+             fn zap(s: mut Slice[i64]) { s[0] = 99i64; }\n\
+             fn total(s: Slice[i64]) -> i64 {\n\
+             \x20   let mut t = 0i64;\n\
+             \x20   let mut i = 0i64;\n\
+             \x20   while i < s.len() { t = t + s[i]; i = i + 1i64; }\n\
+             \x20   return t;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let n: i64 = env.args().len();\n\
+             \x20   // (a) bare shared local receiver, written through a slice\n\
+             \x20   let a = H { v: [n, n + 1i64, n + 2i64] };\n\
+             \x20   zap(mut a.v);\n\
+             \x20   println(f\"a:{a.v[0]}:{a.v[1]}\");\n\
+             \x20   // (b) field at a NON-ZERO index, behind a scalar and a Vec\n\
+             \x20   let b = M { tag: n + 6i64, v: [n, n], w: [n, n + 1i64, n + 2i64] };\n\
+             \x20   zap(mut b.w);\n\
+             \x20   println(f\"b:{b.tag}:{b.v[0]}:{b.w[0]}:{b.w[2]}\");\n\
+             \x20   // (c) `self` inside a shared method\n\
+             \x20   let c = H { v: [n, n + 1i64, n + 2i64] };\n\
+             \x20   c.go();\n\
+             \x20   println(f\"c:{c.v[0]}\");\n\
+             \x20   // (d) READ-ONLY slice of a NON-`mut` field — legal, and\n\
+             \x20   //     equally unbuildable before this fix\n\
+             \x20   let d = R { v: [n, n + 1i64, n + 2i64] };\n\
+             \x20   println(f\"d:{total(d.v)}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a:99:2\nb:7:1:99:3\nc:99\nd:6\n");
+    }
+
     /// B-2026-08-05-39 — a `mut ref` AGGREGATE parameter's whole-value
     /// REASSIGNMENT must write through the borrow.
     ///

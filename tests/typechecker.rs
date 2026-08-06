@@ -27952,6 +27952,83 @@ fn plain_struct_field_mut_ref_argument_not_gated() {
     );
 }
 
+// B-2026-08-06-4, typechecker half. The gate above was extended from the
+// assignment spelling to `mut ref` — but keyed on `borrow_context`, which is
+// once again the SPELLING: a `mut Slice[T]` formal is a `Type::Slice`, carries
+// no borrow context at all, and so walked past a gate that refused both
+// `h.v = …` and `bump(mut h.v)`. The signal is now `param_mutates_through`,
+// which asks whether the parameter WRITES THROUGH its argument and answers for
+// both spellings from one definition — shared with the `mut`-marker rule, so
+// the two cannot drift apart a third time.
+
+#[test]
+fn shared_struct_non_mut_field_mut_slice_argument_rejected() {
+    let errors = typecheck_errors(
+        "shared struct H { v: Vec[i64] }\n\
+         fn zap(s: mut Slice[i64]) { s[0] = 99; }\n\
+         fn main() {\n\
+         \x20   let h = H { v: [1, 2, 3] };\n\
+         \x20   zap(mut h.v);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::SharedFieldNotMut
+                && e.message.contains("H.v")
+                && e.message.contains("is not declared mut")),
+        "expected SharedFieldNotMut for `zap(mut h.v)`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn shared_struct_mut_field_mut_slice_argument_accepted() {
+    // The legal program. It must pass BOTH halves of this row: refusing it
+    // here would make a declared-`mut` Vec field unwritable through a slice,
+    // and the codegen half is what lets it actually build.
+    typecheck_ok(
+        "shared struct H { mut v: Vec[i64] }\n\
+         fn zap(s: mut Slice[i64]) { s[0] = 99; }\n\
+         fn main() {\n\
+         \x20   let h = H { v: [1, 2, 3] };\n\
+         \x20   zap(mut h.v);\n\
+         \x20   println(h.v[0]);\n\
+         }",
+    );
+}
+
+#[test]
+fn shared_struct_non_mut_field_read_slice_argument_not_gated() {
+    // The discriminator is the parameter's MUTABILITY, exactly as for `ref` vs
+    // `mut ref`. A bare `Slice[T]` reads without writing, so an immutable
+    // shared field must stay readable through it — gating on "is a slice"
+    // rather than "is a mutable slice" would make it unreadable.
+    typecheck_ok(
+        "shared struct H { v: Vec[i64] }\n\
+         fn total(s: Slice[i64]) -> i64 { return s.len(); }\n\
+         fn main() {\n\
+         \x20   let h = H { v: [1, 2, 3] };\n\
+         \x20   println(total(h.v));\n\
+         }",
+    );
+}
+
+#[test]
+fn plain_struct_field_mut_slice_argument_not_gated() {
+    // The value-semantic control, mirroring the `mut ref` sibling above: a
+    // plain struct has no field-level `mut` declaration, so the gate must not
+    // reach it.
+    typecheck_ok(
+        "struct G { a: Vec[i64] }\n\
+         fn zap(s: mut Slice[i64]) { s[0] = 99; }\n\
+         fn main() {\n\
+         \x20   let mut g = G { a: [1, 2, 3] };\n\
+         \x20   zap(mut g.a);\n\
+         \x20   println(g.a[0]);\n\
+         }",
+    );
+}
+
 #[test]
 fn shared_field_not_mut_is_run_fatal() {
     // `karac run` must reject the non-`mut` shared-field write at compile time

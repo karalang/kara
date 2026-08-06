@@ -1537,6 +1537,24 @@ pub struct TypeChecker<'a> {
     /// saved/restored around each `check_expr` arg call so outer
     /// contexts don't leak across siblings.
     pub(super) borrow_context: Option<&'static str>,
+    /// True while typechecking a call argument whose callee parameter MUTATES
+    /// THROUGH it — `mut ref T` or `mut Slice[T]`. The shared/par
+    /// write-permission gate in `infer_field_access` consumes it
+    /// (B-2026-08-06-4).
+    ///
+    /// Distinct from `borrow_context` on purpose, and the distinction is the
+    /// whole point. That field answers "which UNION diagnostic flavor applies",
+    /// and its doc records that `mut Slice[T]` deliberately does not count
+    /// there (the slice-assignment contract is write-only, so no union storage
+    /// is read). This one answers "is this argument a write", where the two
+    /// spellings are the same operation and must gate identically — keying the
+    /// rule on `borrow_context` is what let `zap(mut h.v)` past a gate that
+    /// correctly refused `h.v = …` and `bump(mut h.v)`.
+    ///
+    /// Taken (cleared) on the first field access and saved/restored around each
+    /// argument, exactly like `borrow_context`, so a nested read inside the
+    /// same argument does not inherit the write context.
+    pub(super) mut_through_param_arg: bool,
     pub(super) current_return_type: Option<Type>,
     /// Return-position `impl Trait` single-witness pinning. `Some((origin,
     /// trait_name))` while checking a function whose declared return type is a
@@ -1901,6 +1919,7 @@ impl<'a> TypeChecker<'a> {
             comptime_depth: 0,
             assigning_lhs: false,
             borrow_context: None,
+            mut_through_param_arg: false,
             current_return_type: None,
             current_return_impl_trait: None,
             return_impl_trait_witnesses: Vec::new(),

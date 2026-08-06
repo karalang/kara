@@ -6552,6 +6552,40 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(Some(self.slice_header_from_vec_header(header)));
         }
 
+        // B-2026-08-06-4: the same place argument with a `shared` / `par`
+        // struct receiver — `zap(mut h.v)` where `h: H` is shared and
+        // `v: Vec[i64]`. The arm above refuses a shared receiver on correct
+        // reasoning (its slot holds a HANDLE, so GEPing it as the aggregate
+        // reads past the 8-byte slot), but returning `None` for it is not
+        // fail-closed: the caller treats `None` as "carry on", forwards the
+        // raw 3-word `{ptr,len,cap}` against the 2-word `Slice[T]` formal, and
+        // LLVM module verification hard-fails. The receiver is simply one load
+        // further in, at the header-shifted offset `shared_gep_layout`
+        // reports, so resolve it through the same funnel every other shared
+        // field site uses and rebuild the header exactly as the owned arm
+        // does. Loudly broken rather than silently wrong, but broken:
+        // EVERY program of this shape failed to build.
+        //
+        // The write's LEGALITY is the typechecker's job, not this arm's — the
+        // same split B-2026-08-05-41 drew for `mut ref`. `param_mutates_through`
+        // now gates a `mut Slice[T]` formal too, so an undeclared-`mut` shared
+        // field is refused before codegen sees it. The two halves of this row
+        // MUST stay together: this arm alone would turn a loud compile failure
+        // into a silently-accepted unsound write.
+        if let ExprKind::FieldAccess { object, field } = &arg.kind {
+            if let Some(tn) = self.place_chain_type_name(object) {
+                // The type test comes FIRST so no IR is emitted for a field
+                // this arm will decline: `slice_header_from_vec_header` reads
+                // two words off the header, and a scalar / handle field would
+                // hand the callee whatever sits next in the box.
+                if self.shared_field_is_vec_header(&tn, field) {
+                    if let Some(header) = self.shared_mut_ref_place_arg_ptr(object, &tn, field) {
+                        return Ok(Some(self.slice_header_from_vec_header(header)));
+                    }
+                }
+            }
+        }
+
         // Anonymous collection literal at a call boundary — `f([1, 2, 3])`.
         // Named arrays / Vecs hit the Identifier fast path above; a bare
         // literal has no alloca, so materialize it and build a slice header.
@@ -6783,6 +6817,32 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         field_ty == Some(vec_ty)
+    }
+
+    /// Is `field` of the `shared` / `par` struct `type_name` stored as a
+    /// `{ptr,len,cap}` Vec header inside the RC box?
+    ///
+    /// The shared analog of the `field_ty == Some(vec_ty)` test in
+    /// [`Self::arg_is_vec_header_place`], reading the BOX layout
+    /// ([`Self::shared_gep_layout`]) rather than the plain struct type — a
+    /// shared struct has no entry in `struct_types`, so the owned test cannot
+    /// answer this at all. B-2026-08-06-4.
+    fn shared_field_is_vec_header(&self, type_name: &str, field: &str) -> bool {
+        let Some(info) = self.shared_types.get(type_name) else {
+            return false;
+        };
+        if info.is_enum {
+            return false;
+        }
+        let Some(idx) = self
+            .struct_field_names
+            .get(type_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return false;
+        };
+        let (gep_ty, base) = self.shared_gep_layout(type_name, info.heap_type);
+        gep_ty.get_field_type_at_index(idx as u32 + base) == Some(self.vec_struct_type().into())
     }
 
     /// Rebuild a 2-word `{ptr,len}` slice header from a 3-word
