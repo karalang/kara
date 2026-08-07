@@ -802,6 +802,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let (total_cost, min_per_branch) = super::reduce::estimate_par_run_group_cost_units(
                 self.program_snapshot.as_deref(),
                 &group_stmts,
+                Some(self.current_fn_name.as_str()),
             );
             if total_cost > 0
                 && total_cost < super::reduce::PAR_RUN_DISPATCH_THRESHOLD_UNITS

@@ -548,16 +548,30 @@ of `frozen` is still refused at the par capture (`E_CONCURRENT_SHARED_STRUCT`).
 Borrow semantics alone do not license the admission — the freeze-site
 guarantee does.
 
-### One honest caveat about auto-par
+### One honest caveat about auto-par — since FIXED, and the mechanism was not what this said
 
-With auto-par left ON, the frozen build additionally recognises *parallel
+With auto-par left ON, the frozen build additionally recognised *parallel
 reductions inside the traversal itself* (`sum`'s accumulator loop, `repeat`'s)
-and nests them inside the outer parallel group. The answer stays correct, but
-on this shape it costs ~60% more CPU (1.19s vs 0.75s) for no wall-clock gain
-over the explicit-`par`-only build. That is a cost-model question about
-nesting a reduction inside an already-parallel region, not a correctness one,
-and it is not specific to `frozen` — but `frozen` is what makes these bodies
-reachable by the analyzer in the first place, so it shows up here first.
+and nested them inside the outer parallel group. The answer stayed correct, but
+on this shape it cost ~60% more CPU (1.19s vs 0.75s) for no wall-clock gain
+over the explicit-`par`-only build. This entry called that "a cost-model
+question about nesting a reduction inside an already-parallel region".
+
+**The cost was real; "nesting" was the wrong mechanism.** Chased down as
+B-2026-08-06-30 and fixed. The same ~60% appears with only ONE level of
+parallelism — a sequential driver whose single loop fans out, with `sum`'s
+reduction running inline under the fork-depth cap, still measured 0.206s →
+0.330s CPU. Nothing is nested there. The cost is that `sum`'s loop body is
+**outlined** into a worker fn at codegen time, so every recursive call pays an
+indirect call through a descriptor instead of running an inlined loop —
+whether or not the runtime later decides to fan out.
+
+Why it was lowered at all: `CostEstimator` unrolled the self-recursive body
+`INLINE_DEPTH_CAP` times, compounding `RUNTIME_NESTED_LOOP_MULTIPLIER` at each
+level, and scored one iteration of a two-child loop at ~14,900,000 units
+against a floor of 64. A cycle guard in the estimator drops that to 24 (the
+loop now declines) while the driver's loop still scores ~3,600 and still fans
+out. Not specific to `frozen`: any self-recursive reduction paid it.
 
 ### What stage 2 does NOT close
 
@@ -659,12 +673,28 @@ each, identical answers:
 | `let k = n.kids[i]; sum(k)` | **0.221s** | 0.80s |
 | `sum(n.kids[i])` | 0.352s | 1.26s |
 
-So the alias form does not cost anything — it is *faster*, by ~1.6x, and the
-cause is **not identified**. It is not instruction count: `sum`'s emitted body
-is larger for the alias spelling (81 IR lines vs 42), so this is an optimizer
-interaction downstream of codegen. Filed as its own observation
-(B-2026-08-06-30) rather than claimed as a benefit of this stage; nothing here
-depends on it.
+So the alias form did not cost anything — it measured *faster*, by ~1.6x.
+Filed as its own observation (B-2026-08-06-30) rather than claimed as a
+benefit of this stage, which was the right call: **the alias form was never
+faster, and the gap is now closed in both directions** (0.219s/0.804u vs
+0.217s/0.789u).
+
+The 1.6x was the auto-par cost above, and this entry's reading of it was
+backwards. It recorded "`sum`'s emitted body is larger for the alias spelling
+(81 IR lines vs 42), so this is an optimizer interaction downstream of
+codegen." The slower spelling's `sum` is *smaller* precisely **because** its
+loop body was outlined into a worker fn — the missing 39 lines were the cost,
+not the absence of one. The alias spelling escaped only because its `let`
+makes the analyzer not recognise the loop as a reduction at all
+(`loop_reductions: []`), so it was never outlined. Two spellings, one of which
+accidentally avoided a defect.
+
+The lesson worth keeping: **an IR line count is not a cost**, because
+lowerings move code out of the frame you are counting. The count said "more
+code is faster", which reads as an optimizer mystery, and stayed a mystery
+until the emitted binaries were compared for *symbols*
+(`__karac_reduce_worker_2` present in one, absent in the other) rather than
+for size.
 
 ### Why this matters for stage 3
 

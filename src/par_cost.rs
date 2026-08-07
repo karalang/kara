@@ -228,6 +228,7 @@ pub fn accumulator_type_fans_out(type_name: Option<&str>) -> bool {
 /// reclassifies genuinely-winning loops as memory-bound (a 32 MiB strided sum
 /// measured 73.2 ms sequential vs 34.6 ms fanned out, 2.12x; at 128 MiB,
 /// 156.2 ms vs 104.1 ms, 1.50x — more cores extract more bandwidth than one).
+#[allow(clippy::too_many_arguments)] // B-2026-08-06-30 threads the enclosing fn alongside existing gate inputs
 pub fn fanout_verdict(
     body: &Block,
     end_expr: &Expr,
@@ -236,6 +237,7 @@ pub fn fanout_verdict(
     bound_references_param: bool,
     accumulator_fans_out: bool,
     loop_var: Option<&str>,
+    enclosing_fn: Option<&str>,
 ) -> FanoutVerdict {
     fanout_verdict_with_cost(
         body,
@@ -245,6 +247,7 @@ pub fn fanout_verdict(
         bound_references_param,
         accumulator_fans_out,
         loop_var,
+        enclosing_fn,
     )
     .0
 }
@@ -259,6 +262,7 @@ pub fn fanout_verdict(
 /// sequence to keep the estimate in scope. A second copy of a calibrated cost
 /// model drifts from the first, which is the failure this module exists to
 /// prevent (see the module docs).
+#[allow(clippy::too_many_arguments)] // B-2026-08-06-30 threads the enclosing fn alongside existing gate inputs
 pub fn fanout_verdict_with_cost(
     body: &Block,
     end_expr: &Expr,
@@ -267,9 +271,10 @@ pub fn fanout_verdict_with_cost(
     bound_references_param: bool,
     accumulator_fans_out: bool,
     loop_var: Option<&str>,
+    enclosing_fn: Option<&str>,
 ) -> (FanoutVerdict, u64) {
     let per_iter_cost = match program {
-        Some(prog) => CostEstimator::new(prog).estimate_body(body),
+        Some(prog) => CostEstimator::new_within(prog, enclosing_fn).estimate_body(body),
         None => estimate_body_cost_units(body),
     };
     // The accumulator TYPE gate fires before any cost gate: a float
@@ -434,10 +439,34 @@ pub(crate) struct CostEstimator<'a> {
     /// method lookup needs typechecker info threaded in, deferred).
     fn_bodies: HashMap<String, &'a Function>,
     /// Current inlining recursion depth. Bounded by `INLINE_DEPTH_CAP`
-    /// to prevent unbounded recursion on indirect-recursive call graphs
-    /// (`A → B → A`) without needing a visited-set: the depth alone is
-    /// a safe upper bound because each recursive call increments it.
+    /// so the walk always terminates, including on indirect-recursive
+    /// call graphs (`A → B → A`): the depth alone is a safe upper bound
+    /// because each recursive call increments it.
     depth: u32,
+    /// Names of the functions whose bodies are currently being walked,
+    /// outermost first — the enclosing function (when the caller names
+    /// one) plus every callee inlined on the way down.
+    ///
+    /// **This is about accuracy, not termination** — `depth` already
+    /// guarantees the latter, and this field's doc used to say a
+    /// visited-set was therefore unnecessary. B-2026-08-06-30 is the
+    /// counterexample: for a self-recursive body the depth cap does
+    /// terminate the walk, but only after unrolling the *same* body
+    /// `INLINE_DEPTH_CAP` times, compounding
+    /// `RUNTIME_NESTED_LOOP_MULTIPLIER` at every level. A plain
+    /// recursive tree walk (`while i < n.kids.len() { s = s + sum(n.kids[i]) }`)
+    /// scored `64³ × CALL_COST_UNITS` ≈ 15,000,000 units per iteration —
+    /// a number describing the whole subtree, not one iteration, and
+    /// large enough to clear every gate in this module unconditionally.
+    ///
+    /// A recursive call's true per-iteration cost is not knowable here
+    /// (it depends on the runtime trip count at every level), so a cycle
+    /// resolves to `CALL_COST_UNITS` — the same "opaque callee" fallback
+    /// the depth cap already uses, applied one step earlier.
+    ///
+    /// A `Vec` rather than a `HashSet`: bounded by `INLINE_DEPTH_CAP + 1`
+    /// entries, so a linear scan beats hashing.
+    in_progress: Vec<String>,
 }
 
 impl<'a> CostEstimator<'a> {
@@ -448,7 +477,18 @@ impl<'a> CostEstimator<'a> {
     /// to `CALL_COST_UNITS` so the estimator always terminates.
     const INLINE_DEPTH_CAP: u32 = 3;
 
-    pub(crate) fn new(program: &'a Program) -> Self {
+    /// Build an estimator over `program`, seeded with the function whose
+    /// body the caller is about to walk.
+    ///
+    /// The seed is what makes the cycle guard reach the case that
+    /// matters. Estimating `sum`'s own loop body starts with an empty
+    /// stack, so the `sum(...)` call inside it is not yet a cycle and
+    /// gets inlined once; the guard would only fire one level further
+    /// down. Naming the enclosing function up front makes the first
+    /// recursive call the cycle it actually is. Callers that have no
+    /// enclosing function (or whose enclosing name is a method, which
+    /// `fn_bodies` does not key) pass `None`.
+    pub(crate) fn new_within(program: &'a Program, enclosing_fn: Option<&str>) -> Self {
         let mut fn_bodies = HashMap::new();
         for item in &program.items {
             if let Item::Function(f) = item {
@@ -458,6 +498,9 @@ impl<'a> CostEstimator<'a> {
         Self {
             fn_bodies,
             depth: 0,
+            in_progress: enclosing_fn
+                .map(|n| vec![n.to_string()])
+                .unwrap_or_default(),
         }
     }
 
@@ -526,8 +569,15 @@ impl<'a> CostEstimator<'a> {
         let Some(f) = self.fn_bodies.get(&name).copied() else {
             return CALL_COST_UNITS;
         };
+        // Recursion (direct or mutual) — treat the callee as opaque rather
+        // than walking a body already on the stack. See `in_progress`.
+        if self.in_progress.iter().any(|n| n == &name) {
+            return CALL_COST_UNITS;
+        }
         self.depth += 1;
+        self.in_progress.push(name);
         let cost = self.estimate_body(&f.body);
+        self.in_progress.pop();
         self.depth -= 1;
         cost
     }
@@ -779,6 +829,7 @@ pub(crate) fn estimate_body_cost_units(body: &Block) -> u64 {
     let mut est = CostEstimator {
         fn_bodies: HashMap::new(),
         depth: 0,
+        in_progress: Vec::new(),
     };
     est.estimate_body(body)
 }

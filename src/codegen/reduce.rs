@@ -263,6 +263,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.reduction_bound_references_param(&shape),
             acc_int.is_some(),
             Some(&shape.loop_var),
+            Some(self.current_fn_name.as_str()),
         );
         if !verdict.is_fanout() {
             return Ok(None);
@@ -3570,6 +3571,7 @@ pub(super) const PAR_RUN_VISIBILITY_THRESHOLD_UNITS: u64 = 50;
 pub(super) fn estimate_par_run_group_cost_units(
     program: Option<&Program>,
     group_stmts: &[&Stmt],
+    enclosing_fn: Option<&str>,
 ) -> (u64, u64) {
     let Some(program) = program else {
         // No snapshot → can't estimate. `(0, 0)` is the sentinel; the
@@ -3579,7 +3581,7 @@ pub(super) fn estimate_par_run_group_cost_units(
         // outside drop).
         return (0, 0);
     };
-    let mut estimator = CostEstimator::new(program);
+    let mut estimator = CostEstimator::new_within(program, enclosing_fn);
     let mut total: u64 = 0;
     let mut min_per_branch: u64 = u64::MAX;
     for stmt in group_stmts {

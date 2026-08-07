@@ -260,6 +260,7 @@ pub(crate) fn loop_reductions_json(
     fc: &FunctionConcurrency,
     func: Option<&Function>,
     program: Option<&Program>,
+    decision_key: &str,
 ) -> String {
     let entries: Vec<String> = fc
         .loop_reductions
@@ -280,7 +281,7 @@ pub(crate) fn loop_reductions_json(
             } else if r.seq {
                 ("sequential_tabulate", false, "n/a", "lowered inline, single-threaded")
             } else {
-                match func.and_then(|f| reduction_loop_verdict(f, program, r)) {
+                match func.and_then(|f| reduction_loop_verdict(f, program, r, decision_key)) {
                     Some(v) => (
                         "parallel_fanout",
                         v.is_fanout(),
@@ -359,6 +360,7 @@ pub(crate) fn disjoint_write_loops_json(
     fc: &FunctionConcurrency,
     func: Option<&Function>,
     program: Option<&Program>,
+    decision_key: &str,
 ) -> String {
     let entries: Vec<String> = fc
         .disjoint_write_loops
@@ -388,7 +390,7 @@ pub(crate) fn disjoint_write_loops_json(
             } else if !d.proven() {
                 (false, "n/a")
             } else {
-                match func.and_then(|f| disjoint_loop_verdict(f, program, d)) {
+                match func.and_then(|f| disjoint_loop_verdict(f, program, d, decision_key)) {
                     Some(v) => (v.is_fanout(), v.tag()),
                     None => (false, "unknown"),
                 }
@@ -423,6 +425,7 @@ fn disjoint_loop_verdict(
     func: &Function,
     program: Option<&Program>,
     d: &crate::concurrency::DisjointWriteLoop,
+    decision_key: &str,
 ) -> Option<crate::par_cost::FanoutVerdict> {
     let (parent, idx, loop_expr) = find_loop_by_span(&func.body, &d.loop_span)?;
     let shape = crate::par_cost::extract_loop_shape(parent, idx, loop_expr)?;
@@ -442,6 +445,7 @@ fn disjoint_loop_verdict(
         // does not apply (B-2026-07-31-14).
         true,
         Some(&shape.loop_var),
+        Some(decision_key),
     ))
 }
 
@@ -520,6 +524,7 @@ fn reduction_loop_verdict(
     func: &Function,
     program: Option<&Program>,
     r: &crate::concurrency::LoopReduction,
+    decision_key: &str,
 ) -> Option<crate::par_cost::FanoutVerdict> {
     let (parent, idx, loop_expr) = find_loop_by_line(&func.body, r.loop_line)?;
     let shape = crate::par_cost::extract_loop_shape(parent, idx, loop_expr)?;
@@ -543,6 +548,7 @@ fn reduction_loop_verdict(
         // must decline them too. Collect entries record no type and pass.
         crate::par_cost::accumulator_type_fans_out(r.accumulator_type.as_deref()),
         Some(&shape.loop_var),
+        Some(decision_key),
     ))
 }
 
@@ -690,11 +696,13 @@ pub(crate) fn build_concurrency_graph_json(
                         fc,
                         program.and_then(|p| function_by_decision_key(p, key)),
                         program,
+                        key,
                     ),
                     disjoint_write_loops_json(
                         fc,
                         program.and_then(|p| function_by_decision_key(p, key)),
                         program,
+                        key,
                     ),
                     serialization_points_json(fc),
                     reorder_opportunities_json(fc),

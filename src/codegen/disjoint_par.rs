@@ -134,6 +134,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // does not apply (B-2026-07-31-14).
             true,
             Some(&shape.loop_var),
+            Some(self.current_fn_name.as_str()),
         );
         if !verdict.is_fanout() {
             return Ok(None);

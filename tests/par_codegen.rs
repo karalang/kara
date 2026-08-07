@@ -4127,6 +4127,94 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-30 — a SELF-RECURSIVE reduction body must not be scored as
+    /// if the recursion were nested loops.
+    ///
+    /// `CostEstimator` inlines resolvable free-fn callees to estimate a loop's
+    /// per-iteration work, bounded by `INLINE_DEPTH_CAP`. The cap terminated the
+    /// walk but did not stop it from unrolling the *same* body at every level,
+    /// compounding `RUNTIME_NESTED_LOOP_MULTIPLIER` (64) each time. A plain
+    /// recursive tree walk therefore scored `64³ × CALL_COST_UNITS` ≈ 15,000,000
+    /// units per iteration — a figure describing the entire subtree rather than
+    /// one iteration, and far above every gate in `par_cost`. So `sum`'s own
+    /// two-child loop was lowered to `karac_par_reduce` and its body outlined
+    /// into a worker fn, at every one of the tree's 32,767 internal nodes. The
+    /// runtime then *declined* to fan out (cost gate + fork-depth cap), but the
+    /// outlining was already paid: measured +60% CPU (0.206s → 0.330s) on a
+    /// 2^16-node traversal, for zero parallelism.
+    ///
+    /// Both directions are asserted, and the pair is the point:
+    ///
+    /// * `sum`'s own loop — trip count `n.kids.len()`, body one index + one
+    ///   recursive call — must NOT lower. Its estimate is 24 units, under the
+    ///   variable-K floor of 64.
+    /// * `drive`'s loop — same call, but NOT recursive from `drive` — must
+    ///   STILL lower. Its estimate is ~3,600 units, because inlining `sum` once
+    ///   legitimately reveals a runtime-bounded loop. This is the real parallel
+    ///   win (3.3x wall on 4 cores) and the guard must not cost it.
+    ///
+    /// Without the second assertion the first would also pass if the cycle
+    /// guard over-fired and killed recursive-callee reductions wholesale, which
+    /// is the plausible way to get this wrong.
+    #[test]
+    fn test_ir_self_recursive_reduction_declines_but_its_caller_still_fans_out() {
+        /// Does `func`'s own `define` contain a `karac_par_reduce` call site?
+        fn dispatches_in(ir: &str, func: &str) -> bool {
+            let mut inside = false;
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside && line.contains("call void @karac_par_reduce") {
+                    return true;
+                }
+            }
+            false
+        }
+        let src = r#"
+shared struct Node { val: i64, kids: Vec[Node] }
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val;
+    let mut i: i64 = 0;
+    while i < n.kids.len() {
+        s = s + sum(n.kids[i]);
+        i = i + 1;
+    }
+    s
+}
+fn drive(n: frozen Node, times: i64) -> i64 {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < times {
+        t = t + sum(n);
+        i = i + 1;
+    }
+    t
+}
+fn main() {
+    let l1 = Node { val: 3, kids: [] };
+    let l2 = Node { val: 4, kids: [] };
+    let mid = Node { val: 2, kids: [l1, l2] };
+    let root = Node { val: 1, kids: [mid] };
+    println(drive(root, 400i64));
+}
+"#;
+        let ir = ir_for_analyzed(src);
+        assert!(
+            !dispatches_in(&ir, "sum"),
+            "a self-recursive reduction must not lower to karac_par_reduce — its \
+             per-iteration estimate must reflect one iteration, not the whole \
+             recursive subtree; got:\n{ir}"
+        );
+        assert!(
+            dispatches_in(&ir, "drive"),
+            "the NON-recursive caller of the same fn must still fan out — the \
+             cycle guard must not decline reductions merely for calling a \
+             recursive callee; got:\n{ir}"
+        );
+    }
+
     /// B-2026-07-23-20 (HIGH soundness): a reduction whose body passes a
     /// LOOP-INVARIANT shared `mut ref` scratch buffer to a helper must NOT be
     /// parallelized — every iteration writes the same buffer inside the callee,
