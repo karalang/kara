@@ -2431,7 +2431,31 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         // Recurse first — sub-emitter may switch the builder's insert block.
-        let payload_drop = self.emit_drop_fn_for_type_expr(payload_te);
+        //
+        // B-2026-08-07-11 leg (b) — when the payload is ITSELF an `Option`
+        // whose own payload was boxed, the generic resolver is one level short.
+        // `emit_drop_fn_for_type_expr` bottoms out in the primitive no-op for
+        // `Option[Option[i64]]` — every predicate on that path asks whether the
+        // payload owns HEAP, and a boxed scalar does not — so the box below
+        // this one was freed by nobody. The `-2` shape-3 fix (31768650) gave
+        // the outer envelope an owner at the struct field; this gives the
+        // envelopes below it one, and the two together are what make a chain in
+        // a struct field balance.
+        //
+        // `emit_option_drop_fn(P)` drops an `Option[P]`, so the recursive call
+        // takes the INNER payload. Termination is the same `> 3` test that
+        // created the box: each level's payload is strictly the next type down,
+        // and the walk stops at the first one that fits its area — which is a
+        // value rather than an envelope, and is where the interior's own owner
+        // takes over.
+        let inner_boxed_option = Self::option_payload_te(payload_te)
+            .filter(|inner| Self::llvm_type_word_count(self.llvm_type_for_type_expr(inner)) > 3);
+        let payload_drop = match inner_boxed_option {
+            Some(inner) => self
+                .emit_option_drop_fn(&inner)
+                .unwrap_or_else(|| self.emit_drop_fn_for_type_expr(payload_te)),
+            None => self.emit_drop_fn_for_type_expr(payload_te),
+        };
 
         let saved_bb = self.builder.get_insert_block();
         let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);

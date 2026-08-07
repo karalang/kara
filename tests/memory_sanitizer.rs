@@ -36398,6 +36398,92 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-11 leg (b) — the envelope chain inside a STRUCT FIELD.
+    ///
+    /// Two fixes meet here and neither works alone. 31768650 (B-2026-08-07-2
+    /// shape 3) gave the OUTERMOST envelope an owner: a field of type
+    /// `Option[Option[i64]]` now carries a `FieldDrop::OptionInline`, because
+    /// the envelope is heap even when what it holds is not. That left a chain
+    /// field freeing exactly one box — `Option[Option[Option[i64]]]` went from
+    /// 320 + 320 lost to 320 + 0, i.e. it BECAME a pure chain gap. This closes
+    /// the rest, in `emit_option_drop_fn`: its boxed branch asked
+    /// `emit_drop_fn_for_type_expr` for the payload's drop, which bottoms out
+    /// in the primitive no-op for a heapless-but-boxed `Option`, so every
+    /// envelope below the first was freed by nobody.
+    ///
+    /// `emit_option_drop_fn(P)` drops an `Option[P]`, so the recursion takes the
+    /// INNER payload and terminates on the same `> 3` word test that created
+    /// the box — each level is strictly the next type down, and the walk stops
+    /// at the first payload that fits its area, which is a value rather than an
+    /// envelope.
+    ///
+    /// ARMS: `H3` is the row's shape; `H4` puts two envelopes below the first
+    /// and is the one that pre-fix showed indirectly-lost as well as
+    /// definitely-lost; `H2` is the single-box control that 31768650 fixed and
+    /// that must stay at exactly one free; `hu` builds the struct and NEVER
+    /// READS the field, which is the shape that proves the drop is on the field
+    /// rather than on the match.
+    ///
+    /// UNFLOORED DELIBERATELY, and this is the honest version of
+    /// B-2026-08-04-17's rule rather than an exception to it. At `-O2` this
+    /// program performs 6 allocations — the ASAN baseline plus `println` — so a
+    /// floor would assert something the run does not do. All four arms are
+    /// scalar-payload chains whose envelopes are frame-local, and LLVM deletes
+    /// the malloc/free pairs outright; the whole memory half rides on the `-O0`
+    /// leg (`scripts/asan-o0-leg.sh`), where the same program allocates 326.
+    /// Pre-fix every arm leaked 1,280 B at `-O0` and `H4` a further 1,280 B
+    /// indirectly. A floor here would be coverage-shaped rather than coverage,
+    /// which is the exact failure that row exists to name.
+    ///
+    /// STILL RED and deliberately absent: `struct Hs { b:
+    /// Option[Option[Option[String]]] }` leaks 1,280 B at `-O0`, measured
+    /// IDENTICAL before and after this change. It takes the classifier's OTHER
+    /// branch — `payload_droppable` routes it to
+    /// `vec_elem_agg_drop_for_type_expr` rather than to the envelope path
+    /// touched here — so it is a different gap in the same classifier and is
+    /// recorded on B-2026-08-07-11 rather than folded in.
+    ///
+    /// The expected value is COMPUTED: three arms subtract the opaque
+    /// `env.args().len()` seed back out to leave `i` and the fourth contributes
+    /// nothing — `3i` per iteration, so `3 * (0+…+39) = 2340`.
+    #[test]
+    fn asan_struct_field_boxed_enum_chain_frees_every_envelope() {
+        assert_clean_asan_run(
+            r#"
+struct H3 { b: Option[Option[Option[i64]]] }
+struct H4 { b: Option[Option[Option[Option[i64]]]] }
+struct H2 { b: Option[Option[i64]] }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let h3: H3 = H3 { b: a };
+        match h3.b { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let q: Option[Option[Option[Option[i64]]]] = Option.Some(Option.Some(Option.Some(Option.Some(n + i))));
+        let h4: H4 = H4 { b: q };
+        match h4.b { Option.Some(Option.Some(Option.Some(Option.Some(x)))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        let h2: H2 = H2 { b: d };
+        match h2.b { Option.Some(Option.Some(x)) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let u: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let hu: H3 = H3 { b: u };
+        acc = acc + 0;
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["2340"],
+            "struct_field_boxed_enum_chain_frees_every_envelope",
+        );
+    }
+
     /// B-2026-08-07-7 — a match arm binding the INTERIOR out of a struct
     /// field whose `Option` payload is heap-BOXED. Double free at BOTH opt
     /// levels before this: corruption, where every sibling shape merely leaks.
