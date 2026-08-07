@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 218 | 0 |
 | leak | 144 | 2 |
-| double-free | 105 | 1 |
+| double-free | 106 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 80 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 716 | 5 |
+| codegen | 717 | 5 |
 | interp | 127 | 0 |
 | typecheck | 126 | 0 |
 | ownership | 39 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **986 surfaced · 7 open · 969 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **987 surfaced · 7 open · 970 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -138,9 +138,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **986 surfaced 
 | B-2026-08-07-1 | 2026-08-07 | codegen | high | a BOXED-payload enum binding that is RETURNED is freed by its own frame -- the caller reads and frees the same box: double free + use-after-free at BOTH opt levels | — |
 | B-2026-08-07-2 | 2026-08-07 | codegen | low | the remaining owner sites for a box nested in a `Result`'s INLINE payload area -- no binding at all, a struct between the levels, a box inside a box, and escape by return -- 32 B per construction at -O0 | — |
 
-### Fixed (969)
+### Fixed (970)
 
-<details><summary>969 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>970 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1135,6 +1135,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-29 | codegen | high | a BOUND-then-CONSUMED passthrough result double-frees at the DEFAULT -O2: `let x = idopt(d); peek(x);` aborts with `free(): double free detected in t… | FIXED (src/codegen/control_flow_match.rs: new `moved_arg_owner_name` resolves a moved-arg name through `passthrough_owner_alias` before the consume-suppressors look it up, so the suppression lands on the binding that actually owns the payload). Pins tests/memory_sanitizer.rs `asan_bound_passthrough_result_consumed_by_callee_frees_once`, stash-proven RED with a real ASAN error. |
 | B-2026-08-06-30 | codegen | medium | a SELF-RECURSIVE reduction was scored at ~15,000,000 units per iteration (64^3, the depth cap unrolling the same body and compounding the nested-loop… | a23262c |
 | B-2026-08-06-32 | codegen | medium | a heap-BOXED `Option` payload nested inside a `Result`'s INLINE payload area has no owner on any side -- 32 B per construction at -O0 | c6eaeea |
+| B-2026-08-07-3 | codegen | high | `<Result/Option binding>.map(f)` whose ABSENT branch (`Err`/`None`) carries a heap payload double-frees when the map result is CONSUMED or DISCARDED:… | 94ead2dc |
 
 </details>
 
