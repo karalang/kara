@@ -517,8 +517,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.zero_vec_alloca_cap(acc);
                 }
             }
-            ExprKind::Identifier(_) => {
+            ExprKind::Identifier(n) => {
                 self.suppress_source_vec_cleanup_for_arg(tail);
+                // B-2026-08-07-1 — a BRANCH-LEAF tail that hands out a
+                // boxed-payload enum binding (`if hit { found } else {
+                // Option.None }` as a function's tail). The function-body
+                // sibling only inspects the tail expression itself, which here
+                // is the `if`, not the leaf, so the escaping box kept its
+                // scope-exit free and the caller double-freed it.
+                //
+                // This is the flow-SENSITIVE position the whole disarm depends
+                // on: the store lands in this branch's own block, before this
+                // frame drains, so a branch that returns the binding disarms it
+                // and a sibling branch that does not still frees it. That is
+                // why the disarm is a runtime word-0 zero rather than a
+                // retraction of the queued action — a retraction is a
+                // compile-time edit and could not tell the two branches apart.
+                let n = n.clone();
+                self.suppress_boxed_enum_payload_cleanup_for_owner(&n);
             }
             // B-2026-08-06-8 — a FIELD tail (`let x = { let b = mk(); b.v };`).
             // The function-body sibling `suppress_cleanup_for_tail_return` hands

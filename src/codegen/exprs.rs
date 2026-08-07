@@ -842,6 +842,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         // conditional return disarms every path, which can only
                         // under-fire back to the leak this action fixes.
                         self.suppress_nested_boxed_drop_for_var(name);
+                        // B-2026-08-07-1 — the explicit-return sibling of the
+                        // boxed-payload escape disarm in
+                        // `suppress_cleanup_for_tail_return`. Needed in
+                        // addition to it: a `return b;` nested in an `if` is
+                        // not the body's tail, so that walk never sees it.
+                        // Runtime word-0 zero, not a queue retract, so a
+                        // binding returned on one path and consumed on another
+                        // still frees its box on the consuming path.
+                        self.suppress_boxed_enum_payload_cleanup_for_owner(name);
                         // Return-again move-out (B-2026-06-22-2): an explicit
                         // `return f;` of a heap-env closure binding hands its RC
                         // env box to the caller — neutralize the source so the

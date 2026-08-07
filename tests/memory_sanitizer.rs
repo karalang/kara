@@ -35145,6 +35145,151 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-1 — a BOXED-payload enum binding that ESCAPES its frame by
+    /// being returned. The frame frees the box on the way out; the caller then
+    /// reads and frees the same pointer. A double free plus invalid reads, at
+    /// BOTH opt levels — memory corruption, not a leak.
+    ///
+    /// `Wide` is 5 LLVM words against `Option`'s 3-word area, so the payload is
+    /// heap-boxed and the let site queues a `BoxedEnumDrop`. Returning the
+    /// binding hands the caller an enum whose word 0 still points at the callee's
+    /// box. `suppress_cleanup_for_tail_return` retracts a returned binding's Vec
+    /// / String / Map / channel / user-Drop cleanup; `BoxedEnumDrop` post-dates
+    /// most of that list and was never added to it.
+    ///
+    /// THE DISARM IS A RUNTIME WORD-0 ZERO, not a retraction of the queued
+    /// action, and that choice is what most of these arms exist to pin. A
+    /// binding can be returned on ONE path and consumed on another; a
+    /// compile-time retract is flow-insensitive, so it would strand the box on
+    /// the consuming path — trading the double free for a leak. Zeroing stores
+    /// only on the path that actually returns, and the box drop's existing
+    /// null-guard then skips. Both directions are therefore covered rather than
+    /// traded.
+    ///
+    /// FOUR distinct escape positions, because each is a separate walk and none
+    /// sees the others' leaves — this is the part a narrower reading misses:
+    ///
+    ///   * the function-body TAIL (`{ let b = …; b }`);
+    ///   * an explicit `return b;` NESTED IN AN `if`, which is not the body's
+    ///     tail, so the tail walk never sees it;
+    ///   * an `if`/`else` BRANCH LEAF (`if hit { b } else { Option.None }`),
+    ///     suppressed in the branch's own block before its frame drains;
+    ///   * a MATCH-ARM leaf (`match k { 0 => b, _ => Option.None }`), likewise
+    ///     per-arm.
+    ///
+    /// The over-suppression direction is guarded just as hard, since a disarm
+    /// that fires too widely turns a working free into a leak:
+    ///
+    ///   * `never_ret` — a binding that is NOT returned must still free its box;
+    ///   * `two_bind` — two boxed bindings, only one returned, so the other's
+    ///     free must still fire from the same frame;
+    ///   * `else_taken` and `match_tail` — both branches genuinely run (the
+    ///     scrutinee alternates), so the non-returning path must free while the
+    ///     returning path must not. A flow-insensitive disarm leaks here.
+    ///   * `split` — returns on one path, CONSUMES on the other.
+    ///   * the BLOCK tail (`let x = { let bb = …; bb };`) is not a return at
+    ///     all: the consumer owns the box and the block frame must not free it,
+    ///     but nothing may disarm the consumer either.
+    ///   * `fresh_ret` — a returned fresh temp has no binding, so there is
+    ///     nothing to disarm and the arm proves the walk does not invent one.
+    ///
+    /// Also covers `Result` (a 6-word payload against its 5-word area — the
+    /// obvious `Wide` probe does NOT box there, since 5 is not > 5, and an
+    /// early version of this fixture was green for exactly that wrong reason)
+    /// and a HEAP-BEARING interior, where the box drop carries an
+    /// `inner_drop_fn` and the returned value must keep its String intact.
+    ///
+    /// COVERAGE: unlike its nested sibling this does NOT depend on the `-O0`
+    /// leg. The pre-fix compiler ABORTS at the default `-O2` as well, so the
+    /// default suite run is a real gate here; the `-O0` leg re-runs it for the
+    /// paths where a box survives optimization.
+    ///
+    /// The expected value is COMPUTED, not read off a run: every payload is
+    /// seeded from the opaque `env.args().len()`, all eleven arms subtract the
+    /// seed back out to leave `i` (both branches of each two-path arm included,
+    /// which is why the `None` arms return `i` rather than a sentinel), and the
+    /// String arm adds 1 for a successful byte read — `11i + 1` per iteration,
+    /// so `11 * (0+…+39) + 40 = 8620`.
+    #[test]
+    fn asan_returned_boxed_payload_binding_not_freed_by_its_own_frame() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64 }
+struct Wide6 { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+struct WideS { a: i64, b: i64, c: i64, d: i64, s: String }
+
+fn tail_ret(k: i64) -> Option[Wide] {
+    let b: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+    b
+}
+fn early_ret(k: i64) -> Option[Wide] {
+    let b: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+    if k >= 0 { return b; }
+    Option.None
+}
+fn fresh_ret(k: i64) -> Option[Wide] { Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 }) }
+fn never_ret(k: i64) -> i64 {
+    let b: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+    match b { Option.Some(w) => w.a, Option.None => -1 }
+}
+fn two_bind(k: i64) -> Option[Wide] {
+    let dead: Option[Wide] = Option.Some(Wide { a: 99, b: 1, c: 2, d: 3, e: 4 });
+    let live: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+    let x = match dead { Option.Some(w) => w.a, Option.None => 0 };
+    if x == 99 { live } else { Option.None }
+}
+fn split(k: i64) -> Option[Wide] {
+    let b: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+    if k % 2 == 0 { return b; }
+    let c = match b { Option.Some(w) => w.a, Option.None => -1 };
+    Option.Some(Wide { a: c, b: 1, c: 2, d: 3, e: 4 })
+}
+fn res_ret(k: i64) -> Result[Wide6, i64] {
+    let b: Result[Wide6, i64] = Result.Ok(Wide6 { a: k, b: 1, c: 2, d: 3, e: 4, f: 5 });
+    b
+}
+fn heap_ret(k: i64) -> Option[WideS] {
+    let b: Option[WideS] = Option.Some(WideS { a: k, b: 1, c: 2, d: 3, s: "x" + k.to_string() });
+    b
+}
+fn match_tail(k: i64) -> Option[Wide] {
+    let b: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+    match k % 2 { 0 => b, _ => Option.None }
+}
+fn else_taken(k: i64) -> Option[Wide] {
+    let b: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+    if k % 2 == 0 { b } else { Option.None }
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let k = n + i;
+        acc = acc + match tail_ret(k)  { Option.Some(w) => w.a - n, Option.None => -1 };
+        acc = acc + match early_ret(k) { Option.Some(w) => w.a - n, Option.None => -1 };
+        acc = acc + match fresh_ret(k) { Option.Some(w) => w.a - n, Option.None => -1 };
+        acc = acc + never_ret(k) - n;
+        acc = acc + match two_bind(k)  { Option.Some(w) => w.a - n, Option.None => -1 };
+        acc = acc + match split(k)     { Option.Some(w) => w.a - n, Option.None => -1 };
+        acc = acc + match res_ret(k)   { Result.Ok(w) => w.a - n, Result.Err(e) => e };
+        acc = acc + match heap_ret(k)  { Option.Some(w) => w.a - n + (if w.s.len() > 0 { 1 } else { 0 }), Option.None => -1 };
+        acc = acc + match match_tail(k) { Option.Some(w) => w.a - n, Option.None => i };
+        acc = acc + match else_taken(k) { Option.Some(w) => w.a - n, Option.None => i };
+        let x: Option[Wide] = { let bb: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 }); bb };
+        acc = acc + match x { Option.Some(w) => w.a - n, Option.None => -1 };
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["8620"],
+            "returned_boxed_payload_binding_escape",
+            60,
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words

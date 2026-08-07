@@ -759,6 +759,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // tail-return is the canonical Option-unwrap shape
                 // `match opt { Some(v) => v, None => default() }`.
                 self.suppress_source_vec_cleanup_for_arg(&arm.body);
+                // B-2026-08-07-1 — an ARM tail that hands out a boxed-payload
+                // enum binding (`match k { 0 => found, _ => Option.None }` as a
+                // function's tail). Third and last of the branch-leaf
+                // positions, alongside the `if`-branch block tail and the
+                // function-body tail; each is a distinct walk and none of them
+                // sees the others' leaves. Emitted per-arm, in the arm's own
+                // block, so a sibling arm that does not hand the binding out
+                // still frees its box.
+                if let ExprKind::Identifier(n) = &arm.body.kind {
+                    let n = n.clone();
+                    self.suppress_boxed_enum_payload_cleanup_for_owner(&n);
+                }
                 // B-2026-08-04-2 — the arm binding itself escaping as the
                 // match's VALUE (`let r2 = match o { Some(r) => r, .. }`) is a
                 // move like any other, but this tail position is not on

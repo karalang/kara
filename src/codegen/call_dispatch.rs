@@ -4382,6 +4382,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-08-06-32 — a returned binding's NESTED box escapes
                 // into the caller's value; freeing it here is a UAF.
                 self.suppress_nested_boxed_drop_for_var(name);
+                // B-2026-08-07-1 — a returned binding whose payload is heap
+                // BOXED. The caller receives an enum whose word 0 still points
+                // at this frame's box, so the scope-exit `BoxedEnumDrop` frees
+                // memory the caller then reads and frees again — a double free
+                // plus two invalid reads, at BOTH opt levels. This action was
+                // never added to the tail-return retraction list the Vec /
+                // String / Map / channel / user-Drop suppressions around it
+                // form; it post-dates most of them.
+                //
+                // Disarmed by ZEROING word 0 at runtime (the box drop's
+                // null-guard then skips), not by retracting the queued action.
+                // The distinction is load-bearing: a binding can be returned on
+                // one path and CONSUMED on another, and a compile-time retract
+                // is flow-insensitive, so it would strand the box on the
+                // consuming path — trading this double free for a leak. The
+                // store executes only on the path that actually returns.
+                //
+                // Ordered AFTER the return value is loaded, per B-2026-06-12-6:
+                // zeroing first corrupts the value the caller receives.
+                self.suppress_boxed_enum_payload_cleanup_for_owner(name);
                 // Channel-end tail return: when the tail is a bare
                 // Identifier bound to a `Sender`/`Receiver`, the channel
                 // end is moved out as the return value — but `bind_pattern`
