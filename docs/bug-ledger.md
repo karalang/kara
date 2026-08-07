@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 145 | 3 |
-| double-free | 106 | 0 |
+| leak | 145 | 2 |
+| double-free | 107 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 80 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 718 | 5 |
+| codegen | 719 | 5 |
 | interp | 127 | 0 |
 | typecheck | 126 | 0 |
 | ownership | 39 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **988 surfaced · 6 open · 972 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **989 surfaced · 6 open · 973 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -135,11 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **988 surfaced 
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-06-31 | 2026-08-06 | codegen | medium | the STRUCT-payload sibling of B-2026-08-06-9 leg A. FRESH-TEMP half FIXED (the caller-side box drop now runs the payload struct's interior walk); NAMED-BINDING half still OPEN -- it strands the box at -O0, and the leave-the-binding-armed repair is REFUTED (SIGSEGVs the self-host parser) | — |
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. NO BINDING (fresh temp), `Vec.push` (the only -O2 leak) and ESCAPE-BY-RETURN are FIXED — the callee's owned non-escaping param owns it; a struct between the levels and a box inside a box remain; the REASSIGNMENT shape turned out not to belong to this family | — |
-| B-2026-08-07-4 | 2026-08-07 | codegen | medium | reassigning a `let mut` binding whose enum payload is heap-BOXED leaks the OVERWRITTEN value's box -- the store site frees nothing; 32 B per overwrite at -O0, direct and nested alike | — |
+| B-2026-08-07-5 | 2026-08-07 | codegen | medium | `b = c` between two boxed-payload enum bindings leaves BOTH slots holding one box and both armed -- glibc double free at -O0 | — |
 
-### Fixed (972)
+### Fixed (973)
 
-<details><summary>972 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>973 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1136,6 +1136,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-30 | codegen | medium | a SELF-RECURSIVE reduction was scored at ~15,000,000 units per iteration (64^3, the depth cap unrolling the same body and compounding the nested-loop… | a23262c |
 | B-2026-08-06-32 | codegen | medium | a heap-BOXED `Option` payload nested inside a `Result`'s INLINE payload area has no owner on any side -- 32 B per construction at -O0 | c6eaeea |
 | B-2026-08-07-1 | codegen | high | a BOXED-payload enum binding that is RETURNED is freed by its own frame -- the caller reads and frees the same box: double free + use-after-free at B… | ae74c7f |
+| B-2026-08-07-4 | codegen | medium | reassigning a `let mut` binding whose enum payload is heap-BOXED leaks the OVERWRITTEN value's box -- the store site frees nothing; 32 B per overwrit… | da29013 |
 | B-2026-08-07-3 | codegen | high | `<Result/Option binding>.map(f)` whose ABSENT branch (`Err`/`None`) carries a heap payload double-frees when the map result is CONSUMED or DISCARDED:… | 94ead2dc |
 
 </details>
