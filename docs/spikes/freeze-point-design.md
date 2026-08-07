@@ -957,6 +957,20 @@ is `mut` *and* is the traversal path — so neither can be relaxed alone.
 
 ## Stage 3b: the per-instance freeze — steps 1 and 2 LANDED, step 3 remains
 
+> **Step 2's stated justification was wrong, and the correction matters more
+> than the step.** § "Ordering" item 2 says a `frozen T` parameter "can then
+> inherit the guarantee from its caller's already-frozen argument, which is how
+> the mode composes today". Measured: a `frozen` slot **accepts an ordinary
+> binding**, so that composition does not exist and there is nothing to inherit.
+> Building it would mean demanding a frozen argument at every call site, and two
+> call forms resolve no signature today — a free function taken as a value
+> (`let f = frz; f(t)`) and a `frozen` parameter on a method with a non-frozen
+> receiver. It is not needed: the **par capture** is where the guarantee is
+> established, and with the parameter arm relaxed every route for an unfrozen
+> handle to reach a `frozen` parameter concurrently is refused there. See
+> B-2026-08-01-33 for the probe table. Note the argument is **fail-open**,
+> unlike step 1's — it rests on the three fail-closed guards underneath it.
+
 This is the whole remainder, and #133 is squarely in it. Re-measured on the
 reconstructed kata shape rather than inferred from its description, which this
 document had been doing for several stages, it refuses with exactly the two
