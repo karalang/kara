@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 108 | 2 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
-| missing-feature | 80 | 1 |
+| missing-feature | 81 | 2 |
 | false-positive | 56 | 0 |
 | perf | 53 | 3 |
 | diagnostics | 42 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 722 | 7 |
 | interp | 127 | 0 |
-| typecheck | 126 | 0 |
+| typecheck | 127 | 1 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | other | 28 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **993 surfaced · 9 open · 974 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **994 surfaced · 10 open · 974 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **993 surfaced 
 | B-2026-08-07-7 | 2026-08-07 | codegen | high | a struct field of type `Option[Option[String]]` DOUBLE-FREES the String at BOTH opt levels when a match arm binds it out -- the field's drop deep-frees an interior the arm already owns. The `Result` wrapper is NOT required; the struct is | — |
 | B-2026-08-07-6 | 2026-08-07 | codegen | low | the DIRECT sibling of the nested-box chain: `Option[Option[Option[i64]]]` with no `Result` wrapper leaks its inner envelope -- `BoxedEnumDrop` frees one box and has no chain | — |
 | B-2026-08-07-5 | 2026-08-07 | codegen | medium | `b = c` between two boxed-payload enum bindings leaves BOTH slots holding one box and both armed -- glibc double free at -O0 | — |
+| B-2026-08-07-8 | 2026-08-07 | typecheck | low | `self` cannot be passed to a BORROW parameter from any receiver mode — `byref(self)` from `ref self` is `expected 'ref Inner', found 'Inner'`, and so is every other receiver/borrow-param combination | — |
 
 ### Fixed (974)
 
