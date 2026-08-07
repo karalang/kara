@@ -9,6 +9,7 @@
 #   4. a `fixed` row carries a fix SHA (warn-only — pre-convention rows may lack one)
 #   5. cross-repo (if kara-katas is found): every `kata:N` ledger row is cited by
 #      that kata's README, and every B-ID in a kata README exists in the ledger
+#   6. canonical JSON encoding — see scripts/bug-ledger-normalize.py
 set -euo pipefail
 cd "$(dirname "$0")/.."
 LEDGER="docs/bug-ledger.jsonl"
@@ -125,3 +126,15 @@ for e in errs: print(f"ERROR {e}")
 print(f"\n{len(rows)} ledger rows · {len(errs)} errors · {len(warns)} warnings")
 sys.exit(1 if errs else 0)
 PY
+
+# 6. Canonical JSON encoding (B-2026-08-07-13). The ledger has no canonical
+#    writer — every lane appends with its own script — and `json.dumps`
+#    ASCII-escapes by DEFAULT while `ensure_ascii=False` does not. Both forms
+#    round-trip losslessly, so nothing noticed, and the file flipped between
+#    them four times on 2026-08-07 alone, each flip rewriting ~850 of ~1000
+#    rows and burying the one-line change in an 850-line diff.
+#
+#    Runs LAST, and `set -e` means a content failure above aborts before we get
+#    here — encoding is the least interesting thing to be told about when a row
+#    is actually malformed.
+python3 scripts/bug-ledger-normalize.py --check
