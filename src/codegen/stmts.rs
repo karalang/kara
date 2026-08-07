@@ -9051,6 +9051,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         // it: without the transfer the leaf owns nothing and the
                         // (correctly) zeroed source frees nothing → leak.
                         || self.result_field_struct_enum_payload_ok(&field_te)
+                        // B-2026-08-07-19 — and the `Map`/`Set` handle half,
+                        // paired with the same widening in the struct drop.
+                        || self.result_field_map_or_set_half_ok(&field_te).is_some()
                         || matches!(
                             &field_te.kind,
                             TypeKind::Path(p) if p.segments.last().is_some_and(|s|
@@ -9844,8 +9847,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload (`result_inline_payload_struct_drops`, B-2026-07-12-2 gap 3)
         // and self-skips when the payload was heap-BOXED (`BoxedEnumDrop` owns
         // that case), so one tracker serves both widths.
+        // B-2026-08-07-19 — the `Map`/`Set` handle half tracks here too. It
+        // must precede the bare Map/Set arm below, which matches on the
+        // FIELD's own head and would never see a `Result` wrapper anyway; the
+        // ordering is stated because the two arms now name the same types.
         if self.result_field_direct_vecstr_halves_ok(te)
             || self.result_field_struct_enum_payload_ok(te)
+            || self.result_field_map_or_set_half_ok(te).is_some()
         {
             self.track_inline_result_payload_var(var_name, alloca, te);
             return;

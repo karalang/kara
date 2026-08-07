@@ -19037,6 +19037,90 @@ fn main() {
     }
 
     #[test]
+    fn asan_result_map_half_struct_field_freed_and_move_paired() {
+        // B-2026-08-07-19 — the `Result` twin of B-2026-08-07-12 leg 1. A
+        // `Result[Map[K,V], E]` STRUCT FIELD leaked its whole handle tree (720 B
+        // / 10 iterations at BOTH opt levels, no call anywhere in the program):
+        // a Map/Set handle is a single word, so it is neither the inline
+        // `{ptr,len,cap}` overlay nor wide enough to be boxed, and its head is
+        // in neither `struct_types` nor `enum_layouts` — the promotion loop's
+        // two Result gates admit no such half and the field got no drop.
+        //
+        // THE MOVE LEGS ARE THE POINT OF THIS FIXTURE, not the `let`. Widening
+        // a field's drop obliges every move site to neutralize the source with
+        // it. Measured with the classifier widened and the move sites left
+        // alone, every spelling that pattern-matches the field went from CLEAN
+        // to 470 valgrind errors with invalid frees at both opt levels. So the
+        // pattern arm, the whole-struct move, and both callee spellings are all
+        // carried here; the `let`-move spelling stayed clean throughout (it
+        // binds the field to a local, whose own cleanup runs) and rides along as
+        // the arm that must not change.
+        //
+        // The `Err`-side handle and the sibling-field row are included because
+        // the gate is per-FIELD: if it failed for the struct as a whole, the
+        // `Option[String]` sibling would leak with the Map.
+        assert_clean_asan_run(
+            r#"
+struct S { s: Result[Map[i64, String], i64] }
+struct SErr { s: Result[i64, Map[i64, String]] }
+struct Sib { p: Option[String], s: Result[Map[i64, String], i64] }
+struct Ctl { s: Result[String, i64] }
+
+fn mk(n: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(n, "mapv-padded-out-to-force-a-real-heap-buffer".repeat(1));
+    m
+}
+fn take(s: S) -> i64 {
+    match s.s { Ok(inner) => { inner.len() } Err(e) => { e } }
+}
+
+fn main() {
+    // Runtime-derived so the payload is a real allocation at -O2 too
+    // (B-2026-08-04-17).
+    let n: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 3 {
+        // plain let — the leaking shape this row was filed for
+        let a: S = S { s: Result.Ok(mk(n + i)) };
+        println(1);
+        // pattern move out of the field
+        let b: S = S { s: Result.Ok(mk(n + i)) };
+        match b.s { Ok(inner) => { println(inner.len()); } Err(e) => { println(e); } }
+        // field let-move, then match the local
+        let c: S = S { s: Result.Ok(mk(n + i)) };
+        let r: Result[Map[i64, String], i64] = c.s;
+        match r { Ok(inner) => { println(inner.len()); } Err(e) => { println(e); } }
+        // whole-struct move, then pattern
+        let d: S = S { s: Result.Ok(mk(n + i)) };
+        let e: S = d;
+        match e.s { Ok(inner) => { println(inner.len()); } Err(x) => { println(x); } }
+        // move into a callee, both spellings
+        let f: S = S { s: Result.Ok(mk(n + i)) };
+        println(take(f));
+        println(take(S { s: Result.Ok(mk(n + i)) }));
+        // Err-side handle
+        let g: SErr = SErr { s: Result.Err(mk(n + i)) };
+        println(1);
+        // sibling field must not leak with it
+        let h: Sib = Sib { p: Option.Some("sib-padded-out-to-force-a-real-heap-buffer".repeat(1)), s: Result.Ok(mk(n + i)) };
+        println(1);
+        // control: the Result shape that already worked
+        let k: Ctl = Ctl { s: Result.Ok("ctl-padded-out-to-force-a-real-heap-buffer".repeat(1)) };
+        match k.s { Ok(inner) => { println(inner.len()); } Err(x) => { println(x); } }
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "1", "1", "1", "1", "1", "1", "1", "1", "42", "1", "1", "1", "1", "1", "1", "1",
+                "1", "42", "1", "1", "1", "1", "1", "1", "1", "1", "42",
+            ],
+            "result_map_half_struct_field",
+        );
+    }
+
+    #[test]
     fn asan_generic_struct_heap_field_move_out_no_double_free() {
         // B-2026-07-18-44: a generic struct's owned-by-value param/self whose
         // heap String field is returned (moved out). The monomorph analogue of

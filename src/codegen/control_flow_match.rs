@@ -2441,8 +2441,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `zero_result_payload_area` neutralizes both widths — the
                 // inline free is tag-guarded and the boxed `BoxedEnumDrop`
                 // guards on a non-null box word.
+                //
+                // B-2026-08-07-19 — the `Map`/`Set` HANDLE half joins the same
+                // admission, for the same pairing reason and on the same
+                // evidence the `Option` twin above records. With the
+                // classifier widened and this leg left alone, EVERY shape that
+                // pattern-matches the field — `match s.s { Ok(inner) => .. }`,
+                // and the whole-move / callee spellings that contain one — went
+                // from clean to 470 valgrind errors with invalid frees at BOTH
+                // opt levels. The `let`-move spelling stayed clean throughout,
+                // because it binds the field to a local and the local's own
+                // cleanup is what runs.
+                //
+                // `zero_result_payload_area` neutralizes the handle like any
+                // other inline width: the payload area is the handle word, and
+                // the struct drop's `Ok`/`Err` arm is tag-guarded.
                 if !self.result_field_direct_vecstr_halves_ok(&field_te)
                     && !self.result_field_struct_enum_payload_ok(&field_te)
+                    && self.result_field_map_or_set_half_ok(&field_te).is_none()
                 {
                     return None;
                 }

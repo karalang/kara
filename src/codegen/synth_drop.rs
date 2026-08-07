@@ -1745,6 +1745,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !self.result_field_direct_vecstr_halves_ok(&field_te)
                         && !self.result_field_struct_enum_payload_ok(&field_te)
                     {
+                        // B-2026-08-07-19 — a `Map`/`Set` HANDLE half, which
+                        // neither gate above admits. Routed straight to
+                        // `emit_result_drop_fn` rather than through
+                        // `vec_elem_agg_drop_for_type_expr` below, for the same
+                        // reason leg 1 routed the `Option` twin directly: that
+                        // helper gates the `Result` arm on
+                        // `result_payload_inline_recursive_drop_ok`, which is
+                        // shared with LAYOUT decisions and with the VEC-ELEMENT
+                        // path, so teaching it here would hand
+                        // `Vec[Result[Map, E]]` a drop nothing in this change
+                        // measures.
+                        if let Some((ok, err)) = self.result_field_map_or_set_half_ok(&field_te) {
+                            if let Some(f) = self.emit_result_drop_fn(&ok, &err) {
+                                option_drops[idx] = Some(f);
+                                kinds[idx] = FieldDrop::OptionInline;
+                            }
+                        }
                         continue;
                     }
                     if let Some(f) = self.vec_elem_agg_drop_for_type_expr(&field_te) {

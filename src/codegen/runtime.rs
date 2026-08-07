@@ -2838,6 +2838,76 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-08-07-19 — the `Result` peer of
+    /// [`Self::option_payload_map_or_set_drop_ok`]: a `Result[T, E]` STRUCT
+    /// FIELD with a `Map`/`Set` HANDLE half. Returns the two halves so the
+    /// caller can hand them straight to `emit_result_drop_fn`.
+    ///
+    /// IT IS A NEW GATE RATHER THAN A WIDENING, and which predicate NOT to
+    /// touch is the whole content of this row. Two look like the natural seam
+    /// and both are traps:
+    ///
+    ///   * `result_payload_inline_recursive_drop_ok` has five consumers,
+    ///     including `types_lowering.rs`'s LAYOUT decisions — widening it moves
+    ///     lowering for every `Result` in the program.
+    ///   * `result_field_direct_vecstr_halves_ok` is consulted by
+    ///     `field_copy_supported` itself and by the typechecker's `.clone()`
+    ///     derivation. Admitting a `Map` half there would make the struct
+    ///     COPY-SUPPORTED — advertising an entry copy that
+    ///     `deep_copy_result_inline_heap_halves_in_place` cannot perform on a
+    ///     handle, so the caller's original and the callee's copy would share
+    ///     one `Map`. That trades this leak for a DOUBLE FREE.
+    ///
+    /// So this gate is consulted only where a DROP is being decided: the
+    /// promotion loop's `Result` arm and the move sites paired with it. It
+    /// requires at least one half to be the handle it exists for — otherwise
+    /// `result_payload_inline_recursive_drop_ok` already covers the shape and a
+    /// second route to the same drop would only add a way to disagree.
+    ///
+    /// The non-handle half is held to the SAME classes that predicate accepts,
+    /// so `emit_result_drop_fn` never sees a side it cannot lower: heapless
+    /// (its arm emits nothing), the inline `{ptr,len,cap}` overlay, or a
+    /// non-shared struct/enum. `emit_result_drop_fn` needs no new emitter for
+    /// the handle side — it dispatches each half through
+    /// `te_owns_heap_below_buffer` -> `emit_drop_fn_for_type_expr`, which
+    /// already routes `Map`/`SortedMap` to `emit_map_drop_fn` and `Set`/
+    /// `SortedSet` to the same fn as `Map[T, ()]`.
+    pub(super) fn result_field_map_or_set_half_ok(
+        &self,
+        field_te: &TypeExpr,
+    ) -> Option<(TypeExpr, TypeExpr)> {
+        let TypeKind::Path(p) = &field_te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let mut halves = Vec::with_capacity(2);
+        for a in args.iter().take(2) {
+            match a {
+                GenericArg::Type(t) => halves.push(t.clone()),
+                _ => return None,
+            }
+        }
+        if halves.len() != 2 {
+            return None;
+        }
+        let side_ok = |te: &TypeExpr| {
+            !self.te_owns_heap_below_buffer(te)
+                || self.option_payload_inline_recursive_drop_ok(te)
+                || self.option_payload_struct_or_enum_drop_ok(te)
+                || self.option_payload_map_or_set_drop_ok(te)
+        };
+        let any_handle = halves
+            .iter()
+            .any(|h| self.option_payload_map_or_set_drop_ok(h));
+        if !any_handle || !halves.iter().all(side_ok) {
+            return None;
+        }
+        Some((halves[0].clone(), halves[1].clone()))
+    }
+
     /// True iff `field_te` is `Option[P]` with `P` a non-shared user
     /// struct/enum the recursive drop family fully frees — the shape
     /// `track_inline_option_agg_payload_var` registers a leaf drop for
