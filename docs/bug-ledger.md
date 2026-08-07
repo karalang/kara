@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
-| other | 19 | 1 |
+| other | 19 | 0 |
 | use-after-free | 14 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
-| other | 29 | 1 |
+| other | 29 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced · 7 open · 983 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced · 6 open · 984 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,12 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
 | B-2026-08-07-11 | 2026-08-07 | codegen | low | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct literal or pushing it into a `Vec` leaks BOTH envelopes (320 + 320) | — |
 | B-2026-08-07-12 | 2026-08-07 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BOXED payload shared its interior rather than duplicating it -- BOTH FIXED (00660c3), together, because either alone made the other worse. TWO LEGS OPEN: a `Map`/`Set` payload still double-frees, and an ALL-SCALAR boxed payload still orphans its envelope (the -O0 quarantine line's third cause) | — |
-| B-2026-08-07-13 | 2026-08-07 | other | low | docs/bug-ledger.jsonl has no pinned JSON encoding, so writers flip it between raw UTF-8 and \uXXXX escapes and each flip rewrites all ~1000 rows | — |
 | B-2026-08-07-14 | 2026-08-07 | codegen | medium | kāra's i64 OVERFLOW CHECK is ~2.4x dearer relative to its own baseline than rustc's (1.309x vs 1.131x on the identical kata #11 loop), which spends the 1.16x lead kāra's unchecked code holds and lands it at a DEAD TIE with equal-safety Rust instead of ahead; the surviving cost is the `h * (r - l)` multiply's smulh + cmp-asr#63 + branch, still unelided on main two months after it landed | Attributed by matched-pair ladder under B-2026-08-05-34 (arm64 M5 Pro, 2026-08-07). Mechanism commit e4047440 (2026-06-07, AOT integer arithmetic faults), parent ad240cad. NOT a revert candidate and NOT a correctness defect -- at equal safety kāra TIES rustc on this kata (191.4 vs 191.4 ms). The gap is that kāra's i64 overflow check costs 1.309x of its own unchecked baseline where rustc's costs 1.131x of its own, which spends a 1.16x lead kāra otherwise has. Corpus-wide equal-safety data ALREADY EXISTS (Kara/ovf_equal_safety_triage.tsv, 56 rows, kara/ovf median 0.999) and corroborates the tie from a different instrument; what it lacks is a kara-unchecked column, which is what this row's claim rests on. Next step: an IR/asm diff of the smulh+cmp-asr#63 sequence against what rustc emits for the same checked multiply, on the 25-of-56 subset where rustc actually pays for its check. |
 
-### Fixed (983)
+### Fixed (984)
 
-<details><summary>983 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>984 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1149,6 +1148,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-3 | codegen | high | `<Result/Option binding>.map(f)` whose ABSENT branch (`Err`/`None`) carries a heap payload double-frees when the map result is CONSUMED or DISCARDED:… | 94ead2dc |
 | B-2026-08-07-5 | codegen | medium | `b = c` between two boxed-payload enum bindings leaves BOTH slots holding one box and both armed -- glibc double free at -O0 | a635ffe |
 | B-2026-08-07-8 | typecheck | low | `self` cannot be passed to a BORROW parameter from any receiver mode — `byref(self)` from `ref self` is `expected 'ref Inner', found 'Inner'`, and so… | aa3b394 |
+| B-2026-08-07-13 | other | low | docs/bug-ledger.jsonl has no pinned JSON encoding, so writers flip it between raw UTF-8 and \uXXXX escapes and each flip rewrites all ~1000 rows | 9636a9b6 |
 
 </details>
 

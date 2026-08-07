@@ -84,6 +84,17 @@ jobs:
       - name: Mend scorer self-test
         run: python3 examples/mend/harness/test_mend_score.py
 
+      # Also pure-python and also seconds. The ledger's integrity rules
+      # (B-ID uniqueness, the controlled class/severity/surface/source enums,
+      # canonical JSON encoding) were "enforced" only by an instruction in the
+      # PR template and CLAUDE.md, which is how the encoding drifted four times
+      # in one day (B-2026-08-07-13) — a convention nobody can check is a
+      # convention that rots. The cross-repo kata link check needs kara-katas,
+      # which CI does not have; it degrades to a warning there rather than a
+      # failure, so this gate covers the same-repo rules only.
+      - name: Bug-ledger integrity
+        run: ./scripts/bug-lint.sh
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
