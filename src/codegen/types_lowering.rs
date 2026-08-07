@@ -3260,6 +3260,81 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// Sibling of [`Self::boxed_enum_payload_variants`] for a box that comes to
+    /// rest one level DOWN — inside the outer enum's INLINE payload area, where
+    /// neither level's own predicate names it. Returns
+    /// `(outer_enum, outer_variant, inner_enum, inner_variant)` per affected
+    /// arm. B-2026-08-06-32.
+    ///
+    /// Self-limiting by the seeded areas, and that is the whole safety argument.
+    /// An `Option` value is always exactly 4 LLVM words and a `Result` always 6
+    /// (tag + fixed area), so:
+    ///
+    ///   * against `Option`'s 3-word area, a nested `Option`/`Result` payload
+    ///     NEVER fits — it is boxed at the outer level and
+    ///     `boxed_enum_payload_variants` already owns it;
+    ///   * against `Result`'s 5-word area, a nested `Option` payload ALWAYS
+    ///     fits, and a nested `Result` never does.
+    ///
+    /// So the only arm this can return is a `Result` whose `Ok`/`Err` type is an
+    /// `Option[T]` that boxes its own payload (`T` wider than 3 words). The
+    /// common `Result[Option[i64], E]` yields nothing because the inner Option
+    /// stores `i64` inline — measured clean before this existed, and it must
+    /// stay that way. The loop is written over both seeded enums anyway rather
+    /// than hardcoding `Result`, so it stays correct by construction if an area
+    /// is ever retuned.
+    ///
+    /// Deliberately NOT recursive. A third level collapses back into this one:
+    /// `Option[Option[Option[i64]]]` is still 4 words, so the extra nesting adds
+    /// a box INSIDE the box rather than a second inline word to walk, and that
+    /// interior belongs to the boxed payload's own drop.
+    pub(super) fn nested_boxed_enum_payload_variants(
+        &self,
+        te: &TypeExpr,
+    ) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
+        let TypeKind::Path(p) = &te.kind else {
+            return vec![];
+        };
+        let (outer_lit, area, variants): (&'static str, usize, &[&'static str]) =
+            match p.segments.last().map(|s| s.as_str()) {
+                Some("Option") => ("Option", 3, &["Some"]),
+                Some("Result") => ("Result", 5, &["Ok", "Err"]),
+                _ => return vec![],
+            };
+        let args: Vec<&TypeExpr> = match &p.generic_args {
+            Some(a) => a
+                .iter()
+                .filter_map(|g| match g {
+                    GenericArg::Type(t) => Some(t),
+                    _ => None,
+                })
+                .collect(),
+            None => return vec![],
+        };
+        let mut out = Vec::new();
+        for (i, variant) in variants.iter().enumerate() {
+            let Some(arg) = args.get(i) else {
+                continue;
+            };
+            // A payload that OUTGROWS the area is boxed at this level, and
+            // `boxed_enum_payload_variants` is its owner. Only an inline
+            // payload can be hiding a box the outer type does not mention.
+            if Self::llvm_type_word_count(self.llvm_type_for_type_expr(arg)) > area {
+                continue;
+            }
+            for (inner_enum, inner_variant, _) in self.boxed_enum_payload_variants(arg) {
+                // `Option` only — see the area arithmetic above, which leaves
+                // no way for a `Result` to be the inline one. Asserted rather
+                // than assumed so a future area retune fails closed.
+                if inner_enum != "Option" {
+                    continue;
+                }
+                out.push((outer_lit, *variant, inner_enum, inner_variant));
+            }
+        }
+        out
+    }
+
     /// USER-enum sibling of [`Self::boxed_enum_payload_variants`], which matches
     /// on the enum NAME and therefore only ever knew the seeded `Option`
     /// (area 3) and `Result` (area 5) — every user enum fell to its

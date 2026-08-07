@@ -832,6 +832,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(name) = &e.kind {
                         self.suppress_user_drop_for_var(name);
                         self.suppress_map_cleanup_for_tail_identifier(name);
+                        // B-2026-08-06-32 — an explicit `return b;` of a
+                        // binding whose INLINE payload hides a box hands that
+                        // box to the caller; freeing it in the drain below is a
+                        // use-after-free. Needed in addition to the tail-return
+                        // sibling because a `return` nested in an `if` is not
+                        // the body's tail, so the tail walk never sees it.
+                        // Flow-insensitive like the suppressions around it: a
+                        // conditional return disarms every path, which can only
+                        // under-fire back to the leak this action fixes.
+                        self.suppress_nested_boxed_drop_for_var(name);
                         // Return-again move-out (B-2026-06-22-2): an explicit
                         // `return f;` of a heap-env closure binding hands its RC
                         // env box to the caller — neutralize the source so the

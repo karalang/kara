@@ -4379,6 +4379,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // elision of the dead store/free; JIT runs pre-O2 IR and
                 // exposes it.
                 self.suppress_map_cleanup_for_tail_identifier(name);
+                // B-2026-08-06-32 — a returned binding's NESTED box escapes
+                // into the caller's value; freeing it here is a UAF.
+                self.suppress_nested_boxed_drop_for_var(name);
                 // Channel-end tail return: when the tail is a bare
                 // Identifier bound to a `Sender`/`Receiver`, the channel
                 // end is moved out as the return value — but `bind_pattern`
@@ -5138,6 +5141,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             });
         }
+    }
+
+    /// B-2026-08-06-32 — drop the `NestedBoxedEnumDrop` queued for `name` when
+    /// that binding is the function's tail/return value.
+    ///
+    /// The box ESCAPES the frame: `fn mk() -> Result[Option[Wide], E] { let b =
+    /// …; b }` hands the caller a value whose inline payload still points at
+    /// this frame's box. Freeing it at scope exit is a use-after-free in the
+    /// caller — measured as an `Invalid read of size 8` and a wrong answer,
+    /// which is strictly worse than the leak this action exists to fix, so the
+    /// registration is retracted rather than the return being reshaped.
+    ///
+    /// Mirrors `suppress_map_cleanup_for_tail_identifier`'s all-frames scan for
+    /// the same reason it gives: the owning frame is not necessarily the
+    /// innermost one at the moment the tail is walked.
+    pub(super) fn suppress_nested_boxed_drop_for_var(&mut self, name: &str) {
+        let slot_ptr = match self.variables.get(name) {
+            Some(s) => s.ptr,
+            None => return,
+        };
+        for frame in self.scope_cleanup_actions.iter_mut() {
+            frame.retain(|action| match action {
+                crate::codegen::state::CleanupAction::NestedBoxedEnumDrop { enum_slot, .. } => {
+                    *enum_slot != slot_ptr
+                }
+                _ => true,
+            });
+        }
+        self.nested_boxed_payload_vars.remove(name);
     }
 
     pub(super) fn suppress_map_cleanup_for_tail_identifier(&mut self, name: &str) {

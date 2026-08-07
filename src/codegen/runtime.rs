@@ -1605,6 +1605,66 @@ impl<'ctx> super::Codegen<'ctx> {
         self.boxed_enum_payload_vars.insert(name.to_string());
     }
 
+    /// Queue a scope-exit free of a heap box nested one enum level DOWN,
+    /// inside the outer enum's INLINE payload area — the
+    /// `Result[Option[Wide], E]` shape that neither level's own boxing
+    /// predicate names. See `nested_boxed_enum_payload_variants` for why
+    /// that is the only shape, and `CleanupAction::NestedBoxedEnumDrop`
+    /// for the two-tag walk this drives. B-2026-08-06-32.
+    ///
+    /// Unlike [`Self::track_boxed_enum_var`] this does NOT add `name` to
+    /// `boxed_enum_payload_vars`. That set exists so a whole-value move
+    /// can hand the box to a destination that becomes its new owner — but
+    /// no destination takes a NESTED box over. Measured, at `-O0`, on the
+    /// shapes this could reach: moving the binding into a struct literal,
+    /// pushing it into a `Vec`, and passing it by value to a user fn each
+    /// leaked the box before this existed, i.e. every candidate new owner
+    /// registers nothing. Joining the set would disarm this action on
+    /// exactly those moves and hand the box to nobody, which is the
+    /// leak this fixes. The source stays sole owner.
+    pub(super) fn track_nested_boxed_enum_var(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        outer_enum: &str,
+        outer_variant: &str,
+        inner_enum: &str,
+        inner_variant: &str,
+    ) {
+        let Some(outer) = self.enum_layouts.get(outer_enum) else {
+            return;
+        };
+        let enum_ty = outer.llvm_type;
+        let Some(outer_tag) = outer.tags.get(outer_variant).copied() else {
+            return;
+        };
+        let Some(inner_tag) = self
+            .enum_layouts
+            .get(inner_enum)
+            .and_then(|l| l.tags.get(inner_variant).copied())
+        else {
+            return;
+        };
+        // The outer payload area starts at field 1 and the inner enum is laid
+        // there from its own field 0, so the inner TAG is outer field 1 and the
+        // inner box word is the field after it. `coerce_to_payload_words`
+        // FLATTENS the payload, which is what makes this plain index arithmetic
+        // rather than a nested GEP.
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::NestedBoxedEnumDrop {
+                name: name.to_string(),
+                enum_slot,
+                enum_ty,
+                outer_tag,
+                inner_tag,
+                inner_tag_field: 1,
+            });
+        }
+        // Armed for the passthrough rule only — deliberately NOT
+        // `boxed_enum_payload_vars`; see this fn's doc and that field's.
+        self.nested_boxed_payload_vars.insert(name.to_string());
+    }
+
     /// Zero-init an `Option[T]` slot at the top of the current
     /// function's entry block. Mirrors `null_init_slot_in_entry_block`'s
     /// shape but operates on the full Option struct (`{tag, w0, w1,
@@ -6475,6 +6535,7 @@ impl<'ctx> super::Codegen<'ctx> {
             CleanupAction::RcDec { name, .. }
             | CleanupAction::RcDecOption { name, .. }
             | CleanupAction::BoxedEnumDrop { name, .. }
+            | CleanupAction::NestedBoxedEnumDrop { name, .. }
             | CleanupAction::FreeSharedElided { name, .. }
             | CleanupAction::FreeClusterWalk { name, .. }
             | CleanupAction::FreeClusterWalkOption { name, .. } => Some(name.clone()),
@@ -8247,6 +8308,90 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_call(*drop_fn, &[box_ptr.into()], "")
                         .unwrap();
                 }
+                self.builder
+                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
+            }
+            CleanupAction::NestedBoxedEnumDrop {
+                name,
+                enum_slot,
+                enum_ty,
+                outer_tag,
+                inner_tag,
+                inner_tag_field,
+            } => {
+                // Two tag guards, outer then inner. Both are load-bearing: the
+                // outer one keeps an `Err(3)` from having its Ok-side words
+                // read, and the inner one keeps a `Some(None)` from having an
+                // absent payload's word read. Either miss frees an integer.
+                let load_field = |idx: u32, label: &str| {
+                    let ptr = self
+                        .builder
+                        .build_struct_gep(*enum_ty, *enum_slot, idx, &format!("{name}_{label}_ptr"))
+                        .unwrap();
+                    self.builder
+                        .build_load(i64_t, ptr, &format!("{name}_{label}"))
+                        .unwrap()
+                        .into_int_value()
+                };
+                let outer = load_field(0, "nbox_otag");
+                let outer_is = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        outer,
+                        i64_t.const_int(*outer_tag, false),
+                        &format!("{name}_nbox_outer_is"),
+                    )
+                    .unwrap();
+                let inner_bb = self.context.append_basic_block(fn_val, "nboxdrop_inner");
+                let join_bb = self.context.append_basic_block(fn_val, "nboxdrop_join");
+                self.builder
+                    .build_conditional_branch(outer_is, inner_bb, join_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(inner_bb);
+                let inner = load_field(*inner_tag_field, "nbox_itag");
+                let inner_is = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        inner,
+                        i64_t.const_int(*inner_tag, false),
+                        &format!("{name}_nbox_inner_is"),
+                    )
+                    .unwrap();
+                let load_bb = self.context.append_basic_block(fn_val, "nboxdrop_load");
+                self.builder
+                    .build_conditional_branch(inner_is, load_bb, join_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(load_bb);
+                let w0 = load_field(*inner_tag_field + 1, "nbox_w0");
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, &format!("{name}_nbox_ptr"))
+                    .unwrap();
+                // Defensive null-guard, as in the `BoxedEnumDrop` arm.
+                let is_null = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        box_ptr,
+                        ptr_ty.const_null(),
+                        &format!("{name}_nbox_is_null"),
+                    )
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "nboxdrop_free");
+                self.builder
+                    .build_conditional_branch(is_null, join_bb, free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                // BOX-ONLY: no inner drop. The interior already has an owner
+                // (a match arm that binds it out), and running its drop here
+                // double-frees — measured. See `track_nested_boxed_enum_var`.
                 self.builder
                     .build_call(self.free_fn, &[box_ptr.into()], "")
                     .unwrap();

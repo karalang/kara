@@ -6557,6 +6557,47 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// NESTED-box sibling of [`Self::call_passthrough_armed_boxed_source`] —
+    /// the `Result[Option[Wide], E]` shape whose box sits inside the inline
+    /// payload area. B-2026-08-06-32.
+    ///
+    /// Same rule and same direction as the boxed one: `fn id(r) -> r` hands the
+    /// box straight back, nothing entry-copies it, so the source binding and
+    /// the result binding hold ONE pointer and only the source may own it.
+    /// Without this the result's let site registers a second
+    /// `NestedBoxedEnumDrop` and both fire — measured as a glibc double free at
+    /// `-O0`, i.e. this rule turns a leak into corruption if omitted.
+    ///
+    /// Reads its own armed set, never `boxed_enum_payload_vars`: the two
+    /// populations are disjoint by construction (a payload is boxed at a level
+    /// or inline at it, never both) and the nested one deliberately sits
+    /// outside the move rules.
+    pub(super) fn call_passthrough_armed_nested_source(&self, value: &Expr) -> Option<String> {
+        let ExprKind::Call { callee, args, .. } = &value.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(callee_name) = &callee.kind else {
+            return None;
+        };
+        args.iter().enumerate().find_map(|(i, a)| {
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                return None;
+            };
+            if !self.call_arg_flows_into_return(callee_name, i) {
+                return None;
+            }
+            if self.nested_boxed_payload_vars.contains(n.as_str()) {
+                return Some(n.clone());
+            }
+            // A chained passthrough's argument is itself an unarmed result;
+            // follow it one hop to the binding that does own the box.
+            let owner = self.nested_boxed_passthrough_owner_alias.get(n.as_str())?;
+            self.nested_boxed_payload_vars
+                .contains(owner.as_str())
+                .then(|| owner.clone())
+        })
+    }
+
     /// INLINE sibling of [`Self::call_passes_armed_boxed_binding_through`].
     /// B-2026-08-06-27.
     ///

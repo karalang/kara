@@ -964,6 +964,45 @@ pub(crate) enum CleanupAction<'ctx> {
         /// seed-table renumber.
         some_tag: u64,
     },
+    /// B-2026-08-06-32 — free a heap box that is nested one enum level
+    /// DOWN, inside the outer enum's INLINE payload area. `BoxedEnumDrop`
+    /// above cannot reach it: that action asks whether the binding's OWN
+    /// declared type boxes, and here it does not.
+    ///
+    /// The shape is a pure consequence of the two seeded areas. An `Option`
+    /// is always exactly 4 LLVM words and a `Result` always 6, so against
+    /// `Result`'s 5-word area an `Option` payload always fits INLINE, while
+    /// against `Option`'s 3-word area an `Option`/`Result` payload never
+    /// does. `Result[Option[T], E]` with `T` wider than Option's 3 words is
+    /// therefore the ONLY way a box comes to rest inside an inline area —
+    /// the outer store is inline, the inner one boxed, and neither level's
+    /// own predicate names the pointer.
+    ///
+    /// Cleanup walks two tags rather than one: load the outer tag, branch on
+    /// the payload-bearing discriminant (`Ok` / `Err`), then load the INNER
+    /// enum's tag from the first payload word and branch on `Some` before
+    /// recovering the box from the word after it. Both guards are required —
+    /// an `Err(3)` leaves the Ok-side words holding an integer, and reading
+    /// one as a pointer would free a scalar.
+    NestedBoxedEnumDrop {
+        /// Variable name — for diagnostic-labeled IR temporaries.
+        name: String,
+        /// Alloca holding the OUTER `{tag, w0, ...}` enum struct value.
+        enum_slot: PointerValue<'ctx>,
+        /// LLVM struct type of the OUTER enum's tagged-union value — the
+        /// GEP type. Every field is an `i64`, so the inner enum's own
+        /// fields are addressed as outer-field indices.
+        enum_ty: StructType<'ctx>,
+        /// Discriminant of the outer variant whose payload holds the
+        /// nested enum (`Ok` / `Err`).
+        outer_tag: u64,
+        /// Discriminant of the INNER enum's payload-bearing variant
+        /// (`Some` / `Ok`) — the one whose word 0 is the box pointer.
+        inner_tag: u64,
+        /// Index of the outer struct field at which the inner enum's TAG
+        /// lives. The inner enum's box word is the field after it.
+        inner_tag_field: u32,
+    },
     /// User-source `defer { ... }` block to compile at scope exit.
     /// Pushed in program order at the `defer` statement's site; drained
     /// LIFO together with the compiler-internal cleanup variants at

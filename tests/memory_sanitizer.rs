@@ -34976,6 +34976,175 @@ fn main() {
         );
     }
 
+    /// B-2026-08-06-32 — a heap box nested inside a `Result`'s INLINE payload
+    /// area, which neither enum level's own boxing predicate names.
+    ///
+    /// `Result[Option[Option[i64]], i64]`: the `Ok` payload is 4 LLVM words
+    /// against Result's 5-word area, so it is stored INLINE and
+    /// `boxed_enum_payload_variants` reports no boxed variant for the binding's
+    /// own type — correct, as far as it goes. But that inline value is itself an
+    /// `Option` whose 4-word inner outgrew Option's 3-word area, so
+    /// `coerce_to_payload_words` boxed it during construction. The let site asks
+    /// about the OUTER type only, so nobody registered a drop: 32 B per
+    /// construction.
+    ///
+    /// THE SHAPE IS THE ONLY ONE OF ITS KIND, and that is a consequence of the
+    /// seeded areas rather than a choice. An `Option` value is always exactly 4
+    /// words and a `Result` always 6, so against Option's 3-word area a nested
+    /// enum NEVER fits (it is boxed at the outer level, where the existing
+    /// action owns it) and against Result's 5-word area an `Option` ALWAYS
+    /// does. `Result[Option[Wide], E]` is therefore the only way a box comes to
+    /// rest inside an inline area. The `nobox` arm below is the other side of
+    /// that predicate — `Result[Option[i64], E]` stores its inner scalar inline
+    /// and allocates nothing, so it must stay unregistered; freeing there would
+    /// free a word that was never a pointer.
+    ///
+    /// NOBODY ELSE OWNS IT, which is what makes a let-site registration safe
+    /// here where the sibling rows had to fight over the owner. Measured at
+    /// `-O0` before the fix, every candidate owner leaked it identically:
+    /// matched in place, bound out by an arm, moved into a struct literal,
+    /// pushed into a `Vec`, passed by value, returned from a callee. So the
+    /// source binding is not merely the best owner, it is the only one, and it
+    /// is deliberately kept OUT of `boxed_enum_payload_vars` so a move cannot
+    /// disarm it in favour of a destination that registers nothing.
+    ///
+    /// The arms that are not the headline leak are here because each one broke
+    /// during implementation, and every one was measured rather than reasoned:
+    ///
+    ///   * BOUND PASSTHROUGH (`let back = idr(d)`) and CHAINED passthrough. The
+    ///     callee hands the box straight back, so source and result hold ONE
+    ///     pointer. Registering for the result too aborts with a glibc double
+    ///     free at `-O0` — i.e. omitting this rule turns the leak into
+    ///     corruption. The chain needs the alias resolved at the RECORD site;
+    ///     resolving only at lookup leaves `r2` unarmed and it registers a
+    ///     second owner.
+    ///   * DISCARDED passthrough (`idr(f);`) — the over-suppression control for
+    ///     the two above. The source IS sole owner there, so a rule that
+    ///     disarmed it instead would leak.
+    ///   * HEAP-BEARING inner (`Option[Option[String]]` built at runtime). The
+    ///     free this registers is BOX-ONLY. Also running the payload's drop was
+    ///     implemented and double-freed at BOTH opt levels, because the arm that
+    ///     binds the String out already owns it — the envelope is what was
+    ///     unowned, and the envelope is all this frees.
+    ///   * PAYLOAD-ABSENT sources (`Ok(None)`, `Err(n)`). Both tag guards are
+    ///     load-bearing: an `Err` leaves the Ok-side words holding an integer,
+    ///     and reading one as a pointer frees a scalar.
+    ///   * ERR-SIDE nesting, since `Result` boxes per variant against one area.
+    ///
+    /// NOT COVERED, deliberately, and each still leaks exactly as it did before
+    /// this change rather than being papered over: a nested box with no binding
+    /// at all (a fresh temp argument, a `Vec.push`), one inside a STRUCT that is
+    /// itself inline in the area, the interior box of a doubly-boxed
+    /// `Option[Option[Option[i64]]]`, and a binding that ESCAPES by return. The
+    /// last is the sharp one — freeing an escaped box is a use-after-free, so
+    /// the registration is retracted at both return spellings and the shape
+    /// stays a leak on purpose. Its direct-boxed sibling is worse (a double free
+    /// on `main` today) and is filed separately.
+    ///
+    /// COVERAGE, stated because it is weaker than the assertion looks. Against
+    /// the pre-fix compiler this leaks 8,960 B in 280 blocks (7 boxes × 40
+    /// iterations) at `KARAC_OPT_LEVEL=0` and is CLEAN at the default `-O2`,
+    /// where every box folds away — so the memory half is carried entirely by
+    /// the `-O0` leg (`scripts/asan-o0-leg.sh`, B-2026-08-04-17). What the
+    /// `-O2` run still asserts is the accumulated value and the allocation
+    /// floor, so a leak traded for a wrong answer, or a fixture optimized into
+    /// nothing, fails there. The double-free directions fail at either level.
+    ///
+    /// The expected value is COMPUTED, not read off a run: every payload is
+    /// seeded from the opaque `env.args().len()`, seven arms subtract the seed
+    /// back out to leave `i`, the discarded and String arms contribute 1 each
+    /// and the `Ok(None)` arm -1 — `7i + 1` per iteration, so
+    /// `7 * (0+…+39) + 40 = 5500`.
+    #[test]
+    fn asan_box_nested_in_result_inline_payload_area_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn cls(r: Result[Option[Option[i64]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(x))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn clserr(r: Result[i64, Option[Option[i64]]]) -> i64 {
+    match r {
+        Result.Ok(k) => k,
+        Result.Err(Option.Some(Option.Some(x))) => x,
+        Result.Err(_) => -1,
+    }
+}
+fn clsstr(r: Result[Option[Option[String]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(s))) => if s.len() > 0 { 1 } else { 0 },
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn nobox(r: Result[Option[i64], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(x)) => x,
+        Result.Ok(Option.None) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn idr(r: Result[Option[Option[i64]], i64]) -> Result[Option[Option[i64]], i64] { r }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let va = match a {
+            Result.Ok(Option.Some(Option.Some(x))) => x,
+            Result.Ok(_) => -1,
+            Result.Err(e) => e,
+        };
+        acc = acc + va - n;
+
+        let b: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + cls(b) - n;
+
+        let c: Result[i64, Option[Option[i64]]] = Result.Err(Option.Some(Option.Some(n + i)));
+        acc = acc + clserr(c) - n;
+
+        let d: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let back = idr(d);
+        acc = acc + cls(back) - n;
+
+        let e1: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let r1 = idr(e1);
+        let r2 = idr(r1);
+        acc = acc + cls(r2) - n;
+
+        let f: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        idr(f);
+        acc = acc + 1;
+
+        let g: Result[Option[Option[i64]], i64] = Result.Ok(Option.None);
+        acc = acc + cls(g);
+
+        let h: Result[Option[Option[i64]], i64] = Result.Err(n + i);
+        acc = acc + cls(h) - n;
+
+        let k: Result[Option[i64], i64] = Result.Ok(Option.Some(n + i));
+        acc = acc + nobox(k) - n;
+
+        let s = f"p{n + i}";
+        let m: Result[Option[Option[String]], i64] = Result.Ok(Option.Some(Option.Some(s)));
+        acc = acc + clsstr(m);
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["5500"],
+            "box_nested_in_result_inline_payload_area",
+            30,
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words

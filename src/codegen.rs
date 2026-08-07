@@ -1214,6 +1214,32 @@ pub(super) struct Codegen<'ctx> {
     /// destination still references downstream → UAF (selfhost slice 3c-iv:
     /// `TraitMethodNode { body, .. }` for `let mut body = Some(parse_block())`).
     pub(crate) boxed_enum_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-08-06-32 — bindings carrying a `NestedBoxedEnumDrop`, i.e. a box
+    /// living inside the binding's INLINE payload area
+    /// (`Result[Option[Wide], E]`).
+    ///
+    /// Kept SEPARATE from `boxed_enum_payload_vars` above rather than folded
+    /// into it, and the separation is the safety property. That set's members
+    /// are subject to move-suppression: a whole-value move zeroes the source so
+    /// the destination can become the box's owner. No destination takes a
+    /// NESTED box over — a struct-literal move, a `Vec.push` and a by-value
+    /// call were each measured leaking it — so a nested binding must NOT be
+    /// suppressed on a move, and joining that set would disarm the only owner
+    /// there is. This set exists purely so the passthrough rule below can ask
+    /// "is this source armed?" without granting membership in the move rules.
+    pub(crate) nested_boxed_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-08-06-32 — result binding of a passthrough call → the binding
+    /// that actually owns its nested box (`let back = id(b)` ⇒ `back → b`).
+    ///
+    /// The result registers nothing (the source stays sole owner, as in
+    /// B-2026-08-06-21), but a CHAIN would then see an unarmed argument and
+    /// register a second owner for the same box — a double free, measured at
+    /// `-O0` on `let r1 = id(b); let r2 = id(r1);`. Recording resolves one hop
+    /// so every stored value is a genuinely armed owner, which keeps the lookup
+    /// a single hop and needs no walk over a possibly-cyclic map. Same shape as
+    /// `boxed_passthrough_owner_alias`, and separate for the same reason as the
+    /// set above.
+    pub(crate) nested_boxed_passthrough_owner_alias: std::collections::HashMap<String, String>,
     /// Refinement type alias name → its base `TypeExpr` (`type Email =
     /// String where …` → the `String` type expr). Populated from the
     /// program's `Item::TypeAlias`es that carry a `where` predicate.
@@ -7752,6 +7778,8 @@ impl<'ctx> Codegen<'ctx> {
             inline_option_map_payload_vars: std::collections::HashSet::new(),
             inline_option_agg_payload_vars: std::collections::HashSet::new(),
             boxed_enum_payload_vars: std::collections::HashSet::new(),
+            nested_boxed_payload_vars: std::collections::HashSet::new(),
+            nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),
             plain_alias_bases: HashMap::new(),

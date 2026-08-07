@@ -4868,6 +4868,66 @@ impl<'ctx> super::Codegen<'ctx> {
                             })
                             .or_else(|| self.untyped_let_boxed_enum_te(value));
                         if let Some(te) = boxed_te.as_ref() {
+                            // B-2026-08-06-32 — the box is one level DOWN, inside
+                            // this binding's INLINE payload area
+                            // (`Result[Option[Wide], E]`), so `boxed` below is
+                            // empty and the whole registration under it is
+                            // skipped. Nobody else picks the box up: the match,
+                            // a struct-literal move, a `Vec.push`, a by-value
+                            // call and a passthrough were each measured leaking
+                            // it, so the let site is the only owner available
+                            // and it registers unconditionally.
+                            //
+                            // Disjoint from `boxed` by construction rather than
+                            // by ordering — an arm is either boxed at this level
+                            // or inline at it, never both — so the two
+                            // registrations cannot both fire for one arm and
+                            // double-free.
+                            let mut nested = self.nested_boxed_enum_payload_variants(te);
+                            // The RHS hands one of its arguments straight back
+                            // (`fn id(r) -> r`). Nothing entry-copies the box,
+                            // so registering here would make two owners of one
+                            // pointer — a double free, not a leak. The source
+                            // keeps ownership; record the alias so a CHAINED
+                            // passthrough can still find it.
+                            if !nested.is_empty() {
+                                if let Some(src) = self.call_passthrough_armed_nested_source(value)
+                                {
+                                    nested.clear();
+                                    self.nested_boxed_passthrough_owner_alias
+                                        .insert(var_name.to_string(), src);
+                                }
+                            }
+                            if let Some(slot) = (!nested.is_empty())
+                                .then(|| self.variables.get(var_name.as_str()).copied())
+                                .flatten()
+                            {
+                                for (outer_enum, outer_variant, inner_enum, inner_variant) in
+                                    &nested
+                                {
+                                    // BOX-ONLY, for the reason
+                                    // `user_enum_boxed_payload_variants` gives
+                                    // its own box-only free: the ENVELOPE is
+                                    // what has no owner here, and the interior
+                                    // already has one. Running the payload's
+                                    // drop as well was implemented and measured
+                                    // WRONG — a `Result[Option[Option[String]],
+                                    // i64]` whose arm binds the String out
+                                    // aborts with a glibc double free at BOTH
+                                    // opt levels, because the arm's binding
+                                    // frees that String too. What was measured
+                                    // missing is 32 bytes per construction, the
+                                    // box itself, and that is all this frees.
+                                    self.track_nested_boxed_enum_var(
+                                        var_name,
+                                        slot.ptr,
+                                        outer_enum,
+                                        outer_variant,
+                                        inner_enum,
+                                        inner_variant,
+                                    );
+                                }
+                            }
                             let mut boxed = self.boxed_enum_payload_variants(te);
                             if let Some(slot) = (!boxed.is_empty())
                                 .then(|| self.variables.get(var_name.as_str()).copied())
