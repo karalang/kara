@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
-| other | 17 | 1 |
+| other | 17 | 0 |
 | use-after-free | 14 | 0 |
 
 ### By surface
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | cli | 28 | 0 |
-| other | 27 | 1 |
+| other | 27 | 0 |
 | runtime | 21 | 1 |
 | resolver | 18 | 0 |
 | parser | 12 | 0 |
@@ -124,23 +124,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **988 surfaced · 7 open · 971 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **988 surfaced · 6 open · 972 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
-| B-2026-08-04-17 | 2026-08-04 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM deletes at -O2 -- so an E2E/ASAN fixture for an ownership bug can pass against a compiler that aborts on the same shape | tests/memory_sanitizer.rs (assert_clean_asan_run_min_allocs, KARAC_ASAN_ALLOC_AUDIT); scripts/asan-o0-leg.sh + tests/asan-o0-known-failures.txt (the ratcheted -O0 leg); CI job memory-sanitizer-o0 |
 | B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled. The key-type gate this row prescribed is REFUTED on x86 by a tag-only A/B: dropping the tag on kata:170 `Map[i64,i64]` executes 13.1% FEWER instructions and runs 1.20x SLOWER (3763.7 -> 4513.2 ms), because the tag rejects a bucket without touching its key while removing it costs a kv load per occupied bucket. The i64-vs-String pair that decided the old shape straddles TWO implementations (`should_use_mono_map_for` admits only i32/i64 keys, so kata:170 is the inlined mono path and kata:127 the erased runtime path), so it never isolated key type. Holding path and key type FIXED, x86 gains 20% from the tag and arm64 loses 27% -- an ISA effect, which reinstates the arch framing this row had retired. Arch-conditional is the surviving candidate and is UNVALIDATED. Separately, arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338. | MECHANISM MEASURED 2026-08-05 on arm64 with exact libproc counters (scripts/pmc.c): the tag saves 14.7% instructions on Map[i64,i64] but costs 28.7% IPC, netting -10.9% cycles when removed; on Map[String,i64] removing it costs both instructions and cycles. One mechanism, two signs, decided by whether the avoided key compare was expensive. Branch mispredicts RULED OUT (<1% of the top-down breakdown in both configs). Fix shape unchanged: ARCH x KEY-TYPE. OPEN: x86 reports the OPPOSITE SIGN on instruction count (-13.1% vs arm64's +14.7%) for the same flag -- re-measure that lane with pmc.c / perf stat before acting on it. Unmeasured: the Set probe. |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-06-31 | 2026-08-06 | codegen | medium | the STRUCT-payload sibling of B-2026-08-06-9 leg A. FRESH-TEMP half FIXED (the caller-side box drop now runs the payload struct's interior walk); NAMED-BINDING half still OPEN -- it strands the box at -O0, and the leave-the-binding-armed repair is REFUTED (SIGSEGVs the self-host parser) | — |
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. NO BINDING (fresh temp), `Vec.push` (the only -O2 leak) and ESCAPE-BY-RETURN are FIXED — the callee's owned non-escaping param owns it; a struct between the levels and a box inside a box remain; the REASSIGNMENT shape turned out not to belong to this family | — |
 | B-2026-08-07-4 | 2026-08-07 | codegen | medium | reassigning a `let mut` binding whose enum payload is heap-BOXED leaks the OVERWRITTEN value's box -- the store site frees nothing; 32 B per overwrite at -O0, direct and nested alike | — |
 
-### Fixed (971)
+### Fixed (972)
 
-<details><summary>971 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>972 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1064,6 +1063,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-04-14 | interp | medium | The interpreter silently DROPPED an out-of-range index-assign: `v[100] = 7` on a 2-element Vec produced no error, no growth, and no store — while AOT… | a4ca760 |
 | B-2026-08-04-15 | autopar+codegen | high | AUTO-PAR SILENTLY DROPS STORES through a tuple-element receiver: `t.0.push(x)` recorded NO write in the dependency walk, so two pushes to the same Ve… | 567d5aa |
 | B-2026-08-04-16 | codegen+ownership | high | Moving a Vec OUT of a tuple element, mutating it, and moving it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) aborts with `free(): double free detect… | e986284 (src/codegen/stmts.rs tuple-assign arm; src/codegen/expr_ops.rs tuple_index_elem_type_expr). Pins codegen.rs::e2e_named_source_moved_into_a_tuple_element_is_disarmed, memory_sanitizer.rs::asan_named_source_moved_into_a_tuple_element_is_disarmed (floored at 500 allocations against ~1.8k), interpreter.rs::test_named_source_moved_into_a_tuple_element_is_disarmed. Both codegen tests are stash-proven RED against the unfixed compiler (the E2E aborts to empty output, the ASAN case reports a memory error); the interpreter twin passes both ways, as the oracle should. Verified across 16 probe shapes -- both element positions, Vec / String / Vec[String] elements, both-Vec tuples, fresh-temp vs named sources, and the struct-field control -- all clean on both backends with matching alloc/free counts. cargo test --features llvm: 12974 passed, 0 failed. |
+| B-2026-08-04-17 | other | medium | memory-fixture authoring hazard: a payload whose content is compile-time constant, or that is read only through `.len()`, is a DEAD allocation LLVM d… | PARTIAL. 49e126a adds the allocation floor (assert_clean_asan_run_min_allocs). dee8b8a adds the KARAC_ASAN_ALLOC_AUDIT=1 corpus sweep and de-vacuums the Vec-grow fixture. 2467458 de-vacuums eight more and makes the floored variant report to the audit. Zero-allocation fixtures 102 -> 93. OPEN for the remainder, whose discard-shaped subset needs a different technique than the other 93 -- see the refinement in detail. 42ababe de-vacuums plain_alias_struct_fields_no_leak. STILL OPEN for the remaining 73, now mechanically identified by the -O0/-O2 differential; see detail. 11e93060 adds the `concurrency` group that the promotion was actually blocked on -- the leg is green (961/0 at c00ea51a) but the CI job was being starved of runners, not failing. STILL OPEN for the branch-protection flip itself. CLOSED 2026-08-07: `Memory sanitizer -O0 (unoptimized allocations)` promoted to a required check on `main` after three consecutive green CI completions (c7fa03c7, b1d8385d, c5239b0d). Bypass deliberately left ALLOWED -- see detail: a required check cannot gate a direct push, so the flag is a formality while this repo commits straight to `main`, and the ratchet in scripts/asan-o0-leg.sh is the actual mechanism. |
 | B-2026-08-04-18 | ownership | low | Moving a heap value OUT of an aggregate element and then assigning it BACK (`let mut e = t.0; e.push(x); t.0 = e;`) warns `value 't' moved here, used… | c312c8a2 |
 | B-2026-08-04-19 | codegen | high | Double-free (masked at -O2, hard at -O0/JIT): an owned struct/enum binding moved by an ASSIGNMENT — `o.h = h` into a heap-owning user-struct field, o… | 06bf3145 |
 | B-2026-08-04-20 | codegen | medium | The `KARAC_TEST_JIT=1` codegen parity leg did not set KARAC_PROGRAM_ARGS, so `env.args().len()` returned 2 (the `karac_jit_runner` argv `[runner, <ir… | 39b0c294 |
