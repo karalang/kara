@@ -1590,6 +1590,45 @@ impl<'ctx> super::Codegen<'ctx> {
         payload_variant: &str,
         inner_drop_fn: Option<FunctionValue<'ctx>>,
     ) {
+        self.track_boxed_enum_var_with_chain(
+            name,
+            enum_slot,
+            enum_name,
+            payload_variant,
+            inner_drop_fn,
+            Vec::new(),
+        );
+    }
+
+    /// Peer of [`Self::track_boxed_enum_var_with_inner_drop`] that also carries
+    /// the ENVELOPE chain below this box. B-2026-08-07-6.
+    ///
+    /// Deliberately a separate entry point rather than a sixth parameter on the
+    /// two existing ones. `BoxedEnumDrop` is registered from a dozen sites —
+    /// let sites, owned params, monomorph paths, match arms — and only the let
+    /// site has both the declared `TypeExpr` the chain is derived from and a
+    /// measurement behind it. Every other site keeps `Vec::new()` and the exact
+    /// behaviour it had, so the blast radius of this fix stays where it was
+    /// measured. Widening it is a separate change with its own reduction.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn track_boxed_enum_var_with_chain(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_name: &str,
+        payload_variant: &str,
+        inner_drop_fn: Option<FunctionValue<'ctx>>,
+        deeper_tags: Vec<u64>,
+    ) {
+        // The interior belongs to whoever owns it; this action walks envelopes
+        // only. See the field docs on both — if a chain ever coexisted with an
+        // inner drop the walk would descend through a payload that already has
+        // an owner.
+        debug_assert!(
+            deeper_tags.is_empty() || inner_drop_fn.is_none(),
+            "boxed-enum envelope chain must not coexist with an inner payload drop \
+             (binding `{name}`): the chain walks envelopes, the drop owns the interior",
+        );
         let (enum_ty, some_tag) = match self.enum_layouts.get(enum_name) {
             Some(l) => (
                 l.llvm_type,
@@ -1604,6 +1643,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty,
                 inner_drop_fn,
                 some_tag,
+                deeper_tags,
             });
         }
         // Track the binding so a whole-value move into a struct-literal /
@@ -8474,6 +8514,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty,
                 inner_drop_fn,
                 some_tag,
+                deeper_tags,
             } => {
                 let tag_ptr = self
                     .builder
@@ -8537,9 +8578,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_call(*drop_fn, &[box_ptr.into()], "")
                         .unwrap();
                 }
-                self.builder
-                    .build_call(self.free_fn, &[box_ptr.into()], "")
-                    .unwrap();
+                // B-2026-08-07-6 — when `T` is itself an enum whose own payload
+                // is boxed, this box holds another ENVELOPE and freeing only
+                // this one leaks the rest. The chain walk emits this level's
+                // own `free` on its join, so it REPLACES the call below rather
+                // than preceding it. Empty at every registration site but the
+                // let site, where the walk collapses to exactly that free.
+                debug_assert!(
+                    deeper_tags.is_empty() || inner_drop_fn.is_none(),
+                    "envelope chain must not coexist with an inner payload drop",
+                );
+                if deeper_tags.is_empty() {
+                    self.builder
+                        .build_call(self.free_fn, &[box_ptr.into()], "")
+                        .unwrap();
+                } else {
+                    self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, name);
+                }
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
             }

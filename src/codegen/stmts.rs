@@ -5085,13 +5085,53 @@ impl<'ctx> super::Codegen<'ctx> {
                                             Some(drop_fn),
                                         );
                                     } else {
-                                        self.track_boxed_enum_var(
-                                            var_name,
-                                            slot.ptr,
-                                            enum_name,
-                                            variant,
-                                            inner.as_deref(),
-                                        );
+                                        // B-2026-08-07-6 — the box may itself
+                                        // hold a chain of further ENVELOPES
+                                        // (`Option[Option[Option[i64]]]`: the
+                                        // outer payload boxes, and so does the
+                                        // payload inside that box). Empty for
+                                        // every shape whose boxed payload fits
+                                        // its own area, i.e. all the single-box
+                                        // registrations this site already
+                                        // handled.
+                                        //
+                                        // ONLY the chained population takes the
+                                        // new path, and the fall-through stays
+                                        // `track_boxed_enum_var` rather than
+                                        // the chained peer with an empty chain.
+                                        // That wrapper is NOT a pure delegate —
+                                        // it also records `boxed_struct_payload_
+                                        // vars` (B-2026-08-06-31), which the
+                                        // by-value-call arg-site skip reads —
+                                        // and bypassing it leaked 5,351 B in
+                                        // `asan_boxed_struct_option_payload_by_
+                                        // value_call`. A struct payload cannot
+                                        // carry a chain anyway (it is not an
+                                        // `Option`, so the walk is length zero),
+                                        // so requiring `inner.is_none()` here
+                                        // costs nothing and makes the failure
+                                        // direction the safe one: an unforeseen
+                                        // shape falls back to the old path and
+                                        // leaks an envelope, rather than losing
+                                        // the interior's bookkeeping.
+                                        let deeper = payload_te
+                                            .as_ref()
+                                            .map(|p| self.nested_box_deeper_tag_chain(p))
+                                            .unwrap_or_default();
+                                        if deeper.is_empty() || inner.is_some() {
+                                            self.track_boxed_enum_var(
+                                                var_name,
+                                                slot.ptr,
+                                                enum_name,
+                                                variant,
+                                                inner.as_deref(),
+                                            );
+                                        } else {
+                                            self.track_boxed_enum_var_with_chain(
+                                                var_name, slot.ptr, enum_name, variant, None,
+                                                deeper,
+                                            );
+                                        }
                                     }
                                 }
                                 // B-2026-08-05-20 — a whole-value binding-to-

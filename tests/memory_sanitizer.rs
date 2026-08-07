@@ -36053,6 +36053,143 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-6 — the DIRECT sibling of the chain above: the same box
+    /// inside a box, with no `Result` wrapper, so a different action owns the
+    /// outermost envelope.
+    ///
+    /// `Option[Option[Option[i64]]]` boxes at the OUTER level — its 4-word
+    /// payload outgrows Option's 3-word area — so `BoxedEnumDrop` owns that
+    /// box, correctly, for one box. What the box HOLDS is another `Option`
+    /// whose own 4-word payload is boxed again, and nothing freed the second
+    /// envelope. The fix is the SAME walk the `Result`-wrapped twin already
+    /// used (`emit_nested_box_chain_free`), reached from the other action; the
+    /// only judgement was which registration sites get a chain, and the answer
+    /// is measured rather than uniform — see the residue note below.
+    ///
+    /// ARMS, each a shape that moved or a control that must not:
+    ///   * `a` — the row's own shape, triple nest matched in place. 320 B / 10
+    ///     pre-fix.
+    ///   * `b` — quadruple nest, i.e. TWO envelopes below the first. Pre-fix
+    ///     this is the arm that shows a chain rather than an off-by-one:
+    ///     definitely-lost AND indirectly-lost both move.
+    ///   * `c` — a heap `String` INTERIOR under a two-envelope chain. This is
+    ///     the envelope/interior boundary as an assertion: the walk frees the
+    ///     envelopes and must not reach the `String` the arm binds out, which
+    ///     already has an owner. A double free here is what getting the
+    ///     boundary wrong looks like, and B-2026-08-06-32 aborted exactly that
+    ///     way when the free was widened to the payload's drop.
+    ///   * `d` — the EMPTY-chain control. `Option[Option[i64]]` has exactly one
+    ///     envelope and must stay at exactly one free; it is the shape every
+    ///     pre-existing single-box registration takes.
+    ///   * `e` — an arm that binds the boxed CONTENT out rather than
+    ///     destructuring through it.
+    ///   * `f` — reassignment, where B-2026-08-07-4's eager free at the STORE
+    ///     has to carry the chain too. 640 B / 10 pre-fix, i.e. both values.
+    ///   * `g` / `h` / `j` — the guard controls. Each leaves some level's
+    ///     payload words holding a value rather than a pointer, so a missing
+    ///     tag or null check frees a scalar instead of an envelope.
+    ///
+    /// COVERAGE, and it is honest about which leg carries it: pre-fix this
+    /// leaks 8,960 B in 280 blocks plus 1,280 B in 40 blocks indirectly at
+    /// `KARAC_OPT_LEVEL=0`, and is CLEAN at the default `-O2`, where the
+    /// envelopes are local and LLVM deletes the malloc/free pairs outright. So
+    /// the memory half rides entirely on the `-O0` leg
+    /// (`scripts/asan-o0-leg.sh`, B-2026-08-04-17) — the `-O2` run asserts the
+    /// value and the floor only. Worth recording: POST-fix the `-O2` binary
+    /// allocates 206 where pre-fix it allocated 126, because the chain walk
+    /// makes the pairs non-removable. The fixture therefore got LESS vacuous by
+    /// being fixed, which is the opposite of the usual direction and not
+    /// something to rely on.
+    ///
+    /// RESIDUE, deliberately absent so this stays green: passing the binding by
+    /// value to an owned param, moving it into a struct literal, and pushing it
+    /// into a `Vec` all still leak the chain (320 B, and 320+320 B for the two
+    /// move shapes). Each is a different registration site, each measured
+    /// identical before and after this change, and each is filed rather than
+    /// folded in.
+    ///
+    /// The expected value is COMPUTED, not read off a run: payloads are seeded
+    /// from the opaque `env.args().len()` and five arms subtract the seed back
+    /// out to leave `i`, the String arm contributes 1 and the three guard arms
+    /// -1 each — `5i - 2` per iteration, so `5 * (0+…+39) - 2 * 40 = 3820`.
+    #[test]
+    fn asan_direct_boxed_enum_chain_frees_every_envelope() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        match a {
+            Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let b: Option[Option[Option[Option[i64]]]] = Option.Some(Option.Some(Option.Some(Option.Some(n + i))));
+        match b {
+            Option.Some(Option.Some(Option.Some(Option.Some(x)))) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let c: Option[Option[Option[String]]] = Option.Some(Option.Some(Option.Some(mkstr(n + i))));
+        match c {
+            Option.Some(Option.Some(Option.Some(s))) => { if s.contains("envelope-") { acc = acc + 1; } }
+            _ => { acc = acc - 1; }
+        }
+
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        match d {
+            Option.Some(Option.Some(x)) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let e: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        match e {
+            Option.Some(inner) => {
+                match inner {
+                    Option.Some(Option.Some(x)) => { acc = acc + x - n; }
+                    _ => { acc = acc - 1; }
+                }
+            }
+            Option.None => { acc = acc - 1; }
+        }
+
+        let mut f: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        f = Option.Some(Option.Some(Option.Some(n + i)));
+        match f {
+            Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; }
+            _ => { acc = acc - 1; }
+        }
+
+        let g: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.None));
+        match g { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x; } _ => { acc = acc - 1; } }
+
+        let h: Option[Option[Option[i64]]] = Option.Some(Option.None);
+        match h { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x; } _ => { acc = acc - 1; } }
+
+        let j: Option[Option[Option[i64]]] = Option.None;
+        match j { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x; } _ => { acc = acc - 1; } }
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["3820"],
+            "direct_boxed_enum_chain_frees_every_envelope",
+            100,
+        );
+    }
+
     /// B-2026-08-07-7 — a match arm binding the INTERIOR out of a struct
     /// field whose `Option` payload is heap-BOXED. Double free at BOTH opt
     /// levels before this: corruption, where every sibling shape merely leaks.

@@ -963,6 +963,27 @@ pub(crate) enum CleanupAction<'ctx> {
         /// `Ok`). Captured at registration so cleanup is robust to a
         /// seed-table renumber.
         some_tag: u64,
+        /// Tags of the further ENVELOPE boxes reachable *inside* this box,
+        /// outermost first — empty for the single-box shape, which is every
+        /// registration site but the let site. B-2026-08-07-6.
+        ///
+        /// `Option[Option[Option[i64]]]` boxes at the OUTER level (its 4-word
+        /// payload outgrows Option's 3-word area) and this action owns that
+        /// box — correctly, for one box. What the box HOLDS is another
+        /// `Option` whose own 4-word payload is boxed again, and freeing only
+        /// the first leaks the second. Same defect and same walk as
+        /// [`CleanupAction::NestedBoxedEnumDrop`]'s field of this name; the
+        /// two differ only in which action owns the outermost box.
+        ///
+        /// MUTUALLY EXCLUSIVE WITH `inner_drop_fn`, structurally rather than
+        /// by convention: a chain is non-empty only when the boxed payload is
+        /// an `Option` that boxes again, and every shape that resolves an
+        /// inner drop — a user struct, a tuple, `Option[shared T]` — either
+        /// is not an `Option` at all or has a payload that fits its area and
+        /// so terminates the walk at length zero. The emit arm debug-asserts
+        /// it rather than trusting the derivation, because the failure mode
+        /// if it were ever violated is a double free of the interior.
+        deeper_tags: Vec<u64>,
     },
     /// B-2026-08-06-32 — free a heap box that is nested one enum level
     /// DOWN, inside the outer enum's INLINE payload area. `BoxedEnumDrop`
