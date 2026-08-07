@@ -15357,6 +15357,65 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 stage 3b step 1 — the same share, on a type the freeze
+    /// site REFUSED until this slice.
+    ///
+    /// `Node` carries `mut visits`, so it is not deeply immutable and E0512's
+    /// type-level stand-in rejected it outright. The per-instance uniqueness
+    /// proof replaces that stand-in for a `freeze` STATEMENT: `root` is named
+    /// nowhere but its own `let`, so no other handle exists to write through,
+    /// and the freeze is admitted.
+    ///
+    /// What the fixture reads is the point. `tag` and `kids` are IMMUTABLE
+    /// fields, and `visits` — the `mut` one — is still unreachable through the
+    /// frozen handle, because the projection guard (stage 3b step 3) is
+    /// deliberately untouched. So this pins the increment exactly: a
+    /// `mut`-bearing `shared` value can now be shared across branches for reads
+    /// of its immutable parts, and no further.
+    ///
+    /// The traversal is INLINE rather than in a callee, and that is the
+    /// remaining limitation rather than a fixture convenience: a `frozen Node`
+    /// PARAMETER of a `mut`-bearing type is still refused, since a parameter's
+    /// instance belongs to a caller this check cannot see. #133 needs that, and
+    /// needs step 3 as well.
+    #[test]
+    fn asan_freeze_statement_shares_a_mut_bearing_local_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { tag: String, val: i64, kids: Vec[Node], mut visits: i64 }
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 {
+        return Node { tag: f"leaf-{seed}-runtime-heap", val: seed, kids: [], visits: 0 };
+    }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { tag: f"node-{seed}-runtime-heap", val: seed, kids: [a, b], visits: 0 };
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    // NOTHING may name `root` between its `let` and the `freeze`, or the
+    // uniqueness proof fails and E0512 refuses the type again. That is the rule
+    // working: the sibling fixture above reads its source before the freeze
+    // precisely because its type IS deeply immutable and needs no proof.
+    let root = build(7, seed);
+    let g = freeze root;
+    let (a, b) = par {
+        let a = g.val + g.tag.len() + g.kids.len();
+        let b = g.val + g.tag.len() + g.kids.len();
+        (a, b)
+    };
+    println(a + b);
+}
+"#,
+            &["44"],
+            "freeze_statement_shares_a_mut_bearing_local_across_par_branches",
+            // 255 tag Strings plus the 127 interior kids buffers.
+            300,
+        );
+    }
+
     /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
     /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
     /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec

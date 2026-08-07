@@ -54,6 +54,23 @@ use crate::token::Span;
 
 use super::{OwnershipError, OwnershipErrorKind};
 
+/// Which spelling of a freeze this site is, and — for the statement form — the
+/// stage-3b step-1 uniqueness answer.
+///
+/// An enum rather than a bare `bool` because three states are live, not two: a
+/// PARAMETER can never carry the proof (its instance is the caller's), while a
+/// STATEMENT either carries it or fails it, and those two failures need
+/// different advice. Collapsing them is how the `MutableState` suggestion came
+/// to tell every author that no per-instance check exists — true when it was
+/// written, and made false by the very change that consults this.
+#[derive(Clone, Copy)]
+pub(crate) enum FreezeSite {
+    /// A `frozen T` parameter or `frozen self` receiver.
+    Param,
+    /// A `let g = freeze <place>;` statement.
+    Statement { uniquely_bound: bool },
+}
+
 /// Why a `frozen` parameter's type was refused. Each variant names the specific
 /// property that failed, because "cannot be frozen" alone would leave the
 /// reader guessing which of three unrelated conditions they tripped.
@@ -84,12 +101,20 @@ impl super::OwnershipChecker<'_> {
             .self_is_frozen
             .then(|| impl_type.map(|t| (Some(t.to_string()), f.span.clone())))
             .flatten();
-        let sites: Vec<(Option<String>, Span)> = f
+        // `false` — a PARAMETER freeze site never carries the stage-3b
+        // uniqueness proof, and this is a deliberate asymmetry rather than a
+        // conservative default. The proof is about one INSTANCE in one scope;
+        // a parameter's instance belongs to the caller, whose other live
+        // handles this pass cannot see. Establishing it here would be the
+        // interprocedural analysis mechanism 3 exists to avoid — so a
+        // `frozen T` parameter of a `mut`-bearing type stays refused, and
+        // inherits its guarantee from an already-frozen argument instead.
+        let sites: Vec<(Option<String>, Span, FreezeSite)> = f
             .params
             .iter()
             .filter(|p| p.is_frozen)
-            .map(|p| (frozen_type_name(&p.ty), p.span.clone()))
-            .chain(receiver)
+            .map(|p| (frozen_type_name(&p.ty), p.span.clone(), FreezeSite::Param))
+            .chain(receiver.map(|(n, s)| (n, s, FreezeSite::Param)))
             .collect();
         self.report_freeze_sites(sites);
     }
@@ -100,12 +125,11 @@ impl super::OwnershipChecker<'_> {
     /// receiver, above) and the stage-3 STATEMENT sites, which the escape walk
     /// enumerates as it goes and hands over — one classifier, so a type that
     /// may not be frozen is refused whichever way the freeze was spelled.
-    pub(crate) fn report_freeze_sites(&mut self, sites: Vec<(Option<String>, Span)>) {
-        for (name, site_span) in sites {
-            let Some(refusal) = name
-                .as_deref()
-                .map_or(Some(Refusal::NotShared), |n| self.classify_freezable(n))
-            else {
+    pub(crate) fn report_freeze_sites(&mut self, sites: Vec<(Option<String>, Span, FreezeSite)>) {
+        for (name, site_span, site) in sites {
+            let Some(refusal) = name.as_deref().map_or(Some(Refusal::NotShared), |n| {
+                self.classify_freezable(n, site)
+            }) else {
                 continue;
             };
             let shown = name.unwrap_or_else(|| "this type".to_string());
@@ -125,15 +149,33 @@ impl super::OwnershipChecker<'_> {
                      already works"
                         .to_string(),
                 ),
+                // Two different programs, two different fixes — which is why
+                // `FreezeSite` is an enum. A STATEMENT that failed uniqueness
+                // has a local, mechanical repair (drop the other name); a
+                // PARAMETER has none, because the aliasing it would have to
+                // rule out is the caller's.
                 Refusal::MutableState => (
                     format!("`{shown}` has mutable state, so it cannot be frozen yet"),
-                    format!(
-                        "freezing claims the value is deeply immutable for the region, and stage \
-                         1 has no per-instance check to back that claim — so it requires the \
-                         TYPE to guarantee it: no `mut` field anywhere reachable from `{shown}`. \
-                         Either remove `mut` from the reachable fields, or pass `{shown}` \
-                         normally until the per-instance freeze check lands"
-                    ),
+                    match site {
+                        FreezeSite::Statement { .. } => format!(
+                            "freezing claims the value is deeply immutable for the region. For a \
+                             `mut`-bearing type like `{shown}` that claim rests on this being the \
+                             ONLY live name for the instance, and something else here names it \
+                             too — an earlier use of the source, or a source that is itself bound \
+                             from another place. Move or remove that other binding so the \
+                             `freeze` is the first thing to touch the value, or remove `mut` from \
+                             the fields reachable from `{shown}`"
+                        ),
+                        FreezeSite::Param => format!(
+                            "freezing claims the value is deeply immutable for the region. A \
+                             PARAMETER cannot carry that claim for a `mut`-bearing type — the \
+                             instance belongs to the caller, whose other handles this check \
+                             cannot see — so it requires the TYPE to guarantee it: no `mut` field \
+                             anywhere reachable from `{shown}`. Either remove `mut` from the \
+                             reachable fields, or `freeze` the value in the caller and pass the \
+                             frozen handle in"
+                        ),
+                    },
                 ),
             };
             self.errors.push(OwnershipError {
@@ -148,7 +190,30 @@ impl super::OwnershipChecker<'_> {
     }
 
     /// `None` when `type_name` may be frozen; the reason otherwise.
-    fn classify_freezable(&self, type_name: &str) -> Option<Refusal> {
+    ///
+    /// `uniquely_bound` is the stage-3b step-1 proof, and it relaxes exactly
+    /// one arm: [`Refusal::MutableState`]. The type-level deep-immutability
+    /// demand exists as a STAND-IN for the per-instance check the design
+    /// actually specifies ("no live mutable handle to the instance"), which is
+    /// what this module's own header says. When the per-instance fact is
+    /// established, the stand-in has nothing left to stand in for and would be
+    /// refusing on a property the rule never required.
+    ///
+    /// It relaxes NOTHING else, and the two other arms are not oversights:
+    /// `NotShared` and `AlreadyPar` are about the REPRESENTATION (no refcount
+    /// header to skip, or an atomic one that needs no skipping), which no fact
+    /// about aliasing can change.
+    ///
+    /// What keeps the relaxation sound is that it does not stand alone. The
+    /// escape walk freezes the SOURCE root for the rest of the scope, so the
+    /// owner cannot be moved, reassigned, returned or captured while the
+    /// frozen handle lives; the projection guard still refuses every `mut`
+    /// field in read and write position alike (stage 3b step 3, deliberately
+    /// untouched here), so no interior handle can be materialized through the
+    /// frozen place; and uniqueness means no OTHER name existed to write
+    /// through in the first place. Removing any one of the three re-opens the
+    /// race, which is why step 3 is specified to land last and alone.
+    fn classify_freezable(&self, type_name: &str, site: FreezeSite) -> Option<Refusal> {
         let Some(info) = self.typecheck_result.struct_info.get(type_name) else {
             // Not a user struct at all — enum, scalar, builtin container,
             // generic parameter, or unresolvable. None of those carry the
@@ -166,6 +231,15 @@ impl super::OwnershipChecker<'_> {
         // 2 uses to decide what it may promote.
         match self.deep_immutability_closure(type_name) {
             Some(_) => None,
+            None if matches!(
+                site,
+                FreezeSite::Statement {
+                    uniquely_bound: true
+                }
+            ) =>
+            {
+                None
+            }
             None => Some(Refusal::MutableState),
         }
     }

@@ -10392,22 +10392,180 @@ fn freeze_statement_is_subject_to_the_freeze_site_check() {
             "so `frozen` adds nothing",
         ),
         (
-            "a type with mutable state",
+            // Stage 3b step 1 CHANGED which guard catches this. The source is
+            // uniquely bound, so E0512 now relaxes and the freeze succeeds —
+            // and the program is still refused, one guard later, because `n`
+            // is `mut` and the projection walk refuses a `mut` field in read
+            // and write position alike. Asserting the projection message here
+            // rather than deleting the row keeps the PROGRAM pinned as
+            // rejected, which is the property that matters; the E0512 half
+            // moves to the non-unique row below.
+            "a type with mutable state, uniquely bound: refused at the projection",
             "shared struct M { mut n: i64 }\n\
              fn f() -> i64 { let m = M { n: 1 }; let g = freeze m; g.n }",
+            "cannot be projected through `.n`",
+        ),
+        (
+            // The E0512 half, preserved: an ALIASED source fails uniqueness,
+            // so the freeze site itself is still refused for a `mut`-bearing
+            // type. Without this row the relaxation could widen to admit
+            // everything and the suite would not notice.
+            "a type with mutable state, NOT uniquely bound: refused at the freeze",
+            "shared struct M { mut n: i64 }\n\
+             fn f() -> i64 { let m = M { n: 1 }; let a = m; let g = freeze m; g.n + a.n }",
             "has mutable state",
         ),
     ];
     for (label, body, expected) in cases {
         let src = format!("{body}\nfn main() {{ println(\"x\"); }}\n");
         let errors = ownership_errors(&src);
+        // The KIND is no longer uniform across these rows: two are freeze-site
+        // refusals (`FrozenTypeNotFreezable`) and one is now a projection
+        // refusal, because stage 3b step 1 moved which guard fires first for a
+        // uniquely-bound `mut`-bearing source. The invariant every row shares
+        // — and the one worth asserting — is that the program is REFUSED with
+        // the named reason.
         assert!(
-            errors.iter().any(|e| e.message.contains(expected)
-                && e.kind == OwnershipErrorKind::FrozenTypeNotFreezable),
-            "[{label}] expected a FrozenTypeNotFreezable error containing {expected:?}; got {:?}",
+            errors.iter().any(|e| e.message.contains(expected)),
+            "[{label}] expected an error containing {expected:?}; got {:?}",
             errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
         );
     }
+}
+
+/// B-2026-08-01-33 stage 3b step 1 — the alias/uniqueness precondition at a
+/// `freeze` STATEMENT, and the E0512 relaxation it gates.
+///
+/// The design calls this check "local and cheap" and, until this test, it had
+/// NO ENFORCEMENT AT ALL: `let a = t; let g = freeze t;` checked clean, and so
+/// did `take(t)` before the freeze. That was harmless only because E0512
+/// refused every `mut`-bearing type outright — so the check and the relaxation
+/// are one slice, and this test pins both halves together. Enforcing the
+/// check alone would reject working programs and buy nothing; relaxing E0512
+/// alone would admit a data race on a non-atomic refcount.
+///
+/// Soundness rests on THREE guards, and each is exercised below: uniqueness
+/// (no other name existed to write through), the escape walk freezing the
+/// SOURCE root for the rest of the scope, and the projection walk still
+/// refusing every `mut` field — which is why the accept rows read an
+/// IMMUTABLE field off a `mut`-bearing type rather than the `mut` one.
+#[test]
+fn freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source() {
+    // `val` is immutable, `neighbors` is `mut` — so the TYPE is not deeply
+    // immutable (E0512's stand-in fails) while an immutable field remains
+    // readable through the frozen handle.
+    let prelude = "shared struct Node { val: i64, mut neighbors: Vec[i64] }\n\
+                   fn take(n: Node) -> i64 { n.val }\n";
+
+    let accept: &[(&str, &str)] = &[
+        (
+            "a `mut`-bearing type frozen from a uniquely bound source",
+            "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let g = freeze t; g.val }",
+        ),
+        (
+            "the immutable field stays readable through both names",
+            "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let g = freeze t; \
+             g.val + t.val }",
+        ),
+    ];
+    for (label, body) in accept {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[3b-unique accept] {label}");
+        ownership_ok(&src);
+    }
+
+    // Both directions of the uniqueness failure, plus the guard that does NOT
+    // relax. Each row would be ACCEPTED by a check that only looked the other
+    // way, which is why both are here.
+    let reject: &[(&str, &str, &str)] = &[
+        (
+            "an alias made BEFORE the freeze",
+            "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let a = t; \
+             let g = freeze t; g.val + a.val }",
+            "has mutable state",
+        ),
+        (
+            "the source is ITSELF bound from another place",
+            "fn f() -> i64 { let a = Node { val: 1, neighbors: [] }; let t = a; \
+             let g = freeze t; g.val }",
+            "has mutable state",
+        ),
+        (
+            "the source consumed by a call before the freeze",
+            "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let n = take(t); \
+             let g = freeze t; g.val + n }",
+            "has mutable state",
+        ),
+        (
+            // The asymmetry that keeps this mechanism 3 rather than mechanism
+            // 1: a parameter's instance belongs to the caller, so no local
+            // proof can be had and the type-level demand stays.
+            "a `frozen` PARAMETER of the same type — never relaxed",
+            "fn frz(n: frozen Node) -> i64 { n.val }\n\
+             fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; frz(t) }",
+            "has mutable state",
+        ),
+        (
+            // Step 3 is deliberately untouched, so the `mut` field itself is
+            // still unreachable through the frozen handle. If this ever starts
+            // passing without step 3 landing, the relaxation has over-widened.
+            "the `mut` field is still not projectable through the frozen handle",
+            "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let g = freeze t; \
+             g.neighbors.len() }",
+            "cannot be projected through `.neighbors`",
+        ),
+        (
+            // A write through the SOURCE after the freeze — the race the whole
+            // relaxation would enable if the source were not frozen too.
+            "a WRITE through the source after the freeze",
+            "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let g = freeze t; \
+             t.neighbors.push(1); g.val }",
+            "cannot be projected through `.neighbors`",
+        ),
+    ];
+    for (label, body, expected) in reject {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)),
+            "[3b-unique reject: {label}] expected an error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    // The two MutableState suggestions must differ by site, because the repair
+    // differs: a statement has a local one (drop the other name), a parameter
+    // has none. They were one string until this slice, which is how it came to
+    // tell every author that no per-instance check exists.
+    let stmt = ownership_errors(&format!(
+        "{prelude}fn f() -> i64 {{ let t = Node {{ val: 1, neighbors: [] }}; let a = t; \
+         let g = freeze t; g.val + a.val }}\nfn main() {{ println(\"x\"); }}\n"
+    ));
+    assert!(
+        stmt.iter().any(|e| e
+            .suggestion
+            .as_deref()
+            .is_some_and(|s| s.contains("ONLY live name"))),
+        "the statement-site suggestion must name the uniqueness repair; got {:?}",
+        stmt.iter()
+            .map(|e| e.suggestion.clone())
+            .collect::<Vec<_>>()
+    );
+    let param = ownership_errors(&format!(
+        "{prelude}fn frz(n: frozen Node) -> i64 {{ n.val }}\n\
+         fn main() {{ println(\"x\"); }}\n"
+    ));
+    assert!(
+        param.iter().any(|e| e
+            .suggestion
+            .as_deref()
+            .is_some_and(|s| s.contains("belongs to the caller"))),
+        "the parameter-site suggestion must explain why no local proof exists; got {:?}",
+        param
+            .iter()
+            .map(|e| e.suggestion.clone())
+            .collect::<Vec<_>>()
+    );
 }
 
 /// The shape the whole entry exists for: a RECURSIVE traversal of a `shared`

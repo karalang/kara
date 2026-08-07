@@ -185,6 +185,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{types::Type, TypeCheckResult};
 
+use super::frozen_freeze_site::FreezeSite;
 use super::{OwnershipError, OwnershipErrorKind};
 
 /// Why a particular use was rejected. Selects the diagnostic wording; each
@@ -261,7 +262,7 @@ struct Cx<'a, 't> {
     /// second walk looking for freeze statements could miss a nesting form
     /// this one handles, and a site admitted but never classified is exactly
     /// the hole the two-guard design exists to prevent.
-    freeze_sites: Vec<(Option<String>, Span)>,
+    freeze_sites: Vec<(Option<String>, Span, FreezeSite)>,
     /// Type names carrying a user `impl` block. A builtin container name that a
     /// user has extended is not treated as a builtin by the `len`/`is_empty`
     /// exception, so no user body can receive the handle through it.
@@ -291,6 +292,33 @@ struct Cx<'a, 't> {
     /// point, and the one `vec_index_borrow_spans` — the existing
     /// alias-instead-of-own channel — is keyed by.
     alias_spans: HashSet<SpanKey>,
+    /// Stage 3b step 1 — every local name USED so far, in walk order.
+    ///
+    /// This is the alias/uniqueness precondition the design calls "local and
+    /// cheap" and which, until now, had NO enforcement at all: `let a = t; let
+    /// g = freeze t;` checked clean, and so did `take(t)` before the freeze.
+    /// That was harmless only because E0512 refused every type where a second
+    /// handle could WRITE — so relaxing E0512 (the same slice as this) is
+    /// exactly what makes it start mattering.
+    ///
+    /// The walk is ordered, so at a freeze site this set holds precisely the
+    /// uses that PRECEDE it. A root absent from it has been named nowhere but
+    /// its own `let`, which is what "no other live binding of this instance"
+    /// reduces to for the build-then-freeze shape the design motivates.
+    ///
+    /// Deliberately coarse: ANY earlier use disqualifies, including a scalar
+    /// read that could not possibly produce a handle. Fail-closed is the whole
+    /// point here — the cost of a false NEGATIVE is a refused freeze the author
+    /// can work around by moving the read, and the cost of a false POSITIVE is
+    /// a data race on a non-atomic refcount, which this repo has already seen
+    /// go arch-specific and green on x86 CI (B-2026-07-12-29).
+    used_names: HashSet<&'a str>,
+    /// Locals whose `let` initializer was a PLACE — i.e. the binding is itself
+    /// an alias of some other live name (`let t = a;`), the uniqueness failure
+    /// pointing the other way from `used_names`. Both directions must be
+    /// closed or the check proves nothing: one catches the alias made from the
+    /// source, the other the source made from an alias.
+    place_bound: HashSet<&'a str>,
 }
 
 impl<'a> Cx<'a, '_> {
@@ -612,7 +640,7 @@ impl super::OwnershipChecker<'_> {
 type WalkResult = (
     Vec<Rejection>,
     HashSet<SpanKey>,
-    Vec<(Option<String>, Span)>,
+    Vec<(Option<String>, Span, FreezeSite)>,
 );
 
 /// Run the walk over `f` and return every rejected use, plus the initializer
@@ -666,6 +694,8 @@ fn collect_frozen_escapes<'a>(
         frozen_methods: collect_frozen_methods(program),
         freeze_spans: &program.freeze_spans,
         freeze_sites: Vec::new(),
+        used_names: HashSet::new(),
+        place_bound: HashSet::new(),
         user_impl_types: collect_user_impl_types(program),
         in_closure: false,
         aliases: HashSet::new(),
@@ -819,6 +849,18 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
                 && !try_admit_frozen_alias(*is_mut, pattern, value, cx)
             {
                 walk_expr(value, cx);
+            }
+            // Stage 3b step 1 — a binding whose initializer is a PLACE is an
+            // alias of whatever that place is rooted at, so it can never be
+            // the unique name for its instance. Recorded AFTER the walk so the
+            // initializer's own uses land in `used_names` first; recording it
+            // here rather than at the freeze site is what lets the check see
+            // `let t = a; let g = freeze t;`, where the offending `let` is not
+            // the freeze's own.
+            if let (PatternKind::Binding(n), true) =
+                (&pattern.kind, place_root_name(value).is_some())
+            {
+                cx.place_bound.insert(n.as_str());
             }
         }
         StmtKind::LetUninit { .. } => {}
@@ -977,12 +1019,24 @@ fn try_admit_frozen_freeze<'a>(
         .expr_types
         .get(&SpanKey::from_span(&value.span))
         .cloned();
+    // Stage 3b step 1 — the uniqueness precondition, computed HERE because
+    // this is the last point before the operand is walked (which would add the
+    // source's own name to `used_names` and make every freeze look aliased).
+    //
+    // Both directions must hold: nothing has named the root yet, and the root
+    // is not itself a place-bound alias. A root that is not a plain identifier
+    // (`freeze holder.node`) is never unique — the owner `holder` is a second
+    // live handle to the instance's container by construction, and proving
+    // otherwise is the interprocedural analysis this stage exists to avoid.
+    let uniquely_bound = matches!(&value.kind, ExprKind::Identifier(n)
+        if !cx.used_names.contains(n.as_str()) && !cx.place_bound.contains(n.as_str()));
     // Recorded BEFORE the admission decision, so a source this pass declines
     // to freeze still gets classified and reported rather than silently
     // becoming an ordinary binding.
     cx.freeze_sites.push((
         raw.as_ref().and_then(head_type_name).map(str::to_string),
         value.span.clone(),
+        FreezeSite::Statement { uniquely_bound },
     ));
     let Some(ty) = raw.and_then(|t| cx.as_shared_handle(t)) else {
         return false;
@@ -1175,7 +1229,17 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
     match &e.kind {
         // Reached only for a NON-frozen identifier or receiver — a frozen one
         // is consumed by the prologue above.
-        ExprKind::Identifier(_) | ExprKind::SelfValue => {}
+        //
+        // Recorded for the stage-3b uniqueness precondition (`used_names`).
+        // This arm is the single funnel for a bare name in value position:
+        // every handle-producing form that matters — a call argument, a
+        // composite-literal field, the initializer of another `let` — reaches
+        // its root through here, because the shape arms below all recurse into
+        // their operands rather than inspecting roots themselves.
+        ExprKind::Identifier(name) => {
+            cx.used_names.insert(name.as_str());
+        }
+        ExprKind::SelfValue => {}
 
         ExprKind::FieldAccess { object, .. } => walk_expr(object, cx),
 
