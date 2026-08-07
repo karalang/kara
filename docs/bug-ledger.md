@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 93 | 0 |
 | run-vs-build | 88 | 1 |
 | missing-feature | 82 | 2 |
-| perf | 57 | 1 |
+| perf | 58 | 1 |
 | false-positive | 56 | 0 |
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 734 | 2 |
+| codegen | 735 | 2 |
 | interp | 128 | 1 |
 | typecheck | 127 | 0 |
 | ownership | 40 | 2 |
@@ -124,21 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1009 surfaced · 5 open · 994 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1010 surfaced · 5 open · 995 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
-| B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side | HARDWARE-BLOCKED for cloud containers (verified 2026-08-07): no virtualized PMU (perf_event_open returns ENOENT for every counter — NOT a paranoid/perf-CLI problem, check with `cc -O2 -o pmc scripts/pmc_linux.c`), and no kata corpus in a fresh clone. The `KARAC_FN_ALIGN` lever is in place and tested; the remaining arm64 measurement is minutes of work on an M5 Pro and closes the row either way. |
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct -- one approach (the third disjunct) built and REVERTED: it fixes every measured shape but double-frees the self-hosted-parser destructure fixture, because struct destructure is a SECOND move-out gate; the three sites it must widen with are named in the detail | One approach BUILT AND REVERTED 2026-08-07 — the third disjunct this row proposed. It is right about the diagnosis and fixes all five measured shapes plus both `place_optres_field_move_info_ex` pairing guards, but double-frees `asan_vec_of_struct_shared_and_option_field_consumed_no_leak` because STRUCT DESTRUCTURE is a second move-out gate that does not move with it. Next attempt must widen `pattern_binding.rs:813`, `pattern_binding.rs:846` and `control_flow_match.rs:8418` in lockstep — see the detail's closing section. |
 | B-2026-08-07-22 | 2026-08-07 | interp | high | a `par {}` block inside a `while` loop HANGS under `--interp` (the DEFAULT for `karac check`-adjacent workflows and the Mend oracle) while the identical program builds and runs correctly AOT -- no shared type, no `frozen`, no captures needed to reproduce | — |
 | B-2026-08-07-23 | 2026-08-07 | ownership | high | a `frozen` handle has no legal place to be STORED, so no iterative traversal can use one: a local `VecDeque[Node]` worklist refuses `queue.push_back(root)`, and there is no way to declare `VecDeque[frozen Node]`. This is what actually blocks kata #133 after B-2026-08-01-33 stage 3b -- recursion works, worklists do not, and both of that kata's variants carry a `visited: Map[i64, Node]` | src/ownership/frozen_escape.rs (the escape whitelist) + docs/spikes/freeze-point-design.md property 2 |
+| B-2026-08-07-24 | 2026-08-07 | codegen | medium | 64-BYTE BASIC-BLOCK ALIGNMENT is an unclaimed 8.6% on kata:170 and REMOVES that kata's 1.31x placement lottery (31% spread -> 1.3%) at zero dynamic instructions and zero linked bytes -- but sampled across 8 katas the MEDIAN is 1.0034, i.e. very slightly SLOWER, so it is not a blanket default; what is missing is a way to apply it only where the hot loop is placement-sensitive | — |
 
-### Fixed (994)
+### Fixed (995)
 
-<details><summary>994 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>995 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1148,6 +1148,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-3 | codegen | high | `<Result/Option binding>.map(f)` whose ABSENT branch (`Err`/`None`) carries a heap payload double-frees when the map result is CONSUMED or DISCARDED:… | 94ead2dc |
 | B-2026-08-07-5 | codegen | medium | `b = c` between two boxed-payload enum bindings leaves BOTH slots holding one box and both armed -- glibc double free at -O0 | a635ffe |
 | B-2026-08-07-8 | typecheck | low | `self` cannot be passed to a BORROW parameter from any receiver mode — `byref(self)` from `ref self` is `expected 'ref Inner', found 'Inner'`, and so… | aa3b394 |
+| B-2026-08-07-10 | codegen | medium | PLACEMENT SENSITIVITY CONFIRMED AND PRICED ON arm64, BUT THIS ROW'S OWN 1.09x DOES NOT REPRODUCE: vanilla builds of b84477dd and 36a7fa5a are 1.0000… | No default change, and none is warranted from one kata -- the row closes by measurement. Two levers shipped as the instruments in 3718c4d3: `KARAC_TEXT_PAD=<bytes>` (a non-eliminable filler ahead of `main`, so placement can be VARIED rather than quantised) and `KARAC_LLVM_ARGS="<flags>"` (clang's `-mllvm`, which is the only way to reach the block-alignment cl::opt family from codegen). Both are behaviour-neutral by test, and the `KARAC_LLVM_ARGS` test asserts the flag REACHES THE BACKEND rather than that the build survived it -- a silently-forwarding-nothing lever would make every measurement a measurement of the default. Adopting block alignment as a default is B-2026-08-07-24. |
 | B-2026-08-07-11 | codegen | medium | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct l… | PARTIAL. d5cfa3c8 fixes leg (a), the owned param (320 B / 10 -> clean). Legs (b) struct-literal move and (c) `Vec` push STAY OPEN and are re-diagnosed in detail: they are NOT chain gaps -- a single-box `Option[Option[i64]]` leaks 320 B through either -- but a destination-ownership defect, so the chain must not be fixed there before the owner is. 49a12153 fixes leg (b), the struct-field chain, by giving `emit_option_drop_fn`'s boxed branch the recursion it lacked (1,280 B / 40 -> clean). It became a pure chain gap only after 31768650 gave the outermost envelope a field owner. STILL OPEN for leg (c), the `Vec` push -- which is NOT a chain gap, the single-box case leaks too -- and for a newly measured residual, `struct Hs { b: Option[Option[Option[String]]] }`, which takes the classifier's other branch and is unchanged by this. f5df577f fixes leg (c), the `Vec` push, by giving the element arm the same `option_payload_boxed_envelope_only` admission the struct field got in 31768650. SEVERITY RAISED low -> medium: leg (c) leaks at the DEFAULT -O2 (5,120 B + 3,840 B indirectly), which this row twice asserted was impossible for the family — that claim was carried forward from legs (a)/(b) rather than measured. All three filed legs are now closed; the row stays open only for the `struct Hs { b: Option[Option[Option[String]]] }` residual. 61c69e0d fixes the last residual — the MATCH-ARM parked envelope (`own_boxed_option_field_envelope_at`), a fourth site neither leg reached — by giving it the same chain. ROW CLOSED: all three filed legs plus the residual. |
 | B-2026-08-07-12 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BO… | 00660c3,e0d88f2, and leg 1 5ab6e8e8 (synth_drop.rs promotion gate + payload_droppable; control_flow_match.rs both legs of place_optres_field_move_info_ex; runtime.rs option_payload_map_or_set_drop_ok). The Result twin is B-2026-08-07-19, not this row. |
 | B-2026-08-07-13 | other | low | docs/bug-ledger.jsonl has no pinned JSON encoding, so writers flip it between raw UTF-8 and \uXXXX escapes and each flip rewrites all ~1000 rows | 9636a9b6 |
