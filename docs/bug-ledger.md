@@ -99,24 +99,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 87 | 0 |
 | missing-feature | 80 | 1 |
 | false-positive | 56 | 0 |
-| perf | 52 | 2 |
+| perf | 53 | 3 |
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
-| other | 17 | 0 |
+| other | 18 | 1 |
 | use-after-free | 14 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 721 | 6 |
+| codegen | 722 | 7 |
 | interp | 127 | 0 |
 | typecheck | 126 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
+| other | 28 | 1 |
 | cli | 28 | 0 |
-| other | 27 | 0 |
 | runtime | 21 | 1 |
 | resolver | 18 | 0 |
 | parser | 12 | 0 |
@@ -124,15 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **991 surfaced · 7 open · 974 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **993 surfaced · 9 open · 974 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
-| B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled. The key-type gate this row prescribed is REFUTED on x86 by a tag-only A/B: dropping the tag on kata:170 `Map[i64,i64]` executes 13.1% FEWER instructions and runs 1.20x SLOWER (3763.7 -> 4513.2 ms), because the tag rejects a bucket without touching its key while removing it costs a kv load per occupied bucket. The i64-vs-String pair that decided the old shape straddles TWO implementations (`should_use_mono_map_for` admits only i32/i64 keys, so kata:170 is the inlined mono path and kata:127 the erased runtime path), so it never isolated key type. Holding path and key type FIXED, x86 gains 20% from the tag and arm64 loses 27% -- an ISA effect, which reinstates the arch framing this row had retired. Arch-conditional is the surviving candidate and is UNVALIDATED. Separately, arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338. | MECHANISM MEASURED 2026-08-05 on arm64 with exact libproc counters (scripts/pmc.c): the tag saves 14.7% instructions on Map[i64,i64] but costs 28.7% IPC, netting -10.9% cycles when removed; on Map[String,i64] removing it costs both instructions and cycles. One mechanism, two signs, decided by whether the avoided key compare was expensive. Branch mispredicts RULED OUT (<1% of the top-down breakdown in both configs). Fix shape unchanged: ARCH x KEY-TYPE. OPEN: x86 reports the OPPOSITE SIGN on instruction count (-13.1% vs arm64's +14.7%) for the same flag -- re-measure that lane with pmc.c / perf stat before acting on it. Unmeasured: the Set probe. |
+| B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled. The key-type gate this row prescribed is REFUTED on x86 by a tag-only A/B: dropping the tag on kata:170 `Map[i64,i64]` executes 13.1% FEWER instructions and runs 1.20x SLOWER (3763.7 -> 4513.2 ms), because the tag rejects a bucket without touching its key while removing it costs a kv load per occupied bucket. The i64-vs-String pair that decided the old shape straddles TWO implementations (`should_use_mono_map_for` admits only i32/i64 keys, so kata:170 is the inlined mono path and kata:127 the erased runtime path), so it never isolated key type. Holding path and key type FIXED, x86 gains 20% from the tag and arm64 loses 27% -- an ISA effect, which reinstates the arch framing this row had retired. Arch-conditional is the surviving candidate and is UNVALIDATED. Separately, arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338. | PARTIALLY FIXED 2026-08-06 by b3e8206d (the tag compare, arch x key-type gate in src/codegen/mono.rs::map_tag_compare) -- STILL OPEN on the RESIDUAL: kata:170 remains 1.09-1.11x above its pre-58412d9f baseline (matched-pair measured, both orders, same session), attributable by arithmetic to 58412d9f's NON-tag-compare half, which is unmeasured. Follow-on: B-2026-08-06-33 (x86 primitive-key sign, blocks removing the arch condition). Unmeasured on x86: the Set probe. |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
+| B-2026-08-06-33 | 2026-08-06 | codegen | medium | the x86_64 sign for DROPPING the map hash-tag compare on PRIMITIVE keys is disputed between two container lanes (1.20x slower vs 2.0% faster) -- which is the only reason B-2026-08-05-5's fix is arch-conditional instead of a plain key-type gate | src/codegen/mono.rs::map_tag_compare (the `!self.target_is_aarch64` arm) |
+| B-2026-08-06-34 | 2026-08-06 | other | medium | MAIN IS RED (second gate): the shared-ownership matrix RATCHET fails because four cells IMPROVED -- alias/ResultOk, alias/ResultErr, closure_capture/ResultOk, closure_capture/ResultErr now come back Clean where the table still expects Leak | tests/shared_ownership_matrix.rs:413 + its FLOWS.expected table |
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. FIXED: no binding (fresh temp), `Vec.push` (the only -O2 leak), escape-by-return, and the BOX-INSIDE-A-BOX chain. OPEN: a struct between the levels, whose owner is CONTESTED — a fix was implemented and reverted for double-freeing. Shape 6 was never a member of this family | — |
 | B-2026-08-07-7 | 2026-08-07 | codegen | high | a struct field of type `Option[Option[String]]` DOUBLE-FREES the String at BOTH opt levels when a match arm binds it out -- the field's drop deep-frees an interior the arm already owns. The `Result` wrapper is NOT required; the struct is | — |
 | B-2026-08-07-6 | 2026-08-07 | codegen | low | the DIRECT sibling of the nested-box chain: `Option[Option[Option[i64]]]` with no `Result` wrapper leaks its inner envelope -- `BoxedEnumDrop` frees one box and has no chain | — |
