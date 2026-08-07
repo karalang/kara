@@ -35991,6 +35991,94 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-7 — a match arm binding the INTERIOR out of a struct
+    /// field whose `Option` payload is heap-BOXED. Double free at BOTH opt
+    /// levels before this: corruption, where every sibling shape merely leaks.
+    ///
+    /// `struct W { o: Option[Option[String]] }` matched as
+    /// `Option.Some(Option.Some(s))`. `__karac_drop_struct_W` routes the field
+    /// to the DEEP `karac_drop_Option_Option_String`, which frees the `String`
+    /// inside the box, and the arm's `s` owns that same buffer. The arm cannot
+    /// disarm it through the normal channel — `EnumDropKind::is_heap_bearing()`
+    /// is false for `BoxedOptRes`, so the match-out suppressor skips a boxed
+    /// payload BY DESIGN — so the fix writes to the STRUCT instead, zeroing the
+    /// field's tag, which the drop guards on before it touches the box.
+    ///
+    /// THE GATE IS THE FIX, and both of its edges were paid for in failures:
+    ///
+    ///   * BOX-ONLY UNCONDITIONALLY (the previous attempt) fixed this shape and
+    ///     turned FIVE passing memory_sanitizer tests into LeakSanitizer
+    ///     failures — every one an undestructured or borrow-only shape whose
+    ///     interior the deep drop legitimately owns. The `unbound` arm here is
+    ///     that population in miniature and must stay clean.
+    ///   * FIRING ON ANY CONSUMING PATTERN over-corrected the other way:
+    ///     `match a.value { Some(v) => … }` binds the WHOLE payload, `v` owns
+    ///     the payload and the struct drop still owns the box — one allocation
+    ///     each, correctly divided. Zeroing there orphans both (measured: 504 B
+    ///     over 14 allocations in `asan_b04_7_option_heap_enum_struct_field_
+    ///     drop`, caught by the -O0 leg). So the gate requires a NESTED variant
+    ///     sub-pattern, not merely a consuming one.
+    ///
+    /// The `scalar` arm is the no-heap control (`Option[Option[i64]]` — nothing
+    /// to double-free, and its box must still be freed), and the
+    /// `Some(None)` / `None` arms are the tag guards.
+    ///
+    /// QUARANTINED ON THE -O0 LEG, and the entry is this fix's admitted price:
+    /// zeroing the tag also skips the box free, so the 32-byte ENVELOPE leaks
+    /// in the consuming case. That is a leak replacing corruption, tracked by
+    /// the row rather than hidden — see `tests/asan-o0-known-failures.txt`. At
+    /// -O2 the envelope folds away and this runs fully clean, which is where
+    /// the double-free assertion bites: the pre-fix abort reproduced at BOTH
+    /// levels, so the default leg catches any regression on its own.
+    ///
+    /// NOT COVERED, and still corrupting on main: binding the whole payload out
+    /// and destructuring it in a SECOND match (`Some(inner) => match inner {
+    /// Some(s) => … }`). Verified pre-existing by measuring it with this change
+    /// stashed — identical abort — so it is a sibling shape, not a residue of
+    /// this fix, and it is exactly the case the second bullet above forbids
+    /// reaching for.
+    ///
+    /// Expected value is COMPUTED: per iteration the two `String` arms give
+    /// 1 each, the scalar arm gives `i`, and the two payload-absent arms -1
+    /// each — `i` per iteration, so `0+…+39 = 780`.
+    #[test]
+    fn asan_struct_field_boxed_payload_interior_match_out_no_double_free() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct W { o: Option[Option[String]] }
+struct V { o: Option[Option[i64]] }
+fn bound(w: W) -> i64 {
+    match w.o { Option.Some(Option.Some(s)) => if s.len() > 0 { 1 } else { 0 }, _ => -1 }
+}
+fn unbound(w: W) -> i64 {
+    match w.o { Option.Some(Option.Some(_)) => 1, _ => -1 }
+}
+fn scalar(v: V) -> i64 {
+    match v.o { Option.Some(Option.Some(x)) => x, _ => -1 }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        acc = acc + bound(W { o: Option.Some(Option.Some(f"p{n + i}")) });
+        acc = acc + unbound(W { o: Option.Some(Option.Some(f"p{n + i}")) });
+        acc = acc + scalar(V { o: Option.Some(Option.Some(n + i)) }) - n;
+        let w2: W = W { o: Option.Some(Option.None) };
+        acc = acc + bound(w2);
+        let w3: W = W { o: Option.None };
+        acc = acc + bound(w3);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["780"],
+            "struct_field_boxed_payload_interior_match_out",
+            30,
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words

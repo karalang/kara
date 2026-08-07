@@ -74,3 +74,25 @@
 # free without each other, and the third was invisible in the reduction (it is
 # what the fixture's remaining 64 B turned out to be, a second leak of exactly
 # the same size hiding behind the first).
+
+# B-2026-08-07-7 — asan_struct_field_boxed_payload_interior_match_out_no_double_free
+#
+# ADDED 2026-08-07, and it reverses "the list is now empty" above, so it owes an
+# explanation. The fixture's shape DOUBLE-FREED at both opt levels before its
+# fix: a match arm binding the interior out of a struct field whose `Option`
+# payload is heap-boxed, where the struct's deep drop frees the same `String`
+# the arm's binding owns. The fix zeroes the field's tag in the struct so that
+# drop skips the field.
+#
+# The tag guard also gates the ENVELOPE free, so the 32-byte box now leaks in
+# the consuming case — 5,120 B over 160 blocks at -O0, and nothing at -O2 where
+# the box folds away. That is this entry: a leak that replaced corruption, not
+# an -O0 curiosity.
+#
+# Giving the envelope an owner is what removes this line, and the row is open
+# for it. Two rejected alternatives are recorded there so the next attempt does
+# not re-walk them: making the drop box-only unconditionally costs five passing
+# sanitizer tests, and firing the suppression on any consuming pattern (rather
+# than a nested variant one) orphans 504 B in
+# asan_b04_7_option_heap_enum_struct_field_drop.
+memory_sanitizer_tests::asan_struct_field_boxed_payload_interior_match_out_no_double_free

@@ -540,6 +540,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 } else {
                     self.suppress_destructured_enum_payload_cleanup(scrutinee, &arm.pattern);
+                    // B-2026-08-07-7 — the BOXED-payload struct-field channel
+                    // the call above cannot reach (`is_heap_bearing()` is false
+                    // for `BoxedOptRes`, so it skips boxed payloads by design).
+                    self.suppress_struct_field_boxed_payload_match_out(scrutinee, &arm.pattern);
                     // B-2026-06-10-6 companion: the erased-`Option` drop
                     // switch can't classify an inline `String`/`Vec` payload,
                     // so the suppression above no-ops for it. Zero the source
@@ -2625,6 +2629,119 @@ impl<'ctx> super::Codegen<'ctx> {
             self.zero_result_payload_area(result_ty, src_ptr, "respl.argmove");
         } else {
             self.zero_option_field_tag_at(src_ptr);
+        }
+    }
+
+    /// B-2026-08-07-7 — a match arm binds the interior out of
+    /// `<local struct>.field` whose `Option` payload is heap-BOXED. Zero the
+    /// field's TAG in the STRUCT's own memory so the struct's drop skips it.
+    ///
+    /// `struct W { o: Option[Option[String]] }` matched as
+    /// `Option.Some(Option.Some(s))` aborted with a glibc double free at BOTH
+    /// opt levels: `__karac_drop_struct_W` routes the field to the DEEP
+    /// `karac_drop_Option_Option_String`, which frees the String inside the
+    /// box, and the arm's `s` owns that same buffer.
+    ///
+    /// The arm cannot disarm that drop through the normal channel:
+    /// `EnumDropKind::is_heap_bearing()` is false for `BoxedOptRes`, so
+    /// `suppress_destructured_enum_payload_cleanup_at` skips a boxed payload BY
+    /// DESIGN. Hence a second channel, writing to the struct rather than to the
+    /// matched slot — the drop guards on `tag == Some` before it touches the
+    /// box, so clearing the tag is sufficient and needs no knowledge of the
+    /// payload's shape.
+    ///
+    /// FIRES ONLY WHEN AN ARM ACTUALLY CONSUMES, and that is the whole design.
+    /// Making the drop box-only unconditionally was implemented and measured
+    /// first: it fixed this shape and turned five passing memory_sanitizer
+    /// tests into LeakSanitizer failures, every one an UNDESTRUCTURED or
+    /// BORROW-ONLY shape whose interior the deep drop legitimately owns. Gating
+    /// on consumption leaves all five untouched by construction.
+    ///
+    /// COST: the 32-byte envelope leaks in the consuming case, because zeroing
+    /// the tag also skips the box free and nothing else claims it — the same
+    /// trade `place_optres_field_move_info_ex` refuses for the CALL-ARGUMENT
+    /// leg, where a leak would be a regression. Here the alternative is
+    /// corruption, so it is the right way round.
+    ///
+    /// PLACE ROOTS ONLY: a `ref`/borrowed or shared root is refused via
+    /// `field_chain_place_ptr`, which already declines those for the reason it
+    /// gives — writing through a borrow is corruption, not neutralization.
+    pub(super) fn suppress_struct_field_boxed_payload_match_out(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        if self.pattern_binding_is_borrow {
+            return;
+        }
+        let ExprKind::FieldAccess { object, field } = &scrutinee.kind else {
+            return;
+        };
+        // Only a sub-pattern that DESTRUCTURES INTO the payload — a nested
+        // variant pattern that itself binds — and never a plain binding of the
+        // whole payload.
+        //
+        // That distinction is the entire gate, and it was measured rather than
+        // reasoned. `match a.value { Some(v) => … }` binds the WHOLE payload
+        // out; `v` owns the payload and the struct's drop still owns the box,
+        // which is a correct division of one allocation each — zeroing the tag
+        // there orphans the box and its interior (measured: 504 B over 14
+        // allocations in `asan_b04_7_option_heap_enum_struct_field_drop`, an
+        // -O0-leg failure). `Some(Some(s))` is the broken one: the arm claims
+        // the INTERIOR while the deep drop frees it too, and neither owns the
+        // box exclusively.
+        //
+        // A wildcard or literal sub-pattern consumes nothing and leaves the
+        // interior to the struct's drop — the population the box-only attempt
+        // broke, excluded here by the same test.
+        let consumes = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns.iter().any(|sub| {
+                matches!(
+                    &sub.kind,
+                    PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
+                ) && pattern_consumes_field(sub)
+            }),
+            _ => false,
+        };
+        if !consumes {
+            return;
+        }
+        let Some(obj_ty) = self.place_chain_type_name(object) else {
+            return;
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(obj_ty.as_str())
+            .and_then(|ns| ns.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(obj_ty.as_str())
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        // The struct's drop must actually be the rival: an `Option` field whose
+        // payload is BOXED and heap-owning is the only shape routed to the deep
+        // drop with no suppression channel. An inline payload keeps the
+        // existing machinery, which already works.
+        if self
+            .option_inner_shared_type_for_type_expr(&field_te)
+            .is_some()
+        {
+            return;
+        }
+        let Some(pt) = Self::option_payload_te(&field_te) else {
+            return;
+        };
+        if !self.option_payload_is_boxed(&pt) || !self.option_payload_struct_or_enum_drop_ok(&pt) {
+            return;
+        }
+        if let Some(field_ptr) = self.field_chain_place_ptr(scrutinee) {
+            self.zero_option_field_tag_at(field_ptr);
         }
     }
 
