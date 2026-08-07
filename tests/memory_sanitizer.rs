@@ -36573,6 +36573,103 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-11 residual — the envelope chain a MATCH ARM parks when it
+    /// disarms a struct field's drop.
+    ///
+    /// `own_boxed_option_field_envelope_at` (B-2026-08-07-7) exists because
+    /// zeroing an `Option` field's tag is a single guard away from two different
+    /// frees: `karac_drop_Option_<P>` tests `tag == Some` once and behind it does
+    /// BOTH the deep drop of the interior and the `free` of the box. The arm
+    /// needs the first suppressed and the second kept, so it parks the box
+    /// pointer in a private slot and registers a box-only `BoxedEnumDrop`
+    /// against it. That registration owned exactly ONE envelope, and a field
+    /// whose payload boxes AGAIN left the rest owned by nobody.
+    ///
+    /// A FIRST OWNER, NOT A SECOND, which is what made it safe to add and is
+    /// measured rather than argued: pre-fix the shape LEAKED. The field's own
+    /// drop is disarmed by the tag zero, and the arm's binding owns the
+    /// INTERIOR only — had anything else claimed these envelopes the result
+    /// would have been a double free. `224c945f` deferred them here on the
+    /// opposite assumption while B-2026-08-07-6/-11 were in flight; all three of
+    /// those legs have since landed and none reaches this path.
+    ///
+    /// HOW THE SURVIVOR WAS IDENTIFIED, since the row's earlier passes guessed
+    /// wrong twice. Varying only the nesting depth gives depth 2 clean, depth 3
+    /// losing one box, depth 4 losing two — exactly one envelope freed at every
+    /// depth, which is a missing WALK rather than a missing owner. The emitted
+    /// module then showed each `karac_drop_Option_...` level freeing its own box
+    /// and delegating correctly, so the drop functions were never the problem;
+    /// `main` was reaching them through a single-box parked action instead. That
+    /// is the "count frees against mallocs in the emitted module" step this row
+    /// prescribed, and it is what separated the two candidates.
+    ///
+    /// ARMS: `a2` is the empty-chain control that must stay at exactly one
+    /// free; `a3` the reported shape; `a4` two envelopes below the parked one;
+    /// `g` a NON-binding arm over the same field, which takes the other path
+    /// through the guard; `s3` the scalar-interior sibling that leg (b) fixed,
+    /// re-asserted so the two owners cannot start fighting; `u` a struct built
+    /// whose field is never matched at all.
+    ///
+    /// The interior is a heap `String` in every String arm, which is the
+    /// envelope/interior boundary as an assertion: the walk frees envelopes and
+    /// must not reach the `String` the arm binds out. Pre-fix this program lost
+    /// 2,560 B definitely plus 1,280 B indirectly at `KARAC_OPT_LEVEL=0` and was
+    /// CLEAN at `-O2`, so the memory half rides on the `-O0` leg; the floor is
+    /// real regardless (606 allocations at `-O2`) because the `String`s survive
+    /// folding even though the envelopes do not.
+    ///
+    /// The expected value is COMPUTED: three String arms contribute 1 each and
+    /// the scalar arm subtracts the opaque `env.args().len()` seed back out to
+    /// leave `i` — `i + 3` per iteration, so `(0+…+39) + 3 * 40 = 900`.
+    #[test]
+    fn asan_match_arm_parked_envelope_frees_every_level() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Hs2 { b: Option[Option[String]] }
+struct Hs3 { b: Option[Option[Option[String]]] }
+struct Hs4 { b: Option[Option[Option[Option[String]]]] }
+struct Hi3 { b: Option[Option[Option[i64]]] }
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a2: Hs2 = Hs2 { b: Option.Some(Option.Some(mkstr(n + i))) };
+        match a2.b { Option.Some(Option.Some(t)) => { if t.contains("envelope-") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+
+        let a3: Hs3 = Hs3 { b: Option.Some(Option.Some(Option.Some(mkstr(n + i)))) };
+        match a3.b { Option.Some(Option.Some(Option.Some(t))) => { if t.contains("envelope-") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+
+        let a4: Hs4 = Hs4 { b: Option.Some(Option.Some(Option.Some(Option.Some(mkstr(n + i))))) };
+        match a4.b { Option.Some(Option.Some(Option.Some(Option.Some(t)))) => { if t.contains("envelope-") { acc = acc + 1; } } _ => { acc = acc - 1; } }
+
+        let g: Hs3 = Hs3 { b: Option.Some(Option.Some(Option.Some(mkstr(n + i)))) };
+        match g.b { Option.Some(Option.Some(Option.None)) => { acc = acc - 1; } _ => { acc = acc + 0; } }
+
+        let s3: Hi3 = Hi3 { b: Option.Some(Option.Some(Option.Some(n + i))) };
+        match s3.b { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let u: Hs3 = Hs3 { b: Option.Some(Option.Some(Option.Some(mkstr(n + i)))) };
+        acc = acc + 0;
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["900"],
+            "match_arm_parked_envelope_frees_every_level",
+            200,
+        );
+    }
+
     /// B-2026-08-07-7 — a match arm binding the INTERIOR out of a struct
     /// field whose `Option` payload is heap-BOXED. Double free at BOTH opt
     /// levels before this: corruption, where every sibling shape merely leaks.

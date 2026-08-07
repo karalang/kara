@@ -2768,7 +2768,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // Order matters: park the box pointer BEFORE the tag zero, which is
             // what takes the field's drop — and with it the envelope free — off
             // the table.
-            self.own_boxed_option_field_envelope_at(field_ptr);
+            // B-2026-08-07-11 residue — the box this parks may itself hold
+            // further ENVELOPES (`Option[Option[Option[String]]]` as a field:
+            // the field's payload boxes, and so does the payload inside that
+            // box). Freeing only the parked one leaked 32 B per match.
+            //
+            // A FIRST owner here, not a second, and that is measured rather
+            // than argued: the field's own drop is about to be disarmed by the
+            // tag zero below, the arm's binding owns the INTERIOR only, and the
+            // pre-fix result was a LEAK — had anything else claimed these
+            // envelopes it would have been a double free. The comment this
+            // replaces deferred them to B-2026-08-07-6/-11 while those were in
+            // flight; all three of their legs have since landed and none of
+            // them reaches this path.
+            let deeper = self.nested_box_deeper_tag_chain(&pt);
+            self.own_boxed_option_field_envelope_at(field_ptr, deeper);
             self.zero_option_field_tag_at(field_ptr);
         }
     }
@@ -2852,7 +2866,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The parked tag is defaulted to `None` in the entry block, so a drain on
     /// a path that never reached this arm (an arm GUARD that fails after the
     /// frame is pushed) reads a slot that frees nothing rather than garbage.
-    fn own_boxed_option_field_envelope_at(&mut self, field_ptr: PointerValue<'ctx>) {
+    fn own_boxed_option_field_envelope_at(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        deeper_tags: Vec<u64>,
+    ) {
         let Some(fn_val) = self.current_fn else {
             return;
         };
@@ -2924,12 +2942,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty: slot_ty,
                 inner_drop_fn: None,
                 some_tag,
-                // Deliberately empty. This action owns exactly the one envelope
-                // the arm disarmed; a payload that boxes AGAIN below it is the
-                // pre-existing chain question B-2026-08-07-6/-11 own, and
-                // claiming those envelopes here would be a second owner for
-                // them rather than a first.
-                deeper_tags: Vec::new(),
+                // The envelopes below the parked one — see the call site for
+                // why claiming them here is a FIRST owner. Empty for the
+                // single-box shape, which is every field whose payload does not
+                // box again, and the walk then collapses to the same lone
+                // `free` this action emitted before.
+                deeper_tags,
             });
         }
     }
