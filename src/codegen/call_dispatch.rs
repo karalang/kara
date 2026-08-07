@@ -1911,8 +1911,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if !flows_into_return
                 && val.is_struct_value()
                 && self.expr_yields_fresh_owned_temp(&a.value)
-                && self.is_owned_boxed_option_param(&name, i)
+                && self.owned_boxed_option_param_struct(&name, i).is_some()
             {
+                let inner_struct = self.owned_boxed_option_param_struct(&name, i);
                 let cur_fn = self
                     .builder
                     .get_insert_block()
@@ -1926,7 +1927,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     slot,
                     "Option",
                     "Some",
-                    None,
+                    inner_struct.as_deref(),
                 );
             }
             if !flows_into_return
@@ -1987,7 +1988,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
-                self.suppress_inline_option_result_binding_move(&a.value);
+                // B-2026-08-06-31 — a binding whose box carries a user STRUCT
+                // interior keeps its cleanup across a by-value call. The
+                // whole-slot zero below is a MOVE, and it only balances when
+                // some other frame takes the box over; for this payload class
+                // nobody does. B-2026-08-06-9 leg A gave the callee the box for
+                // NON-struct payloads precisely because admitting struct ones
+                // double-frees the three fixtures named on that row, so here
+                // the caller is the only owner there is and zeroing the slot
+                // stranded 32 B of box plus the whole interior per call.
+                //
+                // A callee arm that moves the payload (or a field of it) out is
+                // still safe, and NOT because of anything here: it neutralizes
+                // through the box's own words (B-2026-08-06-10's mirror, which
+                // is gated on exactly this owned-param shape). That is the same
+                // contract the FieldAccess sibling below already depends on —
+                // `place_optres_field_whole_move_info` refuses a boxed payload,
+                // leaving `nd.hp` armed, and `f(nd.hp)` is clean because of it.
+                let boxed_struct_binding = matches!(
+                    &a.value.kind,
+                    ExprKind::Identifier(n) if self.boxed_struct_payload_vars.contains(n.as_str())
+                );
+                if !boxed_struct_binding {
+                    self.suppress_inline_option_result_binding_move(&a.value);
+                }
                 // B-2026-07-28-16 — the same move, but from a FIELD rather than
                 // a binding: `consume(nd.hp)` where `nd` is an owned struct with
                 // an `Option`/`Result` field. The suppressor above is
@@ -2129,29 +2153,27 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Does parameter `i` of free function `name` take a by-value `Option[T]`
-    /// whose payload `T` is HEAP-BOXED — i.e. `T`'s LLVM word count exceeds
-    /// `Option`'s seeded payload area, the exact predicate
+    /// whose payload `T` is a user STRUCT that is HEAP-BOXED — i.e. `T`'s LLVM
+    /// word count exceeds `Option`'s seeded payload area, the exact predicate
     /// `coerce_to_payload_words` boxes on and `reconstruct_payload_value`
-    /// deboxes on?
+    /// deboxes on? Returns the struct's NAME, so the caller-side registration
+    /// can give the box drop that struct's `__karac_drop_struct_<T>` interior
+    /// walk instead of freeing the envelope alone (B-2026-08-06-31).
     ///
     /// `Option` only, deliberately. `Result` boxes PER VARIANT (`Ok` and `Err`
     /// each measured against the 5-word area), so a caller-side free would have
     /// to know which tag is live before it can name the variant that carries a
-    /// box; `Option` has one such tag. The Option case is also the measured
-    /// leak — `classify(Some(Some(42)))`, 32 bytes per call.
+    /// box; `Option` has one such tag.
     ///
-    /// STRUCT payloads only, as of B-2026-08-06-9 leg A. The callee now
-    /// registers its own box-only drop for a non-escaping owned param whose
-    /// seeded-pair payload is boxed and is NOT a user struct
-    /// (`functions.rs`), which is the only frame that can own the box for a
-    /// NAMED argument — the caller's move suppressor has already zeroed the
-    /// binding's tag by then. Keeping this arm for those payloads too would
-    /// free the same box twice for the fresh-temp form. A STRUCT payload keeps
-    /// the caller-side arm: there the callee's owner is B-2026-08-06-10's
-    /// move-out mirror, which only fires on an arm that actually moves, so a
-    /// read-only callee (`take_key`, inferred `ref`) leaves a fresh temp with
-    /// no owner anywhere else.
-    pub(super) fn is_owned_boxed_option_param(&self, name: &str, i: usize) -> bool {
+    /// STRUCT payloads only, as of B-2026-08-06-9 leg A: the CALLEE now owns a
+    /// boxed non-struct `Option` payload, so keeping this arm for those would
+    /// free the same box twice. Which frame owns a boxed STRUCT payload is
+    /// decided by the ARGUMENT FORM, not by the callee — a `FieldAccess`
+    /// (`f(nd.hp)`) leaves the owning struct's field drop in charge, a named
+    /// binding keeps its let-site drop (see the arg-site skip that consults
+    /// `boxed_struct_payload_vars`), and a FRESH TEMP has neither, which is what
+    /// this arm exists for.
+    pub(super) fn owned_boxed_option_param_struct(&self, name: &str, i: usize) -> Option<String> {
         let flagged = |table: &HashMap<String, Vec<bool>>| {
             table
                 .get(name)
@@ -2160,35 +2182,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or(false)
         };
         if flagged(&self.fn_param_ref) || flagged(&self.fn_param_mut_ref) {
-            return false;
+            return None;
         }
-        let Some(program) = self.program_snapshot.as_deref() else {
-            return false;
-        };
-        let Some(param_te) = program.items.iter().find_map(|item| match item {
+        let program = self.program_snapshot.as_deref()?;
+        let param_te = program.items.iter().find_map(|item| match item {
             Item::Function(f) if f.name == name => f.params.get(i).map(|p| p.ty.clone()),
             _ => None,
-        }) else {
-            return false;
-        };
+        })?;
         let TypeKind::Path(p) = &param_te.kind else {
-            return false;
+            return None;
         };
         if p.segments.first().map(|s| s.as_str()) != Some("Option") {
-            return false;
+            return None;
         }
         let Some(GenericArg::Type(payload_te)) = p.generic_args.as_ref().and_then(|a| a.first())
         else {
-            return false;
+            return None;
         };
-        let payload_is_user_struct = match &payload_te.kind {
-            TypeKind::Path(pp) => pp
-                .segments
-                .last()
-                .is_some_and(|s| self.struct_types.contains_key(s.as_str())),
-            _ => false,
+        let TypeKind::Path(pp) = &payload_te.kind else {
+            return None;
         };
-        payload_is_user_struct && self.option_payload_is_boxed(payload_te)
+        let struct_name = pp
+            .segments
+            .last()
+            .filter(|s| self.struct_types.contains_key(s.as_str()))?;
+        self.option_payload_is_boxed(payload_te)
+            .then(|| struct_name.clone())
     }
 
     /// Would an `Option[T]` payload of type `T` be HEAP-BOXED — i.e. does `T`'s

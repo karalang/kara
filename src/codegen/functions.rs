@@ -1985,7 +1985,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // call, nobody's.
                     //
                     // `Option` ONLY, for the reason
-                    // `is_owned_boxed_option_param` gives: `Result` boxes PER
+                    // `owned_boxed_option_param_struct` gives: `Result` boxes PER
                     // VARIANT against a 5-word area, so the caller-side disarm
                     // this registration needs on the passthrough shape would
                     // have to know which tag is live before it can zero the
