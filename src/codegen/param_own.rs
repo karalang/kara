@@ -2092,7 +2092,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.build_store(new_box, boxval).unwrap();
             if let Some(el) = &enum_layout {
-                self.deep_copy_enum_heap_payload_in_place(&payload_name, new_box, el);
+                // B-2026-08-07-12 root B — an `Option`/`Result` payload's layout
+                // is the ERASED GENERIC one, and the helper below drives entirely
+                // off `field_drop_kinds`. For `Option[String]` that reports the
+                // `Some` field as heap-free, so `has_heap` is false, the variant's
+                // case block is never emitted, and NOTHING is copied: the fresh box
+                // above ends up holding a bitwise duplicate whose `String` pointer
+                // still aims at the caller's buffer. Two boxes, one buffer, and
+                // both frames' drops free it — a double free at BOTH opt levels,
+                // reachable with a callee whose body never touches the field.
+                //
+                // Route the CONCRETE payload `TypeExpr` back through the
+                // inline-payload copier instead, which resolves `String` / `Vec` /
+                // `shared` / struct / enum from the type rather than the layout.
+                // The two functions are already designed as a pair — this is the
+                // return leg of the hand-off documented at
+                // `deep_copy_option_inline_payload_in_place`'s struct/enum arm —
+                // and the recursion terminates because each hop strips one
+                // `Option`/`Result` level until the payload is a buffer, an
+                // aggregate, or a scalar that copies nothing.
+                match payload_name.as_str() {
+                    "Option" => self.deep_copy_option_inline_payload_in_place(new_box, &payload_te),
+                    "Result" => {
+                        // Same disjoint-class split the struct-FIELD arm makes.
+                        if self.result_field_struct_enum_payload_ok(&payload_te) {
+                            self.deep_copy_result_struct_enum_payload_in_place(new_box, &payload_te)
+                        } else {
+                            self.deep_copy_result_inline_heap_halves_in_place(new_box, &payload_te)
+                        }
+                    }
+                    _ => self.deep_copy_enum_heap_payload_in_place(&payload_name, new_box, el),
+                }
             } else {
                 self.deep_copy_struct_heap_fields_in_place(new_box, &payload_name);
             }

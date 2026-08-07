@@ -3000,10 +3000,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 let llvm_heap = self.aggregate_has_heap_field(agg_ty);
                 let src_heap_copyable = !llvm_heap
                     && self.aggregate_param_copy_supported_struct(&name, &mut Vec::new())
-                    && (self
-                        .struct_field_type_exprs
-                        .get(&name)
-                        .is_some_and(|ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)))
+                    && (self.struct_field_type_exprs.get(&name).is_some_and(|ftes| {
+                        ftes.iter().any(|f| {
+                            self.type_expr_has_drop_heap(f)
+                                // B-2026-08-07-12 root A — `type_expr_has_drop_heap`
+                                // hardcodes `"Option" | "Result" => false`, and
+                                // `aggregate_has_heap_field` above is LLVM-structural
+                                // so an erased `Option` payload never matches its
+                                // `{ptr,len,cap}` test either. Both signals blind
+                                // means `f(S { s: Option.Some("x") })` registered NO
+                                // caller temp drop and leaked the buffer at BOTH opt
+                                // levels — ordinary `karac build` output, not an -O0
+                                // curiosity. The FN-CALL arm of this same function
+                                // already ORs this companion in (B-2026-08-05-22);
+                                // the struct-LITERAL arm never got it, which is why
+                                // `f(mk())` was clean and `f(S { .. })` was not.
+                                //
+                                // A sibling plain `String` field masked it entirely:
+                                // the struct then qualified via `llvm_heap` and its
+                                // drop freed the `Option` field correctly. So the
+                                // drop was always right and only this gate was wrong.
+                                || self.option_field_te_has_drop_heap(f)
+                        })
+                    })
                         // B-2026-07-03-28 shared leg — a copy-supported struct
                         // whose only heap is a `shared` / `Option[shared]` field is
                         // INVISIBLE to `type_expr_has_drop_heap` (it reports false
@@ -3348,7 +3367,18 @@ impl<'ctx> super::Codegen<'ctx> {
             && self
                 .struct_field_type_exprs
                 .get(name.as_str())
-                .is_some_and(|ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)))
+                .is_some_and(|ftes| {
+                    ftes.iter().any(|f| {
+                        // B-2026-08-07-12 root A, third site. Same blind spot as the
+                        // registrar's struct-literal arm: without the companion, a
+                        // struct whose ONLY heap is an `Option`/`Result` field is not
+                        // recognized as entry-copied, so the passthrough path never
+                        // reaches the registrar at all and the orphaned original
+                        // leaks. Kept in lockstep with that gate — they answer the
+                        // same question about the same structs.
+                        self.type_expr_has_drop_heap(f) || self.option_field_te_has_drop_heap(f)
+                    })
+                })
     }
 
     /// B-2026-08-01-14 — the ENUM sibling of

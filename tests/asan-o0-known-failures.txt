@@ -96,7 +96,19 @@
 # by-value calls per iteration orphans the CALLER's box, because the callee's
 # entry copy duplicates the box and shares the `String` inside it. That
 # reproduces with a non-consuming arm, with a callee whose body is `1`, and with
-# c25c949 stashed. It is B-2026-08-07-12, and it is what this line now waits on.
+# c25c949 stashed. It was filed as B-2026-08-07-12.
+#
+# B-2026-08-07-12's fix then took it from 5,120 B / 160 to 1,280 B / 40, and the
+# 40 that remain are a THIRD reason — so this one line has now outlived three
+# distinct causes, which is exactly why the list requires an explanation per
+# entry rather than a bug id alone.
+#
+# What is left is `scalar(V { o: Option.Some(Option.Some(n + i)) })`, whose
+# payload is ALL SCALAR. The caller-scope gate declines it correctly by its own
+# standard — there is no heap inside the `Option` — but the 32-byte ENVELOPE is
+# itself heap, and nothing owns it. That is the envelope-ownership question
+# B-2026-08-07-6 / -11 are about, reached here through a by-value struct
+# argument, and it is tracked as the remaining leg of B-2026-08-07-12.
 #
 # The lesson for the next attribution: a fixture written to exercise one row can
 # fail for a second row's reason, and "my fix should have emptied this line" is

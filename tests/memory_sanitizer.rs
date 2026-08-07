@@ -36358,6 +36358,94 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-12 — a struct passed BY VALUE whose only heap lives inside
+    /// an `Option`/`Result` field. Two independent roots, and the fixture holds
+    /// both because fixing either alone makes the other worse.
+    ///
+    /// ROOT A, THE GATE (the `take_o` / `take_r` / `take_ov` rows). The
+    /// caller-scope drop for a fresh struct-literal argument was gated on two
+    /// signals that are both blind to `Option`: `aggregate_has_heap_field` is
+    /// LLVM-structural and an erased `Option` payload is not the `{ptr,len,cap}`
+    /// shape, and `type_expr_has_drop_heap` hardcodes `"Option" | "Result" =>
+    /// false`. Nothing was registered and the buffer leaked — at BOTH opt
+    /// levels, so this was ordinary `karac build` output. The FN-CALL arm of the
+    /// same registrar already ORed in `option_field_te_has_drop_heap`; the
+    /// struct-literal arm and `arg_is_entry_copied_heap_struct` did not.
+    ///
+    /// ROOT B, THE ENTRY COPY (the `take_b` rows). For a BOXED payload the
+    /// callee's entry copy mallocs a fresh envelope, copies the old box's value
+    /// into it, and then asked the ERASED generic `Option` layout to duplicate
+    /// what that value points at — which reports no heap, so nothing was
+    /// copied. Two boxes, one `String`, and both frames free it.
+    ///
+    /// WHY BOTH ARE HERE. Root A alone converts the boxed rows from a leak into
+    /// a DOUBLE FREE (measured: forcing the gate on with a sibling `String`
+    /// field, which is what `take_m` does, aborted at both opt levels). Root B
+    /// alone gives the callee its own `String` and then strands the caller's, a
+    /// NEW -O2 leak in the `take_b` rows. Only together is every row clean, and
+    /// that is exactly what this fixture asserts.
+    ///
+    /// `take_b(mk_b(..))` is not decoration: because the fn-call arm already had
+    /// root A's disjunct, that spelling was a live double free on main before
+    /// root B — corruption reachable with a callee whose body is a literal.
+    ///
+    /// CONTROLS. `take_p` is a plain `String` field (always worked, must not
+    /// double-free now that its neighbours register too). `take_t` is the
+    /// sibling-field shape whose accidental correctness localized the bug.
+    /// `borrow_o` is a `ref` param, which must stay caller-owned — registering
+    /// a caller temp drop there would be a second owner, not a first.
+    ///
+    /// Expected value is COMPUTED: 1+2+4+8+16+16+32+64+128 = 271 per iteration,
+    /// x40 = 10840.
+    #[test]
+    fn asan_by_value_struct_option_field_owned_no_leak_no_double_free() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct P { s: String }
+struct O { s: Option[String] }
+struct R { s: Result[String, i64] }
+struct Ov { s: Option[Vec[String]] }
+struct B { o: Option[Option[String]] }
+struct M { a: String, o: Option[Option[String]] }
+struct T { a: String, s: Option[String] }
+fn take_p(x: P) -> i64 { 1 }
+fn take_o(x: O) -> i64 { 2 }
+fn take_r(x: R) -> i64 { 4 }
+fn take_ov(x: Ov) -> i64 { 8 }
+fn take_b(x: B) -> i64 { 16 }
+fn take_m(x: M) -> i64 { 32 }
+fn take_t(x: T) -> i64 { 64 }
+fn borrow_o(x: ref O) -> i64 { 128 }
+fn mk_b(k: i64) -> B { B { o: Option.Some(Option.Some(f"boxed-call-{k}")) } }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        acc = acc + take_p(P { s: f"plain-{n + i}" });
+        acc = acc + take_o(O { s: Option.Some(f"opt-{n + i}") });
+        acc = acc + take_r(R { s: Result.Ok(f"res-{n + i}") });
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"vec-{n + i}");
+        acc = acc + take_ov(Ov { s: Option.Some(v) });
+        let b: B = B { o: Option.Some(Option.Some(f"boxed-named-{n + i}")) };
+        acc = acc + take_b(b);
+        acc = acc + take_b(mk_b(n + i));
+        acc = acc + take_m(M { a: f"sib-{n + i}", o: Option.Some(Option.Some(f"boxed-sib-{n + i}")) });
+        acc = acc + take_t(T { a: f"a-{n + i}", s: Option.Some(f"t-{n + i}") });
+        let bo: O = O { s: Option.Some(f"borrow-{n + i}") };
+        acc = acc + borrow_o(bo);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["10840"],
+            "by_value_struct_option_field_owned",
+            100,
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words
