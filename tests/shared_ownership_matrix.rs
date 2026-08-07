@@ -76,6 +76,49 @@ mod shared_ownership_matrix_tests {
         })
     }
 
+    /// Does LeakSanitizer actually report a leak on this host, right now?
+    ///
+    /// Compiles a C program that leaks 1 KiB and runs it under
+    /// `detect_leaks=1`; LSan reporting the leak makes the run FAIL, so
+    /// failure here is the healthy answer. Both `ASAN_OPTIONS` and
+    /// `LSAN_OPTIONS` are set explicitly — the latter takes precedence for
+    /// leak detection, and an inherited `LSAN_OPTIONS=detect_leaks=0` is one
+    /// of the ways B-2026-08-06-34's silent-inertness happens.
+    #[cfg(target_os = "linux")]
+    fn leak_detection_works() -> bool {
+        static WORKS: OnceLock<bool> = OnceLock::new();
+        *WORKS.get_or_init(|| {
+            let pid = std::process::id();
+            let c = format!("/tmp/karac_matrix_lsan_probe_{pid}.c");
+            let exe = format!("/tmp/karac_matrix_lsan_probe_{pid}");
+            if std::fs::write(
+                &c,
+                "#include <stdlib.h>\nint main(void){ volatile void *p = malloc(1024); (void)p; return 0; }\n",
+            )
+            .is_err()
+            {
+                return false;
+            }
+            let built = Command::new("cc")
+                .args(["-fsanitize=address", &c, "-o", &exe])
+                .output()
+                .ok()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            let detected = built
+                && Command::new(&exe)
+                    .env("ASAN_OPTIONS", "detect_leaks=1:abort_on_error=0:exitcode=23")
+                    .env("LSAN_OPTIONS", "detect_leaks=1")
+                    .output()
+                    .ok()
+                    .map(|o| !o.status.success())
+                    .unwrap_or(false);
+            let _ = std::fs::remove_file(&c);
+            let _ = std::fs::remove_file(&exe);
+            detected
+        })
+    }
+
     #[derive(PartialEq, Eq, Clone, Copy, Debug)]
     enum Outcome {
         Clean,
@@ -122,7 +165,27 @@ mod shared_ownership_matrix_tests {
             } else {
                 "detect_leaks=0:abort_on_error=0:exitcode=23"
             };
-            let out = Command::new(&exe).env("ASAN_OPTIONS", opts).output().ok()?;
+            // LSAN_OPTIONS too, and that is not belt-and-braces: it takes
+            // PRECEDENCE over `ASAN_OPTIONS` for leak detection, so an
+            // inherited `LSAN_OPTIONS=detect_leaks=0` silences LeakSanitizer
+            // while this closure believes it asked for it. Every cell then
+            // reads `Clean`, the ratchet reads that as a frontier improvement,
+            // and its own message tells the reader to relax the table —
+            // deleting four real leaks from the gate. That is B-2026-08-06-34,
+            // reproduced exactly by prefixing this test with
+            // `LSAN_OPTIONS=detect_leaks=0`.
+            let out = Command::new(&exe)
+                .env("ASAN_OPTIONS", opts)
+                .env(
+                    "LSAN_OPTIONS",
+                    if detect_leaks {
+                        "detect_leaks=1"
+                    } else {
+                        "detect_leaks=0"
+                    },
+                )
+                .output()
+                .ok()?;
             Some((
                 out.status.success(),
                 String::from_utf8_lossy(&out.stdout).trim().to_string(),
@@ -396,6 +459,34 @@ mod shared_ownership_matrix_tests {
             rows.join("\n")
         );
 
+        // 0. DETECTOR CONTROL, and it has to come first: every assertion below
+        //    reads a *negative* result (no leak, no error) as good news, so a
+        //    LeakSanitizer that is not running makes the whole grid look
+        //    perfect. B-2026-08-06-34 was exactly that — four expected-`Leak`
+        //    cells reported `Clean`, and the ratchet's own message invited the
+        //    reader to relax the table and erase them.
+        //
+        //    The probe is a C program that mallocs and never frees, NOT a Kāra
+        //    one, and that choice is the point: it tests the INSTRUMENT, so no
+        //    amount of compiler progress can turn it green and quietly retire
+        //    the guard. (A Kāra canary was tried first and is unwritable —
+        //    every `shared` shape that leaks today is a bug someone will fix,
+        //    which makes the control circular.) Same discipline as
+        //    B-2026-08-04-17's non-vacuity floor, one level up: that proves the
+        //    PROGRAM allocated, this proves the DETECTOR looks.
+        //
+        //    Linux-only — macOS Apple-clang ASAN ships no LSan at all, which is
+        //    why the Leak/Clean split is already documented as meaningful only
+        //    on the CI `memory-sanitizer` job.
+        #[cfg(target_os = "linux")]
+        assert!(
+            leak_detection_works(),
+            "LEAK DETECTION IS INERT: a C program that mallocs and never frees ran CLEAN under \
+             `detect_leaks=1`, so every `Clean` in the grid above is unproven and a \
+             `Leak`->`Clean` flip here means nothing. Check for an inherited \
+             LSAN_OPTIONS/ASAN_OPTIONS, a container without ptrace, or an LSan-less toolchain. \
+             Do NOT relax FLOWS.expected on the strength of this run (B-2026-08-06-34)."
+        );
         // 1. Safety invariant — a UAF / double-free is never acceptable.
         assert!(
             mem_errors.is_empty(),
