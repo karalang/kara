@@ -36484,6 +36484,95 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-11 leg (c) — the `Vec`-ELEMENT peer, and the only member of
+    /// this family that leaks at the DEFAULT `-O2`.
+    ///
+    /// `vec_elem_agg_drop_for_type_expr`'s `Option` arm asked three questions of
+    /// the PAYLOAD — is it an inline `{ptr,len,cap}` overlay, a shared handle, a
+    /// droppable struct/enum — and a boxed scalar answers no to all three, so a
+    /// `Vec[Option[Option[i64]]]` element got no per-element drop at all. Same
+    /// missing-owner shape 31768650 fixed for a struct FIELD, one container
+    /// over, and it takes the same admission test
+    /// (`option_payload_boxed_envelope_only`).
+    ///
+    /// THE SINGLE-BOX ARM IS THE DIAGNOSIS, not just a control. `v2` holds
+    /// `Option[Option[i64]]` — exactly one envelope, no chain anywhere — and it
+    /// leaked, which is what distinguishes a missing OWNER from a missing chain
+    /// walk. Legs (a) and (b) of this row both had to be fixed in that order too:
+    /// give the outermost envelope an owner first, and the chain follows.
+    ///
+    /// AND IT IS NOT `-O0`-ONLY, which every other shape in this family was.
+    /// A `Vec` keeps its buffer live past the point LLVM can fold a frame-local
+    /// envelope away, so pre-fix this program lost 5,120 B definitely plus
+    /// 3,840 B indirectly at the DEFAULT opt level (6,400 + 5,120 at `-O0`).
+    /// An ordinary `karac build` leaks here. That is why this fixture carries a
+    /// real floor while its two siblings are unfloored — at `-O2` it performs
+    /// 766 allocations rather than the baseline 6.
+    ///
+    /// ARMS: `v2` single box; `v3` a chain; `v4` two envelopes below the first;
+    /// `vs` a `Vec[Option[String]]` inline-overlay control that the existing
+    /// `option_payload_inline_recursive_drop_ok` route already covered and that
+    /// must not gain a second owner; `vp` a `Vec[Option[i64]]` heapless control
+    /// with no box at all; `vu` a pushed element never read back. The
+    /// `Some(None)` and `None` elements in `v2` are the guard controls — each
+    /// leaves the payload words holding a value rather than a pointer.
+    ///
+    /// The expected value is COMPUTED: four arms subtract the opaque
+    /// `env.args().len()` seed back out to leave `i` and the String arm
+    /// contributes 1 — `4i + 1` per iteration, so `4 * (0+…+39) + 40 = 3160`.
+    #[test]
+    fn asan_vec_element_boxed_enum_envelope_owned() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let mut v2: Vec[Option[Option[i64]]] = Vec.new();
+        v2.push(Option.Some(Option.Some(n + i)));
+        v2.push(Option.Some(Option.None));
+        v2.push(Option.None);
+        match v2[0] { Option.Some(Option.Some(x)) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let mut v3: Vec[Option[Option[Option[i64]]]] = Vec.new();
+        v3.push(a);
+        match v3[0] { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let mut v4: Vec[Option[Option[Option[Option[i64]]]]] = Vec.new();
+        v4.push(Option.Some(Option.Some(Option.Some(Option.Some(n + i)))));
+        match v4[0] { Option.Some(Option.Some(Option.Some(Option.Some(x)))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let mut vs: Vec[Option[String]] = Vec.new();
+        vs.push(Option.Some(mkstr(n + i)));
+        match vs[0] { Option.Some(t) => { if t.contains("envelope-") { acc = acc + 1; } } Option.None => { acc = acc - 1; } }
+
+        let mut vp: Vec[Option[i64]] = Vec.new();
+        vp.push(Option.Some(n + i));
+        match vp[0] { Option.Some(x) => { acc = acc + x - n; } Option.None => { acc = acc - 1; } }
+
+        let mut vu: Vec[Option[Option[Option[i64]]]] = Vec.new();
+        vu.push(Option.Some(Option.Some(Option.Some(n + i))));
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["3160"],
+            "vec_element_boxed_enum_envelope_owned",
+            300,
+        );
+    }
+
     /// B-2026-08-07-7 — a match arm binding the INTERIOR out of a struct
     /// field whose `Option` payload is heap-BOXED. Double free at BOTH opt
     /// levels before this: corruption, where every sibling shape merely leaks.

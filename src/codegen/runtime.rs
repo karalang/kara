@@ -2441,6 +2441,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         return self.emit_option_drop_fn(payload);
                     }
+                    // B-2026-08-07-11 leg (c) — the `Vec`-element peer of
+                    // 31768650's struct-field arm: the ENVELOPE is heap even
+                    // when what it holds is not. Every test above asks whether
+                    // the PAYLOAD owns heap, so a `Vec[Option[Option[i64]]]`
+                    // answers no to all of them and the element got no drop at
+                    // all — yet a payload wider than the 3-word area was
+                    // heap-BOXED by `coerce_to_payload_words`, and that 32-byte
+                    // box was owned by nobody. Measured 320 B / 10 at -O0 for a
+                    // single `v.push(b)`, and the SINGLE-box case leaking is
+                    // what identifies this as a missing owner rather than a
+                    // missing chain walk.
+                    //
+                    // `option_payload_boxed_envelope_only` is the same
+                    // admission test the struct-field arm uses, and its
+                    // restriction to a non-shared struct-or-seeded-enum head is
+                    // the soundness condition rather than a convenience: it is
+                    // the set the element COPY descends into, and copy and drop
+                    // have to be the same set or a tuple payload ends up with
+                    // one box between two owners.
+                    if self.option_payload_boxed_envelope_only(payload) {
+                        return self.emit_option_drop_fn(payload);
+                    }
                 }
             }
             return None;
