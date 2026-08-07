@@ -18896,6 +18896,89 @@ fn main() {
     }
 
     #[test]
+    fn asan_diverging_type_param_name_generic_struct_param() {
+        // B-2026-08-07-18. The whole trigger is a COSMETIC choice: naming a
+        // generic fn's type param differently from the struct's. `fn t[U](x:
+        // Mix[U])` corrupted where the character-for-character identical `fn
+        // t[T](x: Mix[T])` was clean, at the DEFAULT -O2.
+        //
+        // `mono_struct_type_from_active_subst` resolves the STRUCT's fields
+        // through the FN's substitution, so the two agree only by name
+        // coincidence. On the diverging spelling the entry-copy arm declines,
+        // own-by-transfer takes it, and its drop was keyed by BARE NAME inside
+        // the monomorph — synthesized against the ERASED base layout. For
+        // `Mix[T] { v: T, s: String }` field 1 sits at byte 8 erased and byte
+        // 24 mono, so the drop read field 0's LENGTH WORD and freed it (the
+        // reported bad address was `0x4` for a 4-char payload — the length, not
+        // a pointer).
+        //
+        // Both halves are pinned here because the fix needed both:
+        //
+        //   * the FRESH-TEMP arg, where the callee is the only owner. Every
+        //     shape below leaked or corrupted before; a struct with no concrete
+        //     heap sibling (`Pair[T] { a: T, b: T }`) leaked instead of
+        //     corrupting, because there was no concrete field for the mis-GEP'd
+        //     drop to reach.
+        //   * the NAMED binding, which is the regression direction. Correcting
+        //     the drop's layout made it REAL, and the generic call path never
+        //     retracted the caller's drop for an identifier argument the way
+        //     `compile_call` does — so the fix's first cut turned this row's
+        //     leak into a fresh double free in shapes that had been clean.
+        //     `C`/`D` below are exactly those: clean before, double-freeing
+        //     mid-fix, clean now.
+        //
+        // The matching-name spellings ride along as controls: they take the
+        // entry-copy arm instead and their IR must not move.
+        assert_clean_asan_run(
+            r#"
+struct Mix[T] { v: T, s: String }
+struct MixC[T] { v: T, s: String }
+struct Scal[T] { v: T, n: i64 }
+struct Lone[T] { v: T }
+struct Pr[T] { a: T, b: T }
+struct PrC[T] { a: T, b: T }
+
+fn diverge[U](x: Mix[U]) -> i64 { 1 }
+fn same[T](x: MixC[T]) -> i64 { 1 }
+fn scal[U](x: Scal[U]) -> i64 { 1 }
+fn lone[U](x: Lone[U]) -> i64 { 1 }
+fn pair[U](x: Pr[U]) -> i64 { 1 }
+fn pair_same[T](x: PrC[T]) -> i64 { 1 }
+
+fn main() {
+    // Runtime-derived payload: a constant-folded one is a dead allocation the
+    // optimizer deletes, and the fixture then passes vacuously against the
+    // unfixed compiler (B-2026-08-04-17).
+    let n: i64 = env.args().len();
+    let mut i: i64 = 0;
+    while i < 3 {
+        // Fresh temps — the callee is the sole owner.
+        println(diverge(Mix { v: "diverging-payload-past-inline".repeat(n), s: "sibling-payload-past-inline".repeat(n) }));
+        println(same(MixC { v: "control-payload-past-inline".repeat(n), s: "sibling-payload-past-inline".repeat(n) }));
+        println(pair(Pr { a: "bare-a-payload-past-inline".repeat(n), b: "bare-b-payload-past-inline".repeat(n) }));
+        println(pair_same(PrC { a: "bare-a-payload-past-inline".repeat(n), b: "bare-b-payload-past-inline".repeat(n) }));
+        // Named bindings — the caller owns until it retracts.
+        let m = Mix { v: "named-payload-past-inline".repeat(n), s: "named-sibling-past-inline".repeat(n) };
+        println(diverge(m));
+        let sc = Scal { v: "scalar-sibling-payload-past-inline".repeat(n), n: i };
+        println(scal(sc));
+        let lo = Lone { v: "lone-bare-payload-past-inline".repeat(n) };
+        println(lone(lo));
+        let pr = Pr { a: "named-a-payload-past-inline".repeat(n), b: "named-b-payload-past-inline".repeat(n) };
+        println(pair(pr));
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1",
+                "1", "1", "1", "1", "1", "1", "1", "1",
+            ],
+            "diverging_type_param_name_struct_param",
+        );
+    }
+
+    #[test]
     fn asan_generic_struct_heap_field_move_out_no_double_free() {
         // B-2026-07-18-44: a generic struct's owned-by-value param/self whose
         // heap String field is returned (moved out). The monomorph analogue of

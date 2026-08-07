@@ -77,22 +77,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `true` if ownership was taken; `false` if the param was left on the
     /// caller-retains model (no copy, no drop — status quo). See the module
     /// doc for the full rationale.
-    pub(super) fn make_aggregate_param_callee_owned(
-        &mut self,
-        type_name: &str,
-        slot: PointerValue<'ctx>,
-    ) -> bool {
-        self.make_aggregate_param_callee_owned_inst(type_name, slot, None)
-    }
-
-    /// [`Self::make_aggregate_param_callee_owned`] with the param's declared
+    ///
+    /// Takes the param's declared
     /// generic INSTANTIATION (`Box[String]` for `fn sink(b: Box[String])`),
     /// recorded per-binding in `enum_inst_var_types` at the param-registration
     /// site. It is threaded to the own-by-transfer arm below, whose drop is
     /// otherwise synthesized against the ERASED declaration and emits nothing
-    /// (B-2026-08-05-33 predicate (a)). `None` — a non-generic struct, or a
-    /// monomorph body, where the ACTIVE subst already resolves the fields —
-    /// reproduces the previous behavior exactly.
+    /// (B-2026-08-05-33 predicate (a)).
+    ///
+    /// `inst` reaches ONLY that arm's drop, never an arm-selection predicate —
+    /// every one of those is name-keyed. So passing it corrects a drop's
+    /// LAYOUT without moving the ownership decision, which is what makes it
+    /// safe to thread from a call site that previously passed `None`.
+    ///
+    /// A MONOMORPH BODY NEEDS IT TOO, and the belief that it did not was
+    /// B-2026-08-07-18. The active subst is keyed by the enclosing FN's
+    /// type-param names, so it resolves the struct's fields only when the two
+    /// happen to agree — `fn f[T](x: Mix[T])` yes, `fn f[U](x: Mix[U])` no.
+    /// On the diverging spelling the entry-copy arm declines, own-by-transfer
+    /// takes it, and with `None` its drop reads the base layout: for
+    /// `Mix[T] { v: T, s: String }` that is field 0's LENGTH word, freed as a
+    /// pointer. `inst` binds the struct's params POSITIONALLY instead, so the
+    /// name coincidence stops mattering. `None` remains correct only where
+    /// there is no generic instantiation to resolve.
     pub(super) fn make_aggregate_param_callee_owned_inst(
         &mut self,
         type_name: &str,

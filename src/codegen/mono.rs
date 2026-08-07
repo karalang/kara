@@ -1344,29 +1344,54 @@ impl<'ctx> super::Codegen<'ctx> {
         // span carries no annotation — that would trade B-2026-08-07-15's
         // corruption for a leak. Collapsing them into `Option::is_some` reads
         // the second question off an answer to the first.
-        let mono_agg: Vec<(bool, Option<TypeExpr>)> = {
+        // B-2026-08-07-18 — the IDENTIFIER-argument companion, decided in the
+        // same subst-installed block for the same reason: only the callee's
+        // view can tell the two arms apart.
+        //
+        // The own-by-transfer arm's safety argument is a LOCKSTEP — the callee
+        // takes the caller's buffers, so the caller must give up its drop — and
+        // `compile_call` honours it on the concrete path via
+        // `move_declined_copy_struct_arg`. This path never did: everything
+        // below reasons about struct LITERALS, so `t(b)` for a let-bound `b`
+        // left the binding and the callee both owning the same buffers.
+        //
+        // It stayed invisible because the callee's drop was not real. Keyed by
+        // bare name in a monomorph it was synthesized against the ERASED layout
+        // and freed a length word (the -18 corruption) or, for an all-bare-`T`
+        // struct with no concrete field, was never emitted at all (the -18
+        // leak). Giving that drop the instantiation is what turned the missing
+        // retraction into an observable double free.
+        let mut mono_agg: Vec<(bool, Option<TypeExpr>)> = Vec::new();
+        let mut transfer_ident: Vec<bool> = Vec::new();
+        {
             let saved_names = std::mem::replace(&mut self.type_subst_names, subst_names.clone());
             let saved_type_exprs =
                 std::mem::replace(&mut self.type_subst_type_exprs, subst_type_exprs.clone());
-            let insts = args
-                .iter()
-                .map(|a| {
-                    let ExprKind::StructLiteral { path, .. } = &a.value.kind else {
-                        return (false, None);
-                    };
-                    let Some(sname) = path.last() else {
-                        return (false, None);
-                    };
-                    if !self.mono_entry_copies_aggregate_param(sname) {
-                        return (false, None);
-                    }
-                    (true, self.enum_inst_type_from_span(&a.value))
-                })
-                .collect();
+            for a in args.iter() {
+                mono_agg.push(match &a.value.kind {
+                    ExprKind::StructLiteral { path, .. } => match path.last() {
+                        Some(sname) if self.mono_entry_copies_aggregate_param(sname) => {
+                            (true, self.enum_inst_type_from_span(&a.value))
+                        }
+                        _ => (false, None),
+                    },
+                    _ => (false, None),
+                });
+                transfer_ident.push(match &a.value.kind {
+                    ExprKind::Identifier(var) => self
+                        .var_type_names
+                        .get(var.as_str())
+                        .cloned()
+                        .is_some_and(|sname| {
+                            let entry_copies = self.mono_entry_copies_aggregate_param(&sname);
+                            self.struct_param_owned_by_transfer(&sname, entry_copies)
+                        }),
+                    _ => false,
+                });
+            }
             self.type_subst_names = saved_names;
             self.type_subst_type_exprs = saved_type_exprs;
-            insts
-        };
+        }
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             let flows_into_return = self.call_arg_flows_into_return(name, i);
@@ -1378,6 +1403,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     mono_agg[i].1.clone(),
                     mono_agg[i].0,
                 );
+            }
+        }
+        // The retraction itself runs with the CALLER's substitution restored —
+        // it edits caller-scope cleanup frames — while the decision above was
+        // made under the callee's. See `struct_param_owned_by_transfer`.
+        for (i, a) in args.iter().enumerate() {
+            if transfer_ident[i] {
+                self.move_declined_copy_struct_arg(&a.value);
             }
         }
 
@@ -2419,9 +2452,39 @@ impl<'ctx> super::Codegen<'ctx> {
             // MUST stay paired (the callee returns an INDEPENDENT copy, so the
             // caller's original is orphaned without it). `ref`/`mut ref` params
             // (borrows, no ownership) are excluded by the `Path(_)`-only gate.
+            // B-2026-08-07-18 — the param's CONCRETE instantiation, resolved
+            // HERE rather than at the recording site below, because the
+            // ownership call needs it and used to run first.
+            //
+            // Only the own-by-transfer arm's DROP reads it: `inst` reaches
+            // `track_struct_var_inst`, which binds the STRUCT's own params
+            // POSITIONALLY from it (`Mix[U]` under `U -> String` gives
+            // `Mix[String]`, hence `T -> String`). Every arm-selection
+            // predicate in `make_aggregate_param_callee_owned_inst` is
+            // name-keyed and cannot see this, which is the point: the erased
+            // drop is corrected WITHOUT re-deciding who owns the param, so the
+            // caller-side predicates gated on that decision
+            // (`arg_is_entry_copied_heap_struct`, the flows-into-return gate)
+            // keep answering exactly as before.
+            //
+            // Without it the mono path passed `None` and the own-by-transfer
+            // drop was synthesized against the ERASED base layout — reading a
+            // heap field at the base offset, which for `Mix[T] { v: T, s:
+            // String }` is field 0's LENGTH word, and freeing it.
+            let param_inst = {
+                let peeled = match &param.ty.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                    _ => &param.ty,
+                };
+                self.concrete_generic_struct_inst(peeled)
+            };
             if matches!(&param.ty.kind, TypeKind::Path(_)) {
                 if let Some(concrete) = self.var_type_names.get(&param_name).cloned() {
-                    self.make_aggregate_param_callee_owned(&concrete, alloca);
+                    self.make_aggregate_param_callee_owned_inst(
+                        &concrete,
+                        alloca,
+                        param_inst.clone(),
+                    );
                 }
             }
             // B-2026-07-03-23 layer 4: record the CONCRETE generic instantiation
@@ -2436,15 +2499,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // through an `i64`-typed `gap` → module-verifier reject). Only
             // records when at least one generic arg is a bound type param — a
             // fully-concrete param instantiation is already covered by the
-            // struct-literal span record.
-            {
-                let peeled = match &param.ty.kind {
-                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
-                    _ => &param.ty,
-                };
-                if let Some(inst) = self.concrete_generic_struct_inst(peeled) {
-                    self.enum_inst_var_types.insert(param_name.clone(), inst);
-                }
+            // struct-literal span record. Computed above (B-2026-08-07-18
+            // moved it ahead of the ownership call, which needs the same
+            // value); this is the recording half, unchanged.
+            if let Some(inst) = param_inst {
+                self.enum_inst_var_types.insert(param_name.clone(), inst);
             }
             // B-2026-07-02-11: register the collection / String / struct
             // side-tables for the parameter via the same registrar
