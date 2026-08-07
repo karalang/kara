@@ -36702,6 +36702,7 @@ struct Ov { s: Option[Vec[String]] }
 struct B { o: Option[Option[String]] }
 struct M { a: String, o: Option[Option[String]] }
 struct T { a: String, s: Option[String] }
+struct Sc { o: Option[Option[i64]] }
 fn take_p(x: P) -> i64 { 1 }
 fn take_o(x: O) -> i64 { 2 }
 fn take_r(x: R) -> i64 { 4 }
@@ -36710,6 +36711,7 @@ fn take_b(x: B) -> i64 { 16 }
 fn take_m(x: M) -> i64 { 32 }
 fn take_t(x: T) -> i64 { 64 }
 fn borrow_o(x: ref O) -> i64 { 128 }
+fn take_sc(x: Sc) -> i64 { 256 }
 fn mk_b(k: i64) -> B { B { o: Option.Some(Option.Some(f"boxed-call-{k}")) } }
 fn main() {
     let n = env.args().len() as i64;
@@ -36729,12 +36731,15 @@ fn main() {
         acc = acc + take_t(T { a: f"a-{n + i}", s: Option.Some(f"t-{n + i}") });
         let bo: O = O { s: Option.Some(f"borrow-{n + i}") };
         acc = acc + borrow_o(bo);
+        acc = acc + take_sc(Sc { o: Option.Some(Option.Some(n + i)) });
+        let scn: Sc = Sc { o: Option.Some(Option.Some(n + i)) };
+        acc = acc + take_sc(scn) - 256;
         i = i + 1;
     }
     println(acc);
 }
 "#,
-            &["10840"],
+            &["21080"],
             "by_value_struct_option_field_owned",
             100,
         );

@@ -3338,7 +3338,25 @@ impl<'ctx> super::Codegen<'ctx> {
         p.generic_args.as_ref().is_some_and(|args| {
             args.iter().any(|g| match g {
                 GenericArg::Type(t) => {
-                    self.type_expr_has_drop_heap(t) || self.option_payload_struct_or_enum_drop_ok(t)
+                    self.type_expr_has_drop_heap(t)
+                        || self.option_payload_struct_or_enum_drop_ok(t)
+                        // B-2026-08-07-12 leg 2 — a BOXED payload that owns no
+                        // heap of its own still costs a 32-byte envelope, and
+                        // since B-2026-08-07-2 shape 3 the struct's field drop
+                        // frees it. This predicate exists to answer "will a drop
+                        // free something here, so a fresh temp needs an owner",
+                        // and for this shape the answer became yes when that drop
+                        // was added — without this it stayed no and the caller's
+                        // envelope was orphaned (320 B / 10 at -O0 for
+                        // `ig(V { o: Option.Some(Option.Some(n)) })`).
+                        //
+                        // It cannot double-free: the same predicate that admits
+                        // the drop also admits the entry COPY, so the callee's
+                        // struct holds a box of its own. The named-binding
+                        // spelling of this shape went clean under shape 3 for
+                        // exactly that reason; only the fresh temp, which has no
+                        // binding to hang an owner on, was left.
+                        || self.option_payload_boxed_envelope_only(t)
                 }
                 _ => false,
             })

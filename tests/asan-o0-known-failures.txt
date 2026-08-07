@@ -75,50 +75,28 @@
 # what the fixture's remaining 64 B turned out to be, a second leak of exactly
 # the same size hiding behind the first).
 
-# B-2026-08-07-12 — asan_struct_field_boxed_payload_interior_match_out_no_double_free
+# B-2026-08-07-12's entry
+# (asan_struct_field_boxed_payload_interior_match_out_no_double_free) was
+# REMOVED 2026-08-07, and THE LIST IS EMPTY AGAIN. The ratchet found it in the
+# "a listed fixture that starts PASSING fails the leg too" direction, which is
+# the whole reason that direction exists.
 #
-# ADDED 2026-08-07 under B-2026-08-07-7, RE-ATTRIBUTED the same day once that
-# row's own residue was fixed and the line did not go away. Both halves of the
-# history are worth keeping, because the re-attribution is the interesting part.
+# This one line outlived THREE distinct causes, worth recording because each
+# time it looked like the last:
+#   1. B-2026-08-07-7's arm zeroed the struct field's tag to stop a double free,
+#      and that same tag guards the envelope free — 32 B per consuming
+#      construction. Fixed by parking the box and releasing it box-only on the
+#      arm's own cleanup frame.
+#   2. What remained was the fixture's four BY-VALUE calls per iteration, whose
+#      callee entry copy duplicated the box and SHARED the `String` inside it.
+#      Fixed as B-2026-08-07-12's two roots.
+#   3. What remained after THAT was one call per iteration —
+#      `scalar(V { o: Some(Some(n + i)) })`, an ALL-SCALAR boxed payload. The
+#      caller-scope gate declined it correctly on heap grounds; that envelope is
+#      heap by no predicate's reckoning but the allocator's. Closed once
+#      B-2026-08-07-2 shape 3 gave the field a drop, which is what let
+#      `option_field_te_has_drop_heap` answer yes.
 #
-# The fixture's shape DOUBLE-FREED at both opt levels: a match arm binding the
-# interior out of a struct field whose `Option` payload is heap-boxed, where the
-# struct's deep drop frees the same `String` the arm's binding owns. c25c949
-# zeroes the field's tag so that drop skips the field — but that one tag guard
-# also gates the box free, so the 32-byte ENVELOPE leaked in the consuming case.
-# That was the original entry, and B-2026-08-07-7 predicted that giving the
-# envelope an owner would remove this line.
-#
-# It did not, and the arithmetic says why. At -O0 the fixture went 7,680 B over
-# 240 blocks to 5,120 B over 160: the 80 envelopes are gone — two consuming
-# sites (`bound`, `whole`) x 40 iterations — and 160 blocks remain. Those belong
-# to a defect that was inside this fixture all along: every one of its FOUR
-# by-value calls per iteration orphans the CALLER's box, because the callee's
-# entry copy duplicates the box and shares the `String` inside it. That
-# reproduces with a non-consuming arm, with a callee whose body is `1`, and with
-# c25c949 stashed. It was filed as B-2026-08-07-12.
-#
-# B-2026-08-07-12's fix then took it from 5,120 B / 160 to 1,280 B / 40, and the
-# 40 that remain are a THIRD reason — so this one line has now outlived three
-# distinct causes, which is exactly why the list requires an explanation per
-# entry rather than a bug id alone.
-#
-# What is left is `scalar(V { o: Option.Some(Option.Some(n + i)) })`, whose
-# payload is ALL SCALAR. The caller-scope gate declines it correctly by its own
-# standard — there is no heap inside the `Option` — but the 32-byte ENVELOPE is
-# itself heap, and nothing owns it. That is the envelope-ownership question
-# B-2026-08-07-6 / -11 are about, reached here through a by-value struct
-# argument, and it is tracked as the remaining leg of B-2026-08-07-12.
-#
-# The lesson for the next attribution: a fixture written to exercise one row can
-# fail for a second row's reason, and "my fix should have emptied this line" is
-# a prediction to MEASURE, not to act on. The envelope fix is pinned separately
-# by asan_struct_field_boxed_payload_match_out_envelope_owned, which uses only
-# local places precisely so no by-value call can contaminate it.
-#
-# Two rejected alternatives from B-2026-08-07-7 stay recorded there so a future
-# attempt does not re-walk them: making the drop box-only unconditionally costs
-# five passing sanitizer tests, and firing the suppression on any consuming
-# pattern (rather than a nested variant one) orphans 504 B in
-# asan_b04_7_option_heap_enum_struct_field_drop.
-memory_sanitizer_tests::asan_struct_field_boxed_payload_interior_match_out_no_double_free
+# The lesson rounds 2 and 3 paid for: "my fix should empty this line" is a
+# prediction to MEASURE. Twice the arithmetic said otherwise, and both times the
+# leftover was a different bug wearing the same fixture.
