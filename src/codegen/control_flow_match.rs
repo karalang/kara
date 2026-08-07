@@ -5233,6 +5233,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-08-06-31 — the MATCH-ARM half of the destructure mirror; the
+        // `let`-statement half lives in `finish_owned_struct_destructure`, and
+        // the self-host parser needs both. `base_ptr` may be an arm binding
+        // DEBOXED out of an enum payload box — this frame's private copy of a
+        // box the CALLER owns — in which case the zeroing above lands where
+        // that owner cannot see it and its drop frees a buffer this destructure
+        // just handed to a field binding. Recursing on the box reuses the same
+        // per-field walk, so a field the pattern did NOT consume keeps its live
+        // cap and the owner still frees it. One level: the box pointer is a
+        // fresh `inttoptr` and is never itself a key.
+        if let Some(box_ptr) = self.deboxed_payload_box_ptrs.get(&base_ptr).copied() {
+            self.suppress_destructured_struct_pattern_cleanup_at(box_ptr, struct_name, pattern);
+        }
     }
 
     /// Compute the in-place pointer to a place expression rooted at a local

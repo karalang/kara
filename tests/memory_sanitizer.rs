@@ -12001,51 +12001,61 @@ fn main() {
         );
     }
 
-    /// B-2026-08-06-31, FRESH-TEMP half — the caller-side arm that owns a boxed
-    /// STRUCT `Option` payload must free the payload's INTERIOR too, not just
-    /// the envelope.
+    /// B-2026-08-06-31 — the STRUCT-payload sibling of B-2026-08-06-9 leg A,
+    /// both halves.
     ///
     /// `H` is 4 LLVM words against `Option`'s seeded 3-word area, so
-    /// `coerce_to_payload_words` boxes it. `readk(Some(H { .. }))` did get a
-    /// caller-side `BoxedEnumDrop` (B-2026-08-05-7) — but a BOX-ONLY one, so
-    /// every payload's `String` leaked, at both opt levels.
+    /// `coerce_to_payload_words` boxes it. Leg A gave the CALLEE the box for a
+    /// boxed NON-struct payload and excluded struct ones; what that left behind
+    /// was two distinct holes:
+    ///
+    ///   * A NAMED binding (`let a: Option[H] = …; readk(a);`) had its slot
+    ///     zeroed as a move by the arg site, which disarmed the let-site
+    ///     `BoxedEnumDrop`, and nothing took over — 320 B of box per 10 calls
+    ///     at `-O0`, plus the interior.
+    ///   * A FRESH TEMP got a caller-side drop, but a BOX-ONLY one, so the
+    ///     payload's `String` leaked at BOTH opt levels.
     ///
     /// WHICH FRAME OWNS a boxed struct payload turns on the ARGUMENT FORM, not
-    /// on the callee, and all three forms are here because the fix has to land
-    /// on exactly one of them. A `FieldAccess` argument leaves the owning
-    /// struct's field drop in charge — `place_optres_field_whole_move_info`
-    /// refuses a boxed payload for exactly this reason, and `f(nd.hp)` was
-    /// already clean. A fresh temp has no owner but this arm. (The NAMED
-    /// binding form is the third, is NOT fixed, and is deliberately absent —
-    /// see the note below.)
+    /// on the callee, and all three forms are exercised because a fix has to
+    /// land on exactly one of them each time: a `FieldAccess` argument leaves
+    /// the owning struct's field drop in charge
+    /// (`place_optres_field_whole_move_info` refuses a boxed payload for that
+    /// reason, and `f(nd.hp)` was already clean), a named binding keeps its
+    /// let-site drop, and a fresh temp has neither.
     ///
-    /// MOVE-OUT ARMS are what make giving this drop an interior walk safe:
-    /// `take_label` moves a FIELD out and `take_all` moves the WHOLE payload
-    /// out, and each neutralizes through the box's own words
-    /// (B-2026-08-06-10's mirror, gated on this owned-param shape), which is
-    /// storage the caller's drop can see. Without the mirror these two would
-    /// abort instead of leaking, so they pin the interior walk in the
-    /// double-free direction while `readk` pins it in the leak direction.
+    /// THE MOVE-OUT ARMS ARE THE POINT, and there are THREE of them, not two.
+    /// Leaving the caller armed is only safe because a callee arm that moves
+    /// the payload out neutralizes through the box's own words —
+    /// B-2026-08-06-10's mirror, gated on this owned-param shape. That mirror
+    /// had consumers for a FIELD move-out (`x.label`) and a WHOLE-value move
+    /// (`return x`), and NOT for a LET-DESTRUCTURE (`let H { label, k } = x;`),
+    /// which neutralizes by retracting a cleanup action in the callee's own
+    /// queue — invisible to a caller whose drop fn reads the box's data.
     ///
-    /// Plus the controls a suppression-adjacent change needs: `None` sources on
-    /// both callee shapes, and a binding never passed at all, whose let-site
-    /// drop must still fire.
+    /// That third shape is why the first attempt at the named half was
+    /// reverted: it passed a matrix carrying only the first two and SIGSEGV'd
+    /// `selfhost_parser_matches_rust_parser_items`, whose `render_generics`
+    /// does exactly `let GenericParamsNode { params, span } = gp;` inside a
+    /// `Some(gp)` arm over a by-value param. Every one of the 17 corpus entries
+    /// that failed was a generic item. `take_destructure` below is that shape
+    /// reduced, and it is the arm that would catch a regression of it.
     ///
-    /// NOT COVERED — the NAMED-binding form (`let a: Option[H] = …; readk(a);`)
-    /// still strands its box at `-O0`. The arg site zeroes the slot as a move
-    /// and nothing takes over; leaving the binding armed instead was
-    /// implemented, passed this whole matrix, and SIGSEGV'd
-    /// `selfhost_parser_matches_rust_parser_items`. B-2026-08-06-31 stays open
-    /// for it with that measurement.
+    /// Plus the leak-direction controls a suppression change needs: `None`
+    /// sources on two callee shapes, and a binding never passed at all, whose
+    /// let-site drop must still fire.
     ///
-    /// Against the pre-fix compiler: 462 B in 80 allocations at the default
-    /// `-O2` and more at `-O0`, so unlike most of this family it bites on both
-    /// legs. Expected value COMPUTED — each scalar arm subtracts the opaque
-    /// `env.args().len()` seed back out to leave `i` and each byte-read arm
-    /// contributes 1, so `4i + 2` per iteration and
-    /// `4 * (0+…+39) + 40 * 2 = 3200`.
+    /// COVERAGE. Against the pre-fix compiler this is RED at BOTH opt levels —
+    /// the named half's box folds away at `-O2` but the fresh-temp interior
+    /// does not — so unlike most of this family it bites on the default leg as
+    /// well as the `-O0` one (`scripts/asan-o0-leg.sh`, B-2026-08-04-17).
+    ///
+    /// The expected value is COMPUTED, not read off a run: every payload is
+    /// seeded from the opaque `env.args().len()`, each scalar arm subtracts the
+    /// seed back out to leave `i`, and each byte-read arm contributes 1 —
+    /// `8i + 4` per iteration, so `8 * (0+…+39) + 40 * 4 = 6400`.
     #[test]
-    fn asan_boxed_struct_option_payload_freshtemp_arg_no_leak_no_double_free() {
+    fn asan_boxed_struct_option_payload_by_value_call_no_leak_no_double_free() {
         assert_clean_asan_run_min_allocs(
             r#"
 struct H { label: String, k: i64 }
@@ -12069,27 +12079,50 @@ fn take_all(h: Option[H]) -> H {
         Option.None => { return H { label: "none".to_string(), k: 0 }; }
     }
 }
+fn take_destructure(h: Option[H]) -> i64 {
+    match h {
+        Option.Some(x) => { let H { label, k } = x; if label.contains("row") { k } else { 0 - k } }
+        Option.None => 0,
+    }
+}
 
 fn main() {
     let n = env.args().len() as i64;
     let mut acc: i64 = 0;
     let mut i: i64 = 0;
     while i < 40 {
-        // A — FRESH TEMP, read-only callee: the interior leaked pre-fix.
-        acc = acc + readk(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })) - n;
-        // B — FRESH TEMP, callee moves a FIELD out.
-        if take_label(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })).contains("row") { acc = acc + 1; }
-        // C — FRESH TEMP, callee moves the WHOLE payload out.
-        let g: H = take_all(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }));
+        // A — NAMED binding, read-only callee.
+        let a: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        acc = acc + readk(a) - n;
+        // B — NAMED binding, callee moves a FIELD out.
+        let b: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        if take_label(b).contains("row") { acc = acc + 1; }
+        // C — NAMED binding, callee moves the WHOLE payload out.
+        let c: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        let g: H = take_all(c);
         acc = acc + g.k - n;
-        // D — FIELD ARGUMENT: the owning struct's drop stays in charge.
+        if g.label.contains("row") { acc = acc + 1; }
+        // C2 — NAMED binding, callee LET-DESTRUCTURES the payload. The
+        //      self-host `render_generics` shape; the third move-out mirror.
+        let c2: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
+        acc = acc + take_destructure(c2) - n;
+        // D — FRESH TEMP, read-only callee.
+        acc = acc + readk(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })) - n;
+        // E — FRESH TEMP, callee moves a FIELD out.
+        if take_label(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })).contains("row") { acc = acc + 1; }
+        // F — FRESH TEMP, callee moves the WHOLE payload out.
+        let g2: H = take_all(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }));
+        acc = acc + g2.k - n;
+        // F2 — FRESH TEMP, callee LET-DESTRUCTURES the payload.
+        acc = acc + take_destructure(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })) - n;
+        // G — FIELD ARGUMENT: the owning struct's drop stays in charge.
         let nd = Node { hp: Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }), k: 1 };
         acc = acc + readk(nd.hp) - n;
-        // E — None sources on both callee shapes.
+        // H — None sources on two callee shapes.
         let z: Option[H] = Option.None;
-        acc = acc + readk(z);
+        acc = acc + readk(z) + take_destructure(Option.None);
         if take_label(Option.None).contains("none") { acc = acc + 1; }
-        // F — NEVER passed: the let-site drop must still fire.
+        // I — NEVER passed: the let-site drop must still fire.
         let keep: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
         acc = acc + match keep { Option.Some(x) => x.k, Option.None => 0 } - n;
         i = i + 1;
@@ -12097,8 +12130,8 @@ fn main() {
     println(acc);
 }
 "#,
-            &["3200"],
-            "boxed_struct_option_payload_freshtemp_arg",
+            &["6400"],
+            "boxed_struct_option_payload_by_value_call",
             100,
         );
     }

@@ -1236,6 +1236,7 @@ pub(super) struct Codegen<'ctx> {
     /// shares B-2026-08-05-20's bookkeeping with its source. Conservative: a
     /// skip here leaves the pre-existing leak, the safe direction.
     pub(crate) boxed_moved_in_vars: std::collections::HashSet<String>,
+    pub(crate) boxed_struct_payload_vars: std::collections::HashSet<String>,
     /// B-2026-08-06-32 — bindings carrying a `NestedBoxedEnumDrop`, i.e. a box
     /// living inside the binding's INLINE payload area
     /// (`Result[Option[Wide], E]`).
@@ -7801,6 +7802,7 @@ impl<'ctx> Codegen<'ctx> {
             inline_option_agg_payload_vars: std::collections::HashSet::new(),
             boxed_enum_payload_vars: std::collections::HashSet::new(),
             boxed_moved_in_vars: std::collections::HashSet::new(),
+            boxed_struct_payload_vars: std::collections::HashSet::new(),
             nested_boxed_payload_vars: std::collections::HashSet::new(),
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             refinement_bases: HashMap::new(),

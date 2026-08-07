@@ -8837,6 +8837,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // taking ownership cannot double-free against it.
         let boxed_view_src: bool = matches!(&value.kind, ExprKind::Identifier(n)
             if self.boxed_optres_payload_view_vars.contains_key(n.as_str()));
+        // B-2026-08-06-31 — the box this view was DEBOXED from, when its owner
+        // is ANOTHER FRAME (B-2026-08-06-10's mirror; recorded only for an
+        // owned-param scrutinee). The branch below neutralizes by RETRACTION —
+        // `suppress_boxed_payload_view_move` cleared the box's `inner_drop_fn`
+        // — and deliberately writes no data, which is right in-frame and blind
+        // across a call: there the owner is the caller's synthesized drop fn
+        // reading the box's own words, and a retraction in this frame's cleanup
+        // queue is something it never sees. Mirror the field transfer into the
+        // box as well, the same data write the field-move-out and whole-move
+        // shapes already make.
+        let boxed_view_box_ptr: Option<PointerValue<'ctx>> = match &value.kind {
+            ExprKind::Identifier(n) => self
+                .variables
+                .get(n.as_str())
+                .map(|s| s.ptr)
+                .and_then(|p| self.deboxed_payload_box_ptrs.get(&p).copied()),
+            _ => None,
+        };
 
         // B-2026-07-09-12 clone-on-extract — is the source a VIEW whose heap the
         // source does NOT own (no registered struct-drop of its own)? Two source
@@ -8918,9 +8936,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if boxed_view_src && self.destructure_field_needs_cleanup(&field_te) {
                     // See `boxed_view_src`: the box's interior walk is already
                     // disarmed for this source, so the leaf must own the field.
-                    // No source cap-zeroing — there is no second owner to disarm.
+                    // No source cap-zeroing — IN-FRAME there is no second owner
+                    // to disarm.
                     if let Some(slot) = self.variables.get(&name).copied() {
                         self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
+                    }
+                    // ACROSS A CALL there is. See `boxed_view_box_ptr`: when the
+                    // box's owner is the caller, the retraction above is
+                    // invisible to it and only a write into the box's own words
+                    // moves the field's ownership. B-2026-08-06-31.
+                    if let Some(box_ptr) = boxed_view_box_ptr {
+                        self.zero_struct_field_move_cap(box_ptr, &struct_name, fname);
                     }
                 } else if let Some(src_ptr) = callee_owned_src {
                     // Callee-owned place source (see `callee_owned_src` above):
