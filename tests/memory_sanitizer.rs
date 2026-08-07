@@ -37072,6 +37072,104 @@ fn main() {
     }
 
     #[test]
+    fn asan_option_map_set_field_owned_by_transfer_no_leak_no_double_free() {
+        // B-2026-08-07-12 leg 1 — an `Option[Map]`/`Option[Set]` STRUCT FIELD
+        // is freed by the owning struct's drop, and every way of moving it out
+        // neutralizes the source exactly once.
+        //
+        // The field had no drop arm at all: a `Map`/`Set` handle is a single
+        // word, so it is neither the inline `{ptr,len,cap}` overlay
+        // `option_payload_inline_recursive_drop_ok` matches nor wide enough to
+        // be boxed, and its head is in neither `struct_types` nor
+        // `enum_layouts`. It fell through all three payload predicates. The
+        // GATE above them is the other half: it admitted only a copy-supported
+        // struct, and since B-2026-08-05-33 own-by-transfer is a second way to
+        // have exactly one owner — which is why `Sib` here carries a sibling
+        // `Option[String]`, a field that leaked purely because the gate fails
+        // per-STRUCT rather than per-field (1,351 B / 40 of this fixture's
+        // pre-fix total is that String, and it is clean the moment the Map
+        // field is deleted).
+        //
+        // THE MOVE ARMS ARE THE DOUBLE-FREE HALF and must be read with the
+        // leak arms, not separately: widening the drop without widening the
+        // move-site zero is a double free, per the pairing rule in
+        // `place_optres_field_move_info_ex`. `mo` covers the PATTERN leg
+        // (narrow class), `wm` the WHOLE-MOVE leg, `taken` the let-move leg,
+        // and `eat_om` the pattern leg reached inside a callee. Measured: with
+        // the classifier widened and the pattern leg left alone, the three
+        // pattern/whole shapes went from clean to 470 valgrind errors with
+        // invalid frees at BOTH opt levels.
+        //
+        // STASH-PROVEN RED at HEAD: 14,400 B / 200 blocks at -O2 and 15,751 B
+        // / 240 at -O0. The stdout is 20440 BEFORE and after, so an
+        // output-only E2E cannot observe this defect at all — the sanitizer
+        // twin is the whole test, which is why there is no codegen.rs peer.
+        // Expected total DERIVED, not read off a run: the per-iteration
+        // contributions are the disjoint bits 1+2+4+8+16+32+64+128+256 = 511
+        // (every `inner.len()` is 1, one entry per map), over 40 iterations =
+        // 20440.
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Om { s: Option[Map[i64, String]] }
+struct Os { s: Option[Set[i64]] }
+struct Sib { p: Option[String], m: Option[Map[i64, String]] }
+fn ignore_om(x: Om) -> i64 { 1 }
+fn consume_opt(o: Option[Map[i64, String]]) -> i64 {
+    match o {
+        Option.Some(inner) => { inner.len() }
+        Option.None => { 0 }
+    }
+}
+fn eat_om(x: Om) -> i64 {
+    match x.s {
+        Option.Some(inner) => { inner.len() }
+        Option.None => { 0 }
+    }
+}
+fn mk_map(k: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(k, f"mapv-{k}-padded-out-to-force-a-real-heap-buffer");
+    m
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Om = Om { s: Option.Some(mk_map(n + i)) };
+        acc = acc + 1;
+        let mut st: Set[i64] = Set.new();
+        st.insert(n + i);
+        let b: Os = Os { s: Option.Some(st) };
+        acc = acc + 2;
+        acc = acc + ignore_om(Om { s: Option.Some(mk_map(n + i)) }) * 4;
+        let named: Om = Om { s: Option.Some(mk_map(n + i)) };
+        acc = acc + ignore_om(named) * 8;
+        let sib: Sib = Sib { p: Option.Some(f"sib-{n + i}-padded-out-well-past-inline"), m: Option.Some(mk_map(n + i)) };
+        acc = acc + 16;
+        let mo: Om = Om { s: Option.Some(mk_map(n + i)) };
+        match mo.s {
+            Option.Some(inner) => { acc = acc + inner.len() * 32; }
+            Option.None => { acc = acc + 0; }
+        }
+        let wm: Om = Om { s: Option.Some(mk_map(n + i)) };
+        acc = acc + consume_opt(wm.s) * 64;
+        let lm: Om = Om { s: Option.Some(mk_map(n + i)) };
+        let taken = lm.s;
+        acc = acc + consume_opt(taken) * 128;
+        acc = acc + eat_om(Om { s: Option.Some(mk_map(n + i)) }) * 256;
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["20440"],
+            "option_map_set_field_owned_by_transfer",
+            100,
+        );
+    }
+
+    #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words
         // > Option's 3-word area / a user enum's 1-word enum-payload

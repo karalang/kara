@@ -2793,6 +2793,51 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.te_recursive_drop_fully_supported(payload_te)
     }
 
+    /// B-2026-08-07-12 leg 1 — an `Option`/`Result` payload that is a
+    /// `Map`/`Set` HANDLE, the one payload class with real heap that none of
+    /// the sibling predicates above admit.
+    ///
+    /// The handle is a single word, so it is neither the inline
+    /// `{ptr,len,cap}` overlay `option_payload_inline_recursive_drop_ok`
+    /// matches nor wide enough to be boxed, and its head is in neither
+    /// `struct_types` nor `enum_layouts`, so the struct/enum predicate refuses
+    /// it too. It fell through all three and an `Option[Map]` STRUCT FIELD got
+    /// no drop at all — measured 720 B / 10 iterations at BOTH opt levels for a
+    /// plain `let` with no call anywhere in the program.
+    ///
+    /// The head set is exactly what `emit_drop_fn_for_type_expr` routes to
+    /// `emit_map_drop_fn` (`Set` drops as `Map[T, ()]` per the §3.4 lock), and
+    /// that identity is the point rather than a coincidence: this predicate
+    /// exists to promise a REAL drop, so admitting a head the emitter bottoms
+    /// out on as the primitive no-op would arm the move-site zero against a
+    /// free that never runs — the "too wide" half of the pairing rule in
+    /// `place_optres_field_move_info_ex`, i.e. a leak. `HashMap`/`HashSet` are
+    /// deliberately absent for that reason: they appear in the classifier's
+    /// head lists but the drop emitter has no arm for them.
+    pub(super) fn option_payload_map_or_set_drop_ok(&self, payload_te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &payload_te.kind else {
+            return false;
+        };
+        let head = p.segments.first().map(String::as_str).unwrap_or("");
+        if !matches!(head, "Map" | "SortedMap" | "Set" | "SortedSet") {
+            return false;
+        }
+        // The emitter needs the concrete key/value (or element) types to build
+        // the per-entry drop; an unparameterised spelling would reach it with
+        // nothing to bind and fall through to the no-op.
+        let arity = if matches!(head, "Map" | "SortedMap") {
+            2
+        } else {
+            1
+        };
+        p.generic_args.as_ref().is_some_and(|a| {
+            a.len() >= arity
+                && a.iter()
+                    .take(arity)
+                    .all(|g| matches!(g, GenericArg::Type(_)))
+        })
+    }
+
     /// True iff `field_te` is `Option[P]` with `P` a non-shared user
     /// struct/enum the recursive drop family fully frees — the shape
     /// `track_inline_option_agg_payload_var` registers a leaf drop for

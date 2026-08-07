@@ -30238,6 +30238,74 @@ fn main() {
 /// value is. Seed is the literal 1 rather than `env.args().len()` for the usual
 /// reason: an in-process interpreter test would see the TEST binary's argv.
 #[test]
+fn test_option_map_set_field_transfers_and_frees_the_handle() {
+    // B-2026-08-07-12 leg 1 ORACLE. The codegen fix is a memory-ownership
+    // change with no observable output difference — stdout is 20440 both
+    // before and after — so this exists to pin the VALUE the sanitizer twin
+    // (`asan_option_map_set_field_owned_by_transfer_no_leak_no_double_free`)
+    // asserts, independently of the backend that leaks it. If a future change
+    // to `Option[Map]` field semantics alters what these moves observe, this
+    // fails on the interpreter and the ASAN fixture's expectation is wrong
+    // rather than merely unmet.
+    assert_eq!(
+        run(r#"struct Om { s: Option[Map[i64, String]] }
+struct Os { s: Option[Set[i64]] }
+struct Sib { p: Option[String], m: Option[Map[i64, String]] }
+fn ignore_om(x: Om) -> i64 { 1 }
+fn consume_opt(o: Option[Map[i64, String]]) -> i64 {
+    match o {
+        Option.Some(inner) => { inner.len() }
+        Option.None => { 0 }
+    }
+}
+fn eat_om(x: Om) -> i64 {
+    match x.s {
+        Option.Some(inner) => { inner.len() }
+        Option.None => { 0 }
+    }
+}
+fn mk_map(k: i64) -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(k, f"mapv-{k}-padded-out-to-force-a-real-heap-buffer");
+    m
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Om = Om { s: Option.Some(mk_map(n + i)) };
+        acc = acc + 1;
+        let mut st: Set[i64] = Set.new();
+        st.insert(n + i);
+        let b: Os = Os { s: Option.Some(st) };
+        acc = acc + 2;
+        acc = acc + ignore_om(Om { s: Option.Some(mk_map(n + i)) }) * 4;
+        let named: Om = Om { s: Option.Some(mk_map(n + i)) };
+        acc = acc + ignore_om(named) * 8;
+        let sib: Sib = Sib { p: Option.Some(f"sib-{n + i}-padded-out-well-past-inline"), m: Option.Some(mk_map(n + i)) };
+        acc = acc + 16;
+        let mo: Om = Om { s: Option.Some(mk_map(n + i)) };
+        match mo.s {
+            Option.Some(inner) => { acc = acc + inner.len() * 32; }
+            Option.None => { acc = acc + 0; }
+        }
+        let wm: Om = Om { s: Option.Some(mk_map(n + i)) };
+        acc = acc + consume_opt(wm.s) * 64;
+        let lm: Om = Om { s: Option.Some(mk_map(n + i)) };
+        let taken = lm.s;
+        acc = acc + consume_opt(taken) * 128;
+        acc = acc + eat_om(Om { s: Option.Some(mk_map(n + i)) }) * 256;
+        i = i + 1;
+    }
+    println(acc);
+}
+"#),
+        "20440\n"
+    );
+}
+
+#[test]
 fn test_bare_generic_param_map_field_transfers_the_handle() {
     assert_eq!(
         run(r#"struct Box[T] { v: T }

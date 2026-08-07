@@ -2390,14 +2390,41 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the premise does hold — an `Option[String]` payload
                         // binds to an arm binding with its own `FreeVecBuffer`.
                         if !self.option_payload_is_boxed(&pt) {
+                            // B-2026-08-07-12 leg 1 — the `Map`/`Set` handle
+                            // arm, added in the same commit as the classifier
+                            // disjunct it mirrors. The pairing rule above is
+                            // the whole reason it is here: once the struct drop
+                            // frees an `Option[Map]` field, a whole-value move
+                            // of that field MUST neutralize the source, or the
+                            // callee's cleanup and the owner's drop free one
+                            // handle twice.
                             return self.is_string_type_expr(&pt)
                                 || self.extract_vec_elem_type(&pt).is_some()
-                                || self.option_payload_struct_or_enum_drop_ok(&pt);
+                                || self.option_payload_struct_or_enum_drop_ok(&pt)
+                                || self.option_payload_map_or_set_drop_ok(&pt);
                         }
                         false
                     })
                 } else {
+                    // B-2026-08-07-12 leg 1 — the `Map`/`Set` handle joins the
+                    // NARROW class too, which is not the default for this leg
+                    // and needed measuring rather than reasoning.
+                    //
+                    // The narrow class exists because zeroing here is only
+                    // right when the ARM BINDING takes over the free, which is
+                    // true of an inline `{ptr,len,cap}` payload and false of a
+                    // struct/enum one (widening it wholesale is the change the
+                    // doc comment above records as turning a single free into a
+                    // leak). A `Map` handle behaves like the inline case, and
+                    // the measurement says so directly: with the classifier
+                    // widened and this leg left alone, `match s.m { Some(inner)
+                    // => .. }` went from clean to 470 valgrind errors with
+                    // invalid frees at BOTH opt levels — two frees, so the
+                    // binding demonstrably does own it, and the source has to
+                    // be neutralized.
                     self.option_inline_payload_elem(&field_te).is_some()
+                        || Self::option_payload_te(&field_te)
+                            .is_some_and(|pt| self.option_payload_map_or_set_drop_ok(&pt))
                 };
                 if !admitted {
                     return None;

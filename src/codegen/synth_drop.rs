@@ -1653,9 +1653,58 @@ impl<'ctx> super::Codegen<'ctx> {
         // 1 collects candidate indices; phase 2 synthesizes each drop fn (needs
         // `&mut self`, can't co-borrow `kinds`). The fn is stashed in
         // `option_drops` (a local enum can't carry a `FunctionValue<'ctx>`).
+        //
+        // B-2026-08-07-12 leg 1 — copy-support is ONE way to have exactly one
+        // owner, and since B-2026-08-05-33 it is no longer the only one.
+        // OWN-BY-TRANSFER is the other: the callee takes the caller's buffers
+        // outright and the caller retracts its drop, so the by-value param
+        // reaches the same single-owner state by transfer instead of by
+        // duplication. The gate never learned about it, and because it holds
+        // for the WHOLE struct it failed per-STRUCT rather than per-field —
+        // `struct S { p: Option[String], m: Option[Map[..]] }` leaked the
+        // STRING too (measured 1,051 B / 20 blocks at -O0, against 720 B / 10
+        // for the Map alone), and was clean the moment the Map field was
+        // deleted.
+        //
+        // The disjunct is safe for the same reason copy-support is, one step
+        // shorter: `struct_param_owned_by_transfer` already excludes every
+        // shape where a second owner could exist — a `shared`-owning struct
+        // (B-2026-08-05-32 keeps the CALLER's drop), a self-referential one
+        // (B-2026-07-28-3, the callee may store the alias into an owning
+        // container) and a generic one (the mono rescue reads the callee's
+        // subst, B-2026-08-06-2). What it leaves is a struct that no frame
+        // copies and exactly one frame frees.
+        //
+        // Widening the DROP obliges the move sites to widen with it — the
+        // pairing rule spelled out in `place_optres_field_move_info_ex`, whose
+        // whole-move admit is deliberately a mirror of this classifier. Both
+        // legs move in this commit; changing one alone converts this leak into
+        // a double free.
+        //
+        // A GENERIC struct is excluded here, and the exclusion is this call
+        // site's own rather than inherited. `struct_param_owned_by_transfer`
+        // takes `callee_entry_copies_mono` — the CALLEE's answer to whether the
+        // mono rescue fired — and B-2026-08-07-17's doc is explicit that only
+        // `compile_generic_call` can evaluate it, every other caller passing
+        // `false` because there is no active subst to consult. That reasoning
+        // holds for a CALL SITE, which asks about one callee. This is not a
+        // call site: it synthesizes ONE drop fn per struct TYPE, used at every
+        // death of that type, so it needs an answer true for all of them at
+        // once. A generic struct does not have one — at a concrete param it
+        // takes the transfer arm (-17), at a monomorph param the rescue
+        // entry-copies it — and B-2026-08-07-18 is open on a monomorph shape in
+        // this same family that miscompiles today. Passing `false` would let
+        // this gate inherit -17's widening into a path -17 never measured, so
+        // the generic case stays out until it is measured on its own; the
+        // non-generic answer is the one leg 1 verified.
         let mut option_drops: Vec<Option<FunctionValue<'ctx>>> = vec![None; kinds.len()];
-        let struct_callee_owned =
-            self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new());
+        let struct_non_generic = self
+            .struct_generic_params
+            .get(struct_name)
+            .is_none_or(|g| g.is_empty());
+        let struct_callee_owned = self
+            .aggregate_param_copy_supported_struct(struct_name, &mut Vec::new())
+            || (struct_non_generic && self.struct_param_owned_by_transfer(struct_name, false));
         if struct_callee_owned {
             let mut option_idxs: Vec<usize> = Vec::new();
             for (idx, k) in kinds.iter().enumerate() {
@@ -1712,11 +1761,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // freeing it here can't double-free the caller's copy. `Option[shared]`
                 // is excluded (its drop is the combined struct rc-dec walker, not
                 // this `OptionInline` free).
+                // B-2026-08-07-12 leg 1 — plus a `Map`/`Set` HANDLE payload.
+                // It has no entry copy to be symmetric with, and does not need
+                // one: this arm is now reachable for an own-by-transfer struct,
+                // where the callee takes the caller's handle and the caller
+                // retracts. Copy == drop holds at zero copies.
                 let payload_droppable = Self::option_payload_te(&field_te)
                     .map(|pt| {
                         self.is_string_type_expr(&pt)
                             || self.extract_vec_elem_type(&pt).is_some()
                             || self.option_payload_struct_or_enum_drop_ok(&pt)
+                            || self.option_payload_map_or_set_drop_ok(&pt)
                     })
                     .unwrap_or(false);
                 // B-2026-08-07-2 shape 3 — the ENVELOPE is heap even when what
@@ -1759,6 +1814,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     continue;
                 }
                 if !payload_droppable {
+                    continue;
+                }
+                // B-2026-08-07-12 leg 1 — a `Map`/`Set` payload is routed HERE
+                // rather than through `vec_elem_agg_drop_for_type_expr` below,
+                // and the split is deliberate. That helper is shared with the
+                // VEC-ELEMENT path, whose ownership story is its own: an
+                // element's drop is not gated on this struct gate, so teaching
+                // the helper would hand `Vec[Option[Map]]` a drop nothing in
+                // this commit measures. `emit_option_drop_fn` needs no new
+                // emitter — `emit_drop_fn_for_type_expr` already routes
+                // `Map`/`SortedMap` to `emit_map_drop_fn` and `Set`/`SortedSet`
+                // to the same fn as `Map[T, ()]` — and its parameter is a
+                // pointer to the handle SLOT, which is exactly what the
+                // payload area hands it.
+                if Self::option_payload_te(&field_te)
+                    .is_some_and(|pt| self.option_payload_map_or_set_drop_ok(&pt))
+                {
+                    if let Some(pt) = Self::option_payload_te(&field_te) {
+                        if let Some(f) = self.emit_option_drop_fn(&pt) {
+                            option_drops[idx] = Some(f);
+                            kinds[idx] = FieldDrop::OptionInline;
+                        }
+                    }
                     continue;
                 }
                 if let Some(f) = self.vec_elem_agg_drop_for_type_expr(&field_te) {
