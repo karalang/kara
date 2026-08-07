@@ -199,6 +199,16 @@ pub struct Function {
     pub generic_params: Option<GenericParams>,
     pub params: Vec<Param>,
     pub self_param: Option<SelfParam>,
+    /// `frozen self` — B-2026-08-01-33 mechanism 3, stage 2.7. Recorded as a
+    /// BOOL beside the receiver rather than as a fourth [`SelfParam`] variant,
+    /// for the reason stage 1 kept `frozen` off the type tree: a new variant
+    /// would have to be handled at every one of the ~140 `self_param` sites,
+    /// including backends that must never see the mode. `frozen self` parses
+    /// to [`SelfParam::Ref`], so codegen and every phase that does not care
+    /// see the borrow form they already handle, and only the checking phases
+    /// consult this flag. False for every other receiver form and for every
+    /// free function.
+    pub self_is_frozen: bool,
     pub return_type: Option<TypeExpr>,
     pub effects: Option<EffectList>,
     pub requires: Vec<Expr>,

@@ -7,11 +7,13 @@ explicit-`par` admission, auto-par admission), **stage 2 LANDED for PLACES**
 a recursive traversal of a `shared` graph compiles and runs from several `par`
 branches (measured 3.7x wall on 4 cores) — and **stage 2.5 LANDED for
 BINDINGS** (`let k = n.kids[i]` is a non-counting alias rather than a
-materialised handle) **and stage 2.6 for `for` LOOPS** (`for k in n.kids`),
-so both spellings of a traversal compile. See § "Stage 2.5", which corrects
+materialised handle), **stage 2.6 for `for` LOOPS** (`for k in n.kids`) and
+**stage 2.7 for METHODS** (`frozen self`, and calls on a frozen place), so
+every spelling of a traversal compiles. See § "Stage 2.5", which corrects
 stage 2's sizing of that work — it is not mechanism 1 for a parameter-rooted
-place — and § "Stage 2.6", which retracts stage 2.5's unmeasured reason for
-refusing `for`. Stage 3 remains, and #133 still
+place; § "Stage 2.6", which retracts stage 2.5's unmeasured reason for
+refusing `for`; and § "Stage 2.7", which records a hole found in its own first
+draft. Stage 3 remains, and #133 still
 needs it: `Node.neighbors` is `mut`, so the motivating program is refused at
 the freeze site. Proposes a
 language-surface addition, so adopting it into [`docs/design.md`](../design.md)
@@ -752,6 +754,77 @@ concurrency` reports `loop_reductions: []` for a container-iterating `for` in
 element is recognized and fans out. Container iteration is simply not an
 auto-par candidate shape today; the two modes agree, so there is no asymmetry
 to fix.
+
+## Stage 2.7: `frozen self` and method calls (landed) — and a hole in its own first draft
+
+The last spelling gap. A method call on a frozen place is admitted exactly
+when the resolved declaration says `frozen self`:
+
+```kara
+impl Node {
+    fn total(frozen self) -> i64 {
+        let mut s: i64 = self.val;
+        for k in self.kids { s = s + k.total(); }
+        return s;
+    }
+}
+```
+
+The two halves are one slice because neither is sound alone. Admitting
+`place.m()` requires the callee's **body** to be checked — a `ref self` method
+may store or return `self`, and doing that with a non-counting handle is a
+use-after-free — and only a declared receiver mode gets it checked.
+
+**The measurement is why the rule keys on the declared mode, not on the IR.**
+A `ref self` receiver on a `shared struct` is `(0, 0)` in the caller's frame,
+the callee's frame, and a nested `ref self` call. `frozen self` lowers to `ref
+self`, so the two are *indistinguishable in the emitted code* — including the
+one that must be refused. The par_codegen test asserts both zeros deliberately
+and says so; its discriminating leg is an alias bound off the receiver
+(frozen `(0, 0)` vs ref `(2, 3)`).
+
+### The hole, recorded because it is the kind that ships
+
+`self` is its own `ExprKind::SelfValue`, **not** an `Identifier` whose name
+happens to be `"self"`. The first draft's `frozen_place_root` had no arm for
+it, so the walk never judged a receiver at all: `frozen self` parsed,
+type-checked, ownership-checked clean — and protected nothing. Every
+accept-row test written for it passed **vacuously**, because the pass was not
+looking at `self`.
+
+It was found by probing the one case whose expected answer was "must report":
+a closure capturing `self`. That row is now the regression pin, and it is
+mutation-checked — stubbing the `SelfValue` arm to `None` turns it red.
+
+The lesson is the same one this document keeps re-learning from the other
+direction: **an accept-only battery cannot distinguish "admitted" from "never
+examined."** Every stage here needs at least one row whose expected answer is
+a rejection.
+
+### Implementation
+
+`Function::self_is_frozen: bool` beside the receiver rather than a fourth
+`SelfParam` variant — stage 1's call, for stage 1's reason: a new variant
+would have to be handled at every one of ~140 `self_param` sites, including
+backends that must never see the mode. Ten construction sites needed the
+field; trait methods get `false` (stage 2.7 is impl-only, and a
+trait-dispatched call has no single declaration to check anyway).
+
+`frozen` stays contextual, disambiguated by one token of lookahead, so `fn
+frozen(ref self)` is still a method named `frozen`. Method resolution needs no
+typechecker callee map: the pass already computes the receiver place's type,
+so `(type, method)` names exactly one declaration — keyed by the pair, never
+by method name alone, so two types with a same-named method cannot borrow each
+other's guarantee. The freeze-site check covers the receiver through the *same*
+classifier the parameter uses, with the impl target as its type.
+
+### Known limit, measured and not introduced here
+
+Passing `self` to a borrow parameter is a type error — `frz(self)`,
+`byref(self)` from `ref self`, and from owned `self`, all report `expected
+'ref Inner', found 'Inner'`. The typechecker types `self` as `T` regardless of
+receiver mode. Filed as B-2026-08-07-8. Method-to-method composition — the
+path the OO traversal takes — is unaffected.
 
 ### Why this matters for stage 3
 

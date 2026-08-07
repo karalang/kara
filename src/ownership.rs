@@ -2063,13 +2063,13 @@ impl<'a> OwnershipChecker<'a> {
         // mode does anything — admission and RC suppression are wired only
         // once this holds. Emits E0511. Early-outs on any function without a
         // `frozen` parameter, which is every function in every program today.
-        self.check_frozen_param_escape(f);
+        self.check_frozen_param_escape(f, impl_type);
 
         // Freeze-site validity (same entry, stage 1): may this type be frozen
         // at all? Runs alongside the escape check because the two answer
         // different halves of one rule — "can the handle get out" and "was
         // there anything to freeze". Emits E0512.
-        self.check_frozen_freeze_site(f);
+        self.check_frozen_freeze_site(f, impl_type);
 
         // Infer parameter modes
         let mut modes: Vec<(String, OwnershipMode)> = Vec::new();

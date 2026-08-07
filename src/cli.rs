@@ -12157,6 +12157,7 @@ fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) 
         generic_params: None,
         params: Vec::new(),
         self_param: None,
+        self_is_frozen: false,
         return_type: None,
         effects: None,
         requires: Vec::new(),

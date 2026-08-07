@@ -341,6 +341,8 @@ impl<'a> super::TypeChecker<'a> {
                         generic_params: method.generic_params.clone(),
                         params: method.params.clone(),
                         self_param: method.self_param.clone(),
+                        // Trait methods carry no `frozen` receiver (stage 2.7 is impl-only).
+                        self_is_frozen: false,
                         return_type: method.return_type.clone(),
                         effects: method.effects.clone(),
                         requires: method.requires.clone(),

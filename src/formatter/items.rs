@@ -168,7 +168,7 @@ impl super::Formatter {
         self.write_ident(&f.name);
         self.format_generic_params(&f.generic_params);
         self.write_str("(");
-        self.format_fn_params(&f.self_param, &f.params);
+        self.format_fn_params_with_receiver(&f.self_param, f.self_is_frozen, &f.params);
         self.write_str(")");
         if let Some(ref rt) = f.return_type {
             self.write_str(" -> ");
@@ -184,11 +184,26 @@ impl super::Formatter {
     }
 
     pub(super) fn format_fn_params(&mut self, self_param: &Option<SelfParam>, params: &[Param]) {
+        self.format_fn_params_with_receiver(self_param, false, params)
+    }
+
+    /// `self_is_frozen` carries `frozen self` (B-2026-08-01-33 stage 2.7),
+    /// which the parser lowers to `SelfParam::Ref` — so, exactly like
+    /// `Param::is_frozen` below, the keyword lives beside the receiver rather
+    /// than inside it and has to be written back here or `karac fmt` silently
+    /// rewrites `frozen self` to `ref self`.
+    pub(super) fn format_fn_params_with_receiver(
+        &mut self,
+        self_param: &Option<SelfParam>,
+        self_is_frozen: bool,
+        params: &[Param],
+    ) {
         let mut first = true;
         if let Some(ref sp) = self_param {
             first = false;
             match sp {
                 SelfParam::Owned => self.write_str("self"),
+                SelfParam::Ref if self_is_frozen => self.write_str("frozen self"),
                 SelfParam::Ref => self.write_str("ref self"),
                 SelfParam::MutRef => self.write_str("mut ref self"),
             }

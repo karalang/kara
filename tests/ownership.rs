@@ -10094,6 +10094,174 @@ fn frozen_place_may_be_iterated_with_a_for_loop() {
     }
 }
 
+/// STAGE 2.7 — `frozen self`, and a method call on a frozen place.
+///
+/// The two halves are one slice because neither is sound alone. Admitting
+/// `place.method()` requires the callee's BODY to be checked — a `ref self`
+/// method may store or return `self`, and doing that with a non-counting
+/// handle is a use-after-free — and only a declared receiver mode gets it
+/// checked. So the call is admitted exactly when the resolved declaration
+/// says `frozen self`, which is the composition rule `frozen` parameters
+/// already have for free functions, keyed by `(receiver type, method)`.
+///
+/// Needed no codegen change: a `ref self` receiver on a `shared struct` was
+/// measured at 0/0 refcount traffic in the caller's frame, the callee's
+/// frame, and a nested `ref self` call.
+#[test]
+fn frozen_self_receiver_is_checked_like_a_frozen_parameter() {
+    let prelude = "shared struct Inner { v: i64 }\n\
+                   shared struct Node { val: i64, kids: Vec[Inner] }\n\
+                   fn take(i: Inner) -> i64 { i.v }\n";
+    let accept: &[(&str, &str)] = &[
+        (
+            "a scalar field off the receiver",
+            "impl Inner { fn get(frozen self) -> i64 { self.v } }",
+        ),
+        (
+            "a `for` over the receiver's container",
+            "impl Node { fn t(frozen self) -> i64 { let mut s: i64 = 0; \
+             for k in self.kids { s = s + k.v; } s } }",
+        ),
+        (
+            "an alias bound off the receiver",
+            "impl Node { fn t(frozen self) -> i64 { let k = self.kids[0]; k.v } }",
+        ),
+        (
+            "calling another `frozen self` method on the receiver",
+            "impl Inner { fn m(frozen self) -> i64 { self.v }\n\
+                          fn n(frozen self) -> i64 { self.m() } }",
+        ),
+        (
+            "calling a `frozen self` method on a frozen PLACE",
+            "impl Inner { fn m(frozen self) -> i64 { self.v } }\n\
+             fn f(n: frozen Node) -> i64 { n.kids[0].m() }",
+        ),
+        (
+            "calling a `frozen self` method on a frozen ALIAS",
+            "impl Inner { fn m(frozen self) -> i64 { self.v } }\n\
+             fn f(n: frozen Node) -> i64 { let k = n.kids[0]; k.m() }",
+        ),
+        (
+            "the OO traversal — `frozen self` calling itself over a container",
+            "impl Inner { fn m(frozen self) -> i64 { self.v } }\n\
+             impl Node { fn t(frozen self) -> i64 { let mut s: i64 = self.val; \
+             for k in self.kids { s = s + k.m(); } s } }",
+        ),
+    ];
+    for (label, body) in accept {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[frozen stage-2.7 accept] {label}");
+        ownership_ok(&src);
+    }
+
+    let reject: &[(&str, &str, &str)] = &[
+        // THE HOLE THIS TEST EXISTS FOR. `self` is its own `ExprKind`, not an
+        // `Identifier` whose name is "self", so the first draft of the walk
+        // never judged a receiver at all: `frozen self` parsed, checked clean,
+        // and protected nothing. Every accept row above passed vacuously.
+        // Found by probing exactly this case.
+        (
+            "the receiver captured by a closure",
+            "impl Inner { fn leak(frozen self) -> i64 { let c = || self.v; c() } }",
+            "captured by a closure",
+        ),
+        (
+            "a container field of the receiver returned",
+            "impl Node { fn leak(frozen self) -> Vec[Inner] { self.kids } }",
+            "cannot be projected through `.kids`",
+        ),
+        (
+            "an element off the receiver passed to an OWNED slot",
+            "impl Node { fn leak(frozen self) -> i64 { let mut s: i64 = 0; \
+             for k in self.kids { s = s + take(k); } s } }",
+            "passed to a non-`frozen` slot",
+        ),
+        // The composition rule's teeth: a `ref self` method is NOT checked by
+        // this pass, so calling one on a frozen place would hand the handle to
+        // an unchecked body. It must report even though the receiver mode is a
+        // borrow and the emitted traffic is identical.
+        (
+            "calling a `ref self` method on the receiver",
+            "impl Inner { fn m(ref self) -> i64 { self.v }\n\
+                          fn n(frozen self) -> i64 { self.m() } }",
+            "escapes here",
+        ),
+        (
+            "calling a `ref self` method on a frozen place",
+            "impl Inner { fn m(ref self) -> i64 { self.v } }\n\
+             fn f(n: frozen Node) -> i64 { n.kids[0].m() }",
+            "cannot be used through this element",
+        ),
+    ];
+    for (label, body, expected) in reject {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)
+                && e.kind == OwnershipErrorKind::FrozenParamEscapes),
+            "[{label}] expected a FrozenParamEscapes error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    // The receiver is named as a RECEIVER, not a parameter: for `self` the
+    // line to change is the method signature, and calling it a parameter
+    // sends the reader looking for one that is not there.
+    let errors = ownership_errors(&format!(
+        "{prelude}impl Inner {{ fn leak(frozen self) -> i64 {{ let c = || self.v; c() }} }}\n\
+         fn main() {{ println(\"x\"); }}\n"
+    ));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`frozen` receiver `self`")),
+        "the diagnostic must call `self` a receiver; got {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}
+
+/// The freeze-site check (E0512) covers a `frozen self` receiver too, and
+/// through the SAME classifier the parameter uses — two entry points that
+/// could disagree about which types may be frozen would be a rule with two
+/// meanings.
+#[test]
+fn frozen_self_receiver_is_subject_to_the_freeze_site_check() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "a plain struct",
+            "struct P { v: i64 }\nimpl P { fn m(frozen self) -> i64 { self.v } }",
+            "requires a `shared` type",
+        ),
+        (
+            "a `par struct`",
+            "par struct Q { v: i64 }\nimpl Q { fn m(frozen self) -> i64 { self.v } }",
+            "so `frozen` adds nothing",
+        ),
+        (
+            "a type with mutable state",
+            "shared struct M { mut seen: i64 }\nimpl M { fn m(frozen self) -> i64 { self.seen } }",
+            "has mutable state",
+        ),
+        (
+            "mutable state reachable only THROUGH a field",
+            "shared struct Bump { mut n: i64 }\n\
+             shared struct Outer { b: Bump }\n\
+             impl Outer { fn m(frozen self) -> i64 { 0 } }",
+            "has mutable state",
+        ),
+    ];
+    for (label, body, expected) in cases {
+        let src = format!("{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)
+                && e.kind == OwnershipErrorKind::FrozenTypeNotFreezable),
+            "[{label}] expected a FrozenTypeNotFreezable error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}
+
 /// The shape the whole entry exists for: a RECURSIVE traversal of a `shared`
 /// graph, shared read-only across two `par` branches.
 ///

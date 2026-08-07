@@ -96,6 +96,28 @@
 //!    — a pointer load and a store, with no clone, no retain, no release and
 //!    no cleanup at `for.exit`, in borrow mode and `frozen` mode alike. There
 //!    was never any traffic here to remove; only this walk was refusing.
+//! 6. **A method whose receiver is declared `frozen self`** — `n.kids[i].m()`
+//!    (stage 2.7). Resolved by the receiver PLACE's type, which this pass
+//!    already computes, so `(type, method)` names exactly one declaration and
+//!    no typechecker callee map is needed. Its parameters compose too, on the
+//!    same per-position flags a free function's do.
+//!
+//!    **`frozen self` is the whole reason this is sound.** A `ref self`
+//!    method emits the same zero traffic — measured 0/0 in the caller's
+//!    frame, the callee's frame, and a nested `ref self` call — so the
+//!    emitted code cannot tell the two apart. What differs is that a `frozen
+//!    self` method's BODY is checked by this pass, and a `ref self` method's
+//!    is not: it may store or return `self`, and doing that with a
+//!    non-counting handle is a use-after-free. So the admission keys on the
+//!    declared mode, never on the emitted traffic.
+//!
+//!    `self` is a frozen root under the name `"self"`, and note that it is a
+//!    DISTINCT `ExprKind` rather than an `Identifier` whose name happens to
+//!    be "self". Missing that arm is not a false positive but a HOLE — the
+//!    first draft of stage 2.7 had it, and `frozen self` parsed, checked
+//!    clean, and protected nothing, with every accept-row passing vacuously.
+//!    Pinned by `frozen_self_receiver_is_checked_like_a_frozen_parameter`'s
+//!    closure-capture row (tests/ownership.rs), which is red without it.
 //!
 //! This is the "codegen binding class whose slot aliases an existing owner
 //! without retaining" that `docs/spikes/freeze-point-design.md` § "Stage 3"
@@ -131,7 +153,18 @@
 //!   parameter makes later uses of `n` look like uses of the parameter. That
 //!   over-reports (the shadowing `let` is itself already an escape, so the
 //!   function is rejected either way) and never under-reports.
-//! - **Only free-function calls compose.** A `frozen` argument in a *method*
+//! - **A receiver cannot be passed to a borrow parameter at all.** `frz(self)`
+//!   from inside a `frozen self` method is a TYPE error — but so is
+//!   `byref(self)` from a plain `ref self` method, and from an owned `self`
+//!   one. The typechecker types `self` as `T` regardless of receiver mode,
+//!   while a `ref T` / `frozen T` parameter wants `ref T`. That predates all
+//!   of this and is filed as B-2026-08-07-8; the OO path (calling another `frozen
+//!   self` method) is unaffected and is what stage 2.7 is for.
+//! - ~~**Only free-function calls compose.**~~ Superseded by stage 2.7 for
+//!   IMPL methods with a `frozen self` receiver. Still true of TRAIT methods
+//!   and of any method whose receiver place this pass cannot type — a
+//!   trait-dispatched call has no single declaration to check, so leaving it
+//!   out is accurate as well as fail-closed. A `frozen` argument in a *method*
 //!   call is reported, because resolving a method to its declaration needs the
 //!   typechecker's callee map and this pass does not wire it.
 //! - **Unknown types fail closed.** Place-type resolution is positive-evidence
@@ -201,6 +234,15 @@ struct Cx<'a, 't> {
     /// Free-function name → per-position `is_frozen` flags, used to decide
     /// whether passing the handle on is permitted.
     fn_frozen_params: HashMap<&'a str, Vec<bool>>,
+    /// `(impl target type, method name)` → per-position `is_frozen` flags, for
+    /// every impl method declaring a `frozen self` receiver (stage 2.7). A
+    /// method call on a frozen place is admitted only when its declaration is
+    /// in here, which is what makes the callee's body checked rather than
+    /// assumed — the same composition rule `fn_frozen_params` gives free
+    /// functions. Keyed by the type this pass resolves the RECEIVER PLACE to,
+    /// never by method name alone, so two types with a same-named method
+    /// cannot borrow each other's guarantee.
+    frozen_methods: HashMap<(&'a str, &'a str), Vec<bool>>,
     /// Type names carrying a user `impl` block. A builtin container name that a
     /// user has extended is not treated as a builtin by the `len`/`is_empty`
     /// exception, so no user body can receive the handle through it.
@@ -238,6 +280,13 @@ impl<'a> Cx<'a, '_> {
     fn frozen_place_root(&self, e: &Expr) -> Option<&'a str> {
         match &e.kind {
             ExprKind::Identifier(name) => self.frozen.get_key_value(name.as_str()).map(|(k, _)| *k),
+            // `self` is a place root too, and it is a DISTINCT `ExprKind` —
+            // not an `Identifier` whose name happens to be "self". Missing
+            // this arm is not a false positive, it is a HOLE: the prologue
+            // would never judge a receiver at all, so `frozen self` would
+            // parse, check clean, and protect nothing. Found by probing a
+            // closure capture of `self`, which passed when it must report.
+            ExprKind::SelfValue => self.frozen.get_key_value("self").map(|(k, _)| *k),
             ExprKind::FieldAccess { object, .. }
             | ExprKind::Index { object, .. }
             | ExprKind::TupleIndex { object, .. } => self.frozen_place_root(object),
@@ -255,6 +304,7 @@ impl<'a> Cx<'a, '_> {
     fn place_type(&self, e: &Expr) -> Option<Type> {
         match &e.kind {
             ExprKind::Identifier(name) => self.frozen.get(name.as_str()).cloned(),
+            ExprKind::SelfValue => self.frozen.get("self").cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let base = self.place_type(object)?;
                 let info = self.tc.struct_info.get(head_type_name(&base)?)?;
@@ -378,15 +428,16 @@ impl super::OwnershipChecker<'_> {
     ///
     /// No-op — and, importantly, no program-wide work — for a function with no
     /// `frozen` parameter, which today is every function in every program.
-    pub(crate) fn check_frozen_param_escape(&mut self, f: &Function) {
-        if !f.params.iter().any(|p| p.is_frozen) {
+    pub(crate) fn check_frozen_param_escape(&mut self, f: &Function, impl_type: Option<&str>) {
+        if !f.params.iter().any(|p| p.is_frozen) && !f.self_is_frozen {
             return;
         }
 
         // Computed through a free function so the immutable borrow of
         // `typecheck_result` / `program` the walk needs is finished before the
         // errors are pushed through `&mut self`.
-        let (found, aliases) = collect_frozen_escapes(f, self.program, self.typecheck_result);
+        let (found, aliases) =
+            collect_frozen_escapes(f, impl_type, self.program, self.typecheck_result);
 
         // Stage 2.5 alias bindings, surfaced to codegen. Recorded even when
         // this function also produced errors — the program will not compile in
@@ -401,14 +452,26 @@ impl super::OwnershipChecker<'_> {
             is_alias,
         } in found
         {
-            // A stage-2.5 local alias obeys the parameter's rule but is not a
-            // parameter; naming it one would point the reader at the signature
-            // when the line to change is the `let`.
-            let noun = if is_alias { "alias" } else { "parameter" };
+            // Three nouns, because all three name a different line to go fix:
+            // a stage-2.5 local ALIAS obeys the parameter's rule but is a
+            // `let`; a stage-2.7 `frozen self` RECEIVER is the signature but
+            // not a parameter; everything else is a parameter.
+            let noun = if is_alias {
+                "alias"
+            } else if name == "self" {
+                "receiver"
+            } else {
+                "parameter"
+            };
             // Only the `Materialized` help offers "take it by value instead",
             // which is advice about a SIGNATURE — so an alias needs the extra
             // sentence saying which signature.
-            let alias_note = if is_alias {
+            let alias_note = if name == "self" {
+                " `self` here is a `frozen self` receiver, so the declaration to change is this \
+                 method's — take `ref self` (or `self`) instead if the body needs to store, \
+                 return, or capture the handle."
+                    .to_string()
+            } else if is_alias {
                 format!(
                     " `{name}` is a non-counting alias of a `frozen` parameter and inherits its \
                      restrictions, so the declaration to change is that parameter's."
@@ -489,6 +552,7 @@ impl super::OwnershipChecker<'_> {
 /// pushes diagnostics through `&mut self`.
 fn collect_frozen_escapes<'a>(
     f: &'a Function,
+    impl_type: Option<&str>,
     program: &'a Program,
     tc: &TypeCheckResult,
 ) -> (Vec<Rejection>, HashSet<SpanKey>) {
@@ -501,6 +565,22 @@ fn collect_frozen_escapes<'a>(
             frozen.insert(name, root.clone());
         }
     }
+    // A `frozen self` receiver (stage 2.7) is a frozen root under the name
+    // `self`, typed by the impl target. From here on it is indistinguishable
+    // from a `frozen` parameter — same whitelist, same escape rule — which is
+    // the point: the receiver's guarantee has to be the parameter's guarantee
+    // or a method call cannot compose with a free-function call.
+    if f.self_is_frozen {
+        if let Some(t) = impl_type {
+            frozen.insert(
+                "self",
+                Type::Named {
+                    name: t.to_string(),
+                    args: Vec::new(),
+                },
+            );
+        }
+    }
     if frozen.is_empty() {
         return (Vec::new(), HashSet::new());
     }
@@ -509,6 +589,7 @@ fn collect_frozen_escapes<'a>(
         tc,
         frozen,
         fn_frozen_params: collect_fn_frozen_params(program),
+        frozen_methods: collect_frozen_methods(program),
         user_impl_types: collect_user_impl_types(program),
         in_closure: false,
         aliases: HashSet::new(),
@@ -558,6 +639,37 @@ fn collect_user_impl_types(program: &Program) -> HashSet<String> {
         }
     }
     out
+}
+
+/// Every impl method declaring `frozen self`, keyed by `(target type, method
+/// name)` with its per-position parameter `is_frozen` flags.
+///
+/// Impl blocks only. A TRAIT method cannot declare `frozen self` (stage 2.7
+/// does not add the receiver form there), and a trait-dispatched call has no
+/// single declaration to check anyway, so leaving them out is both accurate
+/// and fail-closed.
+fn collect_frozen_methods(program: &Program) -> HashMap<(&str, &str), Vec<bool>> {
+    let mut map: HashMap<(&str, &str), Vec<bool>> = HashMap::new();
+    for item in &program.items {
+        let Item::ImplBlock(b) = item else { continue };
+        let TypeKind::Path(path) = &b.target_type.kind else {
+            continue;
+        };
+        let Some(target) = path.segments.last() else {
+            continue;
+        };
+        for it in &b.items {
+            let ImplItem::Method(m) = it else { continue };
+            if !m.self_is_frozen {
+                continue;
+            }
+            map.insert(
+                (target.as_str(), m.name.as_str()),
+                m.params.iter().map(|p| p.is_frozen).collect(),
+            );
+        }
+    }
+    map
 }
 
 /// Every top-level function's per-position `is_frozen` flags, keyed by name.
@@ -772,7 +884,7 @@ fn try_admit_frozen_for_element<'a>(
 /// `g(x)`; only the projection chain is consumed by the permitting rule.
 fn walk_place_indices<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
     match &e.kind {
-        ExprKind::Identifier(_) => {}
+        ExprKind::Identifier(_) | ExprKind::SelfValue => {}
         ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
             walk_place_indices(object, cx)
         }
@@ -791,6 +903,13 @@ fn walk_place_indices<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
 /// `frozen` (the guarantee composes across the call).
 fn walk_call_args<'a>(callee: Option<&str>, args: &'a [CallArg], cx: &mut Cx<'a, '_>) {
     let sig = callee.and_then(|name| cx.fn_frozen_params.get(name).cloned());
+    walk_call_args_with_sig(sig, args, cx)
+}
+
+/// The body of [`walk_call_args`], taking the resolved per-position flags
+/// directly so a `frozen self` METHOD call (stage 2.7) can supply its own —
+/// method declarations are keyed by `(type, method)`, not by a bare name.
+fn walk_call_args_with_sig<'a>(sig: Option<Vec<bool>>, args: &'a [CallArg], cx: &mut Cx<'a, '_>) {
     for (i, a) in args.iter().enumerate() {
         let Some(name) = cx.frozen_place_root(&a.value) else {
             walk_expr(&a.value, cx);
@@ -853,9 +972,9 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
     }
 
     match &e.kind {
-        // Reached only for a NON-frozen identifier — a frozen one is consumed
-        // by the prologue above.
-        ExprKind::Identifier(_) => {}
+        // Reached only for a NON-frozen identifier or receiver — a frozen one
+        // is consumed by the prologue above.
+        ExprKind::Identifier(_) | ExprKind::SelfValue => {}
 
         ExprKind::FieldAccess { object, .. } => walk_expr(object, cx),
 
@@ -879,7 +998,6 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Path { .. }
-        | ExprKind::SelfValue
         | ExprKind::SelfType
         | ExprKind::PipePlaceholder
         | ExprKind::Continue { .. }
@@ -920,15 +1038,43 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
             args,
             ..
         } => {
-            if !cx.in_closure
+            // Stage 2.7 — a USER method whose receiver is declared `frozen
+            // self`. Resolved by the receiver PLACE's type, which this pass
+            // already computes, so no typechecker callee map is needed: the
+            // pair `(type, method)` names exactly one declaration, and that
+            // declaration's body is checked by this same pass. Passing the
+            // handle on is permitted for the same reason it is to a `frozen`
+            // free-function parameter — the guarantee composes across the call
+            // instead of being re-derived at each site.
+            let frozen_receiver = !cx.in_closure
                 && cx.frozen_place_root(object).is_some()
-                && cx.permits_builtin_query(object, method)
+                && cx
+                    .place_type(object)
+                    .as_ref()
+                    .and_then(head_type_name)
+                    .is_some_and(|t| cx.frozen_methods.contains_key(&(t, method.as_str())));
+            if frozen_receiver
+                || (!cx.in_closure
+                    && cx.frozen_place_root(object).is_some()
+                    && cx.permits_builtin_query(object, method))
             {
                 walk_place_indices(object, cx);
             } else {
                 walk_expr(object, cx);
             }
-            walk_call_args(None, args, cx);
+            // A `frozen self` method's own parameters compose too, so its
+            // declared flags select the permitted argument slots exactly as a
+            // free function's do. Every other method call still passes `None`,
+            // which reports any frozen place in an argument.
+            let sig = if frozen_receiver {
+                cx.place_type(object)
+                    .as_ref()
+                    .and_then(head_type_name)
+                    .and_then(|t| cx.frozen_methods.get(&(t, method.as_str())).cloned())
+            } else {
+                None
+            };
+            walk_call_args_with_sig(sig, args, cx);
         }
         ExprKind::TupleIndex { object, .. } => walk_expr(object, cx),
         ExprKind::Index { object, index } => {

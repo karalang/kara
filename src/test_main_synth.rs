@@ -296,6 +296,7 @@ fn synth_main_function(body: Block) -> Function {
         generic_params: None,
         params: Vec::new(),
         self_param: None,
+        self_is_frozen: false,
         return_type: None,
         effects: None,
         requires: Vec::new(),

@@ -1866,6 +1866,7 @@ fn stub_function(name: &str, span: &Span) -> Item {
         generic_params: None,
         params: Vec::new(),
         self_param: None,
+        self_is_frozen: false,
         return_type: None,
         effects: None,
         requires: Vec::new(),

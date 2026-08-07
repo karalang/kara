@@ -106,6 +106,13 @@ pub struct Parser {
     /// when `frozen_ok` was false, so a rejected `frozen` cannot mark its
     /// parameter.
     pub(crate) frozen_consumed: bool,
+    /// Set by `try_parse_self_param` when it consumes a `frozen self`
+    /// receiver, read and cleared by `parse_fn` into
+    /// [`crate::ast::Function::self_is_frozen`]. The sibling of
+    /// [`Self::frozen_consumed`], and the same wire for the same reason: the
+    /// keyword is recognized in the receiver parse but belongs to the
+    /// function. B-2026-08-01-33 stage 2.7.
+    pub(crate) frozen_self_consumed: bool,
     /// Script mode (design.md § Script mode): when `true` (the default —
     /// root source files), top-level statements synthesize a unit
     /// `fn main()`. Item-only contexts — comptime `ast.item` quotes,
@@ -217,6 +224,7 @@ impl Parser {
             errors: Vec::new(),
             frozen_ok: false,
             frozen_consumed: false,
+            frozen_self_consumed: false,
             allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),
@@ -477,6 +485,7 @@ impl Parser {
                     generic_params: None,
                     params: Vec::new(),
                     self_param: None,
+                    self_is_frozen: false,
                     return_type: None,
                     effects: None,
                     requires: Vec::new(),

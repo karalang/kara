@@ -408,7 +408,11 @@ impl super::Parser {
 
         self.expect(&Token::LeftParen)?;
         self.fn_context_stack.push(FnContext::Function);
+        // Cleared before the receiver parse so a previous function's `frozen
+        // self` can never leak into this one, and taken immediately after.
+        self.frozen_self_consumed = false;
         let (self_param, _self_span, params) = self.parse_fn_params()?;
+        let self_is_frozen = std::mem::take(&mut self.frozen_self_consumed);
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
 
@@ -458,6 +462,7 @@ impl super::Parser {
             generic_params,
             params,
             self_param,
+            self_is_frozen,
             return_type,
             effects,
             requires,
@@ -1340,8 +1345,14 @@ impl super::Parser {
             return Some((None, None, params));
         }
 
-        // Check for self parameter
-        if self.check(&Token::SelfValue)
+        // Check for self parameter. `frozen` is a CONTEXTUAL keyword, so it
+        // arrives as an identifier and only counts as a receiver mode when the
+        // very next token is `self` — a method named `frozen` or a parameter
+        // called `frozen` still parses as it always did.
+        let frozen_self = matches!(self.peek_token(), Token::Identifier { name, .. } if name == "frozen")
+            && matches!(self.peek_token_at(1), Token::SelfValue);
+        if frozen_self
+            || self.check(&Token::SelfValue)
             || self.check(&Token::Own)
             || self.check(&Token::Ref)
             || self.check(&Token::Mut)
@@ -1377,6 +1388,29 @@ impl super::Parser {
     fn try_parse_self_param(&mut self) -> Option<(SelfParam, Span)> {
         let saved = self.pos;
         let start = self.current_span();
+
+        // `frozen self` — B-2026-08-01-33 mechanism 3, stage 2.7.
+        //
+        // Lowers to `ref self`, exactly as `frozen T` lowers to `ref T`: the
+        // design calls a frozen value "non-owning, non-counting", non-owning
+        // is what `ref` already means, and a `ref self` receiver on a `shared
+        // struct` was MEASURED to emit no refcount traffic in the caller's
+        // frame, the callee's frame, or a nested `ref self` call (0/0 in all
+        // three). So this needs no codegen change; what it adds is a receiver
+        // the frozen escape checker can see, which is the whole point —
+        // admitting a method call on a frozen place is only sound if the
+        // callee's BODY is checked, and only a declared mode gets it checked.
+        //
+        // Recorded on `Function::self_is_frozen` rather than as a fourth
+        // `SelfParam` variant; see that field's comment for why.
+        if matches!(self.peek_token(), Token::Identifier { name, .. } if name == "frozen")
+            && matches!(self.peek_token_at(1), Token::SelfValue)
+        {
+            self.advance();
+            self.advance();
+            self.frozen_self_consumed = true;
+            return Some((SelfParam::Ref, self.span_from(&start)));
+        }
 
         // own self — rejected under 2A; bare `self` is the owned/consuming receiver.
         if self.eat(&Token::Own) {

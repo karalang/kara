@@ -1579,6 +1579,8 @@ impl<'a> EffectChecker<'a> {
                             generic_params: m.generic_params.clone(),
                             params: m.params.clone(),
                             self_param: m.self_param.clone(),
+                            // Trait methods carry no `frozen` receiver (stage 2.7 is impl-only).
+                            self_is_frozen: false,
                             return_type: m.return_type.clone(),
                             effects: m.effects.clone(),
                             requires: m.requires.clone(),

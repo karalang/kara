@@ -15227,6 +15227,74 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 2.7** — the same 255-node
+    /// two-branch traversal as the three fixtures above, written as a method
+    /// with a `frozen self` receiver that recurses by calling itself.
+    ///
+    /// The distinct risk this covers is the RECEIVER. `frozen self` lowers to
+    /// `ref self`, so the emitted code is identical to a `ref self` method's,
+    /// and the whole safety argument rests on the ownership pass having seen
+    /// `self` — which it very nearly did not, since `self` is its own
+    /// `ExprKind` rather than an identifier. A regression there would leave a
+    /// non-counting receiver escaping into somewhere it outlives, which shows
+    /// up here as a use-after-free (ASAN) or a leak (LSan on Linux CI), not as
+    /// a wrong answer.
+    ///
+    /// NOT VACUOUS, on the same three legs as its siblings (B-2026-08-04-17),
+    /// and the expected output is computed independently and identically —
+    /// 255 nodes x (val 1 + tag length 19) = 5100 per traversal, x2 branches
+    /// = 10200, +1 for the `contains` check = 10201 — because the spelling
+    /// changes nothing about what is summed.
+    #[test]
+    fn asan_frozen_self_oo_traversal_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { tag: String, val: i64, kids: Vec[Node] }
+
+impl Node {
+    fn total(frozen self) -> i64 {
+        let mut s: i64 = self.val + self.tag.len();
+        for k in self.kids {
+            s = s + k.total();
+        }
+        return s;
+    }
+}
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 {
+        return Node { tag: f"leaf-{seed}-runtime-heap", val: seed, kids: [] };
+    }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { tag: f"node-{seed}-runtime-heap", val: seed, kids: [a, b] };
+}
+
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = root.total();
+        let b = root.total();
+        (a, b)
+    };
+    return a + b;
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(7, seed);
+    let total = driver(root);
+    let mut w: i64 = 0;
+    if root.tag.contains("runtime-heap") { w = 1; }
+    println(total + w);
+}
+"#,
+            &["10201"],
+            "frozen_self_oo_traversal_across_par_branches_no_leak",
+            // Same tree as the siblings: 255 tag Strings plus 127 kids buffers.
+            200,
+        );
+    }
+
     /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
     /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
     /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec

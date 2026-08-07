@@ -757,6 +757,128 @@ fn main() {
         }
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 2.7** — a `frozen self` method
+    /// emits no refcount traffic, and this test records the fact that makes
+    /// the ownership rule keyed on the DECLARED MODE rather than on the IR.
+    ///
+    /// A `ref self` method is `(0, 0)` too — the emitted code cannot tell the
+    /// two receivers apart, because `frozen self` lowers to `ref self`. That
+    /// is precisely why admitting a method call on a frozen place cannot be
+    /// justified by measuring traffic: what differs is that a `frozen self`
+    /// body is CHECKED and a `ref self` body is not, and an unchecked body may
+    /// store or return the handle.
+    ///
+    /// So the discriminating leg here is the same one stage 2.6 used: an alias
+    /// bound off the receiver, where `frozen` is `(0, 0)` and `ref` still
+    /// takes counts. Without it these zeros would pass on a build that emits
+    /// no refcount traffic anywhere.
+    #[test]
+    fn frozen_self_method_emits_no_refcount_traffic() {
+        /// `(rc_inc, rc_dec)` inside one `define`, user functions only.
+        fn traffic_in(ir: &str, func: &str) -> (usize, usize) {
+            let mut inside = false;
+            let (mut inc, mut dec) = (0, 0);
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside {
+                    inc += line.matches("rc_inc").count();
+                    dec += line.matches("rc_dec").count();
+                }
+            }
+            (inc, dec)
+        }
+        let program = |recv: &str, body: &str| {
+            format!(
+                "shared struct Node {{ val: i64, kids: Vec[Node] }}\n\
+                 impl Node {{\n  fn total({recv} self) -> i64 {{ {body} }}\n}}\n\
+                 fn main() {{\n\
+                     let r = Node {{ val: 1, kids: [] }};\n\
+                     println(f\"{{r.total()}}\");\n\
+                 }}"
+            )
+        };
+        // The OO traversal: a `frozen self` method recursing through its own
+        // container, calling itself on each element.
+        let oo = "let mut s: i64 = self.val; for k in self.kids { s = s + k.total(); } return s;";
+        assert_eq!(
+            traffic_in(&ir_for_analyzed(&program("frozen", oo)), "Node.total"),
+            (0, 0),
+            "a `frozen self` traversal must emit NO refcount traffic — that \
+             zero is what lets two `par` branches hold the same receiver"
+        );
+        assert_eq!(
+            traffic_in(&ir_for_analyzed(&program("ref", oo)), "Node.total"),
+            (0, 0),
+            "the `ref self` sibling is ALSO (0, 0), and this assertion records \
+             that on purpose: the receivers are indistinguishable in the IR, \
+             so the ownership rule keys on the declared mode, not on traffic"
+        );
+
+        // The discriminating leg — an alias bound off the receiver.
+        let alias = "let k = self.kids[0]; return k.val;";
+        assert_eq!(
+            traffic_in(&ir_for_analyzed(&program("frozen", alias)), "Node.total"),
+            (0, 0),
+            "an alias bound off a `frozen self` receiver must be non-counting"
+        );
+        let borrowed = traffic_in(&ir_for_analyzed(&program("ref", alias)), "Node.total");
+        assert!(
+            borrowed.0 > 0 && borrowed.1 > 0,
+            "the same alias under `ref self` must STILL take counts — this is \
+             the only leg of this test that discriminates; got inc={} dec={}",
+            borrowed.0,
+            borrowed.1
+        );
+    }
+
+    /// B-2026-08-01-33 mechanism 3, **stage 2.7** — the OO spelling of the
+    /// traversal, across two `par` branches: a `frozen self` method recursing
+    /// through its own container by calling itself on each element.
+    ///
+    /// Asserted as a COMPUTED VALUE for this family's standing reason
+    /// (B-2026-08-05-10).
+    #[test]
+    fn frozen_self_oo_traversal_computes_correctly_across_par_branches() {
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, kids: Vec[Node] }
+impl Node {
+    fn total(frozen self) -> i64 {
+        let mut s: i64 = self.val;
+        for k in self.kids { s = s + k.total(); }
+        return s;
+    }
+}
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = root.total();
+        let b = root.total();
+        (a, b)
+    };
+    a + b
+}
+fn main() {
+    let l1 = Node { val: 3, kids: [] };
+    let l2 = Node { val: 4, kids: [] };
+    let mid = Node { val: 2, kids: [l1, l2] };
+    let root = Node { val: 1, kids: [mid] };
+    println(driver(root));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "20",
+                "two branches traversing one `frozen` graph through a `frozen \
+                 self` method must each total 1+2+3+4"
+            );
+        }
+    }
+
     /// B-2026-08-01-33 mechanism 3, stage 1 — RC SUPPRESSION, and the
     /// measurement that made it a ten-line change instead of a new pass.
     ///

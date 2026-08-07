@@ -73,9 +73,23 @@ impl super::OwnershipChecker<'_> {
     ///
     /// No-op for a function with no `frozen` parameter, which today is every
     /// function in every program.
-    pub(crate) fn check_frozen_freeze_site(&mut self, f: &Function) {
-        for p in f.params.iter().filter(|p| p.is_frozen) {
-            let name = frozen_type_name(&p.ty);
+    pub(crate) fn check_frozen_freeze_site(&mut self, f: &Function, impl_type: Option<&str>) {
+        // A `frozen self` receiver (stage 2.7) is a freeze site too, and its
+        // "declared type" is the impl target. Checked through exactly the same
+        // classifier, so a receiver and a parameter cannot end up disagreeing
+        // about which types may be frozen. `impl_type` is `None` for a free
+        // function, where `self_is_frozen` is never set.
+        let receiver = f
+            .self_is_frozen
+            .then(|| impl_type.map(|t| (Some(t.to_string()), f.span.clone())))
+            .flatten();
+        let sites = f
+            .params
+            .iter()
+            .filter(|p| p.is_frozen)
+            .map(|p| (frozen_type_name(&p.ty), p.span.clone()))
+            .chain(receiver);
+        for (name, site_span) in sites {
             let Some(refusal) = name
                 .as_deref()
                 .map_or(Some(Refusal::NotShared), |n| self.classify_freezable(n))
@@ -112,7 +126,7 @@ impl super::OwnershipChecker<'_> {
             };
             self.errors.push(OwnershipError {
                 message,
-                span: p.span.clone(),
+                span: site_span,
                 kind: OwnershipErrorKind::FrozenTypeNotFreezable,
                 suggestion: Some(suggestion),
                 replacement: None,

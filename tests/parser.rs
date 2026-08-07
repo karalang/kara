@@ -12796,6 +12796,105 @@ fn frozen_round_trips_through_the_formatter() {
     );
 }
 
+/// STAGE 2.7 — `frozen self`, the receiver form. Same two-halves contract as
+/// the parameter mode: recorded on the function, lowered to `ref self` so no
+/// backend learns a fourth receiver.
+///
+/// The contextual-keyword disambiguation is checked on the RECORDED BIT, not
+/// just on the absence of a parse error — a method named `frozen` and a
+/// receiver spelled `frozen self` differ by one token of lookahead, and
+/// getting that wrong would either break existing programs or silently accept
+/// a mode that protects nothing.
+#[test]
+fn frozen_self_is_recorded_on_the_function_and_lowers_to_ref_self() {
+    use karac::ast::{ImplItem, Item, SelfParam};
+
+    let method = |src: &str, idx: usize| {
+        let r = parse(src);
+        assert!(
+            r.errors.is_empty(),
+            "`frozen self` must parse; got {:?}",
+            r.errors
+        );
+        let Some(Item::ImplBlock(b)) = r.program.items.get(idx) else {
+            panic!("expected an impl block at {idx}");
+        };
+        let ImplItem::Method(m) = &b.items[0] else {
+            panic!("expected a method");
+        };
+        (m.self_param.clone(), m.self_is_frozen)
+    };
+
+    let (sp, frozen) = method(
+        "shared struct N { val: i64 }\nimpl N { fn get(frozen self) -> i64 { self.val } }\n",
+        1,
+    );
+    assert!(frozen, "the receiver mode must be recorded on the function");
+    assert_eq!(
+        sp,
+        Some(SelfParam::Ref),
+        "`frozen self` must LOWER to `ref self` — codegen must never see a \
+         fourth receiver form, for the same reason `frozen T` lowers to `ref T`"
+    );
+
+    // The three ordinary receivers must not come out marked.
+    for (recv, expect) in [
+        ("self", SelfParam::Owned),
+        ("ref self", SelfParam::Ref),
+        ("mut ref self", SelfParam::MutRef),
+    ] {
+        let (sp, frozen) = method(
+            &format!("shared struct N {{ mut val: i64 }}\nimpl N {{ fn get({recv}) -> i64 {{ self.val }} }}\n"),
+            1,
+        );
+        assert_eq!(sp, Some(expect), "receiver `{recv}` must parse unchanged");
+        assert!(!frozen, "receiver `{recv}` must not be marked frozen");
+    }
+
+    // A METHOD named `frozen` is not a frozen receiver — the disambiguation is
+    // "the next token is `self`", and a bare `frozen()` must stay a method.
+    let r =
+        parse("shared struct N { val: i64 }\nimpl N { fn frozen(ref self) -> i64 { self.val } }\n");
+    assert!(
+        r.errors.is_empty(),
+        "`frozen` must stay a legal method name; got {:?}",
+        r.errors
+    );
+}
+
+/// `karac fmt` must round-trip `frozen self` for exactly the reason it must
+/// round-trip `frozen T`: the keyword lives beside the receiver rather than
+/// inside it, so the receiver printer is the only thing that can emit it, and
+/// a silent rewrite to `ref self` deletes a guarantee from the user's source.
+#[test]
+fn frozen_self_round_trips_through_the_formatter() {
+    let src = "shared struct N { val: i64 }\n\
+               impl N {\n    fn get(frozen self) -> i64 {\n        self.val\n    }\n\
+               \n    fn other(ref self) -> i64 {\n        self.val\n    }\n}\n";
+    let prog = parse(src);
+    assert!(prog.errors.is_empty(), "setup: {:?}", prog.errors);
+    let formatted = karac::formatter::format_program(&prog.program);
+    assert!(
+        formatted.contains("fn get(frozen self)"),
+        "formatter must print the receiver mode back; got:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("fn other(ref self)"),
+        "formatter must not invent the mode on a plain `ref self`; got:\n{formatted}"
+    );
+    let reparsed = parse(&formatted);
+    assert!(
+        reparsed.errors.is_empty(),
+        "formatted output must re-parse; got {:?}",
+        reparsed.errors
+    );
+    assert_eq!(
+        karac::formatter::format_program(&reparsed.program),
+        formatted,
+        "`karac fmt` must be a fixpoint on a `frozen self` receiver"
+    );
+}
+
 /// Stage 1 accepts `frozen` in ONE position — a parameter's top-level type —
 /// and rejects it everywhere else rather than silently accepting and erasing
 /// it. Those other positions will mean something different once the mode is

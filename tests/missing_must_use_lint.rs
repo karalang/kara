@@ -127,6 +127,7 @@ impl<'a> FnSpec<'a> {
             generic_params: None,
             params: Vec::new(),
             self_param: self.self_param,
+            self_is_frozen: false,
             return_type: self.return_type,
             effects: None,
             requires: Vec::new(),
