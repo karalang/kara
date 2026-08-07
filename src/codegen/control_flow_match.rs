@@ -2765,6 +2765,10 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if let Some(field_ptr) = self.field_chain_place_ptr(scrutinee) {
+            // Order matters: park the box pointer BEFORE the tag zero, which is
+            // what takes the field's drop — and with it the envelope free — off
+            // the table.
+            self.own_boxed_option_field_envelope_at(field_ptr);
             self.zero_option_field_tag_at(field_ptr);
         }
     }
@@ -2814,6 +2818,113 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
             }
             _ => false,
+        }
+    }
+
+    /// B-2026-08-07-7 residue — give the payload ENVELOPE an owner, so
+    /// disarming the field's drop above stops double-freeing the interior
+    /// without also orphaning the 32-byte box that held it.
+    ///
+    /// `zero_option_field_tag_at` is a single guard away from two different
+    /// frees. `karac_drop_Option_<P>` tests `tag == Some` before it touches
+    /// anything, and behind that one test it does BOTH the deep drop of the
+    /// interior (the double free this row fixed) and the `free` of the box
+    /// itself (which nothing else claims). Zeroing the tag is the only channel
+    /// the arm has — a boxed payload has no `is_heap_bearing` suppression path
+    /// — so it necessarily takes the envelope with it.
+    ///
+    /// The recovery is to park the box pointer in a private slot the struct's
+    /// drop cannot see, and register a BOX-ONLY `BoxedEnumDrop` (`inner_drop_fn:
+    /// None`) against it. Interior ownership is unchanged — the arm's binding
+    /// still owns it, which is the whole point of the tag zero.
+    ///
+    /// DEFERRED TO THE ARM'S FRAME, NOT FREED HERE, and the distinction is
+    /// load-bearing rather than stylistic. `scrutinee_is_owned_param_binding`
+    /// walks THROUGH field access, so `match w.o` inside a fn taking `w: W` by
+    /// value sets `pattern_binding_scrutinee_is_owned_param` — which arms
+    /// B-2026-08-06-10's `deboxed_payload_box_ptrs` mirror, whose whole job is
+    /// to WRITE neutralizing zeroes into this same box at a later move site in
+    /// the arm's body. An eager free here would turn each of those writes into
+    /// a use-after-free. Riding the arm's cleanup frame puts the free after the
+    /// body, and pushing it before the body appends means LIFO drains it last —
+    /// after the binding that owns the interior.
+    ///
+    /// The parked tag is defaulted to `None` in the entry block, so a drain on
+    /// a path that never reached this arm (an arm GUARD that fails after the
+    /// frame is pushed) reads a slot that frees nothing rather than garbage.
+    fn own_boxed_option_field_envelope_at(&mut self, field_ptr: PointerValue<'ctx>) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Option").cloned() else {
+            return;
+        };
+        let (Some(some_tag), Some(none_tag)) = (
+            layout.tags.get("Some").copied(),
+            layout.tags.get("None").copied(),
+        ) else {
+            return;
+        };
+        if some_tag == none_tag {
+            return;
+        }
+        let i64_t = self.context.i64_type();
+        let Ok(w0_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, field_ptr, 1, "boxenv.src.ptr")
+        else {
+            return;
+        };
+        let Ok(w0) = self.builder.build_load(i64_t, w0_ptr, "boxenv.src") else {
+            return;
+        };
+        let Some(entry) = fn_val.get_first_basic_block() else {
+            return;
+        };
+        let slot_ty = self
+            .context
+            .struct_type(&[i64_t.into(), i64_t.into()], false);
+        let alloca_b = self.context.create_builder();
+        match entry.get_first_instruction() {
+            Some(first) => alloca_b.position_before(&first),
+            None => alloca_b.position_at_end(entry),
+        }
+        let Ok(slot) = alloca_b.build_alloca(slot_ty, "boxenv.slot") else {
+            return;
+        };
+        let init_b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => init_b.position_before(&term),
+            None => init_b.position_at_end(entry),
+        }
+        if let Ok(tag_ptr) = init_b.build_struct_gep(slot_ty, slot, 0, "boxenv.init.tag") {
+            let _ = init_b.build_store(tag_ptr, i64_t.const_int(none_tag, false));
+        }
+        if let Ok(tag_ptr) = self
+            .builder
+            .build_struct_gep(slot_ty, slot, 0, "boxenv.arm.tag")
+        {
+            let _ = self
+                .builder
+                .build_store(tag_ptr, i64_t.const_int(some_tag, false));
+        }
+        if let Ok(box_ptr) = self
+            .builder
+            .build_struct_gep(slot_ty, slot, 1, "boxenv.arm.w0")
+        {
+            let _ = self.builder.build_store(box_ptr, w0);
+        }
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(super::state::CleanupAction::BoxedEnumDrop {
+                // Not a Kāra identifier — the name keys `clear_boxed_enum_
+                // inner_drop` / `suppress_*_for_var`, and this action must never
+                // answer to a user binding's retraction.
+                name: "boxenv".to_string(),
+                enum_slot: slot,
+                enum_ty: slot_ty,
+                inner_drop_fn: None,
+                some_tag,
+            });
         }
     }
 

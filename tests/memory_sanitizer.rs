@@ -36286,6 +36286,78 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-7 residue — the ENVELOPE the arm's tag zero orphans must
+    /// have an owner of its own.
+    ///
+    /// The sibling fixture above stops the double free by zeroing the struct
+    /// field's tag, and `karac_drop_Option_<P>` tests that tag before it does
+    /// EITHER of its two jobs: the deep drop of the interior (the corruption)
+    /// and the `free` of the 32-byte box (which nothing else claims). So the
+    /// only channel the arm has necessarily paid for the fix with a leak. The
+    /// box pointer is now parked in a private slot at the arm and freed
+    /// BOX-ONLY when the arm's frame drains; the interior's owner is unchanged.
+    ///
+    /// SEPARATE FROM THE SIBLING FIXTURE ON PURPOSE, and the separation is the
+    /// measurement. That one passes its `W` BY VALUE to a callee, which orphans
+    /// the CALLER's envelope for an unrelated reason (the callee's entry copy
+    /// duplicates the box and shares the interior, B-2026-08-07-11) — so it
+    /// stays quarantined on the -O0 leg and could never witness this fix. Every
+    /// `W` here is a local place matched in the same frame, which isolates the
+    /// envelope to exactly one owner question.
+    ///
+    /// CARRIED BY THE -O0 LEG. At -O2 the box folds away with the allocation, so
+    /// the default run is a shape check rather than a leak check; the pre-fix
+    /// measurement was 320 B over 10 blocks at `KARAC_OPT_LEVEL=0` and nothing
+    /// at -O2. The three controls do gate at both levels: `b`'s non-consuming
+    /// arm must keep the deep drop (box-only unconditionally is what broke five
+    /// tests), `c` is a box with an absent interior, and `d` has no box at all.
+    ///
+    /// Expected value is COMPUTED: 1 + 2 + 4 + 8 = 15 per iteration, ×40 = 600.
+    #[test]
+    fn asan_struct_field_boxed_payload_match_out_envelope_owned() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct W { o: Option[Option[String]] }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: W = W { o: Option.Some(Option.Some(f"envelope-{n + i}")) };
+        acc = acc + match a.o {
+            Option.Some(Option.Some(s)) => if s.len() > 0 { 1 } else { 0 },
+            Option.Some(Option.None) => 100,
+            Option.None => 200,
+        };
+        let b: W = W { o: Option.Some(Option.Some(f"envelope-{n + i}")) };
+        acc = acc + match b.o {
+            Option.Some(Option.Some(_)) => 2,
+            Option.Some(Option.None) => 100,
+            Option.None => 200,
+        };
+        let c: W = W { o: Option.Some(Option.None) };
+        acc = acc + match c.o {
+            Option.Some(Option.Some(s)) => s.len() as i64,
+            Option.Some(Option.None) => 4,
+            Option.None => 200,
+        };
+        let d: W = W { o: Option.None };
+        acc = acc + match d.o {
+            Option.Some(Option.Some(s)) => s.len() as i64,
+            Option.Some(Option.None) => 100,
+            Option.None => 8,
+        };
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["600"],
+            "struct_field_boxed_payload_match_out_envelope_owned",
+            30,
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words
