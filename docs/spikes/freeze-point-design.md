@@ -9,13 +9,17 @@ branches (measured 3.7x wall on 4 cores) — and **stage 2.5 LANDED for
 BINDINGS** (`let k = n.kids[i]` is a non-counting alias rather than a
 materialised handle), **stage 2.6 for `for` LOOPS** (`for k in n.kids`) and
 **stage 2.7 for METHODS** (`frozen self`, and calls on a frozen place), so
-every spelling of a traversal compiles. See § "Stage 2.5", which corrects
+every spelling of a traversal compiles — and **stage 3a for the `freeze`
+STATEMENT** (`let g = freeze root;`), which introduces a frozen root from an
+ordinary local instead of requiring a `frozen` parameter to carry one in. See § "Stage 2.5", which corrects
 stage 2's sizing of that work — it is not mechanism 1 for a parameter-rooted
 place; § "Stage 2.6", which retracts stage 2.5's unmeasured reason for
-refusing `for`; and § "Stage 2.7", which records a hole found in its own first
-draft. Stage 3 remains, and #133 still
-needs it: `Node.neighbors` is `mut`, so the motivating program is refused at
-the freeze site. Proposes a
+refusing `for`; § "Stage 2.7", which records a hole found in its own first
+draft; and § "Stage 3a", which reuses stage 2.5's binding class rather than
+building the codegen the stage-3 section below sizes. **Stage 3b remains** —
+the per-instance freeze — and #133 still needs it: `Node.neighbors` is `mut`,
+so the motivating program is refused at the freeze site whether the freeze is
+spelled as a parameter mode or as a statement. Proposes a
 language-surface addition, so adopting it into [`docs/design.md`](../design.md)
 is the owner's step — this document exists to make the call concrete enough to
 accept, reject, or amend, and to record why the alternatives lose. Build log
@@ -834,6 +838,75 @@ Stage 2.5 **is** that binding class, built for the case where the owner is
 known by construction. What stage 3 still has to add is the harder half: a
 frozen local whose owner is an ordinary local in the same frame, where the
 owner's lifetime is a real question rather than a given.
+
+## Stage 3a: the `freeze` statement (landed) — the binding class already existed
+
+```kara
+let root = build();
+let g = freeze root;
+par { sum(g); sum(g); }
+```
+
+The section below sized this as codegen work: "a frozen local has to be a
+genuinely non-counting binding, which needs a codegen binding class whose slot
+aliases an existing owner without retaining." **Stage 2.5 built that class**,
+for the case where the owner is the caller's value. Stage 3a reuses it
+unchanged for the case where the owner is a local in the same frame —
+measured, `let g = freeze t` takes `rc_inc = 0` and registers no cleanup, so
+the function carries only `t`'s own release, while the plain rebind `let g =
+t` pays for two owners.
+
+So the freeze statement needed **no codegen change either**. That is the third
+stage in a row this has been true of, and the pattern is worth naming: each
+time, the doc's cost estimate was written before the enabling measurement, and
+each time the measurement was cheaper than the estimate.
+
+### Two names come out frozen
+
+The handle, and the **source's place root**. The design says "`graph` stays
+usable read-only; freezing does not consume it" — and that second half is not
+a courtesy, it is what pays for the non-counting alias. Once the root is in the
+frozen set, the ordinary whitelist refuses to move, return, or capture it, so
+the owner whose refcount the handle is skipping cannot go away while the handle
+is live. Without it the alias would dangle the moment the source was consumed.
+The source gets its own diagnostic noun — the fourth — because the line to
+change is the `freeze`, not a signature or a `let`.
+
+### Every refusal reports
+
+A `freeze` this pass will not honour is an error, never a silent downgrade to
+an ordinary binding: a temporary operand, a `mut` binding, a destructuring
+pattern, a `freeze` inside a closure body. The reason is a failure this stage
+hit **twice in its own construction**:
+
+1. `check_frozen_param_escape` early-returns for a function with no `frozen`
+   parameter — which is `main`, where a freeze statement most naturally lives.
+   Every negative probe "passed".
+2. An unsupported operand shape fell through to the ordinary walk, where the
+   source was not yet frozen, so nothing reported and the `freeze` quietly did
+   nothing.
+
+Both were caught by probing the cases whose expected answer was "must report",
+and both are now pinned. Combined with stage 2.7's `SelfValue` hole, that is
+three vacuous-pass bugs in three stages, all of the same shape: **the accept
+rows cannot tell you the check ran.**
+
+### `karac fmt` was deleting the keyword
+
+Found by running it, not by reasoning: the first cut rewrote `let g = freeze
+t;` to `let g = t;`. That is not cosmetic — it removes the guarantee and turns
+a non-counting binding into a counted one. The keyword lives on
+`Program::freeze_spans` (a parser-set side table, so no new `ExprKind` and no
+walk churn), which means `format_expr` can never see it and the `let` printer
+is the only thing that can emit it.
+
+### What stage 3a does NOT close
+
+#133, unchanged: `Node.neighbors` is `mut`, so it is refused at the freeze site
+whether the freeze is spelled as a parameter mode or as a statement. What the
+statement buys is that the region is now **explicit and local**, which is the
+precondition the section below gives for a per-instance check ever being
+cheaper than mechanism 1 — not the check itself.
 
 ## Stage 3: the obvious route is refuted, and this sizes the work
 

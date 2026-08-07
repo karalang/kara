@@ -329,6 +329,7 @@ impl<'a> super::OwnershipChecker<'a> {
             &self.typecheck_result.pattern_binding_types,
             &mut tracked,
             |n| self.classify_tracked_binding(n),
+            &self.program.freeze_spans,
         );
         tracked
     }
@@ -636,12 +637,13 @@ fn collect_let_tracked_bindings(
     pattern_binding_types: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
+    freeze: &HashSet<SpanKey>,
 ) {
     for stmt in &block.stmts {
-        collect_let_in_stmt(stmt, pattern_binding_types, out, classify);
+        collect_let_in_stmt(stmt, pattern_binding_types, out, classify, freeze);
     }
     if let Some(e) = &block.final_expr {
-        collect_let_in_expr(e, pattern_binding_types, out, classify);
+        collect_let_in_expr(e, pattern_binding_types, out, classify, freeze);
     }
 }
 
@@ -650,16 +652,25 @@ fn collect_let_in_stmt(
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
+    freeze: &HashSet<SpanKey>,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
             "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
         ),
         StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
-            record_pattern_bindings(pattern, pbt, out, classify);
-            collect_let_in_expr(value, pbt, out, classify);
+            // B-2026-08-01-33 stage 3 — `let g = freeze src;`, keyed on the
+            // initializer's span, which is the same key the escape check and
+            // codegen use, so all three agree on which `let`s are freeze
+            // sites. Marked even when the freeze-site check later REFUSES the
+            // type: such a program does not compile, so the flag is never
+            // read, and re-deciding freezability here would put the rule in
+            // two places.
+            let is_freeze = freeze.contains(&SpanKey::from_span(&value.span));
+            record_pattern_bindings(pattern, pbt, out, classify, is_freeze);
+            collect_let_in_expr(value, pbt, out, classify, freeze);
             if let StmtKind::LetElse { else_block, .. } = &stmt.kind {
-                collect_let_tracked_bindings(else_block, pbt, out, classify);
+                collect_let_tracked_bindings(else_block, pbt, out, classify, freeze);
             }
         }
         StmtKind::LetUninit { .. } => {
@@ -671,18 +682,18 @@ fn collect_let_in_stmt(
             // construct via let-uninit at all. Skip safely.
         }
         StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-            collect_let_tracked_bindings(body, pbt, out, classify);
+            collect_let_tracked_bindings(body, pbt, out, classify, freeze);
         }
         StmtKind::Assign { target, value } => {
-            collect_let_in_expr(target, pbt, out, classify);
-            collect_let_in_expr(value, pbt, out, classify);
+            collect_let_in_expr(target, pbt, out, classify, freeze);
+            collect_let_in_expr(value, pbt, out, classify, freeze);
         }
         StmtKind::CompoundAssign { target, value, .. } => {
-            collect_let_in_expr(target, pbt, out, classify);
-            collect_let_in_expr(value, pbt, out, classify);
+            collect_let_in_expr(target, pbt, out, classify, freeze);
+            collect_let_in_expr(value, pbt, out, classify, freeze);
         }
         StmtKind::Expr(e) => {
-            collect_let_in_expr(e, pbt, out, classify);
+            collect_let_in_expr(e, pbt, out, classify, freeze);
         }
     }
 }
@@ -692,8 +703,9 @@ fn record_pattern_bindings(
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
+    frozen: bool,
 ) {
-    record_pattern_inner(pattern, pbt, out, classify);
+    record_pattern_inner(pattern, pbt, out, classify, frozen);
 }
 
 /// Queue every user-aggregate name reachable from `ty`, following containers,
@@ -755,6 +767,7 @@ fn record_pattern_inner(
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
+    frozen: bool,
 ) {
     match &pattern.kind {
         PatternKind::Binding(name) => {
@@ -768,10 +781,11 @@ fn record_pattern_inner(
                             kind,
                             readonly_scalar_fields,
                             atomic_promotion,
-                            // A `let` binding cannot be frozen in stage 1 —
-                            // `frozen` is a parameter mode and no `freeze`
-                            // expression exists yet.
-                            frozen: false,
+                            // Stage 3: true when this `let`'s initializer is
+                            // a `freeze` site. False for every other binding,
+                            // and for every program that never uses the
+                            // statement.
+                            frozen,
                         },
                     );
                 }
@@ -790,31 +804,32 @@ fn record_pattern_inner(
                             kind,
                             readonly_scalar_fields,
                             atomic_promotion,
-                            // A `let` binding cannot be frozen in stage 1 —
-                            // `frozen` is a parameter mode and no `freeze`
-                            // expression exists yet.
-                            frozen: false,
+                            // Stage 3: true when this `let`'s initializer is
+                            // a `freeze` site. False for every other binding,
+                            // and for every program that never uses the
+                            // statement.
+                            frozen,
                         },
                     );
                 }
             }
-            record_pattern_inner(sub, pbt, out, classify);
+            record_pattern_inner(sub, pbt, out, classify, frozen);
         }
         PatternKind::Tuple(items) => {
             for p in items {
-                record_pattern_inner(p, pbt, out, classify);
+                record_pattern_inner(p, pbt, out, classify, frozen);
             }
         }
         PatternKind::Struct { fields, .. } => {
             for f in fields {
                 if let Some(p) = &f.pattern {
-                    record_pattern_inner(p, pbt, out, classify);
+                    record_pattern_inner(p, pbt, out, classify, frozen);
                 }
             }
         }
         PatternKind::TupleVariant { patterns, .. } => {
             for p in patterns {
-                record_pattern_inner(p, pbt, out, classify);
+                record_pattern_inner(p, pbt, out, classify, frozen);
             }
         }
         _ => {}
@@ -826,6 +841,7 @@ fn collect_let_in_expr(
     pbt: &BindingTypeMap,
     out: &mut HashMap<String, TrackedBinding>,
     classify: impl Fn(&str) -> Option<(BindingKind, HashSet<String>, Option<Vec<String>>)> + Copy,
+    freeze: &HashSet<SpanKey>,
 ) {
     match &expr.kind {
         ExprKind::Block(b)
@@ -836,28 +852,28 @@ fn collect_let_in_expr(
         | ExprKind::LabeledBlock { body: b, .. }
         | ExprKind::Loop { body: b, .. }
         | ExprKind::Lock { body: b, .. } => {
-            collect_let_tracked_bindings(b, pbt, out, classify);
+            collect_let_tracked_bindings(b, pbt, out, classify, freeze);
         }
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            collect_let_in_expr(condition, pbt, out, classify);
-            collect_let_tracked_bindings(then_block, pbt, out, classify);
+            collect_let_in_expr(condition, pbt, out, classify, freeze);
+            collect_let_tracked_bindings(then_block, pbt, out, classify, freeze);
             if let Some(else_b) = else_branch {
-                collect_let_in_expr(else_b, pbt, out, classify);
+                collect_let_in_expr(else_b, pbt, out, classify, freeze);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            collect_let_in_expr(condition, pbt, out, classify);
-            collect_let_tracked_bindings(body, pbt, out, classify);
+            collect_let_in_expr(condition, pbt, out, classify, freeze);
+            collect_let_tracked_bindings(body, pbt, out, classify, freeze);
         }
         ExprKind::For { iterable, body, .. } => {
-            collect_let_in_expr(iterable, pbt, out, classify);
-            collect_let_tracked_bindings(body, pbt, out, classify);
+            collect_let_in_expr(iterable, pbt, out, classify, freeze);
+            collect_let_tracked_bindings(body, pbt, out, classify, freeze);
         }
         _ => {}
     }

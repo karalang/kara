@@ -879,6 +879,104 @@ fn main() {
         }
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 3** — a `freeze`d local is a
+    /// non-counting binding, and its OWNER is now a local in the same frame
+    /// rather than the caller's value.
+    ///
+    /// That is the half the design sized as the hard one, and the measurement
+    /// says the binding class stage 2.5 built covers it: `let g = freeze t`
+    /// takes no receive-inc and registers no cleanup, so `outer` carries only
+    /// `t`'s own scope-exit release, while the plain rebind `let g = t` pays
+    /// for two owners.
+    #[test]
+    fn frozen_local_from_a_freeze_statement_takes_no_counts() {
+        /// `(rc_inc, rc_dec)` inside one `define`, user functions only.
+        fn traffic_in(ir: &str, func: &str) -> (usize, usize) {
+            let mut inside = false;
+            let (mut inc, mut dec) = (0, 0);
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside {
+                    inc += line.matches("rc_inc").count();
+                    dec += line.matches("rc_dec").count();
+                }
+            }
+            (inc, dec)
+        }
+        let program = |init: &str| {
+            format!(
+                "shared struct Node {{ val: i64, kids: Vec[Node] }}\n\
+                 fn outer() -> i64 {{\n\
+                   let t = Node {{ val: 1, kids: [] }};\n\
+                   {init}\n\
+                   return g.val;\n\
+                 }}\n\
+                 fn main() {{ println(f\"{{outer()}}\"); }}"
+            )
+        };
+        let frozen = traffic_in(&ir_for_analyzed(&program("let g = freeze t;")), "outer");
+        assert_eq!(
+            frozen.0, 0,
+            "a `freeze`d local must take NO receive-inc — it aliases `t`, \
+             which already owns the value; got inc={}",
+            frozen.0
+        );
+        // The plain rebind is the discriminator: it must still pay for a
+        // second owner, or the zero above would mean nothing.
+        let plain = traffic_in(&ir_for_analyzed(&program("let g = t;")), "outer");
+        assert!(
+            plain.0 > frozen.0 && plain.1 > frozen.1,
+            "the same binding without `freeze` must still take counts — \
+             frozen {frozen:?} vs plain {plain:?}"
+        );
+    }
+
+    /// B-2026-08-01-33 mechanism 3, **stage 3** — the traversal shared across
+    /// two `par` branches from a `freeze`d LOCAL, with no `frozen` parameter
+    /// anywhere in the call chain to introduce it.
+    ///
+    /// This is what the statement buys: before it, sharing a locally-built
+    /// immutable structure meant hoisting the `par` block into a function that
+    /// declared a `frozen` parameter. Asserted as a computed value, per this
+    /// family's standing reason (B-2026-08-05-10).
+    #[test]
+    fn freeze_statement_shares_a_local_across_par_branches() {
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, kids: Vec[Node] }
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val;
+    for k in n.kids { s = s + sum(k); }
+    return s;
+}
+fn main() {
+    let l1 = Node { val: 3, kids: [] };
+    let l2 = Node { val: 4, kids: [] };
+    let mid = Node { val: 2, kids: [l1, l2] };
+    let root = Node { val: 1, kids: [mid] };
+    let g = freeze root;
+    let (a, b) = par {
+        let a = sum(g);
+        let b = sum(g);
+        (a, b)
+    };
+    println(a + b);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "20",
+                "two branches traversing a locally-`freeze`d graph must each \
+                 total 1+2+3+4"
+            );
+        }
+    }
+
     /// B-2026-08-01-33 mechanism 3, stage 1 — RC SUPPRESSION, and the
     /// measurement that made it a ten-line change instead of a new pass.
     ///

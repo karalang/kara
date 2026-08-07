@@ -599,7 +599,27 @@ impl super::Parser {
         }
 
         self.expect(&Token::Equal)?;
+        // `freeze <place>` — B-2026-08-01-33 mechanism 3, stage 3. A
+        // CONTEXTUAL keyword recognized in exactly one position (a `let`
+        // initializer), so `freeze` stays a legal identifier and an existing
+        // program using the name cannot break. Only when the NEXT token can
+        // begin a place, mirroring the `frozen T` guard.
+        let freeze_kw = matches!(self.peek_token(), Token::Identifier { name, .. } if name == "freeze")
+            && matches!(
+                self.peek_token_at(1),
+                Token::Identifier { .. } | Token::SelfValue
+            );
+        if freeze_kw {
+            self.advance();
+        }
         let value = self.parse_expression()?;
+        if freeze_kw {
+            // Recorded against the FROZEN PLACE's span, which is the span the
+            // ownership pass and codegen both already key on for an alias
+            // binding — so the statement reuses that channel end to end.
+            self.freeze_spans
+                .insert(crate::resolver::SpanKey::from_span(&value.span));
+        }
 
         // let ... else { diverging_block }
         if self.eat(&Token::Else) {

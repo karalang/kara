@@ -212,6 +212,11 @@ enum Reason {
     /// branches join before the function returns, and admitting exactly that
     /// sharing is the point of the feature.
     Captured,
+    /// Stage 3 — a `freeze` this pass will not honour, carrying the specific
+    /// cause. REPORTED rather than declined: a `freeze` that silently does
+    /// nothing is worse than one that is refused, because the author is left
+    /// believing a guarantee they do not have.
+    FreezeRefused(&'static str),
 }
 
 /// One rejected use, with enough to word the diagnostic. `is_alias`
@@ -223,6 +228,7 @@ struct Rejection {
     span: Span,
     reason: Reason,
     is_alias: bool,
+    is_source: bool,
 }
 
 /// Walk state. `frozen` maps each in-scope frozen parameter name to the *type*
@@ -243,6 +249,19 @@ struct Cx<'a, 't> {
     /// never by method name alone, so two types with a same-named method
     /// cannot borrow each other's guarantee.
     frozen_methods: HashMap<(&'a str, &'a str), Vec<bool>>,
+    /// `freeze <place>` initializer spans, from `Program::freeze_spans`
+    /// (stage 3). A `let` whose initializer is in here is a FREEZE SITE: it
+    /// introduces a frozen root from an ordinary binding, rather than deriving
+    /// one from a root that was already frozen.
+    freeze_spans: &'a HashSet<SpanKey>,
+    /// Every `freeze` site this walk visited, with the type name it resolved
+    /// the source to (`None` when it could not) and the span to report at.
+    /// Handed to the freeze-site classifier by the caller so that ADMISSION
+    /// and FREEZABILITY are decided from one enumeration of the sites — a
+    /// second walk looking for freeze statements could miss a nesting form
+    /// this one handles, and a site admitted but never classified is exactly
+    /// the hole the two-guard design exists to prevent.
+    freeze_sites: Vec<(Option<String>, Span)>,
     /// Type names carrying a user `impl` block. A builtin container name that a
     /// user has extended is not treated as a builtin by the `len`/`is_empty`
     /// exception, so no user body can receive the handle through it.
@@ -257,6 +276,11 @@ struct Cx<'a, 't> {
     /// Names in `frozen` that are stage-2.5 LOCAL ALIASES rather than
     /// parameters. Diagnostics only — the rule is identical for both.
     aliases: HashSet<&'a str>,
+    /// Names in `frozen` that are the SOURCE of a stage-3 `freeze` — the
+    /// binding that still owns the value. Diagnostics only, and separate from
+    /// `aliases` because the line to change is different again: an alias is
+    /// fixed at its `let`, a source at the `freeze` that restricted it.
+    sources: HashSet<&'a str>,
     found: Vec<Rejection>,
     /// Stage 2.5 — the initializer span of every `let` admitted as a
     /// NON-COUNTING ALIAS of a frozen place. Handed to codegen (through
@@ -379,6 +403,7 @@ impl<'a> Cx<'a, '_> {
     fn flag(&mut self, name: &str, span: &Span, reason: Reason) {
         self.found.push(Rejection {
             is_alias: self.aliases.contains(name),
+            is_source: self.sources.contains(name),
             name: name.to_string(),
             span: span.clone(),
             reason,
@@ -429,15 +454,28 @@ impl super::OwnershipChecker<'_> {
     /// No-op — and, importantly, no program-wide work — for a function with no
     /// `frozen` parameter, which today is every function in every program.
     pub(crate) fn check_frozen_param_escape(&mut self, f: &Function, impl_type: Option<&str>) {
-        if !f.params.iter().any(|p| p.is_frozen) && !f.self_is_frozen {
+        // A function with no frozen parameter and no `frozen self` can still
+        // contain a stage-3 `freeze` statement. Gating on the PROGRAM using
+        // the mode at all keeps this free for every program that does not —
+        // and forgetting it is not a false positive but a silent no-op: the
+        // first draft of stage 3 returned here for `main`, so every freeze
+        // site went unchecked and every negative probe "passed".
+        if !f.params.iter().any(|p| p.is_frozen)
+            && !f.self_is_frozen
+            && self.program.freeze_spans.is_empty()
+        {
             return;
         }
 
         // Computed through a free function so the immutable borrow of
         // `typecheck_result` / `program` the walk needs is finished before the
         // errors are pushed through `&mut self`.
-        let (found, aliases) =
+        let (found, aliases, freeze_sites) =
             collect_frozen_escapes(f, impl_type, self.program, self.typecheck_result);
+
+        // Stage 3 — every `freeze` site this function contains, classified by
+        // the same rule a `frozen` parameter's declared type is.
+        self.report_freeze_sites(freeze_sites);
 
         // Stage 2.5 alias bindings, surfaced to codegen. Recorded even when
         // this function also produced errors — the program will not compile in
@@ -450,6 +488,7 @@ impl super::OwnershipChecker<'_> {
             span,
             reason,
             is_alias,
+            is_source,
         } in found
         {
             // Three nouns, because all three name a different line to go fix:
@@ -458,6 +497,8 @@ impl super::OwnershipChecker<'_> {
             // not a parameter; everything else is a parameter.
             let noun = if is_alias {
                 "alias"
+            } else if is_source {
+                "source"
             } else if name == "self" {
                 "receiver"
             } else {
@@ -471,6 +512,13 @@ impl super::OwnershipChecker<'_> {
                  method's — take `ref self` (or `self`) instead if the body needs to store, \
                  return, or capture the handle."
                     .to_string()
+            } else if is_source {
+                format!(
+                    " `{name}` is the SOURCE of a `freeze` in this scope, so it is restricted \
+                     from the `freeze` onward — the frozen handle is a non-counting alias of it \
+                     and would dangle if `{name}` went away. Move the use above the `freeze`, or \
+                     drop the `freeze` if the value has to be consumed."
+                )
             } else if is_alias {
                 format!(
                     " `{name}` is a non-counting alias of a `frozen` parameter and inherits its \
@@ -525,6 +573,18 @@ impl super::OwnershipChecker<'_> {
                          function returns.)"
                     ),
                 ),
+                Reason::FreezeRefused(why) => (
+                    format!("this `freeze` cannot be honoured: {why}"),
+                    format!(
+                        "a `freeze` binds a NON-COUNTING handle to an existing value, so it \
+                         needs an immutable binding (`let {name} = freeze <place>;`) naming a \
+                         place whose owner outlives it — a binding, or a field / element \
+                         reached from one. A temporary has no such owner, a `mut` binding could \
+                         be repointed at one that does not, and a closure's environment can \
+                         outlive the call. Bind the value first if it is a temporary, and drop \
+                         `mut` if it is there"
+                    ),
+                ),
                 Reason::NonFrozenArgument => (
                     format!("`frozen` {noun} `{name}` is passed to a non-`frozen` slot"),
                     "the callee could store the handle, so the guarantee has to hold on its \
@@ -546,6 +606,15 @@ impl super::OwnershipChecker<'_> {
     }
 }
 
+/// What one function's walk produces: the rejected uses, the initializer spans
+/// of the bindings admitted as non-counting aliases, and the freeze sites seen
+/// (each with the type name it resolved to, for the freeze-site classifier).
+type WalkResult = (
+    Vec<Rejection>,
+    HashSet<SpanKey>,
+    Vec<(Option<String>, Span)>,
+);
+
 /// Run the walk over `f` and return every rejected use, plus the initializer
 /// spans of the `let` bindings admitted as non-counting aliases. Free-standing
 /// so the shared borrows of `program` / `tc` it holds end before the caller
@@ -555,7 +624,7 @@ fn collect_frozen_escapes<'a>(
     impl_type: Option<&str>,
     program: &'a Program,
     tc: &TypeCheckResult,
-) -> (Vec<Rejection>, HashSet<SpanKey>) {
+) -> WalkResult {
     let mut frozen: HashMap<&str, Type> = HashMap::new();
     for p in f.params.iter().filter(|p| p.is_frozen) {
         let Some(root) = frozen_root_type(&p.ty) else {
@@ -581,8 +650,13 @@ fn collect_frozen_escapes<'a>(
             );
         }
     }
-    if frozen.is_empty() {
-        return (Vec::new(), HashSet::new());
+    // A function with no frozen parameter and no `frozen self` can still
+    // contain a `freeze` statement, which seeds a root mid-body. Proceeding on
+    // "the PROGRAM uses `freeze` at all" keeps the early-out free for every
+    // program that does not — which is every program that does not use the
+    // mode — without a per-function body scan.
+    if frozen.is_empty() && program.freeze_spans.is_empty() {
+        return (Vec::new(), HashSet::new(), Vec::new());
     }
 
     let mut cx = Cx {
@@ -590,14 +664,17 @@ fn collect_frozen_escapes<'a>(
         frozen,
         fn_frozen_params: collect_fn_frozen_params(program),
         frozen_methods: collect_frozen_methods(program),
+        freeze_spans: &program.freeze_spans,
+        freeze_sites: Vec::new(),
         user_impl_types: collect_user_impl_types(program),
         in_closure: false,
         aliases: HashSet::new(),
+        sources: HashSet::new(),
         found: Vec::new(),
         alias_spans: HashSet::new(),
     };
     walk_block(&f.body, &mut cx);
-    (cx.found, cx.alias_spans)
+    (cx.found, cx.alias_spans, cx.freeze_sites)
 }
 
 /// The type a `frozen` parameter's place chain starts from.
@@ -738,7 +815,9 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
             // `shared` handle becomes a non-counting ALIAS rather than an
             // escape. `try_admit_frozen_alias` consumes the initializer when it
             // takes it; otherwise the ordinary walk judges it as before.
-            if !try_admit_frozen_alias(*is_mut, pattern, value, cx) {
+            if !try_admit_frozen_freeze(*is_mut, pattern, value, cx)
+                && !try_admit_frozen_alias(*is_mut, pattern, value, cx)
+            {
                 walk_expr(value, cx);
             }
         }
@@ -825,6 +904,128 @@ fn try_admit_frozen_alias<'a>(
     cx.frozen.insert(name.as_str(), ty);
     cx.aliases.insert(name.as_str());
     true
+}
+
+/// Stage 3 — `let g = freeze src;`, the FREEZE STATEMENT.
+///
+/// Where the stage-2.5 alias derives a frozen root from one that was already
+/// frozen, this INTRODUCES one from an ordinary binding — which is the whole
+/// point: with `frozen` available only as a parameter mode, "is this instance
+/// immutable for the region" is a question about every call site. The
+/// statement makes the region explicit and the check local.
+///
+/// Two names come out frozen, not one:
+///
+/// * `g`, the frozen handle, compiled as a non-counting alias exactly as a
+///   stage-2.5 binding is — the owner is now a local in the same frame rather
+///   than the caller's value, but the ownership rule that pays for it is the
+///   same one, and it is the second name below that supplies it;
+/// * the SOURCE's place root, for the rest of the walk. The design says
+///   "`graph` stays usable read-only; freezing does not consume it", and this
+///   is how that is enforced: once the root is in the frozen set, the ordinary
+///   whitelist refuses to move, reassign, return, or capture it, so the owner
+///   whose refcount `g` is skipping cannot go away while `g` is live. Without
+///   this the alias would dangle the moment the source was consumed.
+///
+/// FREEZABILITY IS NOT CHECKED HERE. `check_frozen_freeze_site` reports E0512
+/// on the same statement, exactly as it does for a parameter — two independent
+/// entry points into one classifier, so a type that may not be frozen is
+/// refused whether it was declared or frozen.
+fn try_admit_frozen_freeze<'a>(
+    is_mut: bool,
+    pattern: &'a Pattern,
+    value: &'a Expr,
+    cx: &mut Cx<'a, '_>,
+) -> bool {
+    if !cx.freeze_spans.contains(&SpanKey::from_span(&value.span)) {
+        return false;
+    }
+    // From here the statement IS a freeze site, so every path below reports
+    // and consumes rather than falling through — a `freeze` that quietly
+    // degrades to an ordinary binding would leave the author believing in a
+    // guarantee they do not have, which is the failure mode this stage's own
+    // first draft had twice (once on the early-out, once here).
+    let binding_name = match &pattern.kind {
+        PatternKind::Binding(n) => Some(n),
+        _ => None,
+    };
+    let why = if cx.in_closure {
+        Some("a `freeze` inside a closure body would put the handle in an environment that can outlive the call")
+    } else if is_mut {
+        Some(
+            "the binding is `mut`, so it could be repointed at a value this `freeze` never checked",
+        )
+    } else if binding_name.is_none() {
+        Some("the pattern binds more than one name, and a frozen handle cannot be spread across several")
+    } else {
+        None
+    };
+    if let Some(why) = why {
+        let shown = binding_name.map(String::as_str).unwrap_or("_");
+        cx.flag(shown, &value.span, Reason::FreezeRefused(why));
+        walk_expr(value, cx);
+        return true;
+    }
+    let name = binding_name.expect("checked above");
+    // The source's type comes from the typechecker rather than from
+    // `place_type`, because the source is NOT yet a frozen root — that is what
+    // distinguishes a freeze site from an alias. Positive evidence only: an
+    // expression with no recorded type, or one that is not a non-generic
+    // `shared struct`, is not admitted and falls through to the ordinary walk.
+    let raw = cx
+        .tc
+        .expr_types
+        .get(&SpanKey::from_span(&value.span))
+        .cloned();
+    // Recorded BEFORE the admission decision, so a source this pass declines
+    // to freeze still gets classified and reported rather than silently
+    // becoming an ordinary binding.
+    cx.freeze_sites.push((
+        raw.as_ref().and_then(head_type_name).map(str::to_string),
+        value.span.clone(),
+    ));
+    let Some(ty) = raw.and_then(|t| cx.as_shared_handle(t)) else {
+        return false;
+    };
+    // The source must be a PLACE — freezing a temporary would name an owner
+    // that no binding holds, so there is nothing whose lifetime dominates the
+    // frozen handle's. REPORTED rather than declined: falling through would
+    // make the `freeze` a silent no-op, which is worse than a refusal.
+    let Some(root) = place_root_name(value) else {
+        cx.flag(
+            name.as_str(),
+            &value.span,
+            Reason::FreezeRefused("its operand is a temporary, not a place"),
+        );
+        walk_expr(value, cx);
+        return true;
+    };
+    walk_place_indices(value, cx);
+    cx.alias_spans.insert(SpanKey::from_span(&value.span));
+    cx.frozen.insert(name.as_str(), ty.clone());
+    cx.aliases.insert(name.as_str());
+    // The source root is frozen from here on. Its own type is looked up the
+    // same way; if it cannot be resolved the root is still frozen (with the
+    // frozen handle's type as a stand-in), which over-restricts rather than
+    // under-restricts.
+    cx.frozen.entry(root).or_insert(ty);
+    cx.sources.insert(root);
+    true
+}
+
+/// The root name of a place expression, for the freeze source. Deliberately
+/// short: `self` and a bare identifier are roots, a projection recurses, and
+/// everything else (a call, a literal, a struct expression) is not a place and
+/// yields `None`.
+fn place_root_name(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        ExprKind::Identifier(name) => Some(name.as_str()),
+        ExprKind::SelfValue => Some("self"),
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::TupleIndex { object, .. } => place_root_name(object),
+        _ => None,
+    }
 }
 
 /// Stage 2.6 — `for k in <frozen place>;` over a container reached through a

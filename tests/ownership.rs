@@ -10262,6 +10262,154 @@ fn frozen_self_receiver_is_subject_to_the_freeze_site_check() {
     }
 }
 
+/// STAGE 3 — the `freeze` STATEMENT, which introduces a frozen root from an
+/// ordinary binding instead of deriving one from a root that was already
+/// frozen.
+///
+/// Why it exists at all, per the design: with `frozen` available only as a
+/// parameter mode, "is this instance immutable for the region" is a question
+/// about every call site. The statement makes the region explicit and the
+/// check local.
+///
+/// TWO names come out frozen. The handle, obviously — but also the SOURCE's
+/// place root, for the rest of the walk. That is what pays for the
+/// non-counting alias: the design says "freezing does not consume it", and the
+/// enforcement is that the ordinary whitelist then refuses to move, return, or
+/// capture the owner whose refcount the handle is skipping.
+#[test]
+fn freeze_statement_introduces_a_frozen_root_from_an_ordinary_binding() {
+    let prelude = "shared struct Node { val: i64, kids: Vec[Node] }\n\
+                   fn frz(n: frozen Node) -> i64 { n.val }\n\
+                   fn take(n: Node) -> i64 { n.val }\n";
+    let accept: &[(&str, &str)] = &[
+        (
+            "a frozen local read as a scalar",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let g = freeze t; g.val }",
+        ),
+        (
+            "a frozen local passed to a frozen slot",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let g = freeze t; frz(g) }",
+        ),
+        (
+            "the source stays READABLE after the freeze",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let g = freeze t; g.val + t.val }",
+        ),
+        (
+            "two freezes of one source",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let g = freeze t; \
+             let h = freeze t; g.val + h.val }",
+        ),
+        (
+            "a frozen local iterated and aliased",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let g = freeze t; \
+             let mut s: i64 = 0; for k in g.kids { let j = k; s = s + j.val; } s }",
+        ),
+    ];
+    for (label, body) in accept {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[freeze accept] {label}");
+        ownership_ok(&src);
+    }
+
+    // Every refusal REPORTS. A `freeze` that silently degraded to an ordinary
+    // binding would leave the author believing in a guarantee they do not
+    // have — which is exactly what this stage's first draft did twice, once
+    // through an early-out that skipped `main` entirely and once by falling
+    // through on an unsupported shape. Both are pinned here.
+    let reject: &[(&str, &str, &str)] = &[
+        (
+            "the SOURCE consumed after the freeze",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let g = freeze t; \
+             take(t) + g.val }",
+            "passed to a non-`frozen` slot",
+        ),
+        (
+            "the frozen handle consumed",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let g = freeze t; take(g) }",
+            "passed to a non-`frozen` slot",
+        ),
+        (
+            "freezing a temporary",
+            "fn f() -> i64 { let g = freeze Node { val: 1, kids: [] }; g.val }",
+            "its operand is a temporary, not a place",
+        ),
+        (
+            "a `mut` frozen binding",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; let mut g = freeze t; g.val }",
+            "the binding is `mut`",
+        ),
+        (
+            "a freeze inside a closure body",
+            "fn f() -> i64 { let t = Node { val: 1, kids: [] }; \
+             let c = || { let g = freeze t; g.val }; c() }",
+            "inside a closure body",
+        ),
+    ];
+    for (label, body, expected) in reject {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)),
+            "[{label}] expected an error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    // The source is named as a SOURCE — not a parameter, not an alias. It is
+    // the fourth noun this diagnostic carries, and each one names a different
+    // line to go change: here it is the `freeze`, not a signature or a `let`.
+    let errors = ownership_errors(&format!(
+        "{prelude}fn f() -> i64 {{ let t = Node {{ val: 1, kids: [] }}; let g = freeze t; \
+         take(t) + g.val }}\nfn main() {{ println(\"x\"); }}\n"
+    ));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`frozen` source `t`")),
+        "the diagnostic must call the freeze source a source; got {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}
+
+/// The freeze-site check reaches a `freeze` STATEMENT through the same
+/// classifier a `frozen` parameter goes through — and it is the same
+/// enumeration of sites, not a second walk: the escape walk records every
+/// freeze site it visits and hands them over, so a site that gets ADMITTED but
+/// never CLASSIFIED cannot exist.
+#[test]
+fn freeze_statement_is_subject_to_the_freeze_site_check() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "a plain struct",
+            "struct P { v: i64 }\n\
+             fn f() -> i64 { let p = P { v: 1 }; let g = freeze p; g.v }",
+            "requires a `shared` type",
+        ),
+        (
+            "a `par struct`",
+            "par struct Q { v: i64 }\n\
+             fn f() -> i64 { let q = Q { v: 1 }; let g = freeze q; g.v }",
+            "so `frozen` adds nothing",
+        ),
+        (
+            "a type with mutable state",
+            "shared struct M { mut n: i64 }\n\
+             fn f() -> i64 { let m = M { n: 1 }; let g = freeze m; g.n }",
+            "has mutable state",
+        ),
+    ];
+    for (label, body, expected) in cases {
+        let src = format!("{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)
+                && e.kind == OwnershipErrorKind::FrozenTypeNotFreezable),
+            "[{label}] expected a FrozenTypeNotFreezable error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}
+
 /// The shape the whole entry exists for: a RECURSIVE traversal of a `shared`
 /// graph, shared read-only across two `par` branches.
 ///

@@ -15295,6 +15295,68 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 3** — the two-branch traversal
+    /// shared from a `freeze`d LOCAL, with no `frozen` parameter introducing
+    /// the root.
+    ///
+    /// The distinct risk is the OWNER. In every fixture above, the owner whose
+    /// refcount the frozen handle skips is the CALLER's value, alive for the
+    /// whole call by construction. Here it is `root`, a local in the same
+    /// frame with its own scope-exit release — so if the ownership rule that
+    /// stops `root` being consumed while `g` is live ever weakens, the frozen
+    /// handle dangles and this fixture reports a use-after-free (ASAN) or a
+    /// leak (LSan on Linux CI) rather than a wrong answer.
+    ///
+    /// NOT VACUOUS on the same three legs as its siblings (B-2026-08-04-17),
+    /// and the expected output is computed independently and identically —
+    /// 255 nodes x (val 1 + tag length 19) = 5100 per traversal, x2 branches
+    /// = 10200, +1 for the `contains` check = 10201.
+    #[test]
+    fn asan_freeze_statement_shares_a_local_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { tag: String, val: i64, kids: Vec[Node] }
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 {
+        return Node { tag: f"leaf-{seed}-runtime-heap", val: seed, kids: [] };
+    }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { tag: f"node-{seed}-runtime-heap", val: seed, kids: [a, b] };
+}
+
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val + n.tag.len();
+    for k in n.kids { s = s + sum(k); }
+    return s;
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(7, seed);
+    // Read the tag bytes back BEFORE the freeze. `contains` is not one of the
+    // two container queries a frozen place permits, and after the `freeze`
+    // the source is restricted too — which is the rule working, not a
+    // limitation of the fixture. Statement order is what the walk keys on.
+    let mut w: i64 = 0;
+    if root.tag.contains("runtime-heap") { w = 1; }
+    let g = freeze root;
+    let (a, b) = par {
+        let a = sum(g);
+        let b = sum(g);
+        (a, b)
+    };
+    println(a + b + w);
+}
+"#,
+            &["10201"],
+            "freeze_statement_shares_a_local_across_par_branches_no_leak",
+            // Same tree as the siblings: 255 tag Strings plus 127 kids buffers.
+            200,
+        );
+    }
+
     /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
     /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
     /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec

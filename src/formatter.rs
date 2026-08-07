@@ -16,6 +16,7 @@ mod types;
 
 pub fn format_program(program: &Program) -> String {
     let mut f = Formatter::new();
+    f.freeze_spans = program.freeze_spans.clone();
     f.format_program(program);
     f.output
 }
@@ -81,6 +82,16 @@ pub fn render_trait_bound(bound: &TraitBound) -> String {
 pub(super) struct Formatter {
     pub(super) output: String,
     pub(super) indent: usize,
+    /// `freeze <place>` initializer spans (B-2026-08-01-33 stage 3), copied
+    /// from the program being formatted. The keyword lives on
+    /// `Program::freeze_spans` rather than inside the expression tree, so
+    /// `format_expr` will never see it and the `let` printer has to write it
+    /// back — without this, `karac fmt` rewrites `let g = freeze t;` to `let g
+    /// = t;`, which deletes a guarantee and turns a non-counting binding into
+    /// a counted one. Empty for every entry point that formats a fragment
+    /// rather than a program (`render_type_expr` and friends), where no `let`
+    /// is reachable.
+    pub(super) freeze_spans: std::collections::HashSet<crate::resolver::SpanKey>,
 }
 
 impl Formatter {
@@ -88,6 +99,7 @@ impl Formatter {
         Formatter {
             output: String::new(),
             indent: 0,
+            freeze_spans: std::collections::HashSet::new(),
         }
     }
 

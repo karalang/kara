@@ -618,6 +618,17 @@ pub struct Program {
     /// names are accepted by the parser and surfaced as unknown-
     /// attribute diagnostics by later passes.
     pub inner_attrs: Vec<Attribute>,
+    /// `freeze <place>` initializer spans — B-2026-08-01-33 mechanism 3,
+    /// stage 3. Set by the PARSER (unlike the tables below, which later passes
+    /// fill in), because `freeze` is a contextual keyword recognized in one
+    /// position and the mode must not travel inside the expression tree: a new
+    /// `ExprKind` would have to be handled by every walk in the compiler, and
+    /// stage 1 already recorded why that trade is the wrong one
+    /// (`Param::is_frozen`'s comment). The ownership pass reads this to decide
+    /// which `let`s are freeze sites, and converts the ones it admits into the
+    /// existing `frozen_alias_bindings` hint, so codegen learns nothing new.
+    /// Empty for every program that does not use the statement.
+    pub freeze_spans: std::collections::HashSet<crate::resolver::SpanKey>,
     /// Set by the lowering pass; empty before lowering runs.
     pub question_conversions: QuestionConversionTable,
     /// Set by the lowering pass from `TypeCheckResult.question_ok_payload_types`;

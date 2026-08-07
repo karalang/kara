@@ -50,6 +50,7 @@
 //! not assumed freezable.
 
 use crate::ast::*;
+use crate::token::Span;
 
 use super::{OwnershipError, OwnershipErrorKind};
 
@@ -83,12 +84,23 @@ impl super::OwnershipChecker<'_> {
             .self_is_frozen
             .then(|| impl_type.map(|t| (Some(t.to_string()), f.span.clone())))
             .flatten();
-        let sites = f
+        let sites: Vec<(Option<String>, Span)> = f
             .params
             .iter()
             .filter(|p| p.is_frozen)
             .map(|p| (frozen_type_name(&p.ty), p.span.clone()))
-            .chain(receiver);
+            .chain(receiver)
+            .collect();
+        self.report_freeze_sites(sites);
+    }
+
+    /// Classify a batch of freeze sites and emit `E0512` for each refusal.
+    ///
+    /// Shared by the DECLARED sites (a `frozen` parameter or `frozen self`
+    /// receiver, above) and the stage-3 STATEMENT sites, which the escape walk
+    /// enumerates as it goes and hands over — one classifier, so a type that
+    /// may not be frozen is refused whichever way the freeze was spelled.
+    pub(crate) fn report_freeze_sites(&mut self, sites: Vec<(Option<String>, Span)>) {
         for (name, site_span) in sites {
             let Some(refusal) = name
                 .as_deref()

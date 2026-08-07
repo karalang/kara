@@ -113,6 +113,10 @@ pub struct Parser {
     /// keyword is recognized in the receiver parse but belongs to the
     /// function. B-2026-08-01-33 stage 2.7.
     pub(crate) frozen_self_consumed: bool,
+    /// `freeze <place>` initializer spans collected during the parse, moved
+    /// onto [`crate::ast::Program::freeze_spans`] at the end. B-2026-08-01-33
+    /// stage 3.
+    pub(crate) freeze_spans: std::collections::HashSet<crate::resolver::SpanKey>,
     /// Script mode (design.md § Script mode): when `true` (the default —
     /// root source files), top-level statements synthesize a unit
     /// `fn main()`. Item-only contexts — comptime `ast.item` quotes,
@@ -225,6 +229,7 @@ impl Parser {
             frozen_ok: false,
             frozen_consumed: false,
             frozen_self_consumed: false,
+            freeze_spans: std::collections::HashSet::new(),
             allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),
@@ -513,6 +518,7 @@ impl Parser {
             items,
             module_doc_comment,
             inner_attrs,
+            freeze_spans: std::mem::take(&mut self.freeze_spans),
             ..Program::default()
         }
     }

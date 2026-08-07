@@ -12895,6 +12895,101 @@ fn frozen_self_round_trips_through_the_formatter() {
     );
 }
 
+/// STAGE 3 — the `freeze` STATEMENT. Contextual keyword again, and the span
+/// travels on `Program::freeze_spans` rather than inside the expression tree,
+/// for the reason stage 1 recorded: a new `ExprKind` would have to be handled
+/// by every walk in the compiler.
+#[test]
+fn freeze_is_a_contextual_keyword_recorded_on_the_program() {
+    // Still an ordinary identifier everywhere else — the property that makes
+    // this a non-breaking addition.
+    for src in [
+        "fn main() { let freeze = 5; println(f\"{freeze}\"); }",
+        "fn freeze() -> i64 { 3 }\nfn main() { println(f\"{freeze()}\"); }",
+        "fn f(freeze: i64) -> i64 { freeze }\nfn main() { println(f\"{f(2)}\"); }",
+    ] {
+        let r = parse(src);
+        assert!(
+            r.errors.is_empty(),
+            "`freeze` must stay usable as an identifier; got {:?} for {src}",
+            r.errors
+        );
+        assert!(
+            r.program.freeze_spans.is_empty(),
+            "an ordinary use of the name must record no freeze site: {src}"
+        );
+    }
+
+    // The statement records exactly one span, keyed by the OPERAND — the same
+    // key the ownership pass and codegen use for a non-counting binding, so
+    // all three agree on which `let`s are freeze sites.
+    let r = parse(
+        "shared struct N { val: i64 }\n\
+         fn main() { let t = N { val: 1 }; let g = freeze t; println(f\"{g.val}\"); }\n",
+    );
+    assert!(
+        r.errors.is_empty(),
+        "`freeze` must parse; got {:?}",
+        r.errors
+    );
+    assert_eq!(
+        r.program.freeze_spans.len(),
+        1,
+        "one `freeze` must record one span"
+    );
+
+    // `let freeze = ...` is a BINDING named `freeze`, not a freeze of nothing;
+    // the disambiguation is that a freeze's operand follows the keyword.
+    let r = parse("fn main() { let freeze = 5; let x = freeze; println(f\"{x}\"); }");
+    assert!(r.errors.is_empty(), "got {:?}", r.errors);
+    assert!(
+        r.program.freeze_spans.is_empty(),
+        "`let x = freeze;` reads the binding named `freeze`, and must record no site"
+    );
+}
+
+/// `karac fmt` must round-trip `freeze`, and this one was CAUGHT BY PROBING
+/// rather than by reasoning: the first cut of stage 3 rewrote
+/// `let g = freeze t;` to `let g = t;`, which is not a cosmetic change — it
+/// deletes the guarantee and turns a non-counting binding into a counted one.
+/// The keyword lives on `Program::freeze_spans`, so `format_expr` can never
+/// see it and the `let` printer is the only thing that can emit it.
+#[test]
+fn freeze_round_trips_through_the_formatter() {
+    let src = "shared struct N { val: i64 }\n\
+               fn main() {\n    let t = N { val: 1 };\n    let g = freeze t;\n\
+               \n    println(f\"{g.val}\");\n}\n";
+    let prog = parse(src);
+    assert!(prog.errors.is_empty(), "setup: {:?}", prog.errors);
+    let formatted = karac::formatter::format_program(&prog.program);
+    assert!(
+        formatted.contains("let g = freeze t;"),
+        "formatter must print the keyword back; got:\n{formatted}"
+    );
+    assert_eq!(
+        formatted.matches("freeze").count(),
+        1,
+        "formatter must not invent the keyword on the ordinary `let` above it; \
+         got:\n{formatted}"
+    );
+    let reparsed = parse(&formatted);
+    assert!(
+        reparsed.errors.is_empty(),
+        "formatted output must re-parse; got {:?}",
+        reparsed.errors
+    );
+    assert_eq!(
+        reparsed.program.freeze_spans.len(),
+        1,
+        "the re-parsed program must still have exactly one freeze site"
+    );
+    assert_eq!(
+        karac::formatter::format_program(&reparsed.program),
+        formatted,
+        "`karac fmt` must be a fixpoint on a `freeze` statement"
+    );
+}
+
 /// Stage 1 accepts `frozen` in ONE position — a parameter's top-level type —
 /// and rejects it everywhere else rather than silently accepting and erasing
 /// it. Those other positions will mean something different once the mode is

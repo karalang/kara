@@ -44,6 +44,17 @@ impl super::Formatter {
                     self.format_type_expr(t);
                 }
                 self.write_str(" = ");
+                // `freeze <place>` (B-2026-08-01-33 stage 3) — the keyword is
+                // recorded on `Program::freeze_spans`, not inside the
+                // expression, so it has to be written back here. Dropping it
+                // would silently rewrite a non-counting frozen binding into an
+                // ordinary counted one.
+                if self
+                    .freeze_spans
+                    .contains(&crate::resolver::SpanKey::from_span(&value.span))
+                {
+                    self.write_str("freeze ");
+                }
                 self.format_expr(value);
                 self.write_str(";\n");
             }
