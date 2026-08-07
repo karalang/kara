@@ -269,6 +269,14 @@ impl KaracMap {
 
     unsafe fn insert(&mut self, key: *const c_void, val: *const c_void) {
         // Resize when (occupied + tombstones) / capacity > 3/4.
+        //
+        // This bound is LOAD-BEARING beyond load factor: it is what leaves at
+        // least a quarter of the buckets EMPTY, which is the termination proof
+        // for a linear probe that has no trip counter. Codegen's
+        // `MapLookupProbe::Unbounded` / `SlotWalk` forms (B-2026-08-07-16,
+        // `KARAC_MAP_PROBE`, off by default) drop their `i >= cap` test and
+        // rely on it. Weaken the fraction toward 1 and those forms spin
+        // forever on a miss — see that enum before changing it.
         if (self.len + self.tombstones + 1) * 4 > self.capacity * 3 {
             self.resize();
         }

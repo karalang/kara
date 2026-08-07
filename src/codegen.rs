@@ -2833,6 +2833,18 @@ pub(super) struct Codegen<'ctx> {
     /// NOTE the override is deliberately blunt (all sites, both directions) so
     /// an A/B measures one variable. The shipped policy is per-site.
     pub(crate) map_tag_override: Option<bool>,
+    /// B-2026-08-07-16: which cursor form the three mono LOOKUP probes use.
+    /// `KARAC_MAP_PROBE=unbounded` drops their `i >= cap` test and `=slotwalk`
+    /// additionally walks the bucket index itself; anything else (including
+    /// unset) is [`MapLookupProbe::Bounded`], the shipped form.
+    ///
+    /// Kept as an A/B lever for the same reason `map_tag_override` is: this is
+    /// the ONLY instrument that isolates the probe form. A commit-to-commit
+    /// comparison does not — that is exactly the mistake this bug's first
+    /// measurement made, comparing across 11 unrelated upstream commits and
+    /// producing a number that meant nothing. One compiler binary, three
+    /// forms, same tree.
+    pub(crate) map_lookup_probe: mono::MapLookupProbe,
     /// One-shot latch consumed by the `BinOp::Add` arm in `compile_binop_typed`
     /// to emit a plain `add` instead of the trapping
     /// `llvm.sadd.with.overflow` sequence.
@@ -7962,6 +7974,11 @@ impl<'ctx> Codegen<'ctx> {
                 Ok("0") => Some(false),
                 Ok("1") => Some(true),
                 _ => None,
+            },
+            map_lookup_probe: match std::env::var("KARAC_MAP_PROBE").as_deref() {
+                Ok("unbounded") => mono::MapLookupProbe::Unbounded,
+                Ok("slotwalk") => mono::MapLookupProbe::SlotWalk,
+                _ => mono::MapLookupProbe::Bounded,
             },
             check_free_accum_sites: std::collections::HashSet::new(),
             elide_next_add_overflow_check: false,

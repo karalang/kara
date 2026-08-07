@@ -14,6 +14,7 @@
 use crate::ast::*;
 use std::collections::HashMap;
 
+use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue};
@@ -41,6 +42,50 @@ pub(super) enum MapProbeKey {
     /// erased runtime path: `should_use_mono_map_for` gates only the former,
     /// so "a String key can never reach mono.rs" is false.
     HeapString,
+}
+
+/// How a mono LOOKUP probe carries its cursor around the bucket array
+/// (B-2026-08-07-16). All three forms visit the same buckets in the same
+/// order; they differ only in what the loop keeps live in a register.
+///
+/// The two unbounded forms rest on an invariant the table maintains rather
+/// than on a per-iteration test: every insert path — the runtime's
+/// `karac_map_*` and the mono `fast_path` alike — evaluates
+/// `(len + tombstones + 1) * 4 > capacity * 3` BEFORE claiming a bucket and
+/// grows (or delegates to the runtime, which grows) when it holds. So after
+/// any insert `len + tombstones <= 3/4 * capacity`, at least a quarter of the
+/// buckets are EMPTY, and `capacity` is a power of two no smaller than
+/// `INITIAL_CAPACITY = 16` allocated eagerly in `KaracMap::new`. A linear
+/// probe therefore always reaches an EMPTY bucket and exits through
+/// `not.found` — the `i >= cap` test can only fire on a table that violates
+/// the invariant. Deletion preserves it (a delete trades one live entry for
+/// one tombstone, leaving the sum unchanged).
+///
+/// THE TRADE that keeps `Bounded` the default is robustness, not speed: the
+/// bound test is also what makes a CORRUPT or externally-built table
+/// terminate. Unbounded, such a table spins forever instead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum MapLookupProbe {
+    /// `i` counts iterations and `i >= cap` ends the probe; the slot is
+    /// `(start + i) & mask`. Keeps `i`, `start`, `mask` AND `cap` live.
+    Bounded,
+    /// As `Bounded` without the bound test — `cap` dies at the point `mask` is
+    /// computed, and two instructions leave the loop body.
+    Unbounded,
+    /// The cursor IS the slot, advanced by `(slot + 1) & mask`. `start` is
+    /// only the PHI's seed and `i` does not exist, so this retires `i`,
+    /// `start` and `cap` against `Bounded` — the variant with a mechanism for
+    /// actually clearing the x86 register spill this bug is about, since
+    /// freeing ONE register (measured) did not.
+    SlotWalk,
+}
+
+/// The loop-carried cursor of a mono LOOKUP probe, returned by
+/// [`Codegen::emit_lookup_probe_cursor`] and advanced by every back-edge.
+pub(super) struct LookupProbeCursor<'ctx> {
+    phi: inkwell::values::PhiValue<'ctx>,
+    form: MapLookupProbe,
+    mask: IntValue<'ctx>,
 }
 
 /// Snapshot of every name-keyed per-function variable side-table that
@@ -3543,6 +3588,105 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
     }
 
+    /// Emit a LOOKUP probe's `probe.cond` — the cursor PHI plus, in
+    /// [`MapLookupProbe::Bounded`], the `i >= cap` test — and leave the builder
+    /// positioned at the head of `probe.body` with this iteration's bucket
+    /// index computed. Returns the cursor every back-edge then advances with
+    /// [`Codegen::advance_lookup_probe`].
+    ///
+    /// The three LOOKUP sites (`emit_mono_map_get_body`,
+    /// `emit_mono_set_contains_body`, `emit_mono_map_str_get_body`) share this
+    /// so the probe form is one edit rather than three kept in sync by hand.
+    /// The two INSERT probes deliberately do NOT use it: they carry
+    /// `first_tomb` / `ft_set` alongside the counter, and they must keep their
+    /// bound because an insert probe walks to claim a bucket rather than to
+    /// find an EMPTY one — the termination argument in [`MapLookupProbe`] is a
+    /// lookup-only property.
+    pub(super) fn emit_lookup_probe_cursor(
+        &mut self,
+        blocks: (BasicBlock<'ctx>, BasicBlock<'ctx>, BasicBlock<'ctx>),
+        not_found_bb: BasicBlock<'ctx>,
+        cap: IntValue<'ctx>,
+        start: IntValue<'ctx>,
+        mask: IntValue<'ctx>,
+    ) -> (LookupProbeCursor<'ctx>, IntValue<'ctx>) {
+        let (entry_bb, probe_cond_bb, probe_body_bb) = blocks;
+        let i64_t = self.context.i64_type();
+        let form = self.map_lookup_probe;
+
+        self.builder.position_at_end(probe_cond_bb);
+        let (phi, seed) = match form {
+            // The cursor IS the slot, so it starts AT `start` rather than at
+            // the zeroth step away from it.
+            MapLookupProbe::SlotWalk => (self.builder.build_phi(i64_t, "slot.cur").unwrap(), start),
+            _ => (
+                self.builder.build_phi(i64_t, "i").unwrap(),
+                i64_t.const_zero(),
+            ),
+        };
+        phi.add_incoming(&[(&seed, entry_bb)]);
+        let cur = phi.as_basic_value().into_int_value();
+
+        match form {
+            MapLookupProbe::Bounded => {
+                let bound_done = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, cur, cap, "bound.done")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(bound_done, not_found_bb, probe_body_bb)
+                    .unwrap();
+            }
+            // No bound test. `not_found_bb` stays reachable — `probe.body`
+            // branches to it on the EMPTY bucket the load factor guarantees,
+            // which is the exit every terminating probe already took.
+            MapLookupProbe::Unbounded | MapLookupProbe::SlotWalk => {
+                self.builder
+                    .build_unconditional_branch(probe_body_bb)
+                    .unwrap();
+            }
+        }
+
+        self.builder.position_at_end(probe_body_bb);
+        let slot = match form {
+            MapLookupProbe::SlotWalk => cur,
+            _ => {
+                let sum_si = self.builder.build_int_add(start, cur, "sum.si").unwrap();
+                self.builder.build_and(sum_si, mask, "slot").unwrap()
+            }
+        };
+        (LookupProbeCursor { phi, form, mask }, slot)
+    }
+
+    /// Register a back-edge into a LOOKUP probe: advance the cursor one bucket
+    /// and feed it to the PHI as arriving from `from_bb`. Builds into whatever
+    /// block the builder is currently positioned at, so call it where the old
+    /// `i + 1` was built — before that block's terminator.
+    pub(super) fn advance_lookup_probe(
+        &mut self,
+        cursor: &LookupProbeCursor<'ctx>,
+        from_bb: BasicBlock<'ctx>,
+        name: &str,
+    ) {
+        let i64_t = self.context.i64_type();
+        let cur = cursor.phi.as_basic_value().into_int_value();
+        let bumped = self
+            .builder
+            .build_int_add(cur, i64_t.const_int(1, false), name)
+            .unwrap();
+        let next = match cursor.form {
+            // Wrap on the edge rather than at the use site, so the PHI always
+            // holds a valid bucket index and `probe.body` can index with it
+            // directly.
+            MapLookupProbe::SlotWalk => self
+                .builder
+                .build_and(bumped, cursor.mask, "slot.next")
+                .unwrap(),
+            _ => bumped,
+        };
+        cursor.phi.add_incoming(&[(&next, from_bb)]);
+    }
+
     /// Cache key for the monomorphized Map[K, V] symbol family —
     /// `"{key_mangle}_{val_mangle}"` (e.g. `"i64_i64"`). Mirrors the
     /// content-addressed scheme used by `mangle_mono_name` for user
@@ -4259,23 +4403,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
 
-        // ── probe.cond: PHI for i; bound-check vs cap ─────────────
-        self.builder.position_at_end(probe_cond_bb);
-        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
-        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
-        let i_val = i_phi.as_basic_value().into_int_value();
-        let bound_done = self
-            .builder
-            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(bound_done, not_found_bb, probe_body_bb)
-            .unwrap();
-
-        // ── probe.body: load status, branch on empty ──────────────
-        self.builder.position_at_end(probe_body_bb);
-        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
-        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        // ── probe.cond + head of probe.body: cursor, then the slot ─
+        // Both the cursor form and the presence of a bound test are
+        // `KARAC_MAP_PROBE`'s call — see `MapLookupProbe` (B-2026-08-07-16).
+        let (cursor, slot) = self.emit_lookup_probe_cursor(
+            (entry_bb, probe_cond_bb, probe_body_bb),
+            not_found_bb,
+            cap,
+            start,
+            mask,
+        );
         let status_slot_p = unsafe {
             self.builder
                 .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
@@ -4323,12 +4460,8 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.emit_map_is_occupied(status_byte, "ctrl.match")
         };
-        let tomb_i_next = self
-            .builder
-            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
-            .unwrap();
-        // Tombstone path: advance i, branch to probe.cond.
-        i_phi.add_incoming(&[(&tomb_i_next, check_occupied_bb)]);
+        // Tombstone path: advance the cursor, branch to probe.cond.
+        self.advance_lookup_probe(&cursor, check_occupied_bb, "i.next.tomb");
         self.builder
             .build_conditional_branch(is_occupied, eq_check_bb, probe_cond_bb)
             .unwrap();
@@ -4354,11 +4487,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_compare(IntPredicate::EQ, slot_key, key_arg, "key.match")
             .unwrap();
-        let nomatch_i_next = self
-            .builder
-            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.nomatch")
-            .unwrap();
-        i_phi.add_incoming(&[(&nomatch_i_next, eq_check_bb)]);
+        self.advance_lookup_probe(&cursor, eq_check_bb, "i.next.nomatch");
         self.builder
             .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
             .unwrap();
@@ -4593,23 +4722,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
 
-        // ── probe.cond: PHI for i; bound-check vs cap ─────────────
-        self.builder.position_at_end(probe_cond_bb);
-        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
-        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
-        let i_val = i_phi.as_basic_value().into_int_value();
-        let bound_done = self
-            .builder
-            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(bound_done, not_found_bb, probe_body_bb)
-            .unwrap();
-
-        // ── probe.body: load status, branch on empty ──────────────
-        self.builder.position_at_end(probe_body_bb);
-        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
-        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        // ── probe.cond + head of probe.body: cursor, then the slot ─
+        // Both the cursor form and the presence of a bound test are
+        // `KARAC_MAP_PROBE`'s call — see `MapLookupProbe` (B-2026-08-07-16).
+        let (cursor, slot) = self.emit_lookup_probe_cursor(
+            (entry_bb, probe_cond_bb, probe_body_bb),
+            not_found_bb,
+            cap,
+            start,
+            mask,
+        );
         let status_slot_p = unsafe {
             self.builder
                 .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
@@ -4657,11 +4779,8 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.emit_map_is_occupied(status_byte, "ctrl.match")
         };
-        let tomb_i_next = self
-            .builder
-            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
-            .unwrap();
-        i_phi.add_incoming(&[(&tomb_i_next, check_occupied_bb)]);
+        // Tombstone path: advance the cursor, branch to probe.cond.
+        self.advance_lookup_probe(&cursor, check_occupied_bb, "i.next.tomb");
         self.builder
             .build_conditional_branch(is_occupied, eq_check_bb, probe_cond_bb)
             .unwrap();
@@ -4686,11 +4805,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_compare(IntPredicate::EQ, slot_key, key_arg, "key.match")
             .unwrap();
-        let nomatch_i_next = self
-            .builder
-            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.nomatch")
-            .unwrap();
-        i_phi.add_incoming(&[(&nomatch_i_next, eq_check_bb)]);
+        self.advance_lookup_probe(&cursor, eq_check_bb, "i.next.nomatch");
         self.builder
             .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
             .unwrap();
@@ -5303,23 +5418,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
 
-        // ── probe.cond: PHI for i; bound-check vs cap ─────────────
-        self.builder.position_at_end(probe_cond_bb);
-        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
-        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
-        let i_val = i_phi.as_basic_value().into_int_value();
-        let bound_done = self
-            .builder
-            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(bound_done, not_found_bb, probe_body_bb)
-            .unwrap();
-
-        // ── probe.body: load status, branch on empty ──────────────
-        self.builder.position_at_end(probe_body_bb);
-        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
-        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        // ── probe.cond + head of probe.body: cursor, then the slot ─
+        // Both the cursor form and the presence of a bound test are
+        // `KARAC_MAP_PROBE`'s call — see `MapLookupProbe` (B-2026-08-07-16).
+        let (cursor, slot) = self.emit_lookup_probe_cursor(
+            (entry_bb, probe_cond_bb, probe_body_bb),
+            not_found_bb,
+            cap,
+            start,
+            mask,
+        );
         let status_slot_p = unsafe {
             self.builder
                 .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
@@ -5367,11 +5475,8 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.emit_map_is_occupied(status_byte, "ctrl.match")
         };
-        let tomb_i_next = self
-            .builder
-            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
-            .unwrap();
-        i_phi.add_incoming(&[(&tomb_i_next, check_occupied_bb)]);
+        // Tombstone path: advance the cursor, branch to probe.cond.
+        self.advance_lookup_probe(&cursor, check_occupied_bb, "i.next.tomb");
         self.builder
             .build_conditional_branch(is_occupied, eq_check_bb, probe_cond_bb)
             .unwrap();
@@ -5399,11 +5504,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_int_value();
-        let nomatch_i_next = self
-            .builder
-            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.nomatch")
-            .unwrap();
-        i_phi.add_incoming(&[(&nomatch_i_next, eq_check_bb)]);
+        self.advance_lookup_probe(&cursor, eq_check_bb, "i.next.nomatch");
         self.builder
             .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
             .unwrap();
