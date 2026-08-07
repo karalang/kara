@@ -3422,19 +3422,57 @@ impl<'ctx> super::Codegen<'ctx> {
     /// So on arm64 the tag NEVER pays for a primitive key across six workloads
     /// and costs up to 1.17x, while it pays for a String key — whose skipped
     /// compare is a `{ptr,len,cap}` load plus a cold heap dereference, not an
-    /// L1 hit. x86 agrees the tag pays for String keys (+11.1%); its sign for
-    /// PRIMITIVE keys is disputed between two container lanes (tag off measured
-    /// 1.20x slower by one, 2.0% faster by the other) and cannot be settled
-    /// from an arm64 host, so x86 keeps the tag until that lane resolves —
-    /// tracked as its own ledger row. That is why this is arch-conditional and
-    /// not a plain key-type gate.
+    /// L1 hit.
     ///
-    /// kata:170 is the outlier in MAGNITUDE and its mechanism is not fully
-    /// explained: there alone the tag executes 12.8% FEWER instructions yet
-    /// burns 18.5% MORE cycles (IPC 3.04 -> 2.24). The static code difference
-    /// is 9 instructions, so that is a dynamic effect — the tag skipping
-    /// `eq_check` work that was cheap enough to be free. The other five agree
-    /// in DIRECTION at a few percent, which is what this policy rests on.
+    /// MEASURED, x86_64 (Intel Xeon @2.80GHz, 4 cores, Linux container), same
+    /// `KARAC_MAP_TAG` A/B on one karac, strictly interleaved A/B/A/B, min and
+    /// median of N, `KARAC_AUTO_PAR=0`, sinks verified, and an A/A control
+    /// (one binary against a copy of itself) run FIRST at each workload length
+    /// — 0.2%/0.02% at 3.9 s, 1.5%/0.8% at 3.6 s, 0.0%/0.4% at 6.8 s. Sign is
+    /// stated as the cost of DROPPING the tag, i.e. positive = the tag pays:
+    ///
+    ///   kata:170 `Map[i64,i64]` (168 keys, `keys()` walk, 3.9 s)  +12.2%/+13.2%
+    ///   kata:128 `Set[i64]`     (20k keys, scaled to 3.6 s)       +5.4%/+5.4%
+    ///   kata:146 `Map[i64,i64]` (LRU, tombstone churn, 0.6 s)     +2.8%/+2.4%
+    ///   kata:217 `Set[i64]`     (800-key windows, 6.8 s)          neutral
+    ///   kata:219 `Map[i64,i64]` (sliding window, 0.8 s)           neutral
+    ///
+    /// So x86 is the MIRROR of arm64 on the same primitive-keyed sites: the tag
+    /// never costs beyond the A/A control and pays up to 1.12x. On kata:170 the
+    /// two distributions are disjoint (tag-on max 3971 ms < tag-off min 4331
+    /// ms over 10 interleaved reps). B-2026-08-06-33 settled this; that is why
+    /// this is arch-conditional and not a plain key-type gate, and deleting
+    /// `!self.target_is_aarch64` would cost x86 up to 12%.
+    ///
+    /// kata:170 is the outlier in MAGNITUDE on BOTH architectures, and on both
+    /// its INSTRUCTION COUNT points away from the winner — in opposite
+    /// directions, which is why counting instructions cannot decide this:
+    ///
+    ///   arm64  tag-on executes 12.8% FEWER instructions and still burns 18.5%
+    ///          MORE cycles (IPC 3.04 -> 2.24). The tag LOSES.
+    ///   x86    tag-on executes 15.1% MORE instructions (cachegrind, exact and
+    ///          deterministic: 15.081 G I-refs vs 13.106 G) and still wins by
+    ///          12%. D1 and LLd misses differ by ONE out of ~3,100 and ~2,360
+    ///          either way — the ~168-entry table is L1-resident, so there is
+    ///          no cache pressure for the tag to relieve.
+    ///
+    /// The x86 extra instructions are a SPILL, visible in the cachegrind D-ref
+    /// split: over 201.6 M key-probes, tag-on does exactly 2.00 more writes per
+    /// probe (403.2 M vs 42.8 K total) while tag-off does 1.24 more reads per
+    /// probe — the kv load the tag would have skipped. So x86 pays two stores
+    /// per probe for the tag and still comes out 12% ahead, because what the
+    /// tag removes is a data-dependent load on the probe's CRITICAL PATH: the
+    /// status byte alone decides whether to advance, so the loop never waits on
+    /// the kv line. What the tag costs is a serialized compare against a
+    /// computed operand. x86 values the shortened chain more; arm64 values the
+    /// avoided compare more. Any future attempt to re-derive this policy from
+    /// I-refs, or from a commit pair rather than from the flag, will get the
+    /// sign wrong — both have already done so once (B-2026-08-06-33).
+    ///
+    /// Loose thread, not blocking: that 2-stores-per-probe spill is pure
+    /// overhead on the arm that already wins. A spill-free tag would widen
+    /// x86's margin, and might flip arm64's sign if part of what the tag costs
+    /// there is the same spill rather than the compare.
     pub(super) fn map_tag_compare(&self, key: MapProbeKey) -> bool {
         if let Some(forced) = self.map_tag_override {
             return forced;
