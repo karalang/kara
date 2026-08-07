@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 87 | 0 |
 | missing-feature | 81 | 1 |
 | false-positive | 56 | 0 |
-| perf | 55 | 3 |
+| perf | 55 | 2 |
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 727 | 6 |
+| codegen | 727 | 5 |
 | interp | 127 | 0 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced · 8 open · 982 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced · 7 open · 983 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
-| B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | OPEN ITEMS (2) AND (3) BOTH CLOSED 2026-08-07 (arm64 M5 Pro). (3) was the big one and it resolved AGAINST the audit: bench-baseline.json carries a PER-KATA env.measured_at spanning 2026-05-31..06-06, the audit rebuilt one base commit (218dd7d7) from the FILE's generated_at, and that commit is 227 src/runtime commits after the one that produced the #8/#9/#11 rows. At the date-aligned commits 4 of 5 probes reproduce within 5% with BYTE-IDENTICAL binary sizes, so the baseline file is faithful. The missed window contains e4047440 (AOT integer overflow/div-zero traps, 2026-06-07) at 1.31x on #11 / 1.20x on #8 / 1.15x on #9 -- LARGER than the a12a1a69 this row bisected -- and 2406bab8 (lean panic-free sort) at 5.80x on #1665, which is that kata's entire '6x'. Two of the audit's conclusions invert: #1665 was not 'INVERTED', and #11 is a valid negative control for NARROW-int traps only. (2) closed in kara-katas 9844c02. RESIDUAL: #71 does not reproduce even date-aligned (1.45x, binary 16 B off) -- a bench-provenance gap, not a compiler claim. |
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. FIXED: no binding (fresh temp), `Vec.push` (the only -O2 leak), escape-by-return, and the BOX-INSIDE-A-BOX chain. OPEN: a struct between the levels, whose owner is CONTESTED — a fix was implemented and reverted for double-freeing. Shape 6 was never a member of this family | — |
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
 | B-2026-08-07-11 | 2026-08-07 | codegen | low | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct literal or pushing it into a `Vec` leaks BOTH envelopes (320 + 320) | — |
@@ -139,9 +138,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced
 | B-2026-08-07-13 | 2026-08-07 | other | low | docs/bug-ledger.jsonl has no pinned JSON encoding, so writers flip it between raw UTF-8 and \uXXXX escapes and each flip rewrites all ~1000 rows | — |
 | B-2026-08-07-14 | 2026-08-07 | codegen | medium | kāra's i64 OVERFLOW CHECK is ~2.4x dearer relative to its own baseline than rustc's (1.309x vs 1.131x on the identical kata #11 loop), which spends the 1.16x lead kāra's unchecked code holds and lands it at a DEAD TIE with equal-safety Rust instead of ahead; the surviving cost is the `h * (r - l)` multiply's smulh + cmp-asr#63 + branch, still unelided on main two months after it landed | Attributed by matched-pair ladder under B-2026-08-05-34 (arm64 M5 Pro, 2026-08-07). Mechanism commit e4047440 (2026-06-07, AOT integer arithmetic faults), parent ad240cad. NOT a revert candidate and NOT a correctness defect -- at equal safety kāra TIES rustc on this kata (191.4 vs 191.4 ms). The gap is that kāra's i64 overflow check costs 1.309x of its own unchecked baseline where rustc's costs 1.131x of its own, which spends a 1.16x lead kāra otherwise has. Corpus-wide equal-safety data ALREADY EXISTS (Kara/ovf_equal_safety_triage.tsv, 56 rows, kara/ovf median 0.999) and corroborates the tie from a different instrument; what it lacks is a kara-unchecked column, which is what this row's claim rests on. Next step: an IR/asm diff of the smulh+cmp-asr#63 sequence against what rustc emits for the same checked multiply, on the 25-of-56 subset where rustc actually pays for its check. |
 
-### Fixed (982)
+### Fixed (983)
 
-<details><summary>982 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>983 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1103,6 +1102,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-31 | interp+codegen | medium | the interpreter computes `Tensor[f32]` elements in f64 while AOT uses a packed f32 buffer, so an f32 tensor gives DIFFERENT ANSWERS on the two backen… | 2bfece1 |
 | B-2026-08-05-32 | codegen | high | A struct with a DIRECT `shared` field, bound to a LOCAL and passed BY VALUE, never rc-decs the box -- it leaks on a DEFAULT -O2 build (288 B / 8 allo… | 17b58f4 |
 | B-2026-08-05-33 | codegen | high | LAW, not one fixture: a by-value aggregate param that is CALLER-RETAINS is owned by nobody and leaks once per call on a DEFAULT -O2 build | 13a6f9ed fixed (a) by registering the by-value param drop at its DECLARED instantiation (enum_inst_var_types) instead of by bare name. 126180fb fixed (b); 17b58f4 fixed (c). |
+| B-2026-08-05-34 | codegen | medium | PERF-REGRESSION, RESOLVED BY MEASUREMENT AND LARGELY NOT A DEFECT: the corpus figure is real but is dominated by e4047440 (AOT integer overflow/div-z… | No karac change, and none is wanted: both causes are correctness work kept as-is -- e4047440 (integer overflow safety) and 2406bab8 (panic-free sort). The surviving optimization headroom is B-2026-08-07-14 (kara's overflow check costs 1.309x of its own unchecked baseline vs rustc's 1.131x). The corpus-join guards are kara-katas 60c76c3 (workload/sink) and 9844c02 (measurement window). |
 | B-2026-08-05-35 | other | medium | the ASAN harness SKIPS on a CODEGEN failure ('setup failed -- skipping'), so a memory_sanitizer test written for a shape that does not yet compile re… | 1557d40 |
 | B-2026-08-05-37 | codegen+interp | high | a `mut ref` PARAMETER given a PLACE argument silently DISCARDS the callee's write on every backend — `bump(mut g.val)` / `bump(mut t.0)` / `bump(mut… | 1bf6175 (src/codegen.rs `fn_param_mut_ref`; src/codegen/call_dispatch.rs `mut_ref_place_arg_ptr` + the direct-call arm; src/codegen/mono.rs the generic-mono arm; src/codegen/functions.rs + mono.rs registration; src/interpreter/eval_call.rs the CICO write-back; src/interpreter.rs `place_is_writeback_safe`). Pins e2e_mut_ref_place_argument_writes_back, test_mut_ref_place_argument_writes_back, test_mut_ref_place_writeback_skips_impure_subscript. |
 | B-2026-08-05-39 | codegen | medium | a `mut ref` AGGREGATE parameter's whole-value REASSIGNMENT stored past its slot — `x = mk()` on a `mut ref String` wrote 24 bytes into the 8-byte all… | 559a8cc (src/codegen/stmts.rs — the aggregate arm beside the scalar `mut ref` assign-through, plus `reclaim_displaced_ref_param_pointee`). Pins e2e_mut_ref_aggregate_param_reassignment_writes_through, test_mut_ref_aggregate_param_reassignment_replaces_pointee, asan_mut_ref_aggregate_param_reassignment_no_leak. |
