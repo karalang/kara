@@ -36689,6 +36689,105 @@ fn main() {
     /// `borrow_o` is a `ref` param, which must stay caller-owned — registering
     /// a caller temp drop there would be a second owner, not a first.
     ///
+    /// B-2026-08-07-15 — a struct that is NOT copy-supported, passed as a FRESH
+    /// TEMP by value, was dropped by BOTH frames. The callee owns it BY TRANSFER
+    /// (B-2026-08-05-33: no entry copy is possible, so it takes the caller's
+    /// buffers and registers the drop), and that arm's safety argument is an
+    /// explicit lockstep with the caller's retraction —
+    /// `move_declined_copy_struct_arg`, which keys on a MOVED NAMED BINDING. A
+    /// fresh struct literal is not one, and the caller's own registrar fires on
+    /// `aggregate_has_heap_field`, which a sibling `String`/`Vec` satisfies. So
+    /// the temp had an owner on one side and was transferred on the other:
+    /// measured 480 valgrind errors at the DEFAULT -O2 with a callee whose body
+    /// is `1`.
+    ///
+    /// `ig_ms` / `ig_vs` / `ig_ss` are the corrupting rows — any `Map`/`Set`
+    /// field makes `field_copy_supported` decline ("Heap the outer-buffer copy
+    /// can't duplicate → bail"), and the sibling heap field turns the caller's
+    /// gate on. `h.ig` and `ig_gen` carry the same shape through the METHOD and
+    /// MONOMORPH arg loops, which have their own copies of the registration.
+    ///
+    /// FIVE CONTROLS, and each one is a way the fix could have been wrong:
+    ///   * `ig_mo` — the same struct with NO sibling heap field. The gate never
+    ///     fired for it, so it was already clean and must stay clean.
+    ///   * `ig_ps` — a plain `String` field, i.e. COPY-SUPPORTED. It takes the
+    ///     other branch entirely (callee entry-copies, both frames own distinct
+    ///     heap) and its IR must be untouched.
+    ///   * `ig_sh` — a shared-owning struct. Copy-support declines for an
+    ///     unrelated reason and the callee does NOT take ownership
+    ///     (B-2026-08-05-32), so the caller's drop is the box's only rc-dec and
+    ///     suppressing it would strand the box.
+    ///   * `ig_ref` — a `ref` param fed a fresh LITERAL. Legal, already clean,
+    ///     and the caller's temp drop is the SOLE owner there: suppressing it
+    ///     would have traded the corruption for a leak. It survives because a
+    ///     `ref` argument never reaches that registrar at all (the rvalue-ref
+    ///     arm continues through `queue_ref_rvalue_arg_cleanup` first) — which
+    ///     this row establishes by measurement, not by reading control flow.
+    ///   * the `named` binding — the half of the lockstep that always worked,
+    ///     here so a fix that broke it cannot pass.
+    ///
+    /// Expected value is COMPUTED: 1+2+4+8+16+32+64+128+256+1 = 512 per
+    /// iteration, x40 = 20480.
+    #[test]
+    fn asan_fresh_temp_struct_arg_owned_by_transfer_no_double_free() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Ms { a: String, m: Map[String, i64] }
+struct Vs { a: Vec[i64], m: Map[String, i64] }
+struct Ss { a: String, s: Set[i64] }
+struct Mo { m: Map[String, i64] }
+struct Ps { a: String }
+shared struct Shr { v: i64 }
+struct Sh2 { a: String, sh: Shr }
+struct Host { k: i64 }
+impl Host {
+    fn ig(ref self, x: Ms) -> i64 { 8 }
+}
+fn ig_ms(x: Ms) -> i64 { 1 }
+fn ig_vs(x: Vs) -> i64 { 2 }
+fn ig_ss(x: Ss) -> i64 { 4 }
+fn ig_mo(x: Mo) -> i64 { 16 }
+fn ig_ps(x: Ps) -> i64 { 32 }
+fn ig_sh(x: Sh2) -> i64 { 64 }
+fn ig_ref(x: ref Ms) -> i64 { 128 }
+fn ig_gen[T](x: Ms, t: T) -> i64 { 256 }
+fn mk_map(k: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"key-padded-out-so-it-heap-allocates-{k}", k);
+    m
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let h: Host = Host { k: n };
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        acc = acc + ig_ms(Ms { a: f"ms-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) });
+        let mut v: Vec[i64] = Vec.new();
+        v.push(n + i);
+        acc = acc + ig_vs(Vs { a: v, m: mk_map(n + i) });
+        let mut s: Set[i64] = Set.new();
+        s.insert(n + i);
+        acc = acc + ig_ss(Ss { a: f"ss-padded-out-so-it-heap-allocates-{n + i}", s: s });
+        acc = acc + h.ig(Ms { a: f"me-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) });
+        acc = acc + ig_mo(Mo { m: mk_map(n + i) });
+        acc = acc + ig_ps(Ps { a: f"ps-padded-out-so-it-heap-allocates-{n + i}" });
+        acc = acc + ig_sh(Sh2 { a: f"sh-padded-out-so-it-heap-allocates-{n + i}", sh: Shr { v: n + i } });
+        acc = acc + ig_ref(Ms { a: f"rf-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) });
+        acc = acc + ig_gen(Ms { a: f"gn-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) }, i);
+        let named: Ms = Ms { a: f"nm-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) };
+        acc = acc + ig_ms(named);
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["20480"],
+            "fresh_temp_struct_arg_owned_by_transfer",
+            100,
+        );
+    }
+
     /// Expected value is COMPUTED: 1+2+4+8+16+16+32+64+128 = 271 per iteration,
     /// x40 = 10840.
     #[test]
