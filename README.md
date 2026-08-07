@@ -292,7 +292,7 @@ raw numbers: **[bench-results.json](https://github.com/karalang/kara-katas/blob/
 These benchmarks are validation, not a value proposition: the bar is
 **parity** — that Kāra's safety, ownership, and effect abstractions land
 production-class workloads within a few percent of Rust/C, with no
-performance cliff. The corpus is also a correctness exercise — 30+
+performance cliff. The corpus is also a correctness exercise — 246
 algorithm kernels spanning control flow, generics, collections, pattern
 matching, ownership, and codegen, where small programs surface a
 disproportionate share of compiler bugs.
@@ -317,7 +317,7 @@ trails on most single-threaded work.
 ![Binary size, sequential lane — relative to Rust, log scale](docs/assets/binary-seq.png)
 
 C-sized binaries (~33 KiB) for most programs, rising to a ~285 KiB floor
-when the larger runtime surface links. Rust ~14× above C; Go ~70×
+when the larger runtime surface links. Rust ~14× above C; Go ~74×
 (runtime + GC in every binary).
 
 - **Runtime memory** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/rss-seq.png)) — Kāra/C/Rust at parity; Kāra runs leak-free at native footprint. Go's GC heap is 2–8×.
@@ -334,14 +334,14 @@ program; lower is faster; everything relative to **Rust = 1.0**.
 
 ![Runtime, parallel lane — Kāra auto-par vs Rust rayon / Go / C-pthreads, relative to Rust](docs/assets/runtime-par.png)
 
-Across the **31 programs** that currently ship the full parallel comparator set,
-Kāra's auto-par runs at a median **1.13× of hand-tuned `rayon`** (typically within
-~10–15%), is **faster than `rayon` outright on seven** (best #22 0.47×, #23, #11,
-#133), beats Go's goroutines on **24 of 31** — often by multiples, as dispatch
+Across the **36 programs** that currently ship the full parallel comparator set,
+Kāra's auto-par runs at a median **1.14× of hand-tuned `rayon`** (typically within
+~10–15%), is **faster than `rayon` outright on nine** (best #22 0.58×, #20, #11,
+#86), beats Go's goroutines on **27 of 36** — often by multiples, as dispatch
 overhead swamps fine-grained reductions — and **edges or matches the raw-pthreads
 C floor on nine** of the allocation-heavy ones, for **none** of the engineering
 cost. It is not uniformly fastest — a few string-/allocation-churn kernels trail
-both C and Go (worst #71 simplify). More points land automatically as parallel
+both C and Go (worst #3629 bfs_sieve). More points land automatically as parallel
 katas are added.
 
 The intra-Kāra view of the same effect (same source, auto-par vs its own
