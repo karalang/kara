@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 112 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 88 | 1 |
-| missing-feature | 81 | 1 |
+| missing-feature | 82 | 2 |
 | perf | 57 | 1 |
 | false-positive | 56 | 0 |
 | diagnostics | 42 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 734 | 2 |
 | interp | 128 | 1 |
 | typecheck | 127 | 0 |
-| ownership | 39 | 1 |
+| ownership | 40 | 2 |
 | autopar | 33 | 1 |
 | other | 29 | 0 |
 | cli | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1008 surfaced · 4 open · 994 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1009 surfaced · 5 open · 994 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1008 surfaced
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side | HARDWARE-BLOCKED for cloud containers (verified 2026-08-07): no virtualized PMU (perf_event_open returns ENOENT for every counter — NOT a paranoid/perf-CLI problem, check with `cc -O2 -o pmc scripts/pmc_linux.c`), and no kata corpus in a fresh clone. The `KARAC_FN_ALIGN` lever is in place and tested; the remaining arm64 measurement is minutes of work on an M5 Pro and closes the row either way. |
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct -- one approach (the third disjunct) built and REVERTED: it fixes every measured shape but double-frees the self-hosted-parser destructure fixture, because struct destructure is a SECOND move-out gate; the three sites it must widen with are named in the detail | One approach BUILT AND REVERTED 2026-08-07 — the third disjunct this row proposed. It is right about the diagnosis and fixes all five measured shapes plus both `place_optres_field_move_info_ex` pairing guards, but double-frees `asan_vec_of_struct_shared_and_option_field_consumed_no_leak` because STRUCT DESTRUCTURE is a second move-out gate that does not move with it. Next attempt must widen `pattern_binding.rs:813`, `pattern_binding.rs:846` and `control_flow_match.rs:8418` in lockstep — see the detail's closing section. |
 | B-2026-08-07-22 | 2026-08-07 | interp | high | a `par {}` block inside a `while` loop HANGS under `--interp` (the DEFAULT for `karac check`-adjacent workflows and the Mend oracle) while the identical program builds and runs correctly AOT -- no shared type, no `frozen`, no captures needed to reproduce | — |
+| B-2026-08-07-23 | 2026-08-07 | ownership | high | a `frozen` handle has no legal place to be STORED, so no iterative traversal can use one: a local `VecDeque[Node]` worklist refuses `queue.push_back(root)`, and there is no way to declare `VecDeque[frozen Node]`. This is what actually blocks kata #133 after B-2026-08-01-33 stage 3b -- recursion works, worklists do not, and both of that kata's variants carry a `visited: Map[i64, Node]` | src/ownership/frozen_escape.rs (the escape whitelist) + docs/spikes/freeze-point-design.md property 2 |
 
 ### Fixed (994)
 
