@@ -9763,6 +9763,71 @@ fn test_method_resolution_no_method_diagnostic_fires_through_ref() {
 // orthogonal to this sub-item) — those paths are exercised at the
 // unit level in `src/typechecker.rs` instead.
 
+/// B-2026-08-07-8 — a `shared struct` receiver can be passed to a free
+/// function, in every receiver/parameter mode combination.
+///
+/// `lower_type_expr` maps the bare name of a `shared struct S` to
+/// `Type::Shared(S)`, deliberately distinct from `Type::Named { name: "S" }`
+/// so consumers can match shared-ness off the type. The impl's `self_type`
+/// then ran that through a fallback whose job is ERASING GENERIC ARGS (so
+/// `impl Foo[T]`'s `self` is `Foo`, not `Foo[T]`), which rebuilt it as the
+/// `Named` form — so `self` was typed as a DIFFERENT type from every
+/// annotation naming the same struct.
+///
+/// The two render identically (`Type::Shared(n)` displays as `n`), which is
+/// why the symptom read as the nonsense "expected 'Inner', found 'Inner'" for
+/// a by-value parameter, and as "expected 'ref Inner', found 'Inner'" for a
+/// borrow. The row filed it as a BORROW rule gap — "there is no receiver mode
+/// from which a borrow parameter is reachable" — but nothing about borrows was
+/// involved: the by-value arm below fails identically pre-fix, and a
+/// NON-shared struct passes every arm. Preserving `Type::Shared` is safe here
+/// because a shared struct is non-generic at v1, so there are no args to
+/// erase.
+///
+/// Covers all four combinations the row lists plus the two it says are
+/// unaffected (by-value parameter, and returning `self`), each of which was
+/// also broken.
+#[test]
+fn test_shared_receiver_passes_to_free_function_in_every_mode() {
+    for (recv, callee, arg_ty) in [
+        ("ref self", "byref", "ref Inner"),
+        ("self", "byref", "ref Inner"),
+        ("ref self", "byval", "Inner"),
+        ("self", "byval", "Inner"),
+        ("mut ref self", "byref", "ref Inner"),
+    ] {
+        typecheck_ok(&format!(
+            "shared struct Inner {{ v: i64 }}\n\
+             fn {callee}(i: {arg_ty}) -> i64 {{ i.v }}\n\
+             impl Inner {{ fn m({recv}) -> i64 {{ {callee}(self) }} }}\n\
+             fn main() {{ let x = Inner {{ v: 1 }}; println(x.m()); }}"
+        ));
+    }
+
+    // The mirrored direction the row describes separately: returning `self`
+    // where the declared return type is the bare struct name. Same root, so
+    // the same fix covers it — and with it fixed the confusing
+    // "expected 'Inner', found 'Inner'" rendering no longer arises.
+    for recv in ["ref self", "self"] {
+        typecheck_ok(&format!(
+            "shared struct Inner {{ v: i64 }}\n\
+             impl Inner {{ fn me({recv}) -> Inner {{ self }} }}\n\
+             fn main() {{ let x = Inner {{ v: 1 }}; println(x.me().v); }}"
+        ));
+    }
+
+    // CONTROL, and the reason the row's reduction did not reproduce as
+    // written: a NON-shared struct was never affected — its `self` and its
+    // annotations are both `Type::Named`. Kept so a future change that
+    // "fixes" the shared path by weakening the plain one fails here.
+    typecheck_ok(
+        "struct Plain { v: i64 }\n\
+         fn byref(i: ref Plain) -> i64 { i.v }\n\
+         impl Plain { fn m(ref self) -> i64 { byref(self) } }\n\
+         fn main() { let x = Plain { v: 1 }; println(x.m()); }",
+    );
+}
+
 #[test]
 fn test_method_resolution_shared_struct_deref_finds_inherent_method() {
     let errors = typecheck_errors(

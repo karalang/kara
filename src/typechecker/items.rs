@@ -2579,6 +2579,28 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     lowered.clone()
                 }
+                // B-2026-08-07-8 — a `shared`/`par` target keeps its
+                // `Type::Shared`. `lower_type_expr` already produced it (the
+                // bare struct name of a `shared struct S` lowers to
+                // `Type::Shared(S)`, deliberately distinct from
+                // `Type::Named { name: "S" }` so consumers can match
+                // shared-ness off the type); the fallback below then
+                // overwrote it with the `Named` form, so `self` was typed as
+                // a DIFFERENT type from every annotation naming the same
+                // struct.
+                //
+                // The two render identically — `Type::Shared(n)` displays as
+                // `n` — which is why the symptom reads as the nonsense
+                // "expected 'Inner', found 'Inner'" when the parameter is
+                // by-value, and as "expected 'ref Inner', found 'Inner'"
+                // when it is a borrow. Nothing about borrows was actually
+                // involved.
+                //
+                // Safe to preserve here because the fallback exists to ERASE
+                // GENERIC ARGS (so `impl Foo[T]`'s `self` is `Foo`, not
+                // `Foo[T]`), and a shared struct is non-generic at v1 — see
+                // `Type::Shared`'s own doc. There are no args to erase.
+                Type::Shared(_) => lowered.clone(),
                 _ => Type::Named {
                     name: type_name.clone(),
                     args: Vec::new(),

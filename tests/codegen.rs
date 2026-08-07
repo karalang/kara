@@ -4235,6 +4235,30 @@ mod codegen_tests {
         }
     }
 
+    /// B-2026-08-07-8 — a `shared struct` receiver handed to a free function.
+    ///
+    /// Codegen had never seen these programs: the typechecker rejected every
+    /// receiver/parameter combination, because the impl's `self_type` rebuilt
+    /// the correctly-lowered `Type::Shared(S)` as the `Named` form and the two
+    /// are deliberately distinct types (they merely RENDER the same, which is
+    /// why the error read "expected 'Inner', found 'Inner'"). So this is the
+    /// first coverage of the lowering, not a regression guard on it.
+    ///
+    /// Each callee scales by a different factor so a wrong argument or a
+    /// mis-taken borrow shows up as a wrong SUM rather than a crash, and the
+    /// seed is `env.args().len()` so nothing folds to a constant. `ref` and
+    /// by-value both appear, and the `frozen` callee is reached from both a
+    /// `ref self` and a `frozen self` receiver.
+    #[test]
+    fn e2e_shared_receiver_passed_to_free_function() {
+        if let Some(out) = run_program(
+            "shared struct Inner { v: i64 }\n             fn byref(i: ref Inner) -> i64 { i.v * 2 }\n             fn byval(i: Inner) -> i64 { i.v * 3 }\n             fn frz(i: frozen Inner) -> i64 { i.v * 5 }\n             impl Inner {\n             \x20   fn a(ref self) -> i64 { byref(self) }\n             \x20   fn b(self) -> i64 { byval(self) }\n             \x20   fn c(ref self) -> i64 { frz(self) }\n             \x20   fn d(frozen self) -> i64 { frz(self) }\n             \x20   fn me(ref self) -> Inner { self }\n             }\n             fn main() {\n             \x20   let n = env.args().len() as i64;\n             \x20   let x = Inner { v: n };\n             \x20   println(x.a() + x.b() + x.c() + x.d());\n             \x20   println(x.me().v);\n             }\n",
+        ) {
+            // n = 1: 1*2 + 1*3 + 1*5 + 1*5 = 15, then the returned self's v.
+            assert_eq!(out, "15\n1\n");
+        }
+    }
+
     #[test]
     fn e2e_shared_struct_map_field_constructed_in_associated_fn() {
         // B-2026-07-08-12 shared-heap sibling: on the `shared struct` path the
