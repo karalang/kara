@@ -2924,6 +2924,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 enum_ty: slot_ty,
                 inner_drop_fn: None,
                 some_tag,
+                // Deliberately empty. This action owns exactly the one envelope
+                // the arm disarmed; a payload that boxes AGAIN below it is the
+                // pre-existing chain question B-2026-08-07-6/-11 own, and
+                // claiming those envelopes here would be a second owner for
+                // them rather than a first.
+                deeper_tags: Vec::new(),
             });
         }
     }
