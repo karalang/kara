@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 218 | 0 |
 | leak | 148 | 1 |
-| double-free | 110 | 0 |
+| double-free | 112 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 81 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 729 | 4 |
+| codegen | 731 | 5 |
 | interp | 127 | 0 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1002 surfaced · 5 open · 987 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1004 surfaced · 6 open · 988 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,10 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1002 surfaced
 | B-2026-08-07-12 | 2026-08-07 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BOXED payload shared its interior -- BOTH ROOTS FIXED (00660c3), and LEG 2 (an all-scalar boxed envelope) FIXED TOO (e0d88f2), which emptied the -O0 quarantine list. LEG 1 re-scoped: its corruption is not about `Option` at all and moved to B-2026-08-07-15; what stays here is an `Option[Map]` field that no drop arm covers | — |
 | B-2026-08-07-14 | 2026-08-07 | codegen | medium | kāra's i64 OVERFLOW CHECK is ~2.4x dearer relative to its own baseline than rustc's (1.309x vs 1.131x on the identical kata #11 loop), which spends the 1.16x lead kāra's unchecked code holds and lands it at a DEAD TIE with equal-safety Rust instead of ahead; the surviving cost is the `h * (r - l)` multiply's smulh + cmp-asr#63 + branch, still unelided on main two months after it landed | Attributed by matched-pair ladder under B-2026-08-05-34 (arm64 M5 Pro, 2026-08-07). Mechanism commit e4047440 (2026-06-07, AOT integer arithmetic faults), parent ad240cad. NOT a revert candidate and NOT a correctness defect -- at equal safety kāra TIES rustc on this kata (191.4 vs 191.4 ms). The gap is that kāra's i64 overflow check costs 1.309x of its own unchecked baseline where rustc's costs 1.131x of its own, which spends a 1.16x lead kāra otherwise has. Corpus-wide equal-safety data ALREADY EXISTS (Kara/ovf_equal_safety_triage.tsv, 56 rows, kara/ovf median 0.999) and corroborates the tie from a different instrument; what it lacks is a kara-unchecked column, which is what this row's claim rests on. Next step: an IR/asm diff of the smulh+cmp-asr#63 sequence against what rustc emits for the same checked multiply, on the 25-of-56 subset where rustc actually pays for its check. |
 | B-2026-08-07-16 | 2026-08-07 | codegen | low | the x86 hash-tag probe spills 2 of the caller's registers per key-probe (4 memory ops) because `ctrl` puts the loop one value over x86-64's 15 GPRs — diagnosed exactly; the obvious fix (free a register by bounding the probe on `mask` instead of `cap`) WINS 3.8% on kata:170 and LOSES 10.7% on kata:217, so it is reverted and the spill stands | src/codegen/mono.rs::emit_mono_map_get_body / emit_mono_set_contains_body (the primitive LOOKUP probe loops). DIAGNOSED here; one fix built, measured and REJECTED on evidence — do not re-try it blind, the numbers are below. |
+| B-2026-08-07-18 | 2026-08-07 | codegen | high | naming a generic fn's type param differently from the struct's silently miscompiles: `fn f[U](x: Mix[U])` is 30 valgrind errors / 10 invalid frees / 88 B lost at the DEFAULT -O2 where the character-for-character identical `fn f[T](x: Mix[T])` is clean. `mono_struct_type_from_active_subst` looks the STRUCT's declared param names up in the FN's substitution, so the match is a coincidence and the documented "falls back to the base layout" is a mis-GEP'd drop. Hits the NAMED binding too, unlike B-2026-08-07-15 | — |
 
-### Fixed (987)
+### Fixed (988)
 
-<details><summary>987 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>988 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1151,6 +1152,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-11 | codegen | medium | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct l… | PARTIAL. d5cfa3c8 fixes leg (a), the owned param (320 B / 10 -> clean). Legs (b) struct-literal move and (c) `Vec` push STAY OPEN and are re-diagnosed in detail: they are NOT chain gaps -- a single-box `Option[Option[i64]]` leaks 320 B through either -- but a destination-ownership defect, so the chain must not be fixed there before the owner is. 49a12153 fixes leg (b), the struct-field chain, by giving `emit_option_drop_fn`'s boxed branch the recursion it lacked (1,280 B / 40 -> clean). It became a pure chain gap only after 31768650 gave the outermost envelope a field owner. STILL OPEN for leg (c), the `Vec` push -- which is NOT a chain gap, the single-box case leaks too -- and for a newly measured residual, `struct Hs { b: Option[Option[Option[String]]] }`, which takes the classifier's other branch and is unchanged by this. f5df577f fixes leg (c), the `Vec` push, by giving the element arm the same `option_payload_boxed_envelope_only` admission the struct field got in 31768650. SEVERITY RAISED low -> medium: leg (c) leaks at the DEFAULT -O2 (5,120 B + 3,840 B indirectly), which this row twice asserted was impossible for the family — that claim was carried forward from legs (a)/(b) rather than measured. All three filed legs are now closed; the row stays open only for the `struct Hs { b: Option[Option[Option[String]]] }` residual. 61c69e0d fixes the last residual — the MATCH-ARM parked envelope (`own_boxed_option_field_envelope_at`), a fourth site neither leg reached — by giving it the same chain. ROW CLOSED: all three filed legs plus the residual. |
 | B-2026-08-07-13 | other | low | docs/bug-ledger.jsonl has no pinned JSON encoding, so writers flip it between raw UTF-8 and \uXXXX escapes and each flip rewrites all ~1000 rows | 9636a9b6 |
 | B-2026-08-07-15 | codegen | high | a struct that is NOT copy-supported (any `Map`/`Set` field) passed as a FRESH TEMP by value is dropped by BOTH frames -- 480 valgrind errors, 175 inv… | db16f10 |
+| B-2026-08-07-17 | codegen | high | B-2026-08-07-15's own-by-transfer gate exempted EVERY generic struct, and a generic struct at a CONCRETE param (`fn take(x: Mix[String])` over `Mix[T… | 0cf32de |
 
 </details>
 
