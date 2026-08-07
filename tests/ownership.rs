@@ -10245,16 +10245,17 @@ fn frozen_self_receiver_is_subject_to_the_freeze_site_check() {
         // the body reading the `mut` field — the projection guard, untouched.
         // The program stays rejected; the guard that rejects it moved.
         (
-            "a type with mutable state: the receiver is admitted, the mut READ is not",
-            "shared struct M { mut seen: i64 }\nimpl M { fn m(frozen self) -> i64 { self.seen } }",
-            "cannot be projected through `.seen`",
+            "a type with mutable state: the receiver is admitted, the mut WRITE is not",
+            "shared struct M { mut seen: i64 }\n\
+             impl M { fn m(frozen self) -> i64 { self.seen = 1; self.seen } }",
+            "cannot be written through",
         ),
         (
-            "mutable state reachable only THROUGH a field: admitted, body reads nothing",
+            "mutable state reachable only THROUGH a field: admitted, the WRITE is not",
             "shared struct Bump { mut n: i64 }\n\
              shared struct Outer { b: Bump }\n\
-             impl Outer { fn m(frozen self) -> i64 { self.b.n } }",
-            "cannot be projected through `.n`",
+             impl Outer { fn m(frozen self) -> i64 { self.b.n = 1; self.b.n } }",
+            "cannot be written through",
         ),
     ];
     for (label, body, expected) in cases {
@@ -10413,10 +10414,10 @@ fn freeze_statement_is_subject_to_the_freeze_site_check() {
             // rather than deleting the row keeps the PROGRAM pinned as
             // rejected, which is the property that matters; the E0512 half
             // moves to the non-unique row below.
-            "a type with mutable state, uniquely bound: refused at the projection",
+            "a type with mutable state, uniquely bound: refused at the WRITE",
             "shared struct M { mut n: i64 }\n\
-             fn f() -> i64 { let m = M { n: 1 }; let g = freeze m; g.n }",
-            "cannot be projected through `.n`",
+             fn f() -> i64 { let m = M { n: 1 }; let g = freeze m; g.n = 2; g.n }",
+            "cannot be written through",
         ),
         (
             // The E0512 half, preserved: an ALIASED source fails uniqueness,
@@ -10510,13 +10511,14 @@ fn freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source() {
             "has mutable state",
         ),
         (
-            // Step 3 is deliberately untouched, so the `mut` field itself is
-            // still unreachable through the frozen handle. If this ever starts
-            // passing without step 3 landing, the relaxation has over-widened.
-            "the `mut` field is still not projectable through the frozen handle",
+            // Step 3 landed, so READING the `mut` field is now permitted —
+            // `g.neighbors.len()` is an accept case (see
+            // `frozen_mut_field_is_readable_but_never_writable`). What must
+            // never be permitted is a WRITE, which is what this row now pins.
+            "the `mut` field is still not WRITABLE through the frozen handle",
             "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let g = freeze t; \
-             g.neighbors.len() }",
-            "cannot be projected through `.neighbors`",
+             g.neighbors = []; g.val }",
+            "cannot be written through",
         ),
         (
             // A write through the SOURCE after the freeze — the race the whole
@@ -10586,6 +10588,129 @@ fn freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source() {
             .map(|e| e.message.clone())
             .collect::<Vec<_>>()
     );
+}
+
+/// B-2026-08-01-33 stage 3b step 3 — a `mut` field may be READ through a
+/// frozen place, and may still not be WRITTEN through one.
+///
+/// Until this step a `mut` field was refused at every projection, in read and
+/// write position alike — which is what § "Two guards" meant by "needs no
+/// write-position tracking", and what blocked #133 (`for k in n.neighbors`).
+/// Resolving the field is not admitting it: position is decided by the caller
+/// and the permitted set is unchanged (scalar read, `len`/`is_empty`, whole
+/// handle into a `frozen` slot).
+///
+/// The reject rows are the write-channel ENUMERATION, and they are the point of
+/// the test. One of them — the `mut`-marked argument — was a live hole in the
+/// first cut: `bump(mut g.count)` is scalar-shaped, so it reached the scalar
+/// fast path and returned before the `mut_marker` test ever ran. It was
+/// harmless until this step made the field resolve. It was found by probing the
+/// channels one at a time, not by reading the code, so each one is pinned here.
+#[test]
+fn frozen_mut_field_is_readable_but_never_writable() {
+    let prelude = "shared struct Node { val: i64, mut visits: i64, mut kids: Vec[Node] }\n\
+                   fn bump(x: mut ref i64) { x = x + 1; }\n";
+
+    let accept: &[(&str, &str)] = &[
+        (
+            "a scalar `mut` field read",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             g.visits }",
+        ),
+        (
+            "`len` on a `mut` container field",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             g.kids.len() }",
+        ),
+        (
+            // #133's shape: the traversal is in a CALLEE and iterates the
+            // `mut` field. Needs step 2 (the parameter) and step 3 (the read).
+            "a callee traversal over a `mut` container field",
+            "fn sum(n: frozen Node) -> i64 { let mut s: i64 = n.val; \
+             for k in n.kids { s = s + sum(k); } s }\n\
+             fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             sum(g) }",
+        ),
+        (
+            // The other half of #133: writing a `mut` field on a FRESH local
+            // built inside the callee. Nothing is rooted at the frozen place,
+            // so nothing here is a write through it.
+            "writing a `mut` field on a fresh local inside a frozen-param callee",
+            "fn mk(n: frozen Node) -> i64 { let mut fresh = Node { val: n.val, visits: 0, \
+             kids: [] }; fresh.visits = 9; fresh.visits }\n\
+             fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             mk(g) }",
+        ),
+    ];
+    for (label, body) in accept {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[3b-step3 accept] {label}");
+        ownership_ok(&src);
+    }
+
+    // Every write channel. `StmtKind` is matched with no `_` arm in the walk,
+    // so a NEW statement kind breaks the build rather than slipping through —
+    // but the non-statement channels (a `mut`-marked argument, a `mut ref self`
+    // method) have no such backstop and are pinned individually.
+    let reject: &[(&str, &str, &str)] = &[
+        (
+            "assignment through the frozen alias",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             g.visits = 5; g.val }",
+            "cannot be written through",
+        ),
+        (
+            "compound assignment",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             g.visits += 5; g.val }",
+            "cannot be written through",
+        ),
+        (
+            // The SOURCE is frozen too, so the owner cannot mutate behind the
+            // branches' backs. Without this the whole region claim is void.
+            "assignment through the frozen SOURCE",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             t.visits = 5; g.val }",
+            "cannot be written through",
+        ),
+        (
+            "a `mut`-marked argument — the hole the first cut had",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             bump(mut g.visits); g.val }",
+            "cannot be written through",
+        ),
+        (
+            "a write through an element of a `mut` container field",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             g.kids[0].visits = 9; g.val }",
+            "cannot be written through",
+        ),
+        (
+            "a write through the frozen PARAMETER inside the callee",
+            "fn bad(n: frozen Node) -> i64 { n.visits = 7; n.val }\n\
+             fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             bad(g) }",
+            "cannot be written through",
+        ),
+        (
+            // A mutating METHOD is refused by not being one of the two
+            // permitted builtin queries, so it reports as a projection rather
+            // than a write. Different message, same refusal.
+            "a mutating method on a `mut` container field",
+            "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
+             g.kids.push(t); g.val }",
+            "cannot be projected through",
+        ),
+    ];
+    for (label, body, expected) in reject {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(expected)),
+            "[3b-step3 reject: {label}] expected an error containing {expected:?}; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
 }
 
 /// The shape the whole entry exists for: a RECURSIVE traversal of a `shared`
@@ -10685,8 +10810,11 @@ fn frozen_param_escape_is_reported_in_every_other_position() {
         ),
         (
             "projected through a `mut` field",
-            "fn f(n: frozen M) -> i64 { n.count }",
-            "cannot be projected through `.count`",
+            // Stage 3b step 3 — the READ is now permitted; the WRITE is what
+            // this row exists to pin. Changing the program rather than
+            // deleting the row keeps a `mut` field pinned as unwritable.
+            "fn f(n: frozen M) -> i64 { n.count = 1; n.count }",
+            "cannot be written through",
         ),
         (
             "projected through a non-scalar field",
@@ -10829,17 +10957,17 @@ fn frozen_freeze_site_refuses_types_that_cannot_be_frozen() {
         // A body of `0` would now compile, so the body has to touch the field
         // for this row to assert anything at all.
         (
-            "shared type with a `mut` field: admitted, the mut READ is not",
-            "fn f(x: frozen M) -> i64 { x.count }",
-            "cannot be projected through `.count`",
+            "shared type with a `mut` field: admitted, and the mut WRITE is not",
+            "fn f(x: frozen M) -> i64 { x.count = 1; x.count }",
+            "cannot be written through",
         ),
         // The transitive case is the one that makes this a DEEP check rather
         // than a field scan: `Outer` is itself mut-free and only reaches
         // mutable state through `Inner`.
         (
-            "mutable state reached transitively: admitted, the deep read is not",
-            "fn f(x: frozen Outer) -> i64 { x.inner.bump }",
-            "cannot be projected through",
+            "mutable state reached transitively: admitted, the deep WRITE is not",
+            "fn f(x: frozen Outer) -> i64 { x.inner.bump = 1; x.inner.bump }",
+            "cannot be written through",
         ),
     ];
     for (label, body, expected) in cases {

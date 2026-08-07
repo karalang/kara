@@ -213,6 +213,12 @@ enum Reason {
     /// branches join before the function returns, and admitting exactly that
     /// sharing is the point of the feature.
     Captured,
+    /// Stage 3b step 3 — the place is the TARGET of a write. Reported
+    /// separately from every read-shaped refusal because the fix is different
+    /// in kind: a read through a frozen place has a permitted spelling to move
+    /// to, a write has none — the region is immutable by definition, so the
+    /// only repair is to move the write outside it or not freeze.
+    Written,
     /// Stage 3 — a `freeze` this pass will not honour, carrying the specific
     /// cause. REPORTED rather than declined: a `freeze` that silently does
     /// nothing is worse than one that is refused, because the author is left
@@ -360,12 +366,23 @@ impl<'a> Cx<'a, '_> {
             ExprKind::FieldAccess { object, field } => {
                 let base = self.place_type(object)?;
                 let info = self.tc.struct_info.get(head_type_name(&base)?)?;
-                // Refused even though E0512 has already refused any type whose
-                // reachable closure contains a `mut` field — see the module
-                // header on why this guard is deliberately independent.
-                if info.mut_fields.contains(field) {
-                    return None;
-                }
+                // B-2026-08-01-33 stage 3b step 3 — a `mut` field RESOLVES here
+                // now. It used to return `None`, which refused it in read and
+                // write position alike; that is what § "Two guards" meant by
+                // "needs no write-position tracking", and it is what blocked
+                // #133 (`for k in root.neighbors`).
+                //
+                // Resolving is not admitting. Position is decided by the
+                // CALLER, and the permitted set is unchanged: a read that
+                // resolves to a scalar, a `len`/`is_empty` builtin query, or a
+                // whole handle into a `frozen` slot. Everything else — every
+                // mutating method among them, since none is `len`/`is_empty` —
+                // still falls through to the prologue and reports. The one
+                // shape this widening would newly admit is a SCALAR `mut` field
+                // in ASSIGN position (`g.count = 5` reads as a scalar and would
+                // have been permitted), and that is closed at the three
+                // assignment statement forms, which are matched exhaustively
+                // with no wildcard arm.
                 info.fields
                     .iter()
                     .find(|(fname, _, _)| fname == field)
@@ -588,6 +605,17 @@ impl super::OwnershipChecker<'_> {
                          This position would materialise it instead — or the container is one \
                          this pass does not model (only `Vec`, arrays and slices are indexed \
                          through `{name}`)"
+                    ),
+                ),
+                Reason::Written => (
+                    format!("`frozen` {noun} `{name}` cannot be written through"),
+                    format!(
+                        "a `freeze` claims the value is deeply immutable for the region, and \
+                         every branch reading through it is relying on that — so a write \
+                         through `{name}`, or through any place rooted at it, is the one thing \
+                         the claim rules out. Move the write BEFORE the `freeze` (the source \
+                         stays writable until then), or drop the `freeze` if the value has to \
+                         change while it is shared"
                     ),
                 ),
                 Reason::Captured => (
@@ -872,24 +900,59 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
         }
         StmtKind::Defer { body } => walk_block(body, cx),
         StmtKind::ErrDefer { body, .. } => walk_block(body, cx),
+        // ── Stage 3b step 3: WRITE positions ────────────────────────────
+        //
+        // These three arms are the entire write-position enumeration, and they
+        // are what pays for `place_type` resolving `mut` fields. A frozen place
+        // in TARGET position is refused here rather than in the prologue,
+        // because the prologue judges by SHAPE and a scalar field read is a
+        // permitted shape — `g.count = 5` would otherwise sail through it.
+        //
+        // Exhaustiveness is structural, not vigilance: `StmtKind` is matched
+        // with no `_` arm, so a new statement kind fails the build and lands
+        // here to be classified. The other two write channels are refused
+        // elsewhere and stay that way — a `mut`-marked call argument by
+        // `walk_call_args_with_sig`'s `!a.mut_marker`, and a mutating method by
+        // simply not being `len`/`is_empty`.
         StmtKind::Assign { target, value } => {
-            walk_expr(target, cx);
+            reject_frozen_write(target, cx);
             walk_expr(value, cx);
         }
         StmtKind::MultiAssign { targets, values } => {
             for t in targets {
-                walk_expr(t, cx);
+                reject_frozen_write(t, cx);
             }
             for v in values {
                 walk_expr(v, cx);
             }
         }
         StmtKind::CompoundAssign { target, value, .. } => {
-            walk_expr(target, cx);
+            reject_frozen_write(target, cx);
             walk_expr(value, cx);
         }
         StmtKind::Expr(e) => walk_expr(e, cx),
     }
+}
+
+/// Stage 3b step 3 — judge a place in WRITE position.
+///
+/// A frozen place is refused outright: the region claims deep immutability, so
+/// a write through any name reaching it is precisely what must not happen. This
+/// runs INSTEAD of `walk_expr` on the target, because `walk_expr`'s prologue
+/// permits a scalar read and an assignment target is scalar-shaped exactly when
+/// it is most dangerous.
+///
+/// A non-frozen target is walked normally, so nested frozen uses inside an
+/// index expression (`other[g.i] = 1`) are still judged.
+fn reject_frozen_write<'a>(target: &'a Expr, cx: &mut Cx<'a, '_>) {
+    if let Some(root) = cx.frozen_place_root(target) {
+        cx.flag(root, &target.span, Reason::Written);
+        // Still walk the INDEX sub-expressions: `g.kids[other.i] = x` has a
+        // second place inside it that deserves its own judgement.
+        walk_place_indices(target, cx);
+        return;
+    }
+    walk_expr(target, cx);
 }
 
 /// Stage 2.5 — `let k = <frozen place>;`, where the place names a `shared`
@@ -1172,6 +1235,21 @@ fn walk_call_args_with_sig<'a>(sig: Option<Vec<bool>>, args: &'a [CallArg], cx: 
         };
         if cx.in_closure {
             cx.flag(name, &a.value.span, Reason::Captured);
+            walk_place_indices(&a.value, cx);
+            continue;
+        }
+        // B-2026-08-01-33 stage 3b step 3 — a `mut`-MARKED argument is a WRITE
+        // channel and must be judged before the scalar fast path below, not
+        // after. `bump(mut g.count)` is scalar-shaped, so the fast path used to
+        // return `continue` and the `!a.mut_marker` test further down never ran.
+        //
+        // It was harmless until step 3: a `mut` field was unresolvable, so
+        // `reads_as_scalar` answered false and the argument fell through to
+        // that test. Making the field resolve is exactly what moved this shape
+        // onto the fast path — found by probing the write channels one by one,
+        // not by reading, which is why the enumeration is written down here.
+        if a.mut_marker {
+            cx.flag(name, &a.value.span, Reason::Written);
             walk_place_indices(&a.value, cx);
             continue;
         }

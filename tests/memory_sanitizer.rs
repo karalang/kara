@@ -15416,6 +15416,76 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 stage 3b step 3 — **LeetCode #133**, the program this
+    /// whole entry was opened for, running across four `par` branches.
+    ///
+    /// It needs all three steps at once and each is visible in the source:
+    /// the `freeze` STATEMENT (step 1's uniqueness proof — nothing may name
+    /// `root` between its `let` and the freeze), the `frozen` PARAMETER on a
+    /// `mut`-bearing type (step 2, admitted from the caller's freeze), and the
+    /// READ of the `mut` `neighbors` field inside the callee (step 3).
+    ///
+    /// The clone half is the part that makes it #133 rather than a traversal:
+    /// each branch BUILDS fresh nodes and writes THEIR `mut neighbors`. Those
+    /// writes are to local instances, not to anything rooted at the frozen
+    /// place, which is exactly the distinction the ledger said a type-level
+    /// check could not make and an instance-level one could.
+    ///
+    /// The write-channel enumeration that keeps this sound is pinned in
+    /// tests/ownership.rs (`frozen_mut_field_is_readable_but_never_writable`),
+    /// including the `mut`-marked-argument hole this step opened and closed.
+    #[test]
+    fn asan_kata133_clone_graph_frozen_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+
+fn clone_graph(n: frozen Node) -> i64 {
+    let mut acc: i64 = n.val;
+    let mut fresh = Node { val: n.val, neighbors: [] };
+    for k in n.neighbors {
+        acc = acc + clone_graph(k);
+        fresh.neighbors.push(Node { val: k.val, neighbors: [] });
+    }
+    return acc + fresh.neighbors.len();
+}
+
+fn sum_clones(root: frozen Node, count: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < count { s = s + clone_graph(root); i = i + 1; }
+    return s;
+}
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 { return Node { val: seed, neighbors: [] }; }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { val: seed, neighbors: [a, b] };
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(6, seed);
+    let g = freeze root;
+    let (s1, s2, s3, s4) = par {
+        let s1 = sum_clones(g, 7);
+        let s2 = sum_clones(g, 7);
+        let s3 = sum_clones(g, 7);
+        let s4 = sum_clones(g, 7);
+        (s1, s2, s3, s4)
+    };
+    println(s1 + s2 + s3 + s4);
+}
+"#,
+            &["7084"],
+            "kata133_clone_graph_frozen_across_par_branches",
+            // The 63-node source graph plus a fresh clone per visited node,
+            // 7 rounds x 4 branches.
+            1000,
+        );
+    }
+
     /// B-2026-08-01-33 stage 3b step 2 — the shape the whole entry exists for,
     /// on a `mut`-bearing type: a RECURSIVE traversal IN A CALLEE, shared
     /// read-only across two `par` branches.
