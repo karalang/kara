@@ -35610,6 +35610,146 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-5 — a whole-value MOVE between two boxed-payload enum
+    /// bindings left both slots holding one box, both armed.
+    ///
+    /// `b = c` copies the enum struct, box pointer included. Both slots then
+    /// hold that one pointer and both keep their let-site drop, so scope exit
+    /// frees it twice — a glibc double free, not a leak.
+    ///
+    /// B-2026-08-05-20 fixed exactly this for the DECLARATION form
+    /// (`let b2 = body;`) and the suppressor it added is applied at every other
+    /// move position — call arguments, struct-literal fields, method receivers,
+    /// channel sends. The ASSIGNMENT position was simply not among its call
+    /// sites, alongside the Map/Set and struct move-suppressions the same arm
+    /// already performs.
+    ///
+    /// THE NESTED ACTION NEEDED ITS OWN SUPPRESSOR, at BOTH positions, and the
+    /// `let` half of that was a gap no row had recorded: B-2026-08-05-20 only
+    /// ever knew direct boxes, and B-2026-08-06-32 introduced the nested action
+    /// without exercising a binding-to-binding move at all. The existing
+    /// suppressor cannot serve it twice over — it is gated on
+    /// `boxed_enum_payload_vars` (nested bindings are deliberately in their own
+    /// set) and it zeroes word 0 of the OUTER enum, which for a nested box is
+    /// the inner enum's TAG rather than the pointer. The new one reads the word
+    /// index off the queued action (`inner_tag_field + 1`) so it cannot drift
+    /// from the layout arithmetic that produced it.
+    ///
+    /// The over-suppression direction is what half these arms are for, since
+    /// this fix DISARMS a source and an over-eager disarm strands the box:
+    ///
+    ///   * `a5 = a5` and its nested twin — a self-assign must NOT be disarmed,
+    ///     or the only owner of the value just stored is gone.
+    ///   * `a6` — the move is inside an `if`, so on the untaken path the source
+    ///     must still free its own box. The suppressor is a runtime word zero
+    ///     emitted in the branch's block, which is what makes that work; a
+    ///     compile-time retraction could not tell the paths apart.
+    ///   * `a7` — the source is REASSIGNED after being moved from, so its
+    ///     action must still free the NEW box it then owns.
+    ///   * `a8` — the destination is reassigned after the move, which pairs
+    ///     this with B-2026-08-07-4's eager free: that free must reclaim the
+    ///     box this move handed over, and must not fire twice with it.
+    ///   * `a9` — a CHAIN (`a = s; d = a;`), where the middle binding is both a
+    ///     disarmed source and a live destination.
+    ///
+    /// Also covers a boxed STRUCT payload and a HEAP-BEARING interior, where
+    /// the value moved must arrive with its String intact.
+    ///
+    /// COVERAGE: the pre-fix compiler ABORTS at BOTH opt levels (`free():
+    /// double free detected in tcache 2`, with `Invalid free()` under
+    /// valgrind), so unlike this family's leak rows the default suite run is a
+    /// real gate here rather than only the `-O0` leg. What the `-O0` leg adds
+    /// is the over-suppression half: at `-O2` only a handful of allocations
+    /// survive folding, so a stranded box would not be visible there.
+    ///
+    /// The expected value is COMPUTED, not read off a run: every payload is
+    /// seeded from the opaque `env.args().len()` and each arm subtracts the
+    /// seed and its own offset back out to leave `i` (the `a7` arm contributes
+    /// `2i`, being read through both bindings), with the String arm adding 1
+    /// for a successful byte read — `11i + 1` per iteration over 30 iterations,
+    /// so `11 * (0+…+29) + 30 = 4815`.
+    #[test]
+    fn asan_boxed_payload_binding_move_between_bindings_frees_once() {
+        assert_clean_asan_run(
+            r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64 }
+struct WideS { a: i64, b: i64, c: i64, d: i64, s: String }
+fn u(v: Option[Option[i64]]) -> i64 {
+    match v { Option.Some(Option.Some(x)) => x, Option.Some(Option.None) => -1, Option.None => -2 }
+}
+fn ur(v: Result[Option[Option[i64]], i64]) -> i64 {
+    match v { Result.Ok(Option.Some(Option.Some(x))) => x, Result.Ok(_) => -1, Result.Err(e) => e }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 30 {
+        let k = n + i;
+
+        let mut a1: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s1: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        a1 = s1;
+        acc = acc + u(a1) - n - 100;
+
+        let mut a2: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(k)));
+        let s2: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(k + 100)));
+        a2 = s2;
+        acc = acc + ur(a2) - n - 100;
+
+        let b3: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(k)));
+        let a3: Result[Option[Option[i64]], i64] = b3;
+        acc = acc + ur(a3) - n;
+
+        let mut a4: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+        let s4: Option[Wide] = Option.Some(Wide { a: k + 100, b: 1, c: 2, d: 3, e: 4 });
+        a4 = s4;
+        acc = acc + (match a4 { Option.Some(w) => w.a, Option.None => -1 }) - n - 100;
+
+        let mut a5: Option[Option[i64]] = Option.Some(Option.Some(k));
+        a5 = a5;
+        acc = acc + u(a5) - n;
+
+        let mut a6: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s6: Option[Option[i64]] = Option.Some(Option.Some(k));
+        if i % 2 == 0 { a6 = s6; }
+        acc = acc + u(a6) - n;
+
+        let mut a7: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let mut s7: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        a7 = s7;
+        s7 = Option.Some(Option.Some(k + 200));
+        acc = acc + u(a7) - n - 100;
+        acc = acc + u(s7) - n - 200;
+
+        let mut a8: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s8: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        a8 = s8;
+        a8 = Option.Some(Option.Some(k + 200));
+        acc = acc + u(a8) - n - 200;
+
+        let mut a9: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s9: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        let mut d9: Option[Option[i64]] = Option.Some(Option.Some(k + 200));
+        a9 = s9;
+        d9 = a9;
+        acc = acc + u(d9) - n - 100;
+
+        let mut aa: Option[WideS] = Option.Some(WideS { a: k, b: 1, c: 2, d: 3, s: "p" + k.to_string() });
+        let sa: Option[WideS] = Option.Some(WideS { a: k + 100, b: 1, c: 2, d: 3, s: "q" + k.to_string() });
+        aa = sa;
+        acc = acc + (match aa { Option.Some(w) => w.a + (if w.s.len() > 0 { 1 } else { 0 }), Option.None => -1 }) - n - 100;
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["4815"],
+            "boxed_payload_binding_move_between_bindings",
+        );
+    }
+
     /// B-2026-08-07-2 shapes 1, 2 and 5 — the nested box's owner when there is
     /// no binding to hang one on, and when the binding escapes.
     ///

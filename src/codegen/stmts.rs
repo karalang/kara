@@ -5126,6 +5126,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-08-07-5 — the NESTED peer of the move suppression
+                // above. `let b2 = b;` over a `Result[Option[Wide], E]` copies
+                // the box pointer into the destination while the source keeps
+                // its own `NestedBoxedEnumDrop`, so both free it. Outside the
+                // `boxed` block because that block is gated on the DIRECT
+                // registration being non-empty, which it never is for a nested
+                // binding (the two populations are disjoint by construction).
+                self.suppress_nested_boxed_payload_move(value);
                 // B-2026-08-05-7 — the USER-enum sibling of the boxed-payload
                 // registration above. `boxed_enum_payload_variants` matches on
                 // the enum NAME and knows only the seeded `Option`/`Result`, so
@@ -7796,6 +7804,36 @@ impl<'ctx> super::Codegen<'ctx> {
                         // is non-scalar. Mirrors the let-binding boundary.
                         let cval = self.coerce_scalar_to_type(val, slot.ty);
                         self.builder.build_store(slot.ptr, cval).unwrap();
+                    }
+                    // B-2026-08-07-5 — `b = c` between two boxed-payload
+                    // bindings. The store copies the enum struct, box pointer
+                    // included, so both slots then hold ONE pointer and both
+                    // keep their let-site `BoxedEnumDrop`: scope exit frees it
+                    // twice. B-2026-08-05-20 fixed exactly this for the
+                    // DECLARATION form (`let b2 = body;`) with the suppressor
+                    // below; the ASSIGNMENT form was simply not among its call
+                    // sites, alongside the Map/struct move-suppressions this arm
+                    // already performs.
+                    //
+                    // AFTER the store, matching the let-site call for the same
+                    // stated reason: the store must land on a source whose bytes
+                    // have already been copied out, and only then may the
+                    // source's box word be zeroed. It is also after
+                    // B-2026-08-02-25's displaced-payload bodies walk and after
+                    // B-2026-08-07-4's eager free, both of which read the OLD
+                    // value through this slot — the ordering that row shipped a
+                    // garbage-tag Drop body by getting wrong.
+                    //
+                    // Self-gated inside the suppressor on
+                    // `boxed_enum_payload_vars`, so a non-boxed RHS is
+                    // untouched, and a self-assign (`b = b`) is excluded here
+                    // because zeroing would disarm the only owner of the value
+                    // just stored.
+                    if !matches!(&value.kind, ExprKind::Identifier(rn) if rn == name) {
+                        self.suppress_inline_option_result_binding_move(value);
+                        // The NESTED action is in its own set and its box is at
+                        // a different word, so it needs its own zero.
+                        self.suppress_nested_boxed_payload_move(value);
                     }
                     // B-2026-07-31-38: a binding whose value moved out (variant
                     // ctor, `let g = f`) had its UserDrop action RETRACTED, and

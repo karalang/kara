@@ -1622,14 +1622,27 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Unlike [`Self::track_boxed_enum_var`] this does NOT add `name` to
     /// `boxed_enum_payload_vars`. That set exists so a whole-value move
-    /// can hand the box to a destination that becomes its new owner — but
-    /// no destination takes a NESTED box over. Measured, at `-O0`, on the
-    /// shapes this could reach: moving the binding into a struct literal,
-    /// pushing it into a `Vec`, and passing it by value to a user fn each
-    /// leaked the box before this existed, i.e. every candidate new owner
-    /// registers nothing. Joining the set would disarm this action on
-    /// exactly those moves and hand the box to nobody, which is the
-    /// leak this fixes. The source stays sole owner.
+    /// can hand the box to a destination that becomes its new owner —
+    /// which for the positions measured at `-O0` no destination does:
+    /// moving the binding into a struct literal, pushing it into a `Vec`,
+    /// and passing it by value to a user fn each leaked the box before
+    /// this existed, i.e. every candidate registers nothing. Joining that
+    /// set would disarm this action on exactly those moves and hand the
+    /// box to nobody.
+    ///
+    /// B-2026-08-07-5 CORRECTS the stronger claim this doc used to make
+    /// ("no destination takes a NESTED box over"). One does: a
+    /// binding-to-binding move, `let b2 = b;` or `b = c;`, copies the box
+    /// pointer into the destination, and BOTH slots then keep their own
+    /// action — a double free, at both opt levels. That position is
+    /// handled by [`Self::suppress_nested_boxed_payload_move`], a
+    /// dedicated zero rather than membership here, because this set's
+    /// members are also subject to move rules that would be wrong for a
+    /// nested box.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each parameter is a distinct layout coordinate of the two-tag                   walk (outer/inner enum and variant, plus the deeper tag chain);                   bundling them into a struct would move the arity, not remove it"
+    )]
     pub(super) fn track_nested_boxed_enum_var(
         &mut self,
         name: &str,
@@ -1673,6 +1686,63 @@ impl<'ctx> super::Codegen<'ctx> {
         // Armed for the passthrough rule only — deliberately NOT
         // `boxed_enum_payload_vars`; see this fn's doc and that field's.
         self.nested_boxed_payload_vars.insert(name.to_string());
+    }
+
+    /// B-2026-08-07-5 — NESTED sibling of
+    /// `suppress_inline_option_result_binding_move`'s box-word zero, for a
+    /// whole-value move between two bindings whose box sits inside the INLINE
+    /// payload area (`Result[Option[Wide], E]`).
+    ///
+    /// The move copies the enum struct, box pointer included, so source and
+    /// destination then hold ONE pointer and both keep their let-site
+    /// `NestedBoxedEnumDrop` — a glibc double free at `-O0`. The existing
+    /// suppressor cannot reach this: it is gated on `boxed_enum_payload_vars`
+    /// (nested bindings are deliberately in their own set, see that field) and
+    /// it zeroes word 0 of the OUTER enum, which for a nested box is the inner
+    /// enum's TAG rather than the pointer.
+    ///
+    /// So the word to zero is read off the queued action itself
+    /// (`inner_tag_field + 1`) rather than hardcoded, which keeps it in step
+    /// with the layout arithmetic in `track_nested_boxed_enum_var` — the two
+    /// cannot drift. Zeroing it makes the action's existing null guard skip;
+    /// the tag is left alone, so a payload-absent slot is unaffected.
+    ///
+    /// Needed at BOTH move positions. The `let` form (`let b2 = b;`) breaks
+    /// exactly like the assignment form — measured — which neither
+    /// B-2026-08-05-20 (direct boxes only) nor B-2026-08-06-32 (which never
+    /// exercised a binding-to-binding move) covered.
+    pub(super) fn suppress_nested_boxed_payload_move(&self, value: &Expr) {
+        let ExprKind::Identifier(name) = &value.kind else {
+            return;
+        };
+        if !self.nested_boxed_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        for action in self.scope_cleanup_actions.iter().flatten() {
+            if let CleanupAction::NestedBoxedEnumDrop {
+                enum_slot,
+                enum_ty,
+                inner_tag_field,
+                ..
+            } = action
+            {
+                if *enum_slot != slot.ptr {
+                    continue;
+                }
+                if let Ok(w0) = self.builder.build_struct_gep(
+                    *enum_ty,
+                    slot.ptr,
+                    inner_tag_field + 1,
+                    "nbox.move.w0",
+                ) {
+                    let _ = self.builder.build_store(w0, i64_t.const_zero());
+                }
+            }
+        }
     }
 
     /// B-2026-08-07-4 — free the box a reassignment is about to DISPLACE.
