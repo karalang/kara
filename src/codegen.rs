@@ -9010,6 +9010,30 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
+        // B-2026-08-07-10 — `KARAC_TEXT_PAD=<bytes>`: a filler function ahead
+        // of the program's own code, so a measurement can move `main` (and the
+        // hot loop inside it) by a CHOSEN number of bytes while every
+        // instruction of the program stays identical.
+        //
+        // WHY A SECOND LEVER, next to `KARAC_FN_ALIGN`. That one can only
+        // align, which quantises placement instead of setting it: on kata:170
+        // the whole 4..1024 sweep reaches three distinct 64-byte residues out
+        // of sixteen, and cannot reproduce the 152-byte shift this row
+        // bisected (fast side at residue 8, slow side at 32). Placement is the
+        // independent variable the row is about, so it needs a lever that
+        // varies it continuously. The row names this experiment outright —
+        // "that needs either an LLVM alignment flag or a padding experiment,
+        // neither of which was run".
+        //
+        // Emitted here, at the top of program lowering, because the backend
+        // emits functions in module order: added after `main` it would shift
+        // nothing. Never called, so the bytes' decoding is irrelevant;
+        // `.space` is zeros. Pinned into `@llvm.used` so `-dead_strip` keeps
+        // it — the row records that a plain dead function is eliminated and is
+        // therefore NOT a placement lever. Off unless set, so no default build
+        // changes.
+        Self::apply_llvm_cl_args();
+        self.emit_text_pad()?;
         // Decide whether `emit_panic` needs the runtime fault-category prefix
         // before ANY function compiles — the first panic site bakes the
         // decision in. Contract-free programs (the overwhelmingly common
@@ -10965,6 +10989,90 @@ impl<'ctx> Codegen<'ctx> {
         };
         manifest.set_section(Some(section_name));
         self.used_data_globals.push(manifest);
+    }
+
+    /// B-2026-08-07-10 — `KARAC_LLVM_ARGS="<flags>"`: forward raw LLVM
+    /// `cl::opt` flags into the process-global option registry, the way
+    /// clang's `-mllvm` does.
+    ///
+    /// A MEASUREMENT LEVER. Backend knobs that exist only as `cl::opt` — the
+    /// block/loop alignment family this row needs
+    /// (`-align-all-nofallthru-blocks=<log2>`) among them — are unreachable
+    /// from the IR-building API that codegen otherwise uses, so without this
+    /// the question "does aligning the hot loop remove the placement penalty"
+    /// cannot be asked at all.
+    ///
+    /// Deliberately unvalidated input: LLVM prints its own diagnostic and
+    /// exits the process on an unknown flag. That is acceptable for a lever
+    /// nothing sets by default and is the same contract clang offers for
+    /// `-mllvm`. `Once` because the registry rejects a second parse.
+    fn apply_llvm_cl_args() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let Ok(raw) = std::env::var("KARAC_LLVM_ARGS") else {
+                return;
+            };
+            let args: Vec<std::ffi::CString> = std::iter::once("karac")
+                .chain(raw.split_whitespace())
+                .filter_map(|s| std::ffi::CString::new(s).ok())
+                .collect();
+            let ptrs: Vec<*const std::ffi::c_char> = args.iter().map(|c| c.as_ptr()).collect();
+            unsafe {
+                llvm_sys::support::LLVMParseCommandLineOptions(
+                    ptrs.len() as i32,
+                    ptrs.as_ptr(),
+                    std::ptr::null(),
+                );
+            }
+        });
+    }
+
+    /// B-2026-08-07-10 — emit the `KARAC_TEXT_PAD` filler function.
+    ///
+    /// A MEASUREMENT LEVER, not a default; see the call site in
+    /// `compile_program` for why placement needs a continuous lever and not
+    /// just `KARAC_FN_ALIGN`'s quantised one. A non-numeric, zero, or absent
+    /// value is a no-op rather than a diagnostic, matching the other `KARAC_*`
+    /// levers.
+    ///
+    /// The body is one side-effecting `.space <n>, 0` inline-asm blob and a
+    /// `ret`. Inline asm because it is the only construct whose emitted byte
+    /// count the optimizer cannot change: any IR-level filler (dead
+    /// arithmetic, an unused array) is exactly what LLVM exists to delete, and
+    /// the row already recorded that a plain dead function gets eliminated.
+    fn emit_text_pad(&mut self) -> Result<(), String> {
+        let Some(bytes) = std::env::var("KARAC_TEXT_PAD")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| *n > 0)
+        else {
+            return Ok(());
+        };
+        let fn_ty = self.context.void_type().fn_type(&[], false);
+        let pad = self.module.add_function("__karac_text_pad", fn_ty, None);
+        let entry = self.context.append_basic_block(pad, "entry");
+        let saved = self.builder.get_insert_block();
+        self.builder.position_at_end(entry);
+        let asm = self.context.create_inline_asm(
+            fn_ty,
+            format!(".space {bytes}, 0"),
+            String::new(),
+            true,  // side effects — never optimize the filler away
+            false, // no stack alignment
+            None,  // default dialect
+            false, // cannot throw
+        );
+        self.builder
+            .build_indirect_call(fn_ty, asm, &[], "")
+            .map_err(|e| format!("codegen: KARAC_TEXT_PAD asm call failed: {e}"))?;
+        self.builder
+            .build_return(None)
+            .map_err(|e| format!("codegen: KARAC_TEXT_PAD return failed: {e}"))?;
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        self.used_symbols.push(pad);
+        Ok(())
     }
 
     /// Materialize the special `@llvm.used` global from `used_symbols`.

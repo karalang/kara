@@ -3335,6 +3335,171 @@ fn test_build_fn_align_lever_is_behaviour_neutral() {
 
 #[cfg(feature = "llvm")]
 #[test]
+fn test_build_text_pad_lever_moves_main_without_changing_behaviour() {
+    // B-2026-08-07-10 — `KARAC_TEXT_PAD=<bytes>` is the placement lever that
+    // actually answered this row: `KARAC_FN_ALIGN` can only quantise placement
+    // (on kata:170 its whole 4..1024 sweep reaches three distinct 64-byte
+    // residues out of sixteen), while the effect turned out to be exactly
+    // 64-byte periodic and worth 1.31x end to end. Measuring that needs a
+    // lever that varies the address continuously.
+    //
+    // Two properties are asserted, because the lever is worthless without
+    // both: the program must behave identically, AND `main` must actually
+    // MOVE by the requested number of bytes. The second is the one that can
+    // rot silently — the filler is pinned into `@llvm.used` precisely because
+    // the row records that a plain dead function gets dead-stripped, and if
+    // that pin ever stopped working the lever would quietly measure nothing.
+    let tmp = scratch_project("text-pad-lever");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"pad_demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn work(n: i64) -> i64 {\n\
+        \x20    let mut acc = 0i64;\n\
+        \x20    let mut i = 0i64;\n\
+        \x20    while i < n { acc = acc + i * 3i64; i = i + 1i64; }\n\
+        \x20    return acc;\n\
+         }\n\
+         fn main() { println(work(1000i64)); }\n",
+    );
+
+    let exe_path = tmp.join("pad_demo");
+    let mut main_addrs = Vec::new();
+    for pad in ["16", "80"] {
+        let out = karac_bin()
+            .current_dir(&tmp)
+            .env("KARAC_TEXT_PAD", pad)
+            .arg("build")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "build with KARAC_TEXT_PAD={pad} failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+
+        let run = common::output_with_hang_watchdog(
+            std::process::Command::new(&exe_path),
+            std::time::Duration::from_secs(15),
+        )
+        .expect("executable should be runnable");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "1498500",
+            "KARAC_TEXT_PAD={pad} must not change program behaviour"
+        );
+
+        // `nm -n` is how every measurement in the row read the address; if it
+        // is unavailable, keep the behaviour half of the test and skip the
+        // placement half rather than failing on a missing tool.
+        if let Ok(nm) = std::process::Command::new("nm")
+            .arg("-n")
+            .arg(&exe_path)
+            .output()
+        {
+            if nm.status.success() {
+                let text = String::from_utf8_lossy(&nm.stdout);
+                if let Some(addr) = text.lines().find_map(|l| {
+                    let mut it = l.split_whitespace();
+                    let a = it.next()?;
+                    let sym = it.nth(1)?;
+                    (sym == "_main" || sym == "main").then(|| u64::from_str_radix(a, 16).ok())?
+                }) {
+                    main_addrs.push(addr);
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    if main_addrs.len() == 2 {
+        assert_eq!(
+            main_addrs[1] - main_addrs[0],
+            64,
+            "KARAC_TEXT_PAD must move `main` by exactly the byte difference it \
+             is given (80 - 16 = 64); it did not, so the filler is being \
+             dead-stripped or emitted after `main` and the lever measures nothing"
+        );
+    }
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_llvm_args_lever_reaches_the_backend() {
+    // B-2026-08-07-10 — `KARAC_LLVM_ARGS` forwards raw LLVM `cl::opt` flags,
+    // the way clang's `-mllvm` does. It is what let this row test BLOCK
+    // alignment, which turned out to be the fix (8.6% on kata:170, and the
+    // 64-byte placement lottery flattened to 1.3%) after FUNCTION alignment
+    // had been measured as no fix on two targets.
+    //
+    // The failure mode worth a test is a SILENT one: if the forwarding broke,
+    // builds would keep succeeding and every measurement taken with the lever
+    // would silently be a measurement of the default. So this asserts the flag
+    // reaches the backend by its observable effect — `-align-all-functions=8`
+    // must land `main` on a 256-byte boundary — not merely that the build
+    // survived being given a flag.
+    let tmp = scratch_project("llvm-args-lever");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"llvmargs_demo\"\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() { println(7i64); }\n");
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_LLVM_ARGS", "-align-all-functions=8")
+        .arg("build")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "build with KARAC_LLVM_ARGS failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let exe_path = tmp.join("llvmargs_demo");
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe_path),
+        std::time::Duration::from_secs(15),
+    )
+    .expect("executable should be runnable");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "7",
+        "KARAC_LLVM_ARGS must not change program behaviour"
+    );
+
+    let nm = std::process::Command::new("nm")
+        .arg("-n")
+        .arg(&exe_path)
+        .output();
+    let _ = std::fs::remove_dir_all(&tmp);
+    if let Ok(nm) = nm {
+        if nm.status.success() {
+            let text = String::from_utf8_lossy(&nm.stdout);
+            let addr = text.lines().find_map(|l| {
+                let mut it = l.split_whitespace();
+                let a = it.next()?;
+                let sym = it.nth(1)?;
+                (sym == "_main" || sym == "main").then(|| u64::from_str_radix(a, 16).ok())?
+            });
+            if let Some(addr) = addr {
+                assert_eq!(
+                    addr % 256,
+                    0,
+                    "`-align-all-functions=8` did not reach the backend: `main` \
+                     is at {addr:#x}, not 256-byte aligned. The lever is \
+                     forwarding nothing and any measurement taken with it is a \
+                     measurement of the default."
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "llvm")]
+#[test]
 fn test_build_project_codegen_three_module_chain_runs() {
     // Pins topological emission order — `db.users` must declare its
     // symbols before `db` references them, which must declare before
