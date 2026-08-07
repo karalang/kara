@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 149 | 1 |
+| leak | 150 | 2 |
 | double-free | 112 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 732 | 5 |
+| codegen | 733 | 6 |
 | interp | 127 | 0 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1005 surfaced · 6 open · 989 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1006 surfaced · 7 open · 989 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1005 surfaced
 | B-2026-08-07-16 | 2026-08-07 | codegen | low | the x86 hash-tag probe spills 2 of the caller's registers per key-probe (4 memory ops) because `ctrl` puts the loop one value over x86-64's 15 GPRs — diagnosed exactly; the obvious fix (free a register by bounding the probe on `mask` instead of `cap`) WINS 3.8% on kata:170 and LOSES 10.7% on kata:217, so it is reverted and the spill stands | src/codegen/mono.rs::emit_mono_map_get_body / emit_mono_set_contains_body (the primitive LOOKUP probe loops). DIAGNOSED here; one fix built, measured and REJECTED on evidence — do not re-try it blind, the numbers are below. |
 | B-2026-08-07-18 | 2026-08-07 | codegen | high | naming a generic fn's type param differently from the struct's silently miscompiles: `fn f[U](x: Mix[U])` is 30 valgrind errors / 10 invalid frees / 88 B lost at the DEFAULT -O2 where the character-for-character identical `fn f[T](x: Mix[T])` is clean. `mono_struct_type_from_active_subst` looks the STRUCT's declared param names up in the FN's substitution, so the match is a coincidence and the documented "falls back to the base layout" is a drop reading field 1 at the ERASED offset 8 (a length word) instead of the mono offset 24. NARROWED: a LEAK for all-bare-`T` structs, CORRUPTION once a concrete heap sibling exists. One fix approach tried and reverted -- see detail | — |
 | B-2026-08-07-19 | 2026-08-07 | codegen | medium | the `Result` twin of B-2026-08-07-12 leg 1: a `Result[Map[K,V], E]` STRUCT FIELD leaks its whole handle tree, 720 B / 10 iterations on a DEFAULT -O2 build, because the promotion loop's Result gates admit no Map/Set half -- the `Option[Map]` sibling is fixed, this is the same defect one wrapper over | src/codegen/synth_drop.rs -- the `Result` arm of the OptionInline promotion loop, gated on `result_field_direct_vecstr_halves_ok` / `result_field_struct_enum_payload_ok`; paired move sites in src/codegen/control_flow_match.rs::place_optres_field_move_info_ex and the destructure-leaf registrations in src/codegen/stmts.rs |
+| B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct | — |
 
 ### Fixed (989)
 
