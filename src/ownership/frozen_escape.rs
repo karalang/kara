@@ -77,6 +77,25 @@
 //!    govern the parameter — it can be read, projected, passed to another
 //!    `frozen` slot, and aliased again, and it can no more escape than the
 //!    parameter can.
+//! 5. **Iterating a container reached through a frozen place** — `for k in
+//!    n.kids { … }` (stage 2.6). The loop variable is a frozen root on the
+//!    same terms as (4) when the element is a `shared struct`, and an
+//!    ordinary binding when it is a scalar, since a register copy of an `i64`
+//!    has nothing to escape with.
+//!
+//!    This one needed **no codegen change at all**, and stage 2.5 said
+//!    otherwise: it recorded `for` as refused "because the loop lowers an
+//!    element copy, not an alias". That was asserted without being measured
+//!    and it is wrong. The emitted loop is
+//!
+//!    ```text
+//!    %for.v.elem = load ptr, ptr %for.v.elem.ptr   ; the handle, out of the Vec
+//!    store ptr %for.v.elem, ptr %k                 ; into the loop variable's slot
+//!    ```
+//!
+//!    — a pointer load and a store, with no clone, no retain, no release and
+//!    no cleanup at `for.exit`, in borrow mode and `frozen` mode alike. There
+//!    was never any traffic here to remove; only this walk was refusing.
 //!
 //! This is the "codegen binding class whose slot aliases an existing owner
 //! without retaining" that `docs/spikes/freeze-point-design.md` § "Stage 3"
@@ -87,10 +106,11 @@
 //! fields, so no branch can write the payload, and this walk has already
 //! proved the root cannot escape, so no alias of it can outlive the owner.
 //!
-//! What is still refused, and why it is not a widening of this rule: `for k in
-//! n.kids` (the loop lowers an element copy, not an alias), a `mut` alias, and
-//! any binding whose place this pass cannot resolve to a `shared struct`. Both
-//! directions are pinned from the codegen side by
+//! What is still refused: a `mut` alias, any binding whose place this pass
+//! cannot resolve to a `shared struct`, a `for` over a container this pass
+//! does not model (`Map`/`Set`) or one whose element is neither a handle nor
+//! a scalar, and every escape. Both directions are pinned from the codegen
+//! side by
 //! `frozen_place_projection_emits_no_refcount_traffic` (tests/par_codegen.rs),
 //! so a codegen change that starts retaining across a projection or an alias
 //! turns that test red instead of silently invalidating this rule.
@@ -268,7 +288,12 @@ impl<'a> Cx<'a, '_> {
     /// pointer, which is what the alias class is. Both yield `None` here and
     /// are reported by the ordinary walk.
     fn shared_handle_type(&self, e: &Expr) -> Option<Type> {
-        let ty = self.place_type(e)?;
+        self.as_shared_handle(self.place_type(e)?)
+    }
+
+    /// `Some(ty)` when `ty` names a non-generic `shared struct`. Shared by the
+    /// two admission sites so "what may be aliased" has one definition.
+    fn as_shared_handle(&self, ty: Type) -> Option<Type> {
         let info = self.tc.struct_info.get(head_type_name(&ty)?)?;
         (info.is_shared && info.generic_params.is_empty()).then_some(ty)
     }
@@ -690,6 +715,58 @@ fn try_admit_frozen_alias<'a>(
     true
 }
 
+/// Stage 2.6 — `for k in <frozen place>;` over a container reached through a
+/// frozen root. Returns `true` when the loop was admitted, which consumes the
+/// ITERABLE (the body is walked by the caller either way).
+///
+/// Two element cases, and they differ in what the loop variable becomes:
+///
+/// * a `shared struct` element — `k` joins the frozen set, exactly as a `let`
+///   alias does, so every use of it inside the body is judged by the rules
+///   that govern the parameter;
+/// * a SCALAR element (`Vec[i64]`) — `k` is a register copy of a value, not a
+///   handle, so it is left as an ordinary binding. Nothing can escape through
+///   it because there is nothing to escape.
+///
+/// Anything else — a non-container place, a `Map`/`Set` (which
+/// [`element_type`] deliberately does not model), a compound non-shared
+/// element, a destructuring pattern — falls through to the ordinary walk and
+/// is reported.
+fn try_admit_frozen_for_element<'a>(
+    pattern: &'a Pattern,
+    iterable: &'a Expr,
+    cx: &mut Cx<'a, '_>,
+) -> bool {
+    if cx.in_closure {
+        return false;
+    }
+    let PatternKind::Binding(name) = &pattern.kind else {
+        return false;
+    };
+    if cx.frozen_place_root(iterable).is_none() {
+        return false;
+    }
+    let Some(elem) = cx.place_type(iterable).as_ref().and_then(element_type) else {
+        return false;
+    };
+    // Classify BEFORE consuming anything: a rejection here falls through to
+    // the caller's ordinary walk, and walking the index operands twice would
+    // report them twice.
+    let handle = cx.as_shared_handle(elem.clone());
+    if handle.is_none() && !super::is_copy_type_basic(&elem) {
+        // Neither a `shared` handle nor a scalar — a `Vec[Vec[i64]]` element,
+        // say, whose binding codegen registers as a buffer owner. Not modelled
+        // here, so it must not be admitted; report the iterable as before.
+        return false;
+    }
+    walk_place_indices(iterable, cx);
+    if let Some(handle) = handle {
+        cx.frozen.insert(name.as_str(), handle);
+        cx.aliases.insert(name.as_str());
+    }
+    true
+}
+
 /// Walk the sub-expressions a frozen place contains that are NOT part of the
 /// place itself — the index operands. `f(n.kids[g(x)])` still has to check
 /// `g(x)`; only the projection chain is consumed by the permitting rule.
@@ -906,8 +983,16 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
             walk_expr(value, cx);
             walk_block(body, cx);
         }
-        ExprKind::For { iterable, body, .. } => {
-            walk_expr(iterable, cx);
+        // ── Permitted position: iterating a container off a frozen root ──
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            if !try_admit_frozen_for_element(pattern, iterable, cx) {
+                walk_expr(iterable, cx);
+            }
             walk_block(body, cx);
         }
         ExprKind::Loop { body, .. } => walk_block(body, cx),

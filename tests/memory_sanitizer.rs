@@ -15128,6 +15128,72 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 2.6** — the same 255-node
+    /// two-branch traversal as the two fixtures above, spelled with `for`.
+    ///
+    /// Worth its own fixture rather than folding into the stage-2.5 one: the
+    /// loop variable is bound by a DIFFERENT codegen path from a `let`, and
+    /// that path takes no retain and registers no scope-exit cleanup — which
+    /// is exactly why stage 2.6 needed no codegen change and exactly why a
+    /// hole in it would show as a use-after-free (ASAN) or a leak (LSan on
+    /// Linux CI) rather than as a wrong answer.
+    ///
+    /// NOT VACUOUS, on the same three legs as its siblings (B-2026-08-04-17):
+    /// the seed is `env.args().len()`, every tag is an f-string built from it
+    /// at runtime, and `main` reads those bytes back with `contains`.
+    ///
+    /// Expected output computed independently, and identical to the siblings'
+    /// because the spelling changes nothing about what is summed: 255 nodes x
+    /// (val 1 + tag length 19) = 5100 per traversal, x2 branches = 10200, +1
+    /// for the `contains` check = 10201.
+    #[test]
+    fn asan_frozen_for_traversal_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { tag: String, val: i64, kids: Vec[Node] }
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 {
+        return Node { tag: f"leaf-{seed}-runtime-heap", val: seed, kids: [] };
+    }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { tag: f"node-{seed}-runtime-heap", val: seed, kids: [a, b] };
+}
+
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val + n.tag.len();
+    for k in n.kids {
+        s = s + sum(k);
+    }
+    return s;
+}
+
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = sum(root);
+        let b = sum(root);
+        (a, b)
+    };
+    return a + b;
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(7, seed);
+    let total = driver(root);
+    let mut w: i64 = 0;
+    if root.tag.contains("runtime-heap") { w = 1; }
+    println(total + w);
+}
+"#,
+            &["10201"],
+            "frozen_for_traversal_across_par_branches_no_leak",
+            // Same tree as the siblings: 255 tag Strings plus 127 kids buffers.
+            200,
+        );
+    }
+
     /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
     /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
     /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec

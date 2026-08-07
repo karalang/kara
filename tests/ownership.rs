@@ -9884,11 +9884,21 @@ fn frozen_param_projection_still_refuses_materializing_uses() {
             "fn f(n: frozen Node) -> Inner { let k = n.kids[0]; k }",
             "escapes here",
         ),
+        // RE-TARGETED by stage 2.6. `for k in n.kids` is now admitted — the
+        // loop element was ALREADY a non-counting alias in the emitted IR
+        // (a pointer load and a store, measured), so refusing it was buying
+        // nothing. Two `for` rows stay here, pinning the two edges: a
+        // container this pass does not model, and an element that escapes.
         (
-            "an element bound by a for loop",
+            "a for loop over a container this pass does not model",
             "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
-             for k in n.kids { s = s + k.v; } s }",
-            "cannot be projected through `.kids`",
+             for k in n.tbl { s = s + 1; } s }",
+            "cannot be projected through `.tbl`",
+        ),
+        (
+            "an element bound by a for loop, then returned",
+            "fn f(n: frozen Node) -> Inner { for k in n.kids { return k; } n.kids[0] }",
+            "escapes here",
         ),
         (
             "an element returned",
@@ -10021,6 +10031,65 @@ fn frozen_place_may_be_bound_to_an_immutable_local_alias() {
     for (label, body) in cases {
         let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
         eprintln!("[frozen stage-2.5 accept] {label}");
+        ownership_ok(&src);
+    }
+}
+
+/// STAGE 2.6 — `for k in <frozen place>`, the spelling stage 2.5 left out.
+///
+/// Stage 2.5 admitted `let k = n.kids[i]` and recorded `for` as still refused
+/// "because the loop lowers an element copy, not an alias". That reason was
+/// asserted without being measured, and it is WRONG: the emitted loop is a
+/// pointer load out of the `Vec` and a store into the loop variable's slot —
+/// no clone, no retain, no release, no scope-exit cleanup — in borrow mode
+/// and in `frozen` mode alike. So there was never any traffic to remove here;
+/// only the ownership walk was refusing.
+///
+/// Two element cases, and they differ in what `k` becomes: a `shared struct`
+/// element makes `k` a frozen root (the reject battery above pins that it
+/// still cannot escape), while a SCALAR element leaves it an ordinary
+/// binding, because a register copy of an `i64` has nothing to escape with.
+#[test]
+fn frozen_place_may_be_iterated_with_a_for_loop() {
+    let prelude = "shared struct Deep { d: i64 }\n\
+                   shared struct Inner { v: i64, deep: Deep, subs: Vec[Deep] }\n\
+                   shared struct Node { val: i64, kids: Vec[Inner], nums: Vec[i64] }\n\
+                   fn g(i: frozen Inner) -> i64 { i.v }\n";
+    let cases: &[(&str, &str)] = &[
+        (
+            "a shared element read as a scalar",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
+             for k in n.kids { s = s + k.v; } s }",
+        ),
+        (
+            "a shared element projected further",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
+             for k in n.kids { s = s + k.deep.d; } s }",
+        ),
+        (
+            "a shared element passed whole to a frozen slot",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
+             for k in n.kids { s = s + g(k); } s }",
+        ),
+        (
+            "a shared element aliased again inside the body",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
+             for k in n.kids { let j = k.deep; s = s + j.d; } s }",
+        ),
+        (
+            "a SCALAR element",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
+             for k in n.nums { s = s + k; } s }",
+        ),
+        (
+            "iterating a container reached through a chain",
+            "fn f(n: frozen Node) -> i64 { let mut s: i64 = 0; \
+             for k in n.kids[0].subs { s = s + k.d; } s }",
+        ),
+    ];
+    for (label, body) in cases {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[frozen stage-2.6 accept] {label}");
         ownership_ok(&src);
     }
 }

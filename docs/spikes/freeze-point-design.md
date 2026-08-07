@@ -6,10 +6,12 @@ explicit-`par` admission, auto-par admission), **stage 2 LANDED for PLACES**
 — projection through field access, indexing, and tuple indexing is sticky, so
 a recursive traversal of a `shared` graph compiles and runs from several `par`
 branches (measured 3.7x wall on 4 cores) — and **stage 2.5 LANDED for
-BINDINGS**: `let k = n.kids[i]` is now a non-counting alias rather than a
-materialised handle, so the natural spelling of a traversal compiles too. See
-§ "Stage 2.5", which also corrects stage 2's sizing of that work — it is not
-mechanism 1 for a parameter-rooted place. Stage 3 remains, and #133 still
+BINDINGS** (`let k = n.kids[i]` is a non-counting alias rather than a
+materialised handle) **and stage 2.6 for `for` LOOPS** (`for k in n.kids`),
+so both spellings of a traversal compile. See § "Stage 2.5", which corrects
+stage 2's sizing of that work — it is not mechanism 1 for a parameter-rooted
+place — and § "Stage 2.6", which retracts stage 2.5's unmeasured reason for
+refusing `for`. Stage 3 remains, and #133 still
 needs it: `Node.neighbors` is `mut`, so the motivating program is refused at
 the freeze site. Proposes a
 language-surface addition, so adopting it into [`docs/design.md`](../design.md)
@@ -483,6 +485,7 @@ step. A frozen place may be:
 
 It may *not* be **bound**. `let k = n.kids[i]`, `for k in n.kids`, returning
 it, storing it, a user method receiver, a non-`frozen` slot — all still report.
+*(Stages 2.5 and 2.6 below admit the first two; the rest still report.)*
 
 ### The boundary is where the measurement put it
 
@@ -627,7 +630,8 @@ mutation-checked — disabling the codegen guard turns it red with `left: (2,
   anywhere. The assignment would report on its own, but refusing the
   *declaration* makes the alias immutable by construction rather than by an
   argument a later change to the assignment walk could break.
-- **`for k in n.kids`** — the loop lowers an element copy, not an alias.
+- ~~**`for k in n.kids`** — the loop lowers an element copy, not an alias.~~
+  **Wrong, and asserted without being measured — landed as stage 2.6 below.**
 - **a place that is not a `shared struct`** — a `Vec[T]` / `String` place is a
   `{ptr,len,cap}` aggregate whose binding codegen registers as a buffer owner,
   and a generic type resolves its fields through unsubstituted parameter
@@ -700,6 +704,54 @@ code is faster", which reads as an optimizer mystery, and stayed a mystery
 until the emitted binaries were compared for *symbols*
 (`__karac_reduce_worker_2` present in one, absent in the other) rather than
 for size.
+
+## Stage 2.6: `for k in <frozen place>` (landed) — ownership-only
+
+Stage 2.5 listed `for k in n.kids` among the shapes still refused "each for a
+stated reason rather than by omission", and gave the reason as *"the loop
+lowers an element copy, not an alias"*. **That reason was asserted without
+being measured, and it is wrong.** The emitted loop is
+
+```llvm
+%for.v.elem = load ptr, ptr %for.v.elem.ptr   ; the handle, out of the Vec
+store ptr %for.v.elem, ptr %k                 ; into the loop variable's slot
+```
+
+— a pointer load and a store, with no clone, no retain, no release and no
+cleanup at `for.exit`, in borrow mode and `frozen` mode alike:
+
+| body | frozen | `ref` |
+|---|---|---|
+| `for k in n.kids { s = s + k.v }` | 0 / 0 | **0 / 0** |
+| `for k in n.kids { s = s + g(k) }` | 0 / 0 | **0 / 0** |
+| `for k in n.nums { s = s + k }` | 0 / 0 | **0 / 0** |
+| `for k in n.kids { let j = k; … }` | 0 / 0 | 2 / 3 |
+
+There was never any traffic here to remove; only the ownership walk was
+refusing. So stage 2.6 is **one admission arm in `frozen_escape.rs` and zero
+codegen change**.
+
+Two element cases, differing in what the loop variable becomes: a non-generic
+`shared struct` element makes it a frozen root, judged thereafter by the same
+whitelist as a `let` alias; a **scalar** element leaves it an ordinary
+binding, since a register copy of an `i64` has nothing to escape with.
+Everything else falls through and reports — a `Map`/`Set`, an element that is
+neither a handle nor a scalar, a destructuring pattern, the whole surface
+inside a closure. Classification runs *before* the iterable is consumed, so a
+rejection walks it exactly once rather than reporting index operands twice.
+
+**The IR test's limit is stated in the test.** Because `ref` is also `(0, 0)`
+for a plain `for`, that column cannot discriminate here. The test's final row
+— a `let` alias *of* a loop element, where frozen is `(0, 0)` and `ref` is
+`(2, 3)` — is the only leg that does, and it is what keeps the zeros from
+passing on a build that emits no refcount traffic anywhere.
+
+**Auto-par is untouched, and the reason is the loop form.** `karac query
+concurrency` reports `loop_reductions: []` for a container-iterating `for` in
+*both* modes, while the same body written `for j in 0..64` over an indexed
+element is recognized and fans out. Container iteration is simply not an
+auto-par candidate shape today; the two modes agree, so there is no asymmetry
+to fix.
 
 ### Why this matters for stage 3
 

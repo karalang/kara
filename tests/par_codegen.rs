@@ -567,6 +567,97 @@ fn main() {
         }
     }
 
+    /// B-2026-08-01-33 mechanism 3, **stage 2.6** — `for k in <frozen place>`
+    /// emits no refcount traffic either, and this test's shape records WHY
+    /// that needed no codegen change.
+    ///
+    /// Unlike the `let`-alias sibling above, the `ref` spelling of a plain
+    /// `for` is ALSO `(0, 0)`: the loop was already a pointer load out of the
+    /// `Vec` and a store into the loop variable's slot, with no clone, no
+    /// retain and no scope-exit cleanup. So stage 2.6 removed nothing from
+    /// codegen — it removed a refusal from the ownership walk that was buying
+    /// nothing, and stage 2.5's stated reason for that refusal ("the loop
+    /// lowers an element copy, not an alias") was wrong.
+    ///
+    /// That makes the `ref` column useless as a discriminator here, so the
+    /// test does not pretend otherwise: the final row — a `let` alias of a
+    /// loop element — is the leg that discriminates, and it is what keeps the
+    /// zeros above from passing on a build that emits no refcount traffic
+    /// anywhere.
+    #[test]
+    fn frozen_for_element_emits_no_refcount_traffic() {
+        /// `(rc_inc, rc_dec)` inside one `define`, user functions only.
+        fn traffic_in(ir: &str, func: &str) -> (usize, usize) {
+            let mut inside = false;
+            let (mut inc, mut dec) = (0, 0);
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside {
+                    inc += line.matches("rc_inc").count();
+                    dec += line.matches("rc_dec").count();
+                }
+            }
+            (inc, dec)
+        }
+        let program = |mode: &str, body: &str| {
+            format!(
+                "shared struct Inner {{ v: i64 }}\n\
+                 shared struct Node {{ val: i64, kids: Vec[Inner], nums: Vec[i64] }}\n\
+                 fn g(i: {mode}Inner) -> i64 {{ i.v }}\n\
+                 fn outer(n: {mode}Node) -> i64 {{ {body} }}\n\
+                 fn main() {{\n\
+                     let z = Node {{ val: 1, kids: [Inner {{ v: 2 }}], nums: [3] }};\n\
+                     println(f\"{{outer(z)}}\");\n\
+                 }}"
+            )
+        };
+        let bodies: &[(&str, &str)] = &[
+            (
+                "a shared element read as a scalar",
+                "let mut s: i64 = 0; for k in n.kids { s = s + k.v; } s",
+            ),
+            (
+                "a shared element passed to a frozen slot",
+                "let mut s: i64 = 0; for k in n.kids { s = s + g(k); } s",
+            ),
+            (
+                "a scalar element",
+                "let mut s: i64 = 0; for k in n.nums { s = s + k; } s",
+            ),
+        ];
+        for (label, body) in bodies {
+            assert_eq!(
+                traffic_in(&ir_for_analyzed(&program("frozen ", body)), "outer"),
+                (0, 0),
+                "[{label}] a `for` over a container off a `frozen` root must \
+                 emit NO refcount traffic — that zero is what lets the \
+                 ownership walk admit the loop variable into a `par` branch"
+            );
+        }
+
+        // The discriminating leg: aliasing a loop element goes through the
+        // stage-2.5 binding path, where `frozen` and `ref` genuinely differ.
+        // If this pair ever collapses, the zeros above stop meaning anything.
+        let alias_body = "let mut s: i64 = 0; for k in n.kids { let j = k; s = s + j.v; } s";
+        assert_eq!(
+            traffic_in(&ir_for_analyzed(&program("frozen ", alias_body)), "outer"),
+            (0, 0),
+            "a `let` alias of a loop element must be non-counting too"
+        );
+        let borrowed = traffic_in(&ir_for_analyzed(&program("ref ", alias_body)), "outer");
+        assert!(
+            borrowed.0 > 0 && borrowed.1 > 0,
+            "the same alias written `ref` must STILL take counts — this is the \
+             only leg of this test that discriminates, since a plain `for` is \
+             already (0, 0) in both modes; got inc={} dec={}",
+            borrowed.0,
+            borrowed.1
+        );
+    }
+
     /// B-2026-08-01-33 mechanism 3, **stage 2.5** — the same traversal as the
     /// stage-2 test above, written the way a person writes one: the child is
     /// bound to a name before it is recursed into.
@@ -615,6 +706,53 @@ fn main() {
                 "20",
                 "two branches traversing one `frozen` graph through BOUND \
                  child aliases must each total 1+2+3+4"
+            );
+        }
+    }
+
+    /// B-2026-08-01-33 mechanism 3, **stage 2.6** — the traversal written the
+    /// way the language's own loop form spells it, across two `par` branches.
+    ///
+    /// The `while i < len` sibling above pins the same arithmetic; this pins
+    /// that the `for` spelling reaches it too. Asserted as a COMPUTED VALUE
+    /// for this family's standing reason (B-2026-08-05-10: a borrowed capture
+    /// once read zero and the program just printed a wrong answer, which no
+    /// traffic count could see).
+    #[test]
+    fn frozen_for_traversal_computes_correctly_across_par_branches() {
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, kids: Vec[Node] }
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val;
+    for k in n.kids {
+        s = s + sum(k);
+    }
+    s
+}
+fn driver(root: frozen Node) -> i64 {
+    let (a, b) = par {
+        let a = sum(root);
+        let b = sum(root);
+        (a, b)
+    };
+    a + b
+}
+fn main() {
+    let l1 = Node { val: 3, kids: [] };
+    let l2 = Node { val: 4, kids: [] };
+    let mid = Node { val: 2, kids: [l1, l2] };
+    let root = Node { val: 1, kids: [mid] };
+    println(driver(root));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "20",
+                "two branches traversing one `frozen` graph with a `for` loop \
+                 must each total 1+2+3+4"
             );
         }
     }
