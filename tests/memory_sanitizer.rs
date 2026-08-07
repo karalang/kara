@@ -36190,6 +36190,116 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-11 leg (a) — the same envelope chain, owned at the OWNED
+    /// PARAM rather than at the let site.
+    ///
+    /// B-2026-08-07-6 gave `BoxedEnumDrop` a `deeper_tags` chain at the LET site
+    /// only, deliberately: `BoxedEnumDrop` is registered from a dozen places and
+    /// each has its own ownership argument. `functions.rs`'s owned-param arm was
+    /// the first of the residue, and it is the cheapest because the callee is
+    /// ALREADY the owner of the outermost envelope on that arm — the deeper ones
+    /// live inside it, so nothing else can reach them once it frees the box they
+    /// hang off. 320 B / 10 pre-fix.
+    ///
+    /// THE CALLER CANNOT BE A COMPETING OWNER, and the pre-fix measurement is
+    /// what says so rather than an argument: the let site's registration is
+    /// disarmed at the by-value move by
+    /// `suppress_inline_option_result_binding_move`, so the failure was a LEAK
+    /// of one envelope. Had the caller still been armed it would have been a
+    /// double free instead. That distinction is the whole reason this arm is
+    /// safe to widen and the two below are not.
+    ///
+    /// ARMS: `tri` is the row's shape; `quad` puts TWO envelopes below the
+    /// first; `tristr` is the envelope/interior boundary again, binding a heap
+    /// `String` out from the bottom of a chain passed by value; `duo` is the
+    /// empty-chain control that must stay at exactly one free.
+    ///
+    /// THE TWO ESCAPE CONTROLS ARE THE POINT OF THE REST. `idc` RETURNS its
+    /// param and `fwd` FORWARDS it to a second by-value param. Neither is
+    /// registered at all — `result_shared_nonescaping_param_names` excludes
+    /// them — so the terminal consumer stays the only owner. This is the exact
+    /// pair that double-freed at both opt levels, then SIGSEGV'd at `-O0`, when
+    /// the owned-param registration was first written without an escape guard
+    /// (recorded in that arm's comment). A chain makes each such mistake free
+    /// one more box than it should, so they are re-asserted here rather than
+    /// assumed still covered.
+    ///
+    /// COVERAGE: pre-fix 320 B / 10 at `KARAC_OPT_LEVEL=0`, CLEAN at the default
+    /// `-O2` where the envelopes fold away — so like its let-site sibling the
+    /// memory half rides on the `-O0` leg (B-2026-08-04-17). Measured 646
+    /// allocations at `-O0` and 126 at `-O2`.
+    ///
+    /// STILL RED and deliberately absent: moving the binding into a struct
+    /// literal, and pushing it into a `Vec`. Those are NOT chain gaps — a
+    /// SINGLE-box `Option[Option[i64]]` leaks 320 B through either, with no
+    /// chain anywhere — so they are a destination-ownership defect that
+    /// B-2026-08-07-11 now records correctly and keeps open.
+    ///
+    /// The expected value is COMPUTED: five arms subtract the opaque
+    /// `env.args().len()` seed back out to leave `i` and the String arm
+    /// contributes 1 — `5i + 1` per iteration, so `5 * (0+…+39) + 40 = 3940`.
+    #[test]
+    fn asan_owned_param_boxed_enum_chain_frees_every_envelope() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn mkstr(n: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("envelope-");
+    s.push_str(n.to_string());
+    s.push_str("-padding-to-force-heap");
+    s
+}
+fn tri(b: Option[Option[Option[i64]]]) -> i64 {
+    match b { Option.Some(Option.Some(Option.Some(x))) => x, _ => 0 }
+}
+fn quad(b: Option[Option[Option[Option[i64]]]]) -> i64 {
+    match b { Option.Some(Option.Some(Option.Some(Option.Some(x)))) => x, _ => 0 }
+}
+fn duo(b: Option[Option[i64]]) -> i64 {
+    match b { Option.Some(Option.Some(x)) => x, _ => 0 }
+}
+fn tristr(b: Option[Option[Option[String]]]) -> i64 {
+    match b { Option.Some(Option.Some(Option.Some(s))) => { if s.contains("envelope-") { 1 } else { 0 } } _ => -1 }
+}
+fn idc(o: Option[Option[Option[i64]]]) -> Option[Option[Option[i64]]] { o }
+fn deep(o: Option[Option[Option[i64]]]) -> i64 {
+    match o { Option.Some(Option.Some(Option.Some(x))) => x, _ => 0 }
+}
+fn fwd(o: Option[Option[Option[i64]]]) -> i64 { deep(o) }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        acc = acc + tri(a) - n;
+
+        let b: Option[Option[Option[Option[i64]]]] = Option.Some(Option.Some(Option.Some(Option.Some(n + i))));
+        acc = acc + quad(b) - n;
+
+        acc = acc + tristr(Option.Some(Option.Some(Option.Some(mkstr(n + i)))));
+
+        let d: Option[Option[i64]] = Option.Some(Option.Some(n + i));
+        acc = acc + duo(d) - n;
+
+        let p: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        let back = idc(p);
+        match back { Option.Some(Option.Some(Option.Some(x))) => { acc = acc + x - n; } _ => { acc = acc - 1; } }
+
+        let f: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(n + i)));
+        acc = acc + fwd(f) - n;
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["3940"],
+            "owned_param_boxed_enum_chain_frees_every_envelope",
+            100,
+        );
+    }
+
     /// B-2026-08-07-7 — a match arm binding the INTERIOR out of a struct
     /// field whose `Option` payload is heap-BOXED. Double free at BOTH opt
     /// levels before this: corruption, where every sibling shape merely leaks.

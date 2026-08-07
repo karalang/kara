@@ -2016,12 +2016,36 @@ impl<'ctx> super::Codegen<'ctx> {
                         if enum_lit != "Option" || inner_struct.is_some() {
                             continue;
                         }
-                        self.track_boxed_enum_var_with_inner_drop(
+                        // B-2026-08-07-11 leg (a) — the box may hold a further
+                        // chain of ENVELOPES (`Option[Option[Option[i64]]]`:
+                        // the param's own payload boxes, and so does the
+                        // payload inside THAT box). Freeing only the outer one
+                        // leaked 32 B per call.
+                        //
+                        // The callee is the right owner for the whole chain
+                        // because it is already the owner of the outermost
+                        // envelope on this arm, and the deeper ones live inside
+                        // it — nothing else can reach them once this frees the
+                        // box they hang off. The caller cannot be a competing
+                        // owner: its let-site registration is disarmed at the
+                        // move by `suppress_inline_option_result_binding_move`,
+                        // which is why the pre-fix measurement was a LEAK of one
+                        // envelope rather than a double free of it.
+                        //
+                        // Mutual exclusion with `inner_drop_fn` holds trivially
+                        // here: this arm passes `None`, and the
+                        // `inner_struct.is_some()` gate above already excludes
+                        // every shape that would want one.
+                        let deeper = Self::option_generic_arg_type_expr(&mono_ty)
+                            .map(|p| self.nested_box_deeper_tag_chain(&p))
+                            .unwrap_or_default();
+                        self.track_boxed_enum_var_with_chain(
                             &param_name,
                             alloca,
                             enum_lit,
                             variant,
                             None,
+                            deeper,
                         );
                     }
                     // B-2026-08-07-2 shapes 1+2 — the same param, one level
