@@ -22055,6 +22055,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_result_map_heap_err_passthrough_disarms_source() {
+        // B-2026-08-07-3 — the SCALAR-inner `Result[i64, String].map(f)` lowering
+        // compiles its ABSENT (`Err`) branch as a SHALLOW copy of the receiver
+        // (`recv_struct.into()`), so an `Err`'s heap String payload is aliased by
+        // the map result. When that result is CONSUMED or DISCARDED the source
+        // binding stayed armed too, and the one buffer was freed twice —
+        // `free(): double free detected in tcache 2` at -O0 and under the JIT,
+        // masked at the DEFAULT -O2 by DSE (so `karac build` looked clean while
+        // `karac run` / the JIT-parity CI leg aborted with EMPTY output). Covers
+        // all three consumption shapes the fix wires the `map_passthrough`
+        // detector into: (b) `er.map(f).unwrap_or(d)` consume, (a) `let r =
+        // er.map(f); r.unwrap_or(d)` let-bound consume, (c) `er.map(f);` discard
+        // in statement position — plus an `Ok` receiver confirming the mapper
+        // still fires. interp == JIT == AOT.
+        if let Some(out) = run_program(
+            "fn dbl(n: i64) -> i64 { n * 2 }\n\
+             fn main() {\n\
+                 let ok: Result[i64, String] = Ok(21);\n\
+                 println(f\"{ok.map(dbl).unwrap_or(-1)}\");\n\
+                 let eb: Result[i64, String] = Err(f\"boom-b\");\n\
+                 println(f\"{eb.map(dbl).unwrap_or(-99)}\");\n\
+                 let ea: Result[i64, String] = Err(f\"boom-a\");\n\
+                 let r: Result[i64, String] = ea.map(dbl);\n\
+                 println(f\"{r.unwrap_or(-98)}\");\n\
+                 let ec: Result[i64, String] = Err(f\"boom-c\");\n\
+                 ec.map(dbl);\n\
+                 println(\"discarded-ok\");\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n-99\n-98\ndiscarded-ok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_map_heap_unannotated_gated() {
         // The un-annotated heap-RETURNING mapper (`|s| s.to_uppercase()`)
         // remains a clean loud build gate (B-2026-07-12-10 residual: the

@@ -5975,6 +5975,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // non-heap / borrow payloads.
                     if matches!(value.kind, ExprKind::Call { .. })
                         || self.rhs_is_fresh_inline_enum(value)
+                        // B-2026-08-07-3 — `let r = <binding>.map(f)`: the `.map`
+                        // Err/None branch aliases the receiver's payload, so `r`
+                        // must be recorded as an alias (below) rather than
+                        // tracked as a fresh owner. Admit the MethodCall shape to
+                        // this Call-gated block so the alias branch can claim it.
+                        || self.map_passthrough_armed_source(value).is_some()
                     {
                         let opt_te = self
                             .enum_inst_type_exprs
@@ -5998,7 +6004,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // it excludes for the non-Call shapes, and for
                                 // the same double-free reason. The source stays
                                 // sole owner.
-                                if let Some(src) = self.call_passthrough_armed_inline_source(value)
+                                if let Some(src) = self
+                                    .call_passthrough_armed_inline_source(value)
+                                    // B-2026-08-07-3 — the `.map` builtin
+                                    // passthrough sibling: `<binding>.map(f)`
+                                    // aliases the receiver's Err/None payload.
+                                    .or_else(|| self.map_passthrough_armed_source(value))
                                 {
                                     self.passthrough_owner_alias
                                         .insert(var_name.to_string(), src);

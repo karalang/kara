@@ -6634,6 +6634,44 @@ impl<'ctx> super::Codegen<'ctx> {
             .or_else(|| self.call_passthrough_armed_source(value, &self.boxed_enum_payload_vars))
     }
 
+    /// The BUILTIN sibling of [`Self::call_passthrough_armed_source`]:
+    /// `Option`/`Result` `.map(f)`. Its ABSENT branch (`None`/`Err`) hands the
+    /// receiver straight back — the hand-rolled scalar-inner lowering in
+    /// `calls.rs` sets `absent_result = recv_struct.into()`, a SHALLOW copy of
+    /// the receiver's `{ptr,len,cap}` words — so `<binding>.map(f)` ALIASES
+    /// `<binding>`'s heap Err/None payload exactly as a user-function
+    /// passthrough aliases its argument (B-2026-08-06-27/28/29). When the
+    /// receiver is a NAMED binding armed in an inline Option/Result payload set,
+    /// return its name so a consumer can disarm the SOURCE (`unwrap_or`, which
+    /// frees the aliased payload on the Err/None branch) or a discarded-temp
+    /// registrar can skip (leaving the source sole owner). B-2026-08-07-3.
+    ///
+    /// Gated to the SCALAR-inner (`Ok`/`Some` payload trivially-copyable) map
+    /// lowering: a heap-inner map delegates to `compile_map_via_match_synthesis`
+    /// (calls.rs), which owns the move-out and does not leave this shallow
+    /// alias. Only `map` is recognized — the other Err/None-passthrough
+    /// combinators are left for measured follow-up, not assumed by symmetry.
+    pub(super) fn map_passthrough_armed_source(&self, value: &Expr) -> Option<String> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &value.kind
+        else {
+            return None;
+        };
+        if method != "map" || args.len() != 1 {
+            return None;
+        }
+        let ExprKind::Identifier(n) = &object.kind else {
+            return None;
+        };
+        (self.inline_option_payload_vars.contains(n.as_str())
+            || self.inline_result_payload_vars.contains(n.as_str()))
+        .then(|| n.clone())
+    }
+
     /// Shared shape test: is `value` a direct call to a named function, passing
     /// a binding that is present in `armed` in a position the callee returns?
     /// Returns the SOURCE binding's name so a caller can record the ownership
@@ -6664,17 +6702,24 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {
-        let ExprKind::Identifier(name) = &value.kind else {
-            return;
+        // Resolve the OWNING binding whose scope-exit payload free must be
+        // disarmed because the caller (`unwrap_or`) has taken and freed the
+        // aliased Err/None payload. Two receiver shapes reach here:
+        //   • a NAMED binding (`r.unwrap_or(d)`) — B-2026-08-06-29's
+        //     user-function-arg path, resolved through the passthrough alias;
+        //   • `<binding>.map(f).unwrap_or(d)` (B-2026-08-07-3) — the `.map`
+        //     Err/None branch aliases `<binding>`'s payload, and `unwrap_or`
+        //     freed that alias, so the SOURCE binding must be disarmed or its
+        //     scope-exit `FreeInlineResultPayload`/`FreeInlineOptionPayload`
+        //     double-frees the same buffer.
+        let name = match &value.kind {
+            ExprKind::Identifier(name) => self.moved_arg_owner_name(name),
+            _ => match self.map_passthrough_armed_source(value) {
+                Some(src) => src,
+                None => return,
+            },
         };
-        // B-2026-08-06-29 — follow the passthrough ownership alias. This is the
-        // USER-FUNCTION arg path (the Map/Vec method sites use the
-        // `_for_moved_arg` suppressors above), and it is the one `peek(x)`
-        // reaches. `x` is not armed — B-2026-08-06-27 records it as an alias of
-        // `d` and leaves `d` the sole owner — so without this the consume
-        // suppressed nothing and `d`'s cleanup double-freed the payload the
-        // callee had already taken.
-        let name = &self.moved_arg_owner_name(name);
+        let name = &name;
         let in_option = self.inline_option_payload_vars.contains(name.as_str());
         let in_result = self.inline_result_payload_vars.contains(name.as_str());
         // `boxed_enum_payload_vars` covers the heap-BOXED wide payload

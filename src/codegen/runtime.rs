@@ -4626,6 +4626,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// suppressing that one would leak.
     fn discarded_temp_aliases_armed_source(&self, tail: &Expr) -> bool {
         self.call_passthrough_armed_any_source(tail).is_some()
+            // B-2026-08-07-3 — `<binding>.map(f);` in statement position: the
+            // `.map` Err/None branch aliases the receiver's payload, so the
+            // discarded temp must NOT register a free (the source stays sole
+            // owner). NARROWING, not zeroing — matching the discarded-passthrough
+            // direction (B-2026-08-06-28); the consume path (`unwrap_or`) is the
+            // one that disarms the source instead.
+            || self.map_passthrough_armed_source(tail).is_some()
     }
 
     pub(super) fn try_track_discarded_inline_option(
