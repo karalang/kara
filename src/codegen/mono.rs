@@ -25,6 +25,24 @@ use super::helpers::{
 };
 use super::state::{LayoutId, MapMonoMethods, VarSlot};
 
+/// Which LOOKUP probe loop is asking whether to fold the 7-bit hash tag into
+/// its occupancy test — see [`Codegen::map_tag_compare`], which is the whole
+/// documentation for why the answer differs. The distinction that matters is
+/// what the tag lets the probe SKIP: an L1-resident scalar compare for a
+/// primitive key, versus a `{ptr,len,cap}` load and a cold heap dereference
+/// for a String one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum MapProbeKey {
+    /// `emit_mono_map_get_body` / `emit_mono_set_contains_body` — i32/i64 keys
+    /// by construction (`should_use_mono_map_for` / `should_use_mono_set_for`).
+    Primitive,
+    /// `emit_mono_map_str_get_body` — the monomorphized `String`-keyed get.
+    /// NOTE this is a SECOND mono path beside the primitive one, not the
+    /// erased runtime path: `should_use_mono_map_for` gates only the former,
+    /// so "a String key can never reach mono.rs" is false.
+    HeapString,
+}
+
 /// Snapshot of every name-keyed per-function variable side-table that
 /// `register_var_from_type_expr` (plus the mono prologue's `Fn`-param /
 /// owned-header registrations) can write. A mono body compiles INLINE,
@@ -3379,6 +3397,54 @@ impl<'ctx> super::Codegen<'ctx> {
     const BUCKET_TOMBSTONE: u64 = 1;
     const BUCKET_OCCUPIED_BIT: u64 = 0x80;
 
+    /// Whether a LOOKUP probe folds the 7-bit hash tag into its occupancy test
+    /// (`status == ctrl`) or tests occupancy alone (`status >= 0x80`), for the
+    /// probe shape named by `key`. B-2026-08-05-5.
+    ///
+    /// The tag's BENEFIT is skipping the key load+compare on a bucket it
+    /// rejects, so it is worth exactly what that skipped compare would have
+    /// cost. Its PRICE is a serialized compare against a computed operand, and
+    /// that price is heavily architecture-dependent. Hence a policy per (probe
+    /// shape x target arch) rather than one switch.
+    ///
+    /// MEASURED, Apple M5 Pro / arm64, `KARAC_MAP_TAG` A/B on one karac
+    /// (exact `scripts/pmc.c` counters, `hyperfine` both orders, sinks
+    /// verified, `KARAC_AUTO_PAR=0`). Negative = the tag costs:
+    ///
+    ///   kata:170 `Map[i64,i64]` (168 keys, `keys()` walk)  tag 1.13-1.17x SLOWER
+    ///   kata:219 `Map[i64,i64]` (sliding window)           tag 1.03x SLOWER
+    ///   kata:1   `Map[i64,i64]` (get-heavy, scaled)        tag 1.02-1.03x SLOWER
+    ///   kata:146 `Map[i64,i64]` (LRU, tombstone churn)     neutral
+    ///   kata:128 `Set[i64]`     (20k keys)                 neutral
+    ///   kata:217 `Set[i64]`     (800-key windows)          neutral
+    ///   kata:127 `Map[String,i64]`                         tag 1.07x FASTER
+    ///
+    /// So on arm64 the tag NEVER pays for a primitive key across six workloads
+    /// and costs up to 1.17x, while it pays for a String key — whose skipped
+    /// compare is a `{ptr,len,cap}` load plus a cold heap dereference, not an
+    /// L1 hit. x86 agrees the tag pays for String keys (+11.1%); its sign for
+    /// PRIMITIVE keys is disputed between two container lanes (tag off measured
+    /// 1.20x slower by one, 2.0% faster by the other) and cannot be settled
+    /// from an arm64 host, so x86 keeps the tag until that lane resolves —
+    /// tracked as its own ledger row. That is why this is arch-conditional and
+    /// not a plain key-type gate.
+    ///
+    /// kata:170 is the outlier in MAGNITUDE and its mechanism is not fully
+    /// explained: there alone the tag executes 12.8% FEWER instructions yet
+    /// burns 18.5% MORE cycles (IPC 3.04 -> 2.24). The static code difference
+    /// is 9 instructions, so that is a dynamic effect — the tag skipping
+    /// `eq_check` work that was cheap enough to be free. The other five agree
+    /// in DIRECTION at a few percent, which is what this policy rests on.
+    pub(super) fn map_tag_compare(&self, key: MapProbeKey) -> bool {
+        if let Some(forced) = self.map_tag_override {
+            return forced;
+        }
+        match key {
+            MapProbeKey::Primitive => !self.target_is_aarch64,
+            MapProbeKey::HeapString => true,
+        }
+    }
+
     /// Mirror of the runtime's `ctrl_of`: the control byte for a bucket holding
     /// a key with this hash. Takes the TOP 7 bits because the bucket index
     /// consumes the low ones — a tag sharing them would be constant along a
@@ -4133,7 +4199,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // compares the bucket byte against this directly — occupancy and hash
         // tag in one instruction; an INSERT probe stores it when claiming a
         // bucket. Loop-invariant, so it is hoisted here with `start`.
-        let ctrl = self.emit_map_ctrl_of(hash);
+        // `None` when this probe tests occupancy ALONE (B-2026-08-05-5), so the
+        // tag arithmetic is never emitted rather than emitted and DCE'd.
+        let ctrl = self
+            .map_tag_compare(MapProbeKey::Primitive)
+            .then(|| self.emit_map_ctrl_of(hash));
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -4186,12 +4256,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // WITHOUT touching its key, which is where the win is (a `String` key
         // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
         // false-positive rate is ~1/128, so `eq` runs on real hits.
-        // B-2026-08-05-5 probe: `KARAC_MAP_TAG=0` drops the hash-tag half of
-        // this compare, leaving a plain occupancy test. The mono map path only
-        // ever has i32/i64 keys (`should_use_mono_map_for`), so the tag's
-        // benefit -- skipping a cold heap dereference on a heap key -- is
-        // structurally unavailable here; this switch measures what it costs.
-        let is_occupied = if self.map_tag_compare {
+        //
+        // `ctrl` is `None` when this probe's policy tests occupancy ALONE
+        // (B-2026-08-05-5) — `map_tag_compare` carries the per-site
+        // measurements. Correctness is unaffected either way: the OCCUPIED bit
+        // is still what admits a bucket to `eq.check`, and dropping the tag
+        // only lets more buckets through to a key compare that then rejects
+        // them. The stored ENCODING never changes — insert probes write
+        // `0x80 | tag7` on every host — so this stays layout-compatible with
+        // `runtime/src/map.rs` and with archives built either way.
+        let is_occupied = if let Some(ctrl) = ctrl {
             self.builder
                 .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
                 .unwrap()
@@ -4459,7 +4533,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // compares the bucket byte against this directly — occupancy and hash
         // tag in one instruction; an INSERT probe stores it when claiming a
         // bucket. Loop-invariant, so it is hoisted here with `start`.
-        let ctrl = self.emit_map_ctrl_of(hash);
+        // `None` when this probe tests occupancy ALONE (B-2026-08-05-5), so the
+        // tag arithmetic is never emitted rather than emitted and DCE'd.
+        let ctrl = self
+            .map_tag_compare(MapProbeKey::Primitive)
+            .then(|| self.emit_map_ctrl_of(hash));
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -4512,12 +4590,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // WITHOUT touching its key, which is where the win is (a `String` key
         // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
         // false-positive rate is ~1/128, so `eq` runs on real hits.
-        // B-2026-08-05-5 probe: `KARAC_MAP_TAG=0` drops the hash-tag half of
-        // this compare, leaving a plain occupancy test. The mono map path only
-        // ever has i32/i64 keys (`should_use_mono_map_for`), so the tag's
-        // benefit -- skipping a cold heap dereference on a heap key -- is
-        // structurally unavailable here; this switch measures what it costs.
-        let is_occupied = if self.map_tag_compare {
+        //
+        // `ctrl` is `None` when this probe's policy tests occupancy ALONE
+        // (B-2026-08-05-5) — `map_tag_compare` carries the per-site
+        // measurements. Correctness is unaffected either way: the OCCUPIED bit
+        // is still what admits a bucket to `eq.check`, and dropping the tag
+        // only lets more buckets through to a key compare that then rejects
+        // them. The stored ENCODING never changes — insert probes write
+        // `0x80 | tag7` on every host — so this stays layout-compatible with
+        // `runtime/src/map.rs` and with archives built either way.
+        let is_occupied = if let Some(ctrl) = ctrl {
             self.builder
                 .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
                 .unwrap()
@@ -5159,7 +5241,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // compares the bucket byte against this directly — occupancy and hash
         // tag in one instruction; an INSERT probe stores it when claiming a
         // bucket. Loop-invariant, so it is hoisted here with `start`.
-        let ctrl = self.emit_map_ctrl_of(hash);
+        // `Some` on every host here (B-2026-08-05-5): the tag is worth MORE for
+        // a String key, not less — it skips a `{ptr,len,cap}` load and a cold
+        // heap dereference, measured 1.07x on arm64 and +11.1% on x86. Only the
+        // blunt `KARAC_MAP_TAG` A/B override can turn this one off.
+        let ctrl = self
+            .map_tag_compare(MapProbeKey::HeapString)
+            .then(|| self.emit_map_ctrl_of(hash));
         self.builder
             .build_unconditional_branch(probe_cond_bb)
             .unwrap();
@@ -5212,12 +5300,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // WITHOUT touching its key, which is where the win is (a `String` key
         // costs a `{ptr,len,cap}` load plus a cold heap dereference). The
         // false-positive rate is ~1/128, so `eq` runs on real hits.
-        // B-2026-08-05-5 probe: `KARAC_MAP_TAG=0` drops the hash-tag half of
-        // this compare, leaving a plain occupancy test. The mono map path only
-        // ever has i32/i64 keys (`should_use_mono_map_for`), so the tag's
-        // benefit -- skipping a cold heap dereference on a heap key -- is
-        // structurally unavailable here; this switch measures what it costs.
-        let is_occupied = if self.map_tag_compare {
+        //
+        // `ctrl` is `None` when this probe's policy tests occupancy ALONE
+        // (B-2026-08-05-5) — `map_tag_compare` carries the per-site
+        // measurements. Correctness is unaffected either way: the OCCUPIED bit
+        // is still what admits a bucket to `eq.check`, and dropping the tag
+        // only lets more buckets through to a key compare that then rejects
+        // them. The stored ENCODING never changes — insert probes write
+        // `0x80 | tag7` on every host — so this stays layout-compatible with
+        // `runtime/src/map.rs` and with archives built either way.
+        let is_occupied = if let Some(ctrl) = ctrl {
             self.builder
                 .build_int_compare(IntPredicate::EQ, status_byte, ctrl, "ctrl.match")
                 .unwrap()

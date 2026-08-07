@@ -2816,36 +2816,23 @@ pub(super) struct Codegen<'ctx> {
     /// bound proof. Empty for essentially every block, so the lookup is a
     /// hash miss on the common path.
     pub(crate) check_free_accum_sites: std::collections::HashSet<crate::resolver::SpanKey>,
-    /// B-2026-08-05-5 A/B lever. DEFAULT ON — the mono map's probe loop tests
-    /// occupancy AND the 7-bit hash tag in one compare, which is the shipped
-    /// behaviour. `KARAC_MAP_TAG=0` drops the tag half, leaving a plain
-    /// occupancy test.
+    /// B-2026-08-05-5 override for the mono probe loops' control-byte test.
+    /// `None` (unset) uses the measured per-site policy in
+    /// [`Codegen::map_tag_compare`]; `KARAC_MAP_TAG=0` forces the tag OFF at
+    /// every site and `=1` forces it ON at every site, the latter restoring
+    /// 58412d9f's pre-fix behaviour exactly.
     ///
-    /// This exists so the proposed key-type fix can be A/B'd on the machine
-    /// that motivated it WITHOUT a rebuild. It is NOT the fix, and it is not
-    /// on by default, because that fix is REFUTED on x86:
+    /// Kept as an A/B lever rather than deleted with the fix: it is the ONLY
+    /// instrument that isolates the tag compare. A commit-to-commit comparison
+    /// against 58412d9f does NOT, because that commit also restructured
+    /// `mono.rs` and changed the `keys()` walk — measuring the tag that way
+    /// produced a 6.1%-faster reading against this lever's 1.9%-slower one on
+    /// the same host and kata, and every fix-sizing estimate taken from the
+    /// commit pair was wrong as a result. Size the tag with the lever.
     ///
-    ///   kata:170 `Map[i64,i64]`, tag OFF vs ON, x86_64
-    ///     instructions/query  12,568 -> 10,922   -13.1%
-    ///     wall clock (min/12)  3763.7 -> 4513.2 ms   1.20x SLOWER
-    ///
-    /// Dropping the tag executes FEWER instructions and runs SLOWER: with the
-    /// tag, a bucket whose tag differs is rejected without touching its key;
-    /// without it, every occupied bucket costs a load from the `kv` array. The
-    /// instruction count is a misleading proxy here — the cost is cache
-    /// traffic, not work.
-    ///
-    /// Two other facts this lever established, both worth keeping:
-    /// (1) the mono path is i32/i64-keyed BY CONSTRUCTION
-    ///     (`should_use_mono_map_for`), so a String key can never reach it —
-    ///     the arm64 loss (kata:170, mono) and the arm64 win (kata:127
-    ///     `Map[String,i64]`, erased runtime path) are in DIFFERENT
-    ///     implementations and do not trade off against each other;
-    /// (2) "long probe chains might still want the tag" is unreachable —
-    ///     `next_capacity` doubles at a 3/16 load factor, so the table is
-    ///     always >=5.3x the live set. A dense-fill all-miss probe measured 68
-    ///     instructions/query BOTH ways.
-    pub(crate) map_tag_compare: bool,
+    /// NOTE the override is deliberately blunt (all sites, both directions) so
+    /// an A/B measures one variable. The shipped policy is per-site.
+    pub(crate) map_tag_override: Option<bool>,
     /// One-shot latch consumed by the `BinOp::Add` arm in `compile_binop_typed`
     /// to emit a plain `add` instead of the trapping
     /// `llvm.sadd.with.overflow` sequence.
@@ -7971,7 +7958,11 @@ impl<'ctx> Codegen<'ctx> {
             struct_drop_fns: HashMap::new(),
             soa_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),
-            map_tag_compare: std::env::var("KARAC_MAP_TAG").as_deref() != Ok("0"),
+            map_tag_override: match std::env::var("KARAC_MAP_TAG").as_deref() {
+                Ok("0") => Some(false),
+                Ok("1") => Some(true),
+                _ => None,
+            },
             check_free_accum_sites: std::collections::HashSet::new(),
             elide_next_add_overflow_check: false,
             elide_proven_index_add_overflow: std::env::var("KARAC_BCE_OVF_SKIP").as_deref()
