@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 146 | 2 |
+| leak | 147 | 3 |
 | double-free | 108 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 722 | 6 |
+| codegen | 723 | 7 |
 | interp | 127 | 0 |
 | typecheck | 127 | 1 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **994 surfaced · 9 open · 975 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced · 10 open · 975 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **994 surfaced 
 | B-2026-08-06-33 | 2026-08-06 | codegen | medium | the x86_64 sign for DROPPING the map hash-tag compare on PRIMITIVE keys is disputed between two container lanes (1.20x slower vs 2.0% faster) -- which is the only reason B-2026-08-05-5's fix is arch-conditional instead of a plain key-type gate | src/codegen/mono.rs::map_tag_compare (the `!self.target_is_aarch64` arm) |
 | B-2026-08-06-34 | 2026-08-06 | other | medium | MAIN IS RED (second gate): the shared-ownership matrix RATCHET fails because four cells IMPROVED -- alias/ResultOk, alias/ResultErr, closure_capture/ResultOk, closure_capture/ResultErr now come back Clean where the table still expects Leak | tests/shared_ownership_matrix.rs:413 + its FLOWS.expected table |
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. FIXED: no binding (fresh temp), `Vec.push` (the only -O2 leak), escape-by-return, and the BOX-INSIDE-A-BOX chain. OPEN: a struct between the levels, whose owner is CONTESTED — a fix was implemented and reverted for double-freeing. Shape 6 was never a member of this family | — |
-| B-2026-08-07-7 | 2026-08-07 | codegen | high | a struct field of type `Option[Option[String]]` DOUBLE-FREES the String at BOTH opt levels when a match arm binds it out -- the field's drop deep-frees an interior the arm already owns. The `Result` wrapper is NOT required; the struct is | — |
+| B-2026-08-07-7 | 2026-08-07 | codegen | medium | a struct field of type `Option[Option[String]]` DOUBLE-FREED the String at BOTH opt levels when a match arm bound it out -- FIXED (c25c949) by disarming the struct's deep field drop at the arm. The 32 B ENVELOPE now leaks in that case (quarantined), and a sibling shape -- whole payload bound out, destructured in a SECOND match -- still corrupts | — |
+| B-2026-08-07-9 | 2026-08-07 | codegen | high | a match ARM that binds a struct field's whole boxed payload out and destructures it in a SECOND match double-frees the interior at both opt levels; the `let` spelling of the same shape is clean | — |
 | B-2026-08-07-6 | 2026-08-07 | codegen | low | the DIRECT sibling of the nested-box chain: `Option[Option[Option[i64]]]` with no `Result` wrapper leaks its inner envelope -- `BoxedEnumDrop` frees one box and has no chain | — |
 | B-2026-08-07-8 | 2026-08-07 | typecheck | low | `self` cannot be passed to a BORROW parameter from any receiver mode — `byref(self)` from `ref self` is `expected 'ref Inner', found 'Inner'`, and so is every other receiver/borrow-param combination | — |
 
