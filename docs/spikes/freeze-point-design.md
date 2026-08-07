@@ -2,14 +2,16 @@
 
 **Status:** design call; **stage 1 COMPLETE ON BOTH PARALLELISM SURFACES**
 (surface, escape check E0511, freeze-site check E0512, RC suppression,
-explicit-`par` admission, auto-par admission) and **stage 2 LANDED for
-PLACES** — projection through field access, indexing, and tuple indexing is
-now sticky, so a recursive traversal of a `shared` graph compiles and runs
-from several `par` branches (measured 3.7x wall on 4 cores). What stage 2 does
-*not* yet admit is a **binding**: `let k = n.kids[i]` still materialises a
-counted handle and is still refused — see § "Stage 2" for why the boundary is
-there. Stage 3 remains, and #133 still needs it: `Node.neighbors` is `mut`, so
-the motivating program is refused at the freeze site. Proposes a
+explicit-`par` admission, auto-par admission), **stage 2 LANDED for PLACES**
+— projection through field access, indexing, and tuple indexing is sticky, so
+a recursive traversal of a `shared` graph compiles and runs from several `par`
+branches (measured 3.7x wall on 4 cores) — and **stage 2.5 LANDED for
+BINDINGS**: `let k = n.kids[i]` is now a non-counting alias rather than a
+materialised handle, so the natural spelling of a traversal compiles too. See
+§ "Stage 2.5", which also corrects stage 2's sizing of that work — it is not
+mechanism 1 for a parameter-rooted place. Stage 3 remains, and #133 still
+needs it: `Node.neighbors` is `mut`, so the motivating program is refused at
+the freeze site. Proposes a
 language-surface addition, so adopting it into [`docs/design.md`](../design.md)
 is the owner's step — this document exists to make the call concrete enough to
 accept, reject, or amend, and to record why the alternatives lose. Build log
@@ -119,9 +121,12 @@ Each stage is independently useful and independently testable.
    and it is the bulk of the type-checker work. **LANDED for places** (see
    § "Stage 2") — and it turned out *not* to be type-checker work at all: the
    place walk is answered structurally from `struct_info`, in the escape
-   checker, with no type-level mode and no `TypeKind::Frozen`. The
-   binding half is deferred and belongs to mechanism 1, for the reason the
-   measurement gives.
+   checker, with no type-level mode and no `TypeKind::Frozen`. The ~~binding
+   half is deferred and belongs to mechanism 1, for the reason the measurement
+   gives~~ — **wrong, and landed as stage 2.5**: for a place rooted at a
+   `frozen` parameter the owner needs no analysis at all, so the retain could
+   simply be removed. Mechanism 1 is what the *general* case needs, not this
+   one.
 3. **Freezing a `mut`-bearing type** — the deep-immutability check at the freeze
    site. #133 needs this too (`Node.neighbors` is `mut`), but it is separable
    from stage 2 and much smaller.
