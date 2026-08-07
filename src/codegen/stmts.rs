@@ -4918,8 +4918,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
                             {
-                                for (outer_enum, outer_variant, inner_enum, inner_variant) in
-                                    &nested
+                                for (
+                                    outer_enum,
+                                    outer_variant,
+                                    inner_enum,
+                                    inner_variant,
+                                    deeper,
+                                ) in &nested
                                 {
                                     // BOX-ONLY, for the reason
                                     // `user_enum_boxed_payload_variants` gives
@@ -4941,6 +4946,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         outer_variant,
                                         inner_enum,
                                         inner_variant,
+                                        deeper.clone(),
                                     );
                                 }
                             }

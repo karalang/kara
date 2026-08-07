@@ -1002,6 +1002,13 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Index of the outer struct field at which the inner enum's TAG
         /// lives. The inner enum's box word is the field after it.
         inner_tag_field: u32,
+        /// Tags of the further ENVELOPE boxes below this one, outermost first
+        /// — empty for the single-box shape. B-2026-08-07-2 shape 4: each
+        /// level's box holds an enum whose own payload is boxed again, and
+        /// freeing only the first leaks the rest. See
+        /// `nested_box_deeper_tag_chain` for why walking envelopes is safe
+        /// where walking the interior is not.
+        deeper_tags: Vec<u64>,
     },
     /// User-source `defer { ... }` block to compile at scope exit.
     /// Pushed in program order at the `defer` statement's site; drained

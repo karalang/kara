@@ -3288,10 +3288,80 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Option[Option[Option[i64]]]` is still 4 words, so the extra nesting adds
     /// a box INSIDE the box rather than a second inline word to walk, and that
     /// interior belongs to the boxed payload's own drop.
+    /// Generic argument `i` of a `Path` type, or `None` for any other shape.
+    /// Local to the nested-box walks below, which repeatedly need "the payload
+    /// type of this `Option`" and would otherwise each re-open the same
+    /// `TypeKind::Path` / `GenericArg::Type` match.
+    fn path_generic_arg(te: &TypeExpr, i: usize) -> Option<&TypeExpr> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        match p.generic_args.as_ref()?.get(i)? {
+            GenericArg::Type(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// The tags of the ENVELOPE boxes below the one
+    /// [`Self::nested_boxed_enum_payload_variants`] names, outermost first.
+    /// B-2026-08-07-2 shape 4.
+    ///
+    /// `Result[Option[Option[Option[i64]]], E]` boxes twice: the `Ok` payload
+    /// is inline in Result's 5-word area, its own 4-word payload is boxed, and
+    /// what THAT box holds is another `Option` whose 4-word payload is boxed
+    /// again. The two-tag walk frees the first envelope and the second leaked —
+    /// 32 B per construction, growing by one box per level (a quadruple nest
+    /// measured 320 B definitely lost plus 320 B indirectly).
+    ///
+    /// ENVELOPES ONLY, which is what makes this safe where widening the free to
+    /// the payload's drop was measured wrong. An envelope is minted by
+    /// `coerce_to_payload_words` and is never named by the source program, so
+    /// no match arm can bind one out and no other action can own one. The
+    /// INTERIOR is the opposite — a `String` an arm binds out has an owner
+    /// already — and this still does not touch it. The `-> i64` chain terminus
+    /// below is exactly that boundary: the walk stops at the first payload that
+    /// fits its area, because that payload is a value, not an envelope.
+    ///
+    /// Bounded rather than trusting the type to be finite: a recursive type
+    /// alias would otherwise spin here, and no real chain is deeper than two.
+    pub(super) fn nested_box_deeper_tag_chain(&self, boxed_contents: &TypeExpr) -> Vec<u64> {
+        let mut out = Vec::new();
+        let mut cur = boxed_contents;
+        for _ in 0..8 {
+            let Some((enum_lit, variant, _)) =
+                self.boxed_enum_payload_variants(cur).into_iter().next()
+            else {
+                break;
+            };
+            if enum_lit != "Option" {
+                break;
+            }
+            let Some(tag) = self
+                .enum_layouts
+                .get(enum_lit)
+                .and_then(|l| l.tags.get(variant).copied())
+            else {
+                break;
+            };
+            let Some(next) = Self::path_generic_arg(cur, 0) else {
+                break;
+            };
+            out.push(tag);
+            cur = next;
+        }
+        out
+    }
+
     pub(super) fn nested_boxed_enum_payload_variants(
         &self,
         te: &TypeExpr,
-    ) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
+    ) -> Vec<(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        Vec<u64>,
+    )> {
         let TypeKind::Path(p) = &te.kind else {
             return vec![];
         };
@@ -3329,7 +3399,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if inner_enum != "Option" {
                     continue;
                 }
-                out.push((outer_lit, *variant, inner_enum, inner_variant));
+                // B-2026-08-07-2 shape 4 — what the box CONTAINS may be another
+                // boxing enum, and freeing only the outermost envelope leaks
+                // every one below it. The box holds `arg`'s own payload, so the
+                // chain is measured from there.
+                let deeper = Self::path_generic_arg(arg, 0)
+                    .map(|inner| self.nested_box_deeper_tag_chain(inner))
+                    .unwrap_or_default();
+                out.push((outer_lit, *variant, inner_enum, inner_variant, deeper));
             }
         }
         out

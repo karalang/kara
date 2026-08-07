@@ -35635,6 +35635,121 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-2 shape 4 — a box inside a box. The nested-box action freed
+    /// the OUTERMOST envelope and every one below it leaked.
+    ///
+    /// `Result[Option[Option[Option[i64]]], E]` boxes twice: the `Ok` payload is
+    /// inline in Result's 5-word area, its own 4-word payload is boxed, and what
+    /// THAT box holds is another `Option` whose 4-word payload is boxed again.
+    /// One box per level below the first leaked — 32 B for the triple nest, and
+    /// the quadruple arm below measured 320 B definitely lost PLUS 320 B
+    /// indirectly lost pre-fix, which is the signature of a chain rather than a
+    /// single miss.
+    ///
+    /// WHY WALKING THE CHAIN IS SAFE where widening the free to the payload's
+    /// drop was measured wrong (B-2026-08-06-32 aborted with a glibc double free
+    /// at both opt levels doing that). Every level here is an ENVELOPE minted by
+    /// `coerce_to_payload_words`. An envelope is never named by the source
+    /// program, so no match arm can bind one out and no other action can own
+    /// one. The INTERIOR is the opposite — a `String` an arm binds out already
+    /// has an owner — and the walk still does not touch it. The `tristr` arm is
+    /// that boundary as an assertion: it binds the `String` out from the bottom
+    /// of a two-envelope chain, so if the walk ever reached past the envelopes
+    /// it would double-free there.
+    ///
+    /// ORDER IS THE OTHER HALF. The pointer to the next envelope lives INSIDE
+    /// the current one, so each level loads its successor BEFORE freeing itself;
+    /// freeing on the way down and reading afterwards is a use-after-free. The
+    /// emitter descends first and frees on the join.
+    ///
+    /// The `duo` arm is the empty-chain control — `Result[Option[Option[i64]],
+    /// E]` has exactly one envelope and must stay at exactly one free. The
+    /// `Ok(Some(None))`, `Ok(None)` and `Err` arms are the guard controls: each
+    /// leaves some level's words holding a value rather than a pointer, and a
+    /// missing tag or null check frees a scalar.
+    ///
+    /// COVERAGE: pre-fix this leaks 5,120 B in 160 blocks plus 1,280 B in 40
+    /// blocks indirectly at `KARAC_OPT_LEVEL=0`, and is CLEAN at the default
+    /// `-O2` where the boxes fold away — so the memory half rides entirely on
+    /// the `-O0` leg (`scripts/asan-o0-leg.sh`, B-2026-08-04-17). The `-O2` run
+    /// still asserts the accumulated value and the allocation floor.
+    ///
+    /// The expected value is COMPUTED: payloads are seeded from the opaque
+    /// `env.args().len()`; five arms subtract the seed back out to leave `i`,
+    /// the String arm contributes 1 and the two payload-absent arms -1 each —
+    /// `5i - 1` per iteration, so `5 * (0+…+39) - 40 = 3860`.
+    #[test]
+    fn asan_nested_box_chain_frees_every_envelope() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn tri(r: Result[Option[Option[Option[i64]]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(Option.Some(x)))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn quad(r: Result[Option[Option[Option[Option[i64]]]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(Option.Some(Option.Some(x))))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn duo(r: Result[Option[Option[i64]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(x))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn tristr(r: Result[Option[Option[Option[String]]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(Option.Some(s)))) => if s.len() > 0 { 1 } else { 0 },
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Result[Option[Option[Option[i64]]], i64] = Result.Ok(Option.Some(Option.Some(Option.Some(n + i))));
+        acc = acc + tri(a) - n;
+
+        let b: Result[Option[Option[Option[Option[i64]]]], i64] = Result.Ok(Option.Some(Option.Some(Option.Some(Option.Some(n + i)))));
+        acc = acc + quad(b) - n;
+
+        acc = acc + tri(Result.Ok(Option.Some(Option.Some(Option.Some(n + i))))) - n;
+
+        let c: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + duo(c) - n;
+
+        let d: Result[Option[Option[Option[i64]]], i64] = Result.Ok(Option.Some(Option.None));
+        acc = acc + tri(d);
+
+        let e1: Result[Option[Option[Option[i64]]], i64] = Result.Ok(Option.None);
+        acc = acc + tri(e1);
+
+        let g: Result[Option[Option[Option[i64]]], i64] = Result.Err(n + i);
+        acc = acc + tri(g) - n;
+
+        let s = f"p{n + i}";
+        let h: Result[Option[Option[Option[String]]], i64] = Result.Ok(Option.Some(Option.Some(Option.Some(s))));
+        acc = acc + tristr(h);
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["3860"],
+            "nested_box_chain_frees_every_envelope",
+            30,
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words

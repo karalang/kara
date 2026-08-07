@@ -2046,7 +2046,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // is returned or forwarded keeps no registration, so the
                     // terminal consumer stays the only owner (B-2026-08-05-7's
                     // argument, reused).
-                    for (outer_enum, outer_variant, inner_enum, inner_variant) in
+                    for (outer_enum, outer_variant, inner_enum, inner_variant, deeper) in
                         self.nested_boxed_enum_payload_variants(&mono_ty)
                     {
                         self.track_nested_boxed_enum_var(
@@ -2056,6 +2056,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             outer_variant,
                             inner_enum,
                             inner_variant,
+                            deeper,
                         );
                     }
                 }

@@ -1630,6 +1630,7 @@ impl<'ctx> super::Codegen<'ctx> {
         outer_variant: &str,
         inner_enum: &str,
         inner_variant: &str,
+        deeper_tags: Vec<u64>,
     ) {
         let Some(outer) = self.enum_layouts.get(outer_enum) else {
             return;
@@ -1658,6 +1659,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 outer_tag,
                 inner_tag,
                 inner_tag_field: 1,
+                deeper_tags,
             });
         }
         // Armed for the passthrough rule only — deliberately NOT
@@ -6615,6 +6617,95 @@ impl<'ctx> super::Codegen<'ctx> {
     /// early-return cleanup) and top-frame drain (per-match-arm cleanup at
     /// `drain_top_frame_with_emit`). Signature takes pre-computed type
     /// handles so the caller hoists them out of inner loops.
+    /// Free `box_ptr` and every ENVELOPE box reachable below it, deepest last.
+    /// B-2026-08-07-2 shape 4.
+    ///
+    /// Order is the whole content of this function. The pointer to the next
+    /// envelope LIVES INSIDE the current one, so each level must load its
+    /// successor BEFORE freeing itself — freeing on the way down and reading
+    /// afterwards is a use-after-free, which is how this family's mistakes
+    /// usually present. So the recursion descends first and the `free` for a
+    /// level is emitted on the join, after every path through the level below
+    /// has converged.
+    ///
+    /// Both guards from the two-tag walk repeat per level and for the same
+    /// reasons: a tag that is not the boxing variant leaves the payload words
+    /// holding a value rather than a pointer, and a null word means the
+    /// envelope was never minted. Either miss frees a scalar.
+    fn emit_nested_box_chain_free(
+        &self,
+        fn_val: inkwell::values::FunctionValue<'ctx>,
+        box_ptr: PointerValue<'ctx>,
+        deeper_tags: &[u64],
+        name: &str,
+    ) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        if let Some((tag, rest)) = deeper_tags.split_first() {
+            // The box holds a flattened `{tag, w0, ...}` enum value, so the
+            // tag is element 0 and the next envelope's pointer element 1 —
+            // the same index arithmetic the outer walk uses, one indirection
+            // down.
+            let load_word = |idx: u64, label: &str| unsafe {
+                let p = self
+                    .builder
+                    .build_in_bounds_gep(
+                        i64_t,
+                        box_ptr,
+                        &[i64_t.const_int(idx, false)],
+                        &format!("{name}_chain_{label}_ptr"),
+                    )
+                    .unwrap();
+                self.builder
+                    .build_load(i64_t, p, &format!("{name}_chain_{label}"))
+                    .unwrap()
+                    .into_int_value()
+            };
+            let descend_bb = self.context.append_basic_block(fn_val, "nboxchain_descend");
+            let free_bb = self.context.append_basic_block(fn_val, "nboxchain_free");
+
+            let t = load_word(0, "tag");
+            let is_variant = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    t,
+                    i64_t.const_int(*tag, false),
+                    &format!("{name}_chain_is"),
+                )
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_variant, descend_bb, free_bb)
+                .unwrap();
+
+            self.builder.position_at_end(descend_bb);
+            let w = load_word(1, "w0");
+            let next = self
+                .builder
+                .build_int_to_ptr(w, ptr_ty, &format!("{name}_chain_ptr"))
+                .unwrap();
+            let is_null = self
+                .builder
+                .build_is_null(next, &format!("{name}_chain_isnull"))
+                .unwrap();
+            let rec_bb = self.context.append_basic_block(fn_val, "nboxchain_rec");
+            self.builder
+                .build_conditional_branch(is_null, free_bb, rec_bb)
+                .unwrap();
+
+            self.builder.position_at_end(rec_bb);
+            self.emit_nested_box_chain_free(fn_val, next, rest, name);
+            self.builder.build_unconditional_branch(free_bb).unwrap();
+
+            self.builder.position_at_end(free_bb);
+        }
+        // Reached on every path, including the two guard failures above: this
+        // box exists and is ours regardless of what it turned out to contain.
+        self.builder
+            .build_call(self.free_fn, &[box_ptr.into()], "")
+            .unwrap();
+    }
+
     pub(super) fn emit_cleanup_action(
         &self,
         action: &CleanupAction<'ctx>,
@@ -8381,6 +8472,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 outer_tag,
                 inner_tag,
                 inner_tag_field,
+                deeper_tags,
             } => {
                 // Two tag guards, outer then inner. Both are load-bearing: the
                 // outer one keeps an `Err(3)` from having its Ok-side words
@@ -8452,9 +8544,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // BOX-ONLY: no inner drop. The interior already has an owner
                 // (a match arm that binds it out), and running its drop here
                 // double-frees — measured. See `track_nested_boxed_enum_var`.
-                self.builder
-                    .build_call(self.free_fn, &[box_ptr.into()], "")
-                    .unwrap();
+                //
+                // `deeper_tags` is the ENVELOPE chain below this box, and
+                // walking it is not a widening of the box-only rule but an
+                // application of it: every level is a `coerce_to_payload_words`
+                // envelope the source program cannot name, so no arm can own
+                // one. The interior stays untouched at every depth.
+                self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, name);
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
             }
