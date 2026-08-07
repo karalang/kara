@@ -1988,30 +1988,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
-                // B-2026-08-06-31 — a binding whose box carries a user STRUCT
-                // interior keeps its cleanup across a by-value call. The
-                // whole-slot zero below is a MOVE, and it only balances when
-                // some other frame takes the box over; for this payload class
-                // nobody does. B-2026-08-06-9 leg A gave the callee the box for
-                // NON-struct payloads precisely because admitting struct ones
-                // double-frees the three fixtures named on that row, so here
-                // the caller is the only owner there is and zeroing the slot
-                // stranded 32 B of box plus the whole interior per call.
-                //
-                // A callee arm that moves the payload (or a field of it) out is
-                // still safe, and NOT because of anything here: it neutralizes
-                // through the box's own words (B-2026-08-06-10's mirror, which
-                // is gated on exactly this owned-param shape). That is the same
-                // contract the FieldAccess sibling below already depends on —
-                // `place_optres_field_whole_move_info` refuses a boxed payload,
-                // leaving `nd.hp` armed, and `f(nd.hp)` is clean because of it.
-                let boxed_struct_binding = matches!(
-                    &a.value.kind,
-                    ExprKind::Identifier(n) if self.boxed_struct_payload_vars.contains(n.as_str())
-                );
-                if !boxed_struct_binding {
-                    self.suppress_inline_option_result_binding_move(&a.value);
-                }
+                self.suppress_inline_option_result_binding_move(&a.value);
                 // B-2026-07-28-16 — the same move, but from a FIELD rather than
                 // a binding: `consume(nd.hp)` where `nd` is an owned struct with
                 // an `Option`/`Result` field. The suppressor above is
@@ -2169,10 +2146,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// boxed non-struct `Option` payload, so keeping this arm for those would
     /// free the same box twice. Which frame owns a boxed STRUCT payload is
     /// decided by the ARGUMENT FORM, not by the callee — a `FieldAccess`
-    /// (`f(nd.hp)`) leaves the owning struct's field drop in charge, a named
-    /// binding keeps its let-site drop (see the arg-site skip that consults
-    /// `boxed_struct_payload_vars`), and a FRESH TEMP has neither, which is what
-    /// this arm exists for.
+    /// (`f(nd.hp)`) leaves the owning struct's field drop in charge, and a
+    /// FRESH TEMP has no owner at all, which is what this arm exists for. The
+    /// NAMED-binding form has neither owner today and still leaks its box;
+    /// the obvious repair (leave the binding armed instead of zeroing its slot
+    /// as a move) is REFUTED — see B-2026-08-06-31.
     pub(super) fn owned_boxed_option_param_struct(&self, name: &str, i: usize) -> Option<String> {
         let flagged = |table: &HashMap<String, Vec<bool>>| {
             table

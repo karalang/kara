@@ -1564,14 +1564,6 @@ impl<'ctx> super::Codegen<'ctx> {
             payload_variant,
             inner_drop_fn,
         );
-        // B-2026-08-06-31 — remember that this binding's box carries a user
-        // STRUCT interior, which is the population the callee-side registration
-        // (B-2026-08-06-9 leg A) deliberately excludes. A by-value call must
-        // therefore leave this binding armed rather than zero its slot as a
-        // move; see the arg-site skip in `call_dispatch.rs`.
-        if inner_struct_name.is_some() && inner_drop_fn.is_some() {
-            self.boxed_struct_payload_vars.insert(name.to_string());
-        }
     }
 
     /// Peer of [`track_boxed_enum_var`] that takes the boxed payload's inner

@@ -1214,19 +1214,6 @@ pub(super) struct Codegen<'ctx> {
     /// destination still references downstream → UAF (selfhost slice 3c-iv:
     /// `TraitMethodNode { body, .. }` for `let mut body = Some(parse_block())`).
     pub(crate) boxed_enum_payload_vars: std::collections::HashSet<String>,
-    /// B-2026-08-06-31 — the subset of [`Self::boxed_enum_payload_vars`] whose
-    /// box carries a user STRUCT interior (`track_boxed_enum_var` was given an
-    /// `inner_struct_name` and resolved a `__karac_drop_struct_<T>` for it).
-    ///
-    /// That is exactly the population B-2026-08-06-9 leg A's callee-side
-    /// registration excludes, so for these bindings the CALLER remains the
-    /// box's only possible owner across a by-value call and the arg site must
-    /// not zero the slot as a move. The callee's match arm still neutralizes
-    /// whatever it moves out, through the box's own words — B-2026-08-06-10's
-    /// mirror, which is the same contract the FieldAccess arg path already
-    /// relies on (`suppress_place_optres_field_whole_move_source` refuses a
-    /// boxed payload for this reason and is clean because of it).
-    pub(crate) boxed_struct_payload_vars: std::collections::HashSet<String>,
     /// Refinement type alias name → its base `TypeExpr` (`type Email =
     /// String where …` → the `String` type expr). Populated from the
     /// program's `Item::TypeAlias`es that carry a `where` predicate.
@@ -7765,7 +7752,6 @@ impl<'ctx> Codegen<'ctx> {
             inline_option_map_payload_vars: std::collections::HashSet::new(),
             inline_option_agg_payload_vars: std::collections::HashSet::new(),
             boxed_enum_payload_vars: std::collections::HashSet::new(),
-            boxed_struct_payload_vars: std::collections::HashSet::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),
             plain_alias_bases: HashMap::new(),

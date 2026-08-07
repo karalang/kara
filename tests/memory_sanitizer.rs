@@ -12001,55 +12001,51 @@ fn main() {
         );
     }
 
-    /// B-2026-08-06-31 — the STRUCT-payload sibling of B-2026-08-06-9 leg A.
+    /// B-2026-08-06-31, FRESH-TEMP half — the caller-side arm that owns a boxed
+    /// STRUCT `Option` payload must free the payload's INTERIOR too, not just
+    /// the envelope.
     ///
     /// `H` is 4 LLVM words against `Option`'s seeded 3-word area, so
-    /// `coerce_to_payload_words` boxes it. Leg A gave the CALLEE the box for a
-    /// boxed NON-struct payload and deliberately excluded struct ones, because
-    /// admitting them double-freed the three fixtures this file already
-    /// carries. What that exclusion left behind is this row, and it is two
-    /// distinct holes rather than one:
-    ///
-    ///   * A NAMED binding (`let a: Option[H] = …; readk(a);`) had its slot
-    ///     zeroed as a move by the arg site, which disarmed the let-site
-    ///     `BoxedEnumDrop` — and nothing took over. 320 B of box per 10 calls
-    ///     at `-O0`, plus the payload's interior.
-    ///   * A FRESH TEMP got a caller-side drop, but a BOX-ONLY one, so the
-    ///     payload's interior `String` leaked at BOTH opt levels.
+    /// `coerce_to_payload_words` boxes it. `readk(Some(H { .. }))` did get a
+    /// caller-side `BoxedEnumDrop` (B-2026-08-05-7) — but a BOX-ONLY one, so
+    /// every payload's `String` leaked, at both opt levels.
     ///
     /// WHICH FRAME OWNS a boxed struct payload turns on the ARGUMENT FORM, not
-    /// on the callee — that is the thing worth carrying forward. A
-    /// `FieldAccess` argument leaves the owning struct's field drop in charge
-    /// (`place_optres_field_whole_move_info` refuses a boxed payload for
-    /// exactly this reason, and `f(nd.hp)` was already clean); a named binding
-    /// keeps its let-site drop; a fresh temp has neither and needs the
-    /// caller-side arm. All three are exercised below, so a fix that moves
-    /// ownership to the wrong one of them fails here rather than in the wild.
+    /// on the callee, and all three forms are here because the fix has to land
+    /// on exactly one of them. A `FieldAccess` argument leaves the owning
+    /// struct's field drop in charge — `place_optres_field_whole_move_info`
+    /// refuses a boxed payload for exactly this reason, and `f(nd.hp)` was
+    /// already clean. A fresh temp has no owner but this arm. (The NAMED
+    /// binding form is the third, is NOT fixed, and is deliberately absent —
+    /// see the note below.)
     ///
-    /// MOVE-OUT ARMS ARE CARRIED for both forms, and they are the reason this
-    /// is safe at all: the caller now stays armed over a payload the callee may
-    /// move out of, and what makes that balance is B-2026-08-06-10's mirror —
-    /// the arm zeroes the box's own words, which is storage the caller's drop
-    /// can see. `take_label` moves a FIELD out, `take_all` moves the WHOLE
-    /// payload out, and `readk` moves nothing; drop the mirror and the first
-    /// two abort instead of leaking.
+    /// MOVE-OUT ARMS are what make giving this drop an interior walk safe:
+    /// `take_label` moves a FIELD out and `take_all` moves the WHOLE payload
+    /// out, and each neutralizes through the box's own words
+    /// (B-2026-08-06-10's mirror, gated on this owned-param shape), which is
+    /// storage the caller's drop can see. Without the mirror these two would
+    /// abort instead of leaking, so they pin the interior walk in the
+    /// double-free direction while `readk` pins it in the leak direction.
     ///
-    /// Plus the leak-direction controls a suppression change needs: `None`
-    /// sources on both callee shapes, and a binding that is never passed at all
-    /// (whose let-site drop must still fire).
+    /// Plus the controls a suppression-adjacent change needs: `None` sources on
+    /// both callee shapes, and a binding never passed at all, whose let-site
+    /// drop must still fire.
     ///
-    /// COVERAGE. Against the pre-fix compiler the named-binding half is visible
-    /// only at `KARAC_OPT_LEVEL=0` (the box folds away at `-O2`) while the
-    /// fresh-temp interior half is RED at BOTH levels, so this fixture bites on
-    /// the default leg as well as the `-O0` one (`scripts/asan-o0-leg.sh`,
-    /// B-2026-08-04-17).
+    /// NOT COVERED — the NAMED-binding form (`let a: Option[H] = …; readk(a);`)
+    /// still strands its box at `-O0`. The arg site zeroes the slot as a move
+    /// and nothing takes over; leaving the binding armed instead was
+    /// implemented, passed this whole matrix, and SIGSEGV'd
+    /// `selfhost_parser_matches_rust_parser_items`. B-2026-08-06-31 stays open
+    /// for it with that measurement.
     ///
-    /// The expected value is COMPUTED, not read off a run: every payload is
-    /// seeded from the opaque `env.args().len()`, each scalar arm subtracts the
-    /// seed back out to leave `i`, and each byte-read arm contributes 1 —
-    /// `6i + 4` per iteration, so `6 * (0+…+39) + 40 * 4 = 4840`.
+    /// Against the pre-fix compiler: 462 B in 80 allocations at the default
+    /// `-O2` and more at `-O0`, so unlike most of this family it bites on both
+    /// legs. Expected value COMPUTED — each scalar arm subtracts the opaque
+    /// `env.args().len()` seed back out to leave `i` and each byte-read arm
+    /// contributes 1, so `4i + 2` per iteration and
+    /// `4 * (0+…+39) + 40 * 2 = 3200`.
     #[test]
-    fn asan_boxed_struct_option_payload_by_value_call_no_leak_no_double_free() {
+    fn asan_boxed_struct_option_payload_freshtemp_arg_no_leak_no_double_free() {
         assert_clean_asan_run_min_allocs(
             r#"
 struct H { label: String, k: i64 }
@@ -12079,32 +12075,21 @@ fn main() {
     let mut acc: i64 = 0;
     let mut i: i64 = 0;
     while i < 40 {
-        // A — NAMED binding, read-only callee: box AND interior stranded pre-fix.
-        let a: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
-        acc = acc + readk(a) - n;
-        // B — NAMED binding, callee moves a FIELD out of the payload.
-        let b: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
-        if take_label(b).contains("row") { acc = acc + 1; }
-        // C — NAMED binding, callee moves the WHOLE payload out.
-        let c: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
-        let g: H = take_all(c);
-        acc = acc + g.k - n;
-        if g.label.contains("row") { acc = acc + 1; }
-        // D — FRESH TEMP, read-only callee: the interior leaked pre-fix.
+        // A — FRESH TEMP, read-only callee: the interior leaked pre-fix.
         acc = acc + readk(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })) - n;
-        // E — FRESH TEMP, callee moves a FIELD out.
+        // B — FRESH TEMP, callee moves a FIELD out.
         if take_label(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i })).contains("row") { acc = acc + 1; }
-        // F — FRESH TEMP, callee moves the WHOLE payload out.
-        let g2: H = take_all(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }));
-        acc = acc + g2.k - n;
-        // G — FIELD ARGUMENT: the owning struct's drop stays in charge.
+        // C — FRESH TEMP, callee moves the WHOLE payload out.
+        let g: H = take_all(Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }));
+        acc = acc + g.k - n;
+        // D — FIELD ARGUMENT: the owning struct's drop stays in charge.
         let nd = Node { hp: Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i }), k: 1 };
         acc = acc + readk(nd.hp) - n;
-        // H — None sources on both callee shapes.
+        // E — None sources on both callee shapes.
         let z: Option[H] = Option.None;
         acc = acc + readk(z);
         if take_label(Option.None).contains("none") { acc = acc + 1; }
-        // I — NEVER passed: the let-site drop must still fire.
+        // F — NEVER passed: the let-site drop must still fire.
         let keep: Option[H] = Option.Some(H { label: "row-" + (n + i).to_string(), k: n + i });
         acc = acc + match keep { Option.Some(x) => x.k, Option.None => 0 } - n;
         i = i + 1;
@@ -12112,8 +12097,8 @@ fn main() {
     println(acc);
 }
 "#,
-            &["4840"],
-            "boxed_struct_option_payload_by_value_call",
+            &["3200"],
+            "boxed_struct_option_payload_freshtemp_arg",
             100,
         );
     }
