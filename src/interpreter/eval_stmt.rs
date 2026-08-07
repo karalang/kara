@@ -2936,16 +2936,15 @@ impl<'a> super::Interpreter<'a> {
                                 // the buffer with no body walk. Skipped when the
                                 // binding already moved its value out, matching
                                 // the guard the other arms use.
-                                Value::Array(ref rc) => {
+                                Value::Array(ref rc)
                                     if !self
                                         .moved_out_container_bodies_bindings
-                                        .contains(t.as_str())
-                                    {
-                                        let elems: Vec<Value> =
-                                            rc.read().map(|g| g.clone()).unwrap_or_default();
-                                        for e in elems {
-                                            self.run_discarded_value_user_drops(e);
-                                        }
+                                        .contains(t.as_str()) =>
+                                {
+                                    let elems: Vec<Value> =
+                                        rc.read().map(|g| g.clone()).unwrap_or_default();
+                                    for e in elems {
+                                        self.run_discarded_value_user_drops(e);
                                     }
                                 }
                                 _ => {}
