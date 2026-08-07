@@ -75,7 +75,7 @@
 # what the fixture's remaining 64 B turned out to be, a second leak of exactly
 # the same size hiding behind the first).
 
-# B-2026-08-07-11 — asan_struct_field_boxed_payload_interior_match_out_no_double_free
+# B-2026-08-07-12 — asan_struct_field_boxed_payload_interior_match_out_no_double_free
 #
 # ADDED 2026-08-07 under B-2026-08-07-7, RE-ATTRIBUTED the same day once that
 # row's own residue was fixed and the line did not go away. Both halves of the
@@ -96,7 +96,7 @@
 # by-value calls per iteration orphans the CALLER's box, because the callee's
 # entry copy duplicates the box and shares the `String` inside it. That
 # reproduces with a non-consuming arm, with a callee whose body is `1`, and with
-# c25c949 stashed. It is B-2026-08-07-11, and it is what this line now waits on.
+# c25c949 stashed. It is B-2026-08-07-12, and it is what this line now waits on.
 #
 # The lesson for the next attribution: a fixture written to exercise one row can
 # fail for a second row's reason, and "my fix should have emptied this line" is

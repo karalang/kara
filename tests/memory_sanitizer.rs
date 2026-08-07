@@ -36300,7 +36300,7 @@ fn main() {
     /// SEPARATE FROM THE SIBLING FIXTURE ON PURPOSE, and the separation is the
     /// measurement. That one passes its `W` BY VALUE to a callee, which orphans
     /// the CALLER's envelope for an unrelated reason (the callee's entry copy
-    /// duplicates the box and shares the interior, B-2026-08-07-11) — so it
+    /// duplicates the box and shares the interior, B-2026-08-07-12) — so it
     /// stays quarantined on the -O0 leg and could never witness this fix. Every
     /// `W` here is a local place matched in the same frame, which isolates the
     /// envelope to exactly one owner question.
