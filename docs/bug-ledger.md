@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 87 | 0 |
 | missing-feature | 81 | 1 |
 | false-positive | 56 | 0 |
-| perf | 53 | 3 |
+| perf | 54 | 3 |
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
@@ -110,37 +110,37 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 723 | 6 |
+| codegen | 724 | 6 |
 | interp | 127 | 0 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | other | 28 | 0 |
 | cli | 28 | 0 |
-| runtime | 21 | 1 |
+| runtime | 21 | 0 |
 | resolver | 18 | 0 |
 | parser | 12 | 0 |
 | lexer | 4 | 0 |
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced · 7 open · 978 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **996 surfaced · 7 open · 979 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
-| B-2026-08-05-5 | 2026-08-04 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled. The key-type gate this row prescribed is REFUTED on x86 by a tag-only A/B: dropping the tag on kata:170 `Map[i64,i64]` executes 13.1% FEWER instructions and runs 1.20x SLOWER (3763.7 -> 4513.2 ms), because the tag rejects a bucket without touching its key while removing it costs a kv load per occupied bucket. The i64-vs-String pair that decided the old shape straddles TWO implementations (`should_use_mono_map_for` admits only i32/i64 keys, so kata:170 is the inlined mono path and kata:127 the erased runtime path), so it never isolated key type. Holding path and key type FIXED, x86 gains 20% from the tag and arm64 loses 27% -- an ISA effect, which reinstates the arch framing this row had retired. Arch-conditional is the surviving candidate and is UNVALIDATED. Separately, arm64 never received the 1.28x x86 speedup in b7ba6ea4..a42b5338. | PARTIALLY FIXED 2026-08-06 by the tag-compare gate (src/codegen/mono.rs::map_tag_compare). STILL OPEN on the RESIDUAL, which is now ATTRIBUTED BY MEASUREMENT and NOT to 58412d9f: at that commit the non-tag half costs ~0 once its occupancy test is written in the flag form (770 ms vs the parent's 769 ms), so the live ~1.11x belongs to the ~800 commits AFTER it and that interval is unbisected. Endpoints verified 770 ms / 855 ms with the test form held constant. Follow-on: B-2026-08-06-33 (x86 primitive-key sign). |
 | B-2026-08-05-34 | 2026-08-05 | codegen | medium | PERF-REGRESSION, corpus figure LARGELY ARTIFACT, real signal BISECTED to a12a1a69 (narrow-int arithmetic traps at declared width, 2026-06-09): the 1.18x seq-lane median does not survive audit (3 katas compare CHANGED workloads, the 'current' side is a rolling accumulation, and on 10 of 32 katas the C/Rust mirrors moved 1.2x-1.7x too), but underneath it a real codegen cost is confirmed on arm64 -- #9 palindrome 1.123x and #8 atoi 1.059x across that ONE commit, with #11 container (1 narrow int) FLAT as the negative control; it is a CORRECTNESS fix, so the follow-on is to optimize the check (B-2026-08-05-38), not revert it | BISECTED 2026-08-05 on arm64 to a12a1a69 (parent 7896db16); git bisect run path-limited to src+runtime, 11 steps, ratio-vs-base decision, sinks checked throughout. #9 fully attributed (1.123x of a 1.124x endpoint); #8 partially (1.059x of 1.113x, ~1.05x residual UNCHASED). Optimization follow-on filed as B-2026-08-05-38. Open: confirm on x86 (likely NOT arm64-specific); the corpus join remains unsafe as written and the baseline absolutes still do not reproduce at 218dd7d7. |
 | B-2026-08-06-33 | 2026-08-06 | codegen | medium | the x86_64 sign for DROPPING the map hash-tag compare on PRIMITIVE keys is disputed between two container lanes (1.20x slower vs 2.0% faster) -- which is the only reason B-2026-08-05-5's fix is arch-conditional instead of a plain key-type gate | src/codegen/mono.rs::map_tag_compare (the `!self.target_is_aarch64` arm) |
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. FIXED: no binding (fresh temp), `Vec.push` (the only -O2 leak), escape-by-return, and the BOX-INSIDE-A-BOX chain. OPEN: a struct between the levels, whose owner is CONTESTED — a fix was implemented and reverted for double-freeing. Shape 6 was never a member of this family | — |
 | B-2026-08-07-7 | 2026-08-07 | codegen | medium | a struct field of type `Option[Option[String]]` DOUBLE-FREED the String at BOTH opt levels when a match arm bound it out -- FIXED (c25c949) by disarming the struct's deep field drop at the arm. The 32 B ENVELOPE now leaks in that case (quarantined), and a sibling shape -- whole payload bound out, destructured in a SECOND match -- still corrupts | — |
 | B-2026-08-07-6 | 2026-08-07 | codegen | low | the DIRECT sibling of the nested-box chain: `Option[Option[Option[i64]]]` with no `Result` wrapper leaks its inner envelope -- `BoxedEnumDrop` frees one box and has no chain | — |
+| B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
 
-### Fixed (978)
+### Fixed (979)
 
-<details><summary>978 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>979 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1073,6 +1073,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-05-2 | codegen | high | A `mut ref` parameter given a TUPLE ELEMENT (`bump(mut t.0)`) does not mutate the element under AOT -- the program then PANICS reading the index the… | 99d27f7 (src/codegen/call_dispatch.rs — a TupleIndex arm in the ref-argument path, sibling to B-2026-07-12-1's FieldAccess arm). ONE arm closes both rows. Pins codegen.rs::e2e_tuple_element_borrowed_in_place_for_ref_params, memory_sanitizer.rs::asan_tuple_element_borrowed_in_place_for_ref_params (floored at 300 against ~800 allocations), interpreter.rs::test_tuple_element_borrowed_in_place_for_ref_params. Both codegen tests are stash-proven RED against the unfixed compiler (E2E panics with `vec index out of bounds`, ASAN reports a memory error); the interpreter twin passes both ways. cargo test --features llvm: 12980 passed, 0 failed. |
 | B-2026-08-05-3 | codegen | medium | `Option[(Vec[T], ...)]` leaks the tuple payload's heap element when the Some arm binds and reads it -- 32 bytes definitely lost; the struct payload t… | f0aadd9 |
 | B-2026-08-05-4 | runtime | high | PERF-REGRESSION introduced by B-2026-07-31-21's fix (75a3a928): a remove-heavy Map runs 1.76x slower because the same-width compacting rehash re-fire… | 73237002 + 45398dd9 |
+| B-2026-08-05-5 | codegen+runtime | medium | ARM64 perf regression ATTRIBUTED to 58412d9f (7-bit hash tag in the map bucket control byte); FIX SHAPE REOPENED, was wrongly recorded as settled | c4e6d76e (the tag compare); the placement half is B-2026-08-07-10 |
 | B-2026-08-05-14 | codegen | medium | tests/selfhost_codegen.rs (selfhost_codegen_matches_seed_run) is RED on macOS/arm64 for EVERY corpus entry: the self-hosted emitter hardcodes a Linux… | 06a3f683 |
 | B-2026-08-05-6 | codegen | medium | Bounds checks survive in a CALLEE that walks a caller-owned buffer at a caller-chosen offset — `fn f(v: ref Vec[u8], base: i64, len: i64) { while lo… | c87f488 |
 | B-2026-08-05-7 | codegen | high | ~23 heap-ownership shapes emit a DOUBLE FREE; the `ok_or` String Err payload case is CONFIRMED to abort on a DEFAULT -O2 `karac build` as soon as the… | ef9c1b1 + aaadaac + 33f1ca0 + 0965dbc + 103c518 + 0830bbc (leak A) + f380a8f (leak B) — row STAYS OPEN for the remaining 10, all leaks + 5d48b3c + b359f437 (tensor fresh-temp owned arg) + 70c15e83 (boxed Option/Result payload box, both sites) |
