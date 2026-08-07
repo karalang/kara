@@ -955,7 +955,26 @@ whose reachable closure holds a `mut` field, and stage 2's place walk refuses a
 `mut` field at every projection step. #133 needs both relaxed — `Node.neighbors`
 is `mut` *and* is the traversal path — so neither can be relaxed alone.
 
-## Stage 3b: the per-instance freeze — steps 1 and 2 LANDED, step 3 remains
+## Stage 3b: the per-instance freeze — ALL THREE STEPS LANDED
+
+> **#133's shape runs.** All three steps are in: the `freeze` statement's
+> uniqueness proof (step 1), the `frozen` parameter admitted from the caller's
+> freeze (step 2), and the `mut`-field READ through a frozen place (step 3).
+> Measured on a reconstruction — four `par` branches over a `frozen Node`
+> parameter, each cloning the graph and writing its own fresh nodes' `mut`
+> fields: interp / JIT / AOT agree, 20 repeat AOT runs give one output,
+> valgrind clean. **The kata file itself has NOT been run** (the katas repo is
+> not attached here), so "the shape runs" is not yet "the kata passes".
+>
+> **Step 3 was smaller than this document expected, and for a reason worth
+> keeping.** § "1. The projection half needs write-position tracking" predicted
+> enumerating `Assign` / `CompoundAssign` / `mut`-marked-argument /
+> `mut ref self`. Only the ASSIGNMENT half needed enumerating: mutating methods
+> are refused by not being `len`/`is_empty`, so no list of mutators exists to
+> fall out of date. What *did* need enumerating was the `mut`-marked argument,
+> and it was a live hole in the first cut — `bump(mut g.count)` is
+> scalar-shaped and reached the scalar fast path before the `mut_marker` test.
+> Found by probing the channels one at a time, not by reading.
 
 > **Step 2's stated justification was wrong, and the correction matters more
 > than the step.** § "Ordering" item 2 says a `frozen T` parameter "can then
