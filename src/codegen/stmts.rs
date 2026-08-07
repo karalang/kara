@@ -5054,6 +5054,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .insert(var_name.to_string(), src);
                                     }
                                 }
+                                // B-2026-08-07-4 — record PROVENANCE. A box
+                                // acquired by whole-value move from another
+                                // binding shares B-2026-08-05-20's bookkeeping
+                                // with its source and can be released through a
+                                // channel that leaves this slot reading `Some`
+                                // with a stale pointer, so it is excluded from
+                                // the reassignment eager-free. See the field's
+                                // doc for the measured shape.
+                                if matches!(&value.kind, ExprKind::Identifier(_)) {
+                                    self.boxed_moved_in_vars.insert(var_name.to_string());
+                                }
                                 for (enum_name, variant, inner) in &boxed {
                                     let nested_opt_drop = payload_te
                                         .as_ref()
@@ -7725,6 +7736,48 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .unwrap();
                                 }
                             }
+                        }
+                    }
+                    // B-2026-08-07-4 — reassigning a binding whose enum payload
+                    // is heap-BOXED orphaned the OVERWRITTEN value's box. The
+                    // scope-exit action frees whatever the slot holds LAST, so
+                    // N stores leaked N-1 boxes; measured 32 B per overwrite at
+                    // -O0, linear in stores, and identical for the DIRECT and
+                    // NESTED actions (which is why the row's original filing as
+                    // a nested-only shape was wrong). Boxed STRUCT payloads leak
+                    // their whole box too — 40 B for a 5-field one.
+                    //
+                    // Vec/String, Map/Set, struct and Tensor all already free
+                    // eagerly here; this family just had no arm. Same two guards
+                    // as those siblings, and both are load-bearing rather than
+                    // defensive: `b = b` is CLEAN today and freeing first would
+                    // hand the store a dangling pointer, and an RHS that mentions
+                    // the target may have moved the old value into a callee
+                    // (`b = consume(b)`) — uncertain ⇒ leave it leaking, the safe
+                    // direction.
+                    //
+                    // ORDER: last thing before the store, and specifically
+                    // AFTER B-2026-08-02-25's displaced-payload BODIES walk
+                    // just above. That walk reads the old payload through the
+                    // box, so freeing first hands it dangling memory — measured
+                    // as a user Drop body printing a garbage tag
+                    // (`D23080788582` for `D1`). Same bodies-then-memory order
+                    // the Vec eager-free states for its own element walk.
+                    //
+                    // That walk's doc claims the displaced payload's memory is
+                    // "already reclaimed by the untouched FreeInlineOptionPayload
+                    // / BoxedEnumDrop action". True for the INLINE payload it
+                    // was measured on; NOT true for a boxed one, which is this
+                    // row — the scope-exit action reads the slot after the
+                    // store and frees only the last value.
+                    if (self.boxed_enum_payload_vars.contains(name.as_str())
+                        || self.nested_boxed_payload_vars.contains(name.as_str()))
+                        && !self.boxed_moved_in_vars.contains(name.as_str())
+                    {
+                        let self_alias =
+                            matches!(&value.kind, ExprKind::Identifier(rn) if rn == name);
+                        if !self_alias && !crate::deque_head::expr_mentions_name_deep(value, name) {
+                            self.emit_boxed_enum_overwrite_free(name);
                         }
                     }
                     if let Some(slot) = self.variables.get(name).copied() {

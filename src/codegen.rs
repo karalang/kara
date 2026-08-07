@@ -1214,6 +1214,28 @@ pub(super) struct Codegen<'ctx> {
     /// destination still references downstream → UAF (selfhost slice 3c-iv:
     /// `TraitMethodNode { body, .. }` for `let mut body = Some(parse_block())`).
     pub(crate) boxed_enum_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-08-07-4 — boxed-payload bindings that acquired their box by a
+    /// whole-value MOVE from another binding (`let mut vv = value;`) rather
+    /// than from a fresh construction.
+    ///
+    /// Excluded from the reassignment eager-free, because for these the box can
+    /// be released through a channel that leaves the SLOT untouched. Measured:
+    /// `let A { value } = a; let mut vv = value; while let Some(v) = vv {
+    /// consume(v); vv = none(); }` frees the box at the consuming arm, and the
+    /// slot still reads `Some` with a now-stale pointer — so a store-site free
+    /// that trusts the slot double-frees. It is safe WITHOUT the eager free
+    /// only because the store then makes the scope-exit action's tag guard
+    /// skip, which is exactly why the leak this row fixes does not show up
+    /// there either.
+    ///
+    /// The queued action is NOT retracted in that shape (verified by
+    /// instrumentation) and `clear_boxed_enum_inner_drop` never fires for it,
+    /// so neither the cleanup queue nor the inner-drop marker can distinguish
+    /// it — hence a gate on PROVENANCE, which is knowable at the let site. A
+    /// freshly-constructed box has one owner by construction; a moved-in one
+    /// shares B-2026-08-05-20's bookkeeping with its source. Conservative: a
+    /// skip here leaves the pre-existing leak, the safe direction.
+    pub(crate) boxed_moved_in_vars: std::collections::HashSet<String>,
     /// B-2026-08-06-32 — bindings carrying a `NestedBoxedEnumDrop`, i.e. a box
     /// living inside the binding's INLINE payload area
     /// (`Result[Option[Wide], E]`).
@@ -7778,6 +7800,7 @@ impl<'ctx> Codegen<'ctx> {
             inline_option_map_payload_vars: std::collections::HashSet::new(),
             inline_option_agg_payload_vars: std::collections::HashSet::new(),
             boxed_enum_payload_vars: std::collections::HashSet::new(),
+            boxed_moved_in_vars: std::collections::HashSet::new(),
             nested_boxed_payload_vars: std::collections::HashSet::new(),
             nested_boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             refinement_bases: HashMap::new(),

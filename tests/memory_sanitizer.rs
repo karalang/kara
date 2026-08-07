@@ -35356,6 +35356,159 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-4 — reassigning a `let mut` binding whose enum payload is
+    /// heap-BOXED orphaned the OVERWRITTEN value's box.
+    ///
+    /// Every registration in this family is keyed to a SLOT and fires once, at
+    /// scope exit, so it frees whatever the slot holds LAST. A slot that holds
+    /// N values over its life needs N frees and no scope-exit action can supply
+    /// the other N-1 — by then the displaced pointers are gone. The free has to
+    /// happen at the STORE, which is a different site from every other fix in
+    /// this family.
+    ///
+    /// Measured 32 B per overwrite at `-O0`, LINEAR in stores (a
+    /// three-store binding leaks two boxes), and identical for the DIRECT and
+    /// NESTED actions — which is why the row's original filing as a
+    /// nested-only shape was wrong. A boxed STRUCT payload leaks its whole box
+    /// too (40 B for a 5-field one), a shape the row did not list at all.
+    ///
+    /// THE FIX EMITS THE BINDING'S OWN QUEUED CLEANUP ACTION before the store
+    /// rather than a hand-rolled free, and that is what makes the ownership
+    /// question answer itself: THE QUEUE IS THE ARMED SET. A binding whose
+    /// registration was retracted — moved into a callee, returned, aliased by a
+    /// passthrough — has no action to find, so nothing is emitted and the
+    /// consumer that took the box over is not double-freed. The row's central
+    /// caution ("the store must consult the same armed set the scope-exit
+    /// action does or it will double-free") is therefore satisfied
+    /// structurally, not by a second predicate that could drift from the first.
+    ///
+    /// The over-freeing direction is what most of these arms are for, since
+    /// this fix ADDS a free and every one of them could be one too many:
+    ///
+    ///   * `a6 = a6` — a self-alias is CLEAN today; freeing first would hand
+    ///     the store a pointer it had just released. Guarded, and the arm is
+    ///     here so the guard cannot be dropped silently.
+    ///   * `a7` — MOVED into a callee, then reassigned. The callee owns that
+    ///     box; a store-site free that ignored the armed set double-frees here.
+    ///   * `a9 = bump(a9)` — the RHS mentions the target, so the old value may
+    ///     have moved into the callee. Skipped ⇒ still leaks in the general
+    ///     case, which is the safe direction; this shape happens to be clean
+    ///     because `bump` consumes its argument.
+    ///   * `a8 = Option.None` then back — the tag guard must skip a payload-
+    ///     absent slot rather than free word 0 of a `None`.
+    ///   * `a5` — the store is INSIDE an `if`, so only executed stores may
+    ///     free (pre-fix this leaked 160 B / 5 over ten iterations, not 320 /
+    ///     10). Both branches produce the same value so the arm's contribution
+    ///     is uniform.
+    ///   * `outer` — declared OUTSIDE the loop and assigned inside, so the
+    ///     binding's action lives in a frame below the current one. Pins the
+    ///     all-frames scan; a top-frame-only search finds nothing and leaks.
+    ///   * a `Vec` and a `String` reassignment, which were already correct
+    ///     before this change (their store sites have freed eagerly for a long
+    ///     time) and must stay that way — they are the reason this was
+    ///     diagnosable as a missing arm rather than an unsolved problem.
+    ///
+    /// NOT COVERED: `b = c` between two boxed bindings. That shape ALREADY
+    /// double-frees on main independently of reassignment (both slots end up
+    /// holding one pointer and both stay armed); this change removes its leak
+    /// half but not its double free, and it is filed separately rather than
+    /// folded in.
+    ///
+    /// COVERAGE: against the pre-fix compiler this leaks 6,480 B in 195 blocks
+    /// at `KARAC_OPT_LEVEL=0` (165 boxes of 32 B plus 30 struct boxes of 40 B)
+    /// and is CLEAN at the default `-O2`, where the boxes fold away — so the
+    /// memory half rides the `-O0` leg (`scripts/asan-o0-leg.sh`,
+    /// B-2026-08-04-17) and the `-O2` leg carries the value plus the allocation
+    /// floor.
+    ///
+    /// The expected value is COMPUTED, not read off a run: every payload is
+    /// seeded from the opaque `env.args().len()` and each arm subtracts the
+    /// seed and its own offset back out to leave `i` (the `a7` arm contributes
+    /// `2i`, being measured before and after its reassignment), with the String
+    /// arm adding 1 for a successful byte read — `12i + 1` per iteration over
+    /// 30 iterations, so `12 * (0+…+29) + 30 = 5250`.
+    #[test]
+    fn asan_reassigned_boxed_payload_binding_frees_displaced_box() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64 }
+fn consume(v: Option[Option[i64]]) -> i64 {
+    match v { Option.Some(Option.Some(x)) => x, Option.Some(Option.None) => -1, Option.None => -2 }
+}
+fn bump(v: Option[Option[i64]]) -> Option[Option[i64]] {
+    match v { Option.Some(Option.Some(x)) => Option.Some(Option.Some(x + 100)), _ => Option.None }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut outer: Option[Option[i64]] = Option.None;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 30 {
+        let k = n + i;
+
+        let mut a1: Option[Option[i64]] = Option.Some(Option.Some(k));
+        a1 = Option.Some(Option.Some(k + 100));
+        acc = acc + consume(a1) - n - 100;
+
+        let mut a2: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(k)));
+        a2 = Result.Ok(Option.Some(Option.Some(k + 100)));
+        acc = acc + (match a2 { Result.Ok(Option.Some(Option.Some(x))) => x, Result.Ok(_) => -1, Result.Err(e) => e }) - n - 100;
+
+        let mut a3: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+        a3 = Option.Some(Wide { a: k + 100, b: 1, c: 2, d: 3, e: 4 });
+        acc = acc + (match a3 { Option.Some(w) => w.a, Option.None => -1 }) - n - 100;
+
+        let mut a4: Option[Option[i64]] = Option.Some(Option.Some(k));
+        a4 = Option.Some(Option.Some(k + 100));
+        a4 = Option.Some(Option.Some(k + 200));
+        acc = acc + consume(a4) - n - 200;
+
+        let mut a5: Option[Option[i64]] = Option.Some(Option.Some(k));
+        if i % 2 == 0 { a5 = Option.Some(Option.Some(k)); }
+        acc = acc + consume(a5) - n;
+
+        let mut a6: Option[Option[i64]] = Option.Some(Option.Some(k));
+        a6 = a6;
+        acc = acc + consume(a6) - n;
+
+        let mut a7: Option[Option[i64]] = Option.Some(Option.Some(k));
+        acc = acc + consume(a7) - n;
+        a7 = Option.Some(Option.Some(k + 100));
+        acc = acc + consume(a7) - n - 100;
+
+        let mut a8: Option[Option[i64]] = Option.Some(Option.Some(k));
+        a8 = Option.None;
+        a8 = Option.Some(Option.Some(k + 100));
+        acc = acc + consume(a8) - n - 100;
+
+        let mut a9: Option[Option[i64]] = Option.Some(Option.Some(k));
+        a9 = bump(a9);
+        acc = acc + consume(a9) - n - 100;
+
+        outer = Option.Some(Option.Some(k));
+        acc = acc + consume(outer) - n;
+
+        let mut v: Vec[i64] = Vec.new();
+        v.push(k);
+        v = Vec.new();
+        v.push(k + 100);
+        acc = acc + v[0] - n - 100;
+
+        let mut s: String = "a" + k.to_string();
+        s = "bb" + k.to_string();
+        acc = acc + (if s.len() > 0 { 1 } else { 0 });
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["5250"],
+            "reassigned_boxed_payload_displaced_box",
+            20,
+        );
+    }
+
     /// B-2026-08-07-2 shapes 1, 2 and 5 — the nested box's owner when there is
     /// no binding to hang one on, and when the binding escapes.
     ///

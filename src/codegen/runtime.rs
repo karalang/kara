@@ -1665,6 +1665,59 @@ impl<'ctx> super::Codegen<'ctx> {
         self.nested_boxed_payload_vars.insert(name.to_string());
     }
 
+    /// B-2026-08-07-4 — free the box a reassignment is about to DISPLACE.
+    ///
+    /// Every registration in this family is keyed to a SLOT and fires once, at
+    /// scope exit. A slot that holds N values over its life needs N frees, and
+    /// no scope-exit action can supply the other N-1 — by then the displaced
+    /// pointers are gone. So the free has to happen at the STORE, which is a
+    /// different site from every other fix in this family. Sibling of the
+    /// Vec/String, Map/Set, struct and Tensor eager-frees already in the
+    /// `StmtKind::Assign` arm; the boxed-enum family simply had no arm there.
+    ///
+    /// Emits the binding's OWN queued cleanup action(s) rather than a
+    /// hand-rolled free, which buys three things at once: the tag guards and
+    /// null guard come along (a `None` slot or an `Err`-tagged one frees
+    /// nothing), the direct and NESTED actions are handled by the same code
+    /// with no second copy of the two-tag walk, and — most importantly — the
+    /// QUEUE IS THE ARMED SET. A binding whose registration was retracted
+    /// (moved into a callee, returned, aliased by a passthrough) has no action
+    /// to find, so nothing is emitted and the consumer that took the box over
+    /// is not double-freed. That is exactly the ownership caution the row
+    /// raises, satisfied structurally instead of by a second predicate that
+    /// could drift from the first.
+    ///
+    /// The actions stay queued: they re-load from the slot, so scope exit still
+    /// frees whatever value the slot holds LAST. N stores ⇒ N frees.
+    ///
+    /// Callers must emit this AFTER the RHS is compiled (its last read of the
+    /// old value has happened) and BEFORE the store, and must skip a self-alias
+    /// or any RHS that mentions the target — see the call site's guards.
+    pub(super) fn emit_boxed_enum_overwrite_free(&self, name: &str) {
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        // All live frames, not just the top: at a mid-function store a
+        // transient RHS-evaluation frame can sit above the frame that owns the
+        // binding's action — the same rationale the Map sibling gives.
+        for action in self.scope_cleanup_actions.iter().flatten() {
+            let matches_slot = match action {
+                CleanupAction::BoxedEnumDrop { enum_slot, .. }
+                | CleanupAction::NestedBoxedEnumDrop { enum_slot, .. } => *enum_slot == slot.ptr,
+                _ => false,
+            };
+            if matches_slot {
+                self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
+            }
+        }
+    }
+
     /// Zero-init an `Option[T]` slot at the top of the current
     /// function's entry block. Mirrors `null_init_slot_in_entry_block`'s
     /// shape but operates on the full Option struct (`{tag, w0, w1,
