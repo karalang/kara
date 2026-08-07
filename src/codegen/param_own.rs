@@ -947,25 +947,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (B-2026-08-05-32: those keep the caller's drop, the callee never decs),
     /// and is not self-referential (B-2026-07-28-3: the callee may store the
     /// alias into an owning container, so it declines and the documented leak
-    /// stays). One condition is ADDED rather than mirrored: the struct must
-    /// declare no generic params. The arm tries
-    /// [`Self::try_make_generic_struct_param_callee_owned`] FIRST, and that
-    /// rescue reads the CALLEE's active substitution — which a caller-side
-    /// look-alike cannot see (the same trap B-2026-08-06-2 defect (B) documents
-    /// on the mono path). A struct with no type params can never take the
-    /// rescue, so excluding it makes the two agree by construction instead of
-    /// by luck.
-    pub(super) fn struct_param_owned_by_transfer(&self, struct_name: &str) -> bool {
+    /// stays). One condition is ADDED rather than mirrored, and it is
+    /// `callee_entry_copies_mono`: the arm tries
+    /// [`Self::try_make_generic_struct_param_callee_owned`] FIRST, so a struct
+    /// that takes the mono rescue is entry-copied and the caller's drop is
+    /// right (B-2026-08-06-2 defect (B)).
+    ///
+    /// THE FLAG IS THE CALLEE'S ANSWER, NOT A CALLER-SIDE LOOK-ALIKE — that
+    /// distinction is the whole reason it is a parameter. Only
+    /// `compile_generic_call` can evaluate the rescue, because only it has the
+    /// callee's substitution installed; it calls
+    /// [`Self::mono_entry_copies_aggregate_param`] there and threads the result
+    /// down. Every other call path passes `false`, which is correct rather than
+    /// merely conservative: the rescue needs an active subst and there is none.
+    ///
+    /// B-2026-08-07-17 — the first cut of this row excluded EVERY generic
+    /// struct instead, reasoning that a caller-side predicate cannot see the
+    /// rescue. True, but it gives up more than the mono path: a generic struct
+    /// also reaches a CONCRETE param (`fn take(x: Mix[String])`), where there
+    /// is no monomorph, no subst, and no rescue — the callee takes the transfer
+    /// arm like any other. `Mix[T] { v: T, s: String }` there kept both owners
+    /// and stayed at 10 invalid frees per 10 iterations at BOTH opt levels
+    /// after this row's fix landed. Erasure is just another way to fail
+    /// copy-support (the bare `T` hits `field_copy_supported`'s conservative
+    /// `_ => false`), so the shape belongs to this row, not beside it.
+    pub(super) fn struct_param_owned_by_transfer(
+        &self,
+        struct_name: &str,
+        callee_entry_copies_mono: bool,
+    ) -> bool {
         if !self.struct_types.contains_key(struct_name)
             || self.shared_types.contains_key(struct_name)
         {
             return false;
         }
-        if self
-            .struct_generic_params
-            .get(struct_name)
-            .is_some_and(|g| !g.is_empty())
-        {
+        if callee_entry_copies_mono {
             return false;
         }
         !self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new())

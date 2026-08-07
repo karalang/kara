@@ -2598,7 +2598,7 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
         arg_flows_into_return: bool,
     ) {
-        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_flows_into_return, None)
+        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_flows_into_return, None, false)
     }
 
     /// [`Self::track_inline_owned_aggregate_arg`] with the struct-literal arg's
@@ -2617,12 +2617,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`fn take[U](b: Box[U])`, where `mono_struct_type_from_active_subst`
     /// finds no binding for `T` and falls back to the base layout). In both the
     /// callee TAKES the buffer, so a caller drop here would be a double free.
+    ///
+    /// `callee_entry_copies_mono` is that same predicate's raw answer, and it is
+    /// SEPARATE from `mono_inst` because the two can disagree in the direction
+    /// that matters. `mono_inst` is additionally conditioned on recovering the
+    /// instantiation from the span map, so it reads `None` both when the callee
+    /// takes the buffer and when it entry-copies but the span carries no
+    /// annotation. Only the first of those may suppress the caller's drop
+    /// (B-2026-08-07-17), so `struct_param_owned_by_transfer` is asked with the
+    /// flag rather than with `mono_inst.is_none()`.
     pub(super) fn track_inline_owned_aggregate_arg_inst(
         &mut self,
         val: BasicValueEnum<'ctx>,
         arg: &Expr,
         arg_flows_into_return: bool,
         mono_inst: Option<TypeExpr>,
+        callee_entry_copies_mono: bool,
     ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
@@ -3073,10 +3083,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 // fns all reproduce; the same struct passed as a NAMED binding is
                 // clean, which is exactly the half of the lockstep that exists.
                 //
-                // The predicate excludes generic structs, so the monomorph path's
-                // `mono_inst` (only ever `Some` for one) cannot collide with it:
-                // there the callee entry-copies and the caller's drop is right.
-                let callee_owns_by_transfer = self.struct_param_owned_by_transfer(&name);
+                // A GENERIC struct is not exempt, and B-2026-08-07-17 is what
+                // that costs when it is. The predicate's first cut excluded
+                // every generic struct, on the sound observation that a
+                // caller-side look-alike cannot evaluate the callee's mono
+                // rescue — but the rescue only exists on the monomorph path,
+                // and a generic struct also reaches a CONCRETE param
+                // (`fn take(x: Mix[String])`) where there is no subst to read.
+                // `Mix[T] { v: T, s: String }` spelled that way kept both owners
+                // and stayed at 10 invalid frees per 10 iterations at BOTH opt
+                // levels. Erasure is just another way to fail copy-support — the
+                // bare `T` lands on `field_copy_supported`'s conservative
+                // `_ => false` — so it is this bug, not a neighbour of it.
+                //
+                // What the predicate needs is the callee's ANSWER, which
+                // `compile_generic_call` computes under the callee's own
+                // substitution and threads down as `callee_entry_copies_mono`.
+                // Not `mono_inst.is_some()`: that is additionally conditioned on
+                // the span map carrying the instantiation, so it reads `None`
+                // for an entry-copying callee whose span has no annotation, and
+                // suppressing there would trade this corruption for a leak.
+                let callee_owns_by_transfer =
+                    self.struct_param_owned_by_transfer(&name, callee_entry_copies_mono);
                 let needs_memory_drop = !callee_owns_by_transfer
                     && (llvm_heap || src_heap_copyable || src_shared_owning);
                 if needs_memory_drop || field_bodies_fn.is_some() {

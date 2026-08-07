@@ -1289,7 +1289,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // caller drop is a double free. Installing the callee's subst and asking
         // the callee's own predicate is what makes the two agree by
         // construction; a caller-side look-alike cannot see that distinction.
-        let mono_agg_insts: Vec<Option<TypeExpr>> = {
+        //
+        // The predicate's raw answer rides alongside the instantiation rather
+        // than being recovered from it (B-2026-08-07-17). `enum_inst_type_from_-
+        // span` can miss where the predicate holds, and the two callers want
+        // opposite defaults on that gap: the drop registration needs the
+        // instantiation or it cannot key a drop at all, while the own-by-
+        // transfer suppression must NOT fire for an entry-copying callee whose
+        // span carries no annotation — that would trade B-2026-08-07-15's
+        // corruption for a leak. Collapsing them into `Option::is_some` reads
+        // the second question off an answer to the first.
+        let mono_agg: Vec<(bool, Option<TypeExpr>)> = {
             let saved_names = std::mem::replace(&mut self.type_subst_names, subst_names.clone());
             let saved_type_exprs =
                 std::mem::replace(&mut self.type_subst_type_exprs, subst_type_exprs.clone());
@@ -1297,13 +1307,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 .iter()
                 .map(|a| {
                     let ExprKind::StructLiteral { path, .. } = &a.value.kind else {
-                        return None;
+                        return (false, None);
                     };
-                    let sname = path.last()?;
+                    let Some(sname) = path.last() else {
+                        return (false, None);
+                    };
                     if !self.mono_entry_copies_aggregate_param(sname) {
-                        return None;
+                        return (false, None);
                     }
-                    self.enum_inst_type_from_span(&a.value)
+                    (true, self.enum_inst_type_from_span(&a.value))
                 })
                 .collect();
             self.type_subst_names = saved_names;
@@ -1318,7 +1330,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     val,
                     &a.value,
                     flows_into_return,
-                    mono_agg_insts[i].clone(),
+                    mono_agg[i].1.clone(),
+                    mono_agg[i].0,
                 );
             }
         }

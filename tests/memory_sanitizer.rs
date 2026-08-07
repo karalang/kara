@@ -36923,8 +36923,25 @@ fn main() {
     ///   * the `named` binding — the half of the lockstep that always worked,
     ///     here so a fix that broke it cannot pass.
     ///
-    /// Expected value is COMPUTED: 1+2+4+8+16+32+64+128+256+1+512+1024 = 2048
-    /// per iteration, x40 = 81920.
+    /// A GENERIC STRUCT IS THE THIRD ROUTE IN, and the fix's first cut gave it
+    /// away wholesale — the predicate excluded every generic struct, because a
+    /// caller-side reading cannot evaluate the callee's mono rescue.
+    /// B-2026-08-07-17: sound about the monomorph, too broad for the rest.
+    /// `ig_mix_conc` takes `Mix[T] { v: T, s: String }` at a CONCRETE param,
+    /// where there IS no monomorph and no substitution, so the callee reaches
+    /// the transfer arm like any other and kept both owners — 10 invalid frees
+    /// per 10 iterations at BOTH opt levels, still there after the first fix
+    /// landed. The erased bare `T` is just another way to close
+    /// `field_copy_supported`, alongside the `Map` and the `Array` above.
+    ///
+    /// `ig_mix_mono[T]` is its opposite number and the reason the flag is the
+    /// callee's own answer rather than a caller-side guess: there the monomorph
+    /// resolves `T` and ENTRY-COPIES, so the caller's temp IS orphaned and its
+    /// drop must stay. Suppressing it re-opens B-2026-08-06-2 defect (B) —
+    /// measured at 140 B in 4 blocks while writing this.
+    ///
+    /// Expected value is COMPUTED: 1+2+4+8+16+32+64+128+256+1+512+1024+2048
+    /// +4096 = 8192 per iteration, x40 = 327680.
     #[test]
     fn asan_fresh_temp_struct_arg_owned_by_transfer_no_double_free() {
         assert_clean_asan_run_min_allocs(
@@ -36937,6 +36954,7 @@ struct Ps { a: String }
 struct Inner { m: Map[String, i64] }
 struct Outer { a: String, i: Inner }
 struct Ar { a: String, arr: Array[i64, 4] }
+struct Mix[T] { v: T, s: String }
 shared struct Shr { v: i64 }
 struct Sh2 { a: String, sh: Shr }
 struct Host { k: i64 }
@@ -36953,6 +36971,8 @@ fn ig_ref(x: ref Ms) -> i64 { 128 }
 fn ig_gen[T](x: Ms, t: T) -> i64 { 256 }
 fn ig_nest(x: Outer) -> i64 { 512 }
 fn ig_arr(x: Ar) -> i64 { 1024 }
+fn ig_mix_conc(x: Mix[String]) -> i64 { 2048 }
+fn ig_mix_mono[T](x: Mix[T]) -> i64 { 4096 }
 fn mk_map(k: i64) -> Map[String, i64] {
     let mut m: Map[String, i64] = Map.new();
     m.insert(f"key-padded-out-so-it-heap-allocates-{k}", k);
@@ -36980,6 +37000,8 @@ fn main() {
         acc = acc + ig_nest(Outer { a: f"nt-padded-out-so-it-heap-allocates-{n + i}", i: Inner { m: mk_map(n + i) } });
         let arr: Array[i64, 4] = [n + i, 1, 2, 3];
         acc = acc + ig_arr(Ar { a: f"ar-padded-out-so-it-heap-allocates-{n + i}", arr: arr });
+        acc = acc + ig_mix_conc(Mix { v: f"mc-padded-out-so-it-heap-allocates-{n + i}", s: f"mcs-padded-out-so-it-heap-allocates-{n + i}" });
+        acc = acc + ig_mix_mono(Mix { v: f"mm-padded-out-so-it-heap-allocates-{n + i}", s: f"mms-padded-out-so-it-heap-allocates-{n + i}" });
         let named: Ms = Ms { a: f"nm-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) };
         acc = acc + ig_ms(named);
         i = i + 1;
@@ -36987,7 +37009,7 @@ fn main() {
     println(acc);
 }
 "#,
-            &["81920"],
+            &["327680"],
             "fresh_temp_struct_arg_owned_by_transfer",
             100,
         );
