@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 218 | 0 |
 | leak | 148 | 2 |
-| double-free | 109 | 0 |
+| double-free | 110 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 81 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 727 | 4 |
+| codegen | 728 | 5 |
 | interp | 127 | 0 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
@@ -124,17 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced · 5 open · 985 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1001 surfaced · 6 open · 985 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
 | B-2026-08-07-11 | 2026-08-07 | codegen | low | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct literal or pushing it into a `Vec` leaks BOTH envelopes (320 + 320) | — |
-| B-2026-08-07-12 | 2026-08-07 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BOXED payload shared its interior rather than duplicating it -- BOTH FIXED (00660c3), together, because either alone made the other worse. TWO LEGS OPEN: a `Map`/`Set` payload still double-frees, and an ALL-SCALAR boxed payload still orphans its envelope (the -O0 quarantine line's third cause) | — |
+| B-2026-08-07-12 | 2026-08-07 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BOXED payload shared its interior -- BOTH ROOTS FIXED (00660c3), and LEG 2 (an all-scalar boxed envelope) FIXED TOO (e0d88f2), which emptied the -O0 quarantine list. LEG 1 re-scoped: its corruption is not about `Option` at all and moved to B-2026-08-07-15; what stays here is an `Option[Map]` field that no drop arm covers | — |
 | B-2026-08-07-14 | 2026-08-07 | codegen | medium | kāra's i64 OVERFLOW CHECK is ~2.4x dearer relative to its own baseline than rustc's (1.309x vs 1.131x on the identical kata #11 loop), which spends the 1.16x lead kāra's unchecked code holds and lands it at a DEAD TIE with equal-safety Rust instead of ahead; the surviving cost is the `h * (r - l)` multiply's smulh + cmp-asr#63 + branch, still unelided on main two months after it landed | Attributed by matched-pair ladder under B-2026-08-05-34 (arm64 M5 Pro, 2026-08-07). Mechanism commit e4047440 (2026-06-07, AOT integer arithmetic faults), parent ad240cad. NOT a revert candidate and NOT a correctness defect -- at equal safety kāra TIES rustc on this kata (191.4 vs 191.4 ms). The gap is that kāra's i64 overflow check costs 1.309x of its own unchecked baseline where rustc's costs 1.131x of its own, which spends a 1.16x lead kāra otherwise has. Corpus-wide equal-safety data ALREADY EXISTS (Kara/ovf_equal_safety_triage.tsv, 56 rows, kara/ovf median 0.999) and corroborates the tie from a different instrument; what it lacks is a kara-unchecked column, which is what this row's claim rests on. Next step: an IR/asm diff of the smulh+cmp-asr#63 sequence against what rustc emits for the same checked multiply, on the 25-of-56 subset where rustc actually pays for its check. |
+| B-2026-08-07-15 | 2026-08-07 | codegen | high | a struct that is NOT copy-supported (any `Map`/`Set` field) passed as a FRESH TEMP by value is dropped by BOTH frames -- 480 valgrind errors, 175 invalid frees at the DEFAULT -O2, double-freeing the struct's sibling `String`. The callee owns by transfer (B-2026-08-05-33) whose comment calls the caller's retraction "the whole safety argument", but that retraction keys on a MOVED NAMED BINDING and a fresh temp is not one. The named spelling is clean. No `Option`, no pattern, callee body `1` | — |
 
 ### Fixed (985)
 
