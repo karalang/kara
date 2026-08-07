@@ -955,7 +955,7 @@ whose reachable closure holds a `mut` field, and stage 2's place walk refuses a
 `mut` field at every projection step. #133 needs both relaxed — `Node.neighbors`
 is `mut` *and* is the traversal path — so neither can be relaxed alone.
 
-## Stage 3b: the per-instance freeze — scoped, not started
+## Stage 3b: the per-instance freeze — steps 1 and 2 LANDED, step 3 remains
 
 This is the whole remainder, and #133 is squarely in it. Re-measured on the
 reconstructed kata shape rather than inferred from its description, which this
@@ -1014,7 +1014,12 @@ So "local and cheap" is an estimate about an analysis that **does not exist**,
 not a description of one that does. It is the precondition for both guard
 relaxations, and it should land first.
 
-### Deliberately NOT implemented now
+**It does now** — see the Ordering list. The estimate held: it is two sets on a
+walk that already existed. What the estimate missed is that the condition fails
+in two directions, and that a *consumed* source (`take(t)` before the freeze)
+is a third case neither direction names.
+
+### Deliberately NOT implemented alone — and it was not
 
 The alias condition could be enforced today, on its own. It should not be:
 E0512 already refuses every type where an alias could matter, so enforcing it
@@ -1022,18 +1027,48 @@ now would reject programs that currently work and buy nothing until the
 relaxation it guards actually lands. It belongs in the same slice as the
 relaxation, not ahead of it.
 
+**Followed.** Steps 1 and 2 landed together. Worth recording that this section
+and the Ordering list below it read as a contradiction and are not one: this is
+about **land** order, the list is about **build** order. Step 1 shipped alone
+is a pure regression.
+
 ### Ordering
 
-1. The alias/uniqueness condition at the freeze site — the precondition, and
-   the piece that does not exist at all.
-2. Relax E0512 for a `freeze` STATEMENT whose source satisfies (1), keeping the
-   parameter-mode freeze site as strict as it is. A `frozen T` parameter can
-   then inherit the guarantee from its caller's already-frozen argument, which
-   is how the mode composes today — no whole-program analysis, so this stays
-   mechanism 3 rather than becoming mechanism 1.
+1. ~~The alias/uniqueness condition at the freeze site — the precondition, and
+   the piece that does not exist at all.~~ **LANDED.** Two sets on the existing
+   escape walk (`used_names`, `place_bound`), read at the freeze site before
+   the operand is walked. It fails in **two** directions and closing one proves
+   nothing — `let a = t; freeze t` (alias from the source) and `let t = a;
+   freeze t` (source from an alias) — plus a third this document had not
+   recorded: `let n = take(t); freeze t`, the source **consumed** and then
+   frozen, also checked clean. Deliberately coarse: any earlier use of the root
+   disqualifies, because a false negative costs a moved line and a false
+   positive is a racing refcount.
+2. ~~Relax E0512 for a `freeze` STATEMENT whose source satisfies (1), keeping the
+   parameter-mode freeze site as strict as it is.~~ **LANDED**, exactly as
+   specified — the proof relaxes only the `MutableState` arm, and only for a
+   statement. `NotShared`/`AlreadyPar` are about representation and cannot be
+   relaxed by an aliasing fact; a parameter never receives the proof, because
+   its instance belongs to the caller. Measured: a `mut`-bearing `shared`
+   struct now shares across `par` branches for reads of its **immutable**
+   fields — three backends agree, 20 repeat AOT runs give one output, valgrind
+   clean. The `mut` field itself stays unreachable, so the increment is the
+   freeze SITE only.
+
+   The three guards that make it sound, all probed: uniqueness; the escape walk
+   freezing the SOURCE root for the rest of the scope; and the projection walk
+   still refusing every `mut` field. After a *successful* freeze of `shared
+   struct M { mut n: i64 }`, both `m.n = 99` and `g.n` are still refused — the
+   relaxation admits the freeze, not the mutation.
 3. Relax the projection walk for a **read** of a `mut` field through a frozen
    place, with the write forms enumerated — the hazardous half, and the one to
-   land last and alone.
+   land last and alone. **STILL OPEN, and now the only thing between this and
+   #133** — together with the parameter-mode question, since #133's traversal
+   is in a callee and a `frozen Node` parameter of a `mut`-bearing type is
+   still refused by design. Note the two are not independent: step 3 makes the
+   `mut` field readable, and the parameter would then have to inherit the
+   caller's uniqueness proof rather than establish its own, or it becomes
+   mechanism 1.
 
 ## Risks, stated plainly
 

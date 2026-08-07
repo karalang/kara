@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 150 | 2 |
 | double-free | 112 | 1 |
 | codegen-gap | 93 | 0 |
-| run-vs-build | 87 | 0 |
+| run-vs-build | 88 | 1 |
 | missing-feature | 81 | 1 |
 | perf | 57 | 2 |
 | false-positive | 56 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 734 | 5 |
-| interp | 127 | 0 |
+| interp | 128 | 1 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1007 surfaced · 6 open · 991 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1008 surfaced · 7 open · 991 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1007 surfaced
 | B-2026-08-07-19 | 2026-08-07 | codegen | medium | the `Result` twin of B-2026-08-07-12 leg 1: a `Result[Map[K,V], E]` STRUCT FIELD leaks its whole handle tree, 720 B / 10 iterations on a DEFAULT -O2 build, because the promotion loop's Result gates admit no Map/Set half -- the `Option[Map]` sibling is fixed, this is the same defect one wrapper over | src/codegen/synth_drop.rs -- the `Result` arm of the OptionInline promotion loop, gated on `result_field_direct_vecstr_halves_ok` / `result_field_struct_enum_payload_ok`; paired move sites in src/codegen/control_flow_match.rs::place_optres_field_move_info_ex and the destructure-leaf registrations in src/codegen/stmts.rs |
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct | — |
 | B-2026-08-07-21 | 2026-08-07 | codegen | low | ELEMENTWISE checked arithmetic loses auto-vectorization too -- 4.22x measured in kara (99.74M vs 23.62M Ir on 20M element-ops; the checked loop is scalar 3x-unrolled with `jo` after every add, the wrapping loop is AVX2 16-wide) -- and UNLIKE the reduction case of B-2026-08-07-14 this one is LEGAL to fix, because per-element overflow conditions are order-independent, so an OR-accumulated flag checked once after the loop traps on exactly the same SET of programs; clang confirms that branchless form vectorizes (36 ymm vs 0). The real blocker is not soundness of the trap set but PANIC TIMING AND SITE ATTRIBUTION | Split out of B-2026-08-07-14 when that row closed. That row proved the REDUCTION case cannot be fixed (checked add is non-associative, so vectorizing deletes traps); this row is the ELEMENTWISE case, where the same mechanism costs the same kind of money but the fix is not blocked on soundness. SEVERITY IS `low` DELIBERATELY: the 4.22x below is a real measurement on a kernel built to isolate the shape, but how often the shape occurs in the corpus is UNMEASURED, and the blocker (below) is diagnostics quality rather than difficulty. Raise it if a corpus scan finds the shape is common. |
+| B-2026-08-07-22 | 2026-08-07 | interp | high | a `par {}` block inside a `while` loop HANGS under `--interp` (the DEFAULT for `karac check`-adjacent workflows and the Mend oracle) while the identical program builds and runs correctly AOT -- no shared type, no `frozen`, no captures needed to reproduce | — |
 
 ### Fixed (991)
 
