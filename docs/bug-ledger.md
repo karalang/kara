@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 148 | 3 |
+| leak | 148 | 2 |
 | double-free | 109 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 727 | 5 |
+| codegen | 727 | 4 |
 | interp | 127 | 0 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
@@ -124,22 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced · 6 open · 984 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1000 surfaced · 5 open · 985 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
-| B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. FIXED: no binding (fresh temp), `Vec.push` (the only -O2 leak), escape-by-return, and the BOX-INSIDE-A-BOX chain. OPEN: a struct between the levels, whose owner is CONTESTED — a fix was implemented and reverted for double-freeing. Shape 6 was never a member of this family | — |
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
 | B-2026-08-07-11 | 2026-08-07 | codegen | low | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct literal or pushing it into a `Vec` leaks BOTH envelopes (320 + 320) | — |
 | B-2026-08-07-12 | 2026-08-07 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BOXED payload shared its interior rather than duplicating it -- BOTH FIXED (00660c3), together, because either alone made the other worse. TWO LEGS OPEN: a `Map`/`Set` payload still double-frees, and an ALL-SCALAR boxed payload still orphans its envelope (the -O0 quarantine line's third cause) | — |
 | B-2026-08-07-14 | 2026-08-07 | codegen | medium | kāra's i64 OVERFLOW CHECK is ~2.4x dearer relative to its own baseline than rustc's (1.309x vs 1.131x on the identical kata #11 loop), which spends the 1.16x lead kāra's unchecked code holds and lands it at a DEAD TIE with equal-safety Rust instead of ahead; the surviving cost is the `h * (r - l)` multiply's smulh + cmp-asr#63 + branch, still unelided on main two months after it landed | Attributed by matched-pair ladder under B-2026-08-05-34 (arm64 M5 Pro, 2026-08-07). Mechanism commit e4047440 (2026-06-07, AOT integer arithmetic faults), parent ad240cad. NOT a revert candidate and NOT a correctness defect -- at equal safety kāra TIES rustc on this kata (191.4 vs 191.4 ms). The gap is that kāra's i64 overflow check costs 1.309x of its own unchecked baseline where rustc's costs 1.131x of its own, which spends a 1.16x lead kāra otherwise has. Corpus-wide equal-safety data ALREADY EXISTS (Kara/ovf_equal_safety_triage.tsv, 56 rows, kara/ovf median 0.999) and corroborates the tie from a different instrument; what it lacks is a kara-unchecked column, which is what this row's claim rests on. Next step: an IR/asm diff of the smulh+cmp-asr#63 sequence against what rustc emits for the same checked multiply, on the 25-of-56 subset where rustc actually pays for its check. |
 
-### Fixed (984)
+### Fixed (985)
 
-<details><summary>984 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>985 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1141,6 +1140,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-33 | codegen | medium | SETTLED, lane A's DIRECTION confirmed: on x86_64 the map hash-tag compare PAYS for primitive keys, so B-2026-08-05-5's `!self.target_is_aarch64` cond… | e7a5ebc — SETTLED BY MEASUREMENT 2026-08-07, no behaviour change: the shipped x86 default already was the faster arm. That commit carries the EVIDENCE, in src/codegen/mono.rs::map_tag_compare's doc comment. |
 | B-2026-08-06-34 | other | medium | MAIN IS NOT RED and the four cells are NOT fixed: the ownership-matrix ratchet reported four `Leak`->`Clean` flips because LeakSanitizer was INERT (t… | 8452994b |
 | B-2026-08-07-1 | codegen | high | a BOXED-payload enum binding that is RETURNED is freed by its own frame -- the caller reads and frees the same box: double free + use-after-free at B… | ae74c7f |
+| B-2026-08-07-2 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area -- ALL SIX RESOLVED | b55a849,d1aa710,3176865 |
 | B-2026-08-07-7 | codegen | medium | a struct field of type `Option[Option[String]]` DOUBLE-FREED the String at BOTH opt levels when a match arm bound it out -- FIXED (c25c949) by disarm… | c25c949,5f47dc6 |
 | B-2026-08-07-9 | codegen | high | a match ARM that binds a struct field's whole boxed payload out and destructures it in a SECOND match double-frees the interior at both opt levels; t… | ba64b21 |
 | B-2026-08-07-6 | codegen | low | the DIRECT sibling of the nested-box chain: `Option[Option[Option[i64]]]` with no `Result` wrapper leaks its inner envelope -- `BoxedEnumDrop` frees… | 28e17d9d |
