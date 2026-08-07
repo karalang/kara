@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 147 | 2 |
-| double-free | 110 | 1 |
+| leak | 148 | 3 |
+| double-free | 109 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 81 | 1 |
@@ -135,7 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **998 surfaced 
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. FIXED: no binding (fresh temp), `Vec.push` (the only -O2 leak), escape-by-return, and the BOX-INSIDE-A-BOX chain. OPEN: a struct between the levels, whose owner is CONTESTED — a fix was implemented and reverted for double-freeing. Shape 6 was never a member of this family | — |
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
 | B-2026-08-07-11 | 2026-08-07 | codegen | low | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct literal or pushing it into a `Vec` leaks BOTH envelopes (320 + 320) | — |
-| B-2026-08-07-12 | 2026-08-07 | codegen | high | a fresh-temp struct literal passed BY VALUE leaks the heap inside an `Option`/`Result` field at BOTH opt levels -- `Option[String]`, `Result[String,_]`, `Option[Vec]`, `Option[Map]` all leak, and a sibling plain `String` field makes it vanish, so the defect is the caller-scope drop GATE, not the drop. A SECOND root corrupts: the callee's entry copy duplicates a BOXED `Option` payload's envelope but shares its interior, which already double-frees on main through the fn-call arm. Fixing the gate alone turns two leaking shapes into double frees -- measured | — |
+| B-2026-08-07-12 | 2026-08-07 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BOXED payload shared its interior rather than duplicating it -- BOTH FIXED (00660c3), together, because either alone made the other worse. TWO LEGS OPEN: a `Map`/`Set` payload still double-frees, and an ALL-SCALAR boxed payload still orphans its envelope (the -O0 quarantine line's third cause) | — |
 
 ### Fixed (982)
 
