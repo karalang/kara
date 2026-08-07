@@ -3052,7 +3052,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 let src_shared_owning = !llvm_heap
                     && !src_heap_copyable
                     && self.struct_owns_shared_field(&name, &mut Vec::new());
-                let needs_memory_drop = llvm_heap || src_heap_copyable || src_shared_owning;
+                // B-2026-08-07-15 — the callee TAKES this struct. The `llvm_heap`
+                // disjunct above is registered unconditionally, and the comment
+                // at the head of this arm gives the reason: "whenever its drop
+                // frees a buffer the callee either entry-copies (independent) or
+                // caller-retains (shares, never frees)". That was exhaustive when
+                // it was written and B-2026-08-05-33 added a THIRD case —
+                // own-by-transfer, where the callee neither copies nor retains but
+                // takes the caller's buffers and registers the drop that frees
+                // them. Its safety argument is an explicit lockstep with the
+                // caller's retraction, and `move_declined_copy_struct_arg` honours
+                // that only for an IDENTIFIER argument; a fresh struct LITERAL has
+                // no binding to retract and lands here instead, so both frames
+                // freed the same heap.
+                //
+                // Measured on `fn ig(x: S)` with `struct S { a: String, m: Map[..]
+                // }` — a callee whose body is `1` — as 480 valgrind errors over 10
+                // iterations at BOTH opt levels, i.e. ordinary `karac build`
+                // output. `Set`, `Vec`-instead-of-`String`, methods and generic
+                // fns all reproduce; the same struct passed as a NAMED binding is
+                // clean, which is exactly the half of the lockstep that exists.
+                //
+                // The predicate excludes generic structs, so the monomorph path's
+                // `mono_inst` (only ever `Some` for one) cannot collide with it:
+                // there the callee entry-copies and the caller's drop is right.
+                let callee_owns_by_transfer = self.struct_param_owned_by_transfer(&name);
+                let needs_memory_drop = !callee_owns_by_transfer
+                    && (llvm_heap || src_heap_copyable || src_shared_owning);
                 if needs_memory_drop || field_bodies_fn.is_some() {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();

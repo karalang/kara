@@ -927,6 +927,52 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.aggregate_param_copy_supported_struct_mono(struct_name)
     }
 
+    /// Does an owned by-value struct param of `struct_name` arrive OWN BY
+    /// TRANSFER — the callee entry-copies nothing, takes the caller's own
+    /// buffers, and registers the drop that frees them?
+    ///
+    /// This is the caller-side reading of the B-2026-08-05-33 arm in
+    /// [`Self::make_aggregate_param_callee_owned_inst`], and it exists so both
+    /// sides answer from ONE predicate. The arm's safety argument is a lockstep
+    /// — "the caller already retracts its drop for exactly this shape" — and
+    /// `move_declined_copy_struct_arg` honours it for an IDENTIFIER argument
+    /// only. A fresh struct-LITERAL argument has no binding to retract, and its
+    /// caller-temp drop is registered somewhere else entirely
+    /// (`track_inline_owned_aggregate_arg_inst`), so the lockstep never reached
+    /// it: `ig(S { a: f"..", m: map })` had two owners and double-freed at BOTH
+    /// opt levels (B-2026-08-07-15).
+    ///
+    /// The conditions mirror that arm one for one — a non-shared user struct
+    /// that is not copy-supported, does not own a `shared` field
+    /// (B-2026-08-05-32: those keep the caller's drop, the callee never decs),
+    /// and is not self-referential (B-2026-07-28-3: the callee may store the
+    /// alias into an owning container, so it declines and the documented leak
+    /// stays). One condition is ADDED rather than mirrored: the struct must
+    /// declare no generic params. The arm tries
+    /// [`Self::try_make_generic_struct_param_callee_owned`] FIRST, and that
+    /// rescue reads the CALLEE's active substitution — which a caller-side
+    /// look-alike cannot see (the same trap B-2026-08-06-2 defect (B) documents
+    /// on the mono path). A struct with no type params can never take the
+    /// rescue, so excluding it makes the two agree by construction instead of
+    /// by luck.
+    pub(super) fn struct_param_owned_by_transfer(&self, struct_name: &str) -> bool {
+        if !self.struct_types.contains_key(struct_name)
+            || self.shared_types.contains_key(struct_name)
+        {
+            return false;
+        }
+        if self
+            .struct_generic_params
+            .get(struct_name)
+            .is_some_and(|g| !g.is_empty())
+        {
+            return false;
+        }
+        !self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new())
+            && !self.struct_owns_shared_field(struct_name, &mut Vec::new())
+            && !self.struct_is_self_referential(struct_name)
+    }
+
     fn aggregate_param_copy_supported_struct_mono(&self, struct_name: &str) -> bool {
         if self.shared_types.contains_key(struct_name) {
             return false;
