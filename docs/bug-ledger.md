@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
-| other | 18 | 0 |
+| other | 19 | 1 |
 | use-after-free | 14 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
-| other | 28 | 0 |
+| other | 29 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **998 surfaced · 6 open · 982 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **999 surfaced · 7 open · 982 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **998 surfaced 
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
 | B-2026-08-07-11 | 2026-08-07 | codegen | low | the envelope chain is owned only at the LET site: passing a boxed-chain enum by value to an owned param leaks 320 B/10, and moving it into a struct literal or pushing it into a `Vec` leaks BOTH envelopes (320 + 320) | — |
 | B-2026-08-07-12 | 2026-08-07 | codegen | medium | a fresh-temp struct literal passed BY VALUE leaked the heap inside an `Option`/`Result` field at BOTH opt levels, and the callee's entry copy of a BOXED payload shared its interior rather than duplicating it -- BOTH FIXED (00660c3), together, because either alone made the other worse. TWO LEGS OPEN: a `Map`/`Set` payload still double-frees, and an ALL-SCALAR boxed payload still orphans its envelope (the -O0 quarantine line's third cause) | — |
+| B-2026-08-07-13 | 2026-08-07 | other | low | docs/bug-ledger.jsonl has no pinned JSON encoding, so writers flip it between raw UTF-8 and \uXXXX escapes and each flip rewrites all ~1000 rows | — |
 
 ### Fixed (982)
 

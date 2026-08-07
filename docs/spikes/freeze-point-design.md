@@ -19,7 +19,9 @@ draft; and § "Stage 3a", which reuses stage 2.5's binding class rather than
 building the codegen the stage-3 section below sizes. **Stage 3b remains** —
 the per-instance freeze — and #133 still needs it: `Node.neighbors` is `mut`,
 so the motivating program is refused at the freeze site whether the freeze is
-spelled as a parameter mode or as a statement. Proposes a
+spelled as a parameter mode or as a statement. § "Stage 3b" scopes that work
+and records the finding that resizes it: the precondition § "The call" calls
+"local and cheap" has **no enforcement today at all**. Proposes a
 language-surface addition, so adopting it into [`docs/design.md`](../design.md)
 is the owner's step — this document exists to make the call concrete enough to
 accept, reject, or amend, and to record why the alternatives lose. Build log
@@ -952,6 +954,86 @@ independent (§ "Two guards"): the freeze-site check (E0512) refuses any type
 whose reachable closure holds a `mut` field, and stage 2's place walk refuses a
 `mut` field at every projection step. #133 needs both relaxed — `Node.neighbors`
 is `mut` *and* is the traversal path — so neither can be relaxed alone.
+
+## Stage 3b: the per-instance freeze — scoped, not started
+
+This is the whole remainder, and #133 is squarely in it. Re-measured on the
+reconstructed kata shape rather than inferred from its description, which this
+document had been doing for several stages, it refuses with exactly the two
+errors the two-guard design predicts:
+
+```
+error[ownership]: `Node` has mutable state, so it cannot be frozen yet
+error[ownership]: `frozen` parameter `root` cannot be projected through `.neighbors` yet
+```
+
+Three findings size the work, and the third is the one that changes the plan.
+
+### 1. The projection half needs write-position tracking — the recorded dead end, from the other side
+
+Today a `mut` field is refused at *every* projection step, in read and write
+position alike, and § "Two guards" notes that this is precisely why the arm
+"needs no write-position tracking". #133 needs to **read** `neighbors`. Allowing
+that means distinguishing a read from a write, and the moment you do, the
+`Assign` / `CompoundAssign` / `mut`-marked-argument / `mut ref self` forms all
+have to be enumerated — which is the failure class the "per-binding
+`readonly_scalar_fields`" dead end was rejected for, here with the same
+non-deterministic, arch-sensitive symptom.
+
+It is bounded (the walk is exhaustive with no `_` arm, so a new statement kind
+breaks the build) but it is not free, and B-2026-08-05-37 already records one
+oddity on that surface: a `mut`-marked argument rooted at a `shared struct`
+field is accepted and its write silently discarded.
+
+### 2. Stage 3a made the region explicit, which is what the check needs
+
+With `frozen` available only as a parameter mode, "is this instance immutable
+for the region" is a question about every call site. The `freeze` statement
+makes the region the rest of the scope and the check local — that was the
+argument for building it, and it holds.
+
+### 3. The precondition has NO enforcement today, and that is measured
+
+§ "The call" says the freeze-site check reduces, for the build-then-read shape,
+to *"no other live binding of this instance"*, and calls that "local and cheap".
+Probed:
+
+```kara
+let t = Imm { val: 1 };
+let a = t;            // a second full-power handle to the same instance
+let g = freeze t;     // ... and this checks CLEAN today
+```
+
+Nothing observes aliases at the freeze point, in either direction — `take(t)`
+before the freeze passes too. That is harmless while E0512 refuses every type
+where a second handle could *write*, which is exactly why it has never
+mattered. It stops being harmless the moment E0512 relaxes: `a` could write
+`a.tag` while branches read through `g`.
+
+So "local and cheap" is an estimate about an analysis that **does not exist**,
+not a description of one that does. It is the precondition for both guard
+relaxations, and it should land first.
+
+### Deliberately NOT implemented now
+
+The alias condition could be enforced today, on its own. It should not be:
+E0512 already refuses every type where an alias could matter, so enforcing it
+now would reject programs that currently work and buy nothing until the
+relaxation it guards actually lands. It belongs in the same slice as the
+relaxation, not ahead of it.
+
+### Ordering
+
+1. The alias/uniqueness condition at the freeze site — the precondition, and
+   the piece that does not exist at all.
+2. Relax E0512 for a `freeze` STATEMENT whose source satisfies (1), keeping the
+   parameter-mode freeze site as strict as it is. A `frozen T` parameter can
+   then inherit the guarantee from its caller's already-frozen argument, which
+   is how the mode composes today — no whole-program analysis, so this stays
+   mechanism 3 rather than becoming mechanism 1.
+3. Relax the projection walk for a **read** of a `mut` field through a frozen
+   place, with the write forms enumerated — the hazardous half, and the one to
+   land last and alone.
 
 ## Risks, stated plainly
 
