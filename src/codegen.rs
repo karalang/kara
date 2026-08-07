@@ -9964,6 +9964,39 @@ impl<'ctx> Codegen<'ctx> {
         // No-op unless debug info is enabled.
         self.di_finalize();
 
+        // B-2026-08-07-10 — `KARAC_FN_ALIGN=<bytes>`: force a minimum
+        // alignment on every DEFINED function in the module.
+        //
+        // A MEASUREMENT LEVER, not a default. That row bisected a sticky 1.09x
+        // regression on kata:170 to a commit with identical instruction count
+        // AND identical binary size on both sides — the only difference being
+        // that a new helper emitted ahead of `main` shifted it by 152 bytes.
+        // The carrier is therefore code placement relative to fetch and
+        // branch-predictor structures, and the row's stated next step is to
+        // force alignment behind a lever and re-measure before deciding
+        // whether alignment is worth its size cost corpus-wide.
+        //
+        // Applied here rather than at each function's creation so it covers
+        // user, stdlib and shim functions uniformly, and after every one of
+        // them exists. Declarations (no body) are skipped: alignment on an
+        // external symbol is meaningless and LLVM would carry it into the
+        // reference. Off unless the variable is set, so no default build
+        // changes; a non-numeric or zero value is ignored rather than
+        // diagnosed, matching the other `KARAC_*` levers.
+        if let Some(align) = std::env::var("KARAC_FN_ALIGN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|a| *a > 0 && a.is_power_of_two())
+        {
+            let mut f = self.module.get_first_function();
+            while let Some(fv) = f {
+                if fv.count_basic_blocks() > 0 {
+                    fv.as_global_value().set_alignment(align);
+                }
+                f = fv.get_next_function();
+            }
+        }
+
         self.module.verify().map_err(|e| {
             // A verifier failure is otherwise a one-line ICE with no module to
             // inspect. `KARAC_DUMP_IR_ON_VERIFY_FAIL=<path>` writes the full

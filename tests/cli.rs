@@ -3271,6 +3271,70 @@ fn test_build_generic_struct_reconstruct_heap_field_no_double_free_at_o0() {
 
 #[cfg(feature = "llvm")]
 #[test]
+fn test_build_fn_align_lever_is_behaviour_neutral() {
+    // B-2026-08-07-10 — `KARAC_FN_ALIGN=<bytes>` forces a minimum alignment on
+    // every defined function. It exists to MEASURE the placement sensitivity
+    // that row bisected (a 1.09x regression on kata:170 whose two sides had
+    // identical instruction counts AND identical binary size, the only
+    // difference being that `main` moved 152 bytes), so the one property it
+    // must have is that it changes placement WITHOUT changing behaviour.
+    //
+    // Asserted here rather than assumed, because a lever that silently altered
+    // results would make every measurement taken with it worthless.
+    let tmp = scratch_project("fn-align-lever");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"align_demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn work(n: i64) -> i64 {\n\
+        \x20    let mut acc = 0i64;\n\
+        \x20    let mut i = 0i64;\n\
+        \x20    while i < n { acc = acc + i * 3i64; i = i + 1i64; }\n\
+        \x20    return acc;\n\
+         }\n\
+         fn main() { println(work(1000i64)); }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_FN_ALIGN", "64")
+        .arg("build")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "build with KARAC_FN_ALIGN=64 failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Built: "),
+        "expected `Built: ...` line; stdout={}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+
+    let exe_path = tmp.join("align_demo");
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe_path),
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    let run = run.expect("executable should be runnable");
+    assert!(
+        run.status.success(),
+        "aligned build did not run; exit={:?} stderr={}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    // sum(i*3) for i in 0..1000 = 3 * (999*1000/2) = 1_498_500
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "1498500",
+        "KARAC_FN_ALIGN must not change program behaviour"
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
 fn test_build_project_codegen_three_module_chain_runs() {
     // Pins topological emission order — `db.users` must declare its
     // symbols before `db` references them, which must declare before
