@@ -2024,6 +2024,40 @@ impl<'ctx> super::Codegen<'ctx> {
                             None,
                         );
                     }
+                    // B-2026-08-07-2 shapes 1+2 — the same param, one level
+                    // further down: a box inside the param's INLINE payload
+                    // area (`Result[Option[Wide], E]`). The arm above is keyed
+                    // on the param type's OWN boxing variants and reports none
+                    // for this shape, so a temp handed straight to a by-value
+                    // param had no owner anywhere. Two source shapes reach it
+                    // and both were measured leaking 32 B per call: a fresh
+                    // temp argument (`cls(Result.Ok(…))`) and a `v[j]` element
+                    // read, which is why this is also the only member of its
+                    // family that leaked at -O2 — a `Vec` keeps the allocation
+                    // live past the point LLVM could fold it away.
+                    //
+                    // The caller-side disarm is what keeps this from becoming
+                    // a SECOND owner: when the argument is a BINDING, the let
+                    // site registered its own `NestedBoxedEnumDrop` and
+                    // `suppress_nested_boxed_drop_for_var` now retracts it at
+                    // the move, exactly as the direct-boxed sibling's
+                    // `suppress_inline_option_result_binding_move` does. The
+                    // non-escaping guard above is the other half: a param that
+                    // is returned or forwarded keeps no registration, so the
+                    // terminal consumer stays the only owner (B-2026-08-05-7's
+                    // argument, reused).
+                    for (outer_enum, outer_variant, inner_enum, inner_variant) in
+                        self.nested_boxed_enum_payload_variants(&mono_ty)
+                    {
+                        self.track_nested_boxed_enum_var(
+                            &param_name,
+                            alloca,
+                            outer_enum,
+                            outer_variant,
+                            inner_enum,
+                            inner_variant,
+                        );
+                    }
                 }
                 // RC-fallback boxing for non-shared, non-Vec parameters flagged by the
                 // ownership checker. The param value is boxed in {i64 rc, T} on the heap

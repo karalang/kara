@@ -35290,6 +35290,132 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-2 shapes 1, 2 and 5 — the nested box's owner when there is
+    /// no binding to hang one on, and when the binding escapes.
+    ///
+    /// B-2026-08-06-32 gave the box an owner at the LET SITE and recorded the
+    /// positions it could not reach as a separate row: a fresh temp argument
+    /// and a `Vec.push` have no slot to register against, and a binding
+    /// RETURNED from its frame has its registration deliberately retracted
+    /// because freeing an escaped box is a use-after-free. All three were
+    /// measured leaking 32 B per construction.
+    ///
+    /// The owner is the CALLEE's owned, non-escaping parameter — the same place
+    /// B-2026-08-05-7 and B-2026-08-06-9 leg A put it for the directly-boxed
+    /// sibling, extended to the nested descriptor. That one registration closes
+    /// all three at once, including the escape shape the row expected to need a
+    /// different mechanism: the escaped box does get an owner in the caller,
+    /// and it is whatever consumes the returned value.
+    ///
+    /// `Vec.push` is the arm that matters most and the reason this is not purely
+    /// an `-O0` fixture: a `Vec` keeps the allocation live past the point LLVM
+    /// could fold it away, so that shape leaked at the DEFAULT `-O2` too — the
+    /// only member of the family that did.
+    ///
+    /// THE OTHER HALF IS THE DOUBLE-FREE DIRECTIONS, and they are why the last
+    /// four arms exist. A second owner, not a missing one, is this family's
+    /// failure mode, and giving the callee ownership creates one wherever a
+    /// live binding still aliases the box it is handed. Each of these was
+    /// measured as a glibc `double free detected in tcache 2` at `-O0` during
+    /// implementation, and each is a strictly worse outcome than the leak it
+    /// replaced:
+    ///
+    ///   * `cls(idr(b))` — the passthrough result is `b`'s box; `b` keeps its
+    ///     registration because `idr` can return its parameter, so the consumer
+    ///     has to disarm the source it aliases.
+    ///   * `cls(idr(idr(b)))` — the outer passthrough's argument is a CALL, so
+    ///     an identifier-only resolver stops before reaching `b`.
+    ///   * `let c = idr(b); cls(c)` — `c` is an identifier that registers
+    ///     nothing; the owner is one alias-map hop away.
+    ///   * `fwd(b)`, which forwards to another by-value param rather than
+    ///     returning — the control for the three above. The forwarding param
+    ///     escapes, so it must register NOTHING and let the terminal consumer
+    ///     be the sole owner; a rule that registered per-hop would free once
+    ///     per hop.
+    ///
+    /// The `nobox` arm is the over-suppression control in the other direction:
+    /// `Result[Option[i64], E]` stores its inner scalar inline and allocates
+    /// nothing, so a registration there would free a word that was never a
+    /// pointer.
+    ///
+    /// The expected value is COMPUTED rather than read off a run: every payload
+    /// is seeded from the opaque `env.args().len()`, eight arms subtract the
+    /// seed back out to leave `i`, and the String arm contributes 1 — `8i + 1`
+    /// per iteration, so `8 * (0+…+39) + 40 = 6280`. Confirmed against the
+    /// built program at both opt levels (406/406 and 126/126 allocs/frees).
+    #[test]
+    fn asan_nested_box_owned_by_callee_when_no_binding_owns_it() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn cls(r: Result[Option[Option[i64]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(x))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn clsstr(r: Result[Option[Option[String]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(s))) => if s.len() > 0 { 1 } else { 0 },
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn nobox(r: Result[Option[i64], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(x)) => x,
+        Result.Ok(Option.None) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn idr(r: Result[Option[Option[i64]], i64]) -> Result[Option[Option[i64]], i64] { r }
+fn fwd(r: Result[Option[Option[i64]], i64]) -> i64 { cls(r) }
+fn mk(x: i64) -> Result[Option[Option[i64]], i64] {
+    let b: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(x)));
+    b
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        acc = acc + cls(Result.Ok(Option.Some(Option.Some(n + i)))) - n;
+
+        let mut v: Vec[Result[Option[Option[i64]], i64]] = [];
+        v.push(Result.Ok(Option.Some(Option.Some(n + i))));
+        acc = acc + cls(v[0]) - n;
+
+        acc = acc + cls(mk(n + i)) - n;
+
+        let b: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + cls(idr(b)) - n;
+
+        let c: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + cls(idr(idr(c))) - n;
+
+        let d: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let e1 = idr(d);
+        acc = acc + cls(e1) - n;
+
+        let g: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + fwd(g) - n;
+
+        acc = acc + clsstr(Result.Ok(Option.Some(Option.Some(f"p{n + i}"))));
+
+        acc = acc + nobox(Result.Ok(Option.Some(n + i))) - n;
+
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["6280"],
+            "nested_box_owned_by_callee_when_no_binding_owns_it",
+            30,
+        );
+    }
+
     #[test]
     fn asan_nested_option_pattern_boxed_payload_lifecycle_clean() {
         // B-2026-07-15-5: an inner `Option[T]` payload is heap-BOXED (4 words

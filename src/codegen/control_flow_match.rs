@@ -6128,7 +6128,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// against `x` — resolving repeatedly would be the correct generalization
     /// if that shape ever arms, but it does not today and an unbounded walk
     /// over a map that could contain a cycle is not worth adding unmeasured.
-    fn moved_arg_owner_name(&self, name: &str) -> String {
+    pub(super) fn moved_arg_owner_name(&self, name: &str) -> String {
         self.passthrough_owner_alias
             .get(name)
             .cloned()
@@ -6584,6 +6584,57 @@ impl<'ctx> super::Codegen<'ctx> {
     /// populations are disjoint by construction (a payload is boxed at a level
     /// or inline at it, never both) and the nested one deliberately sits
     /// outside the move rules.
+    /// The binding that actually owns the nested box `value` evaluates to, or
+    /// `None` if nothing armed does. B-2026-08-07-2.
+    ///
+    /// [`Self::call_passthrough_armed_nested_source`] answers the same question
+    /// for the let site, but only one hop and only for a call whose argument is
+    /// a bare identifier. That is enough where it is used and NOT enough at a
+    /// by-value argument, where the callee is about to take ownership and every
+    /// spelling that still aliases a live owner has to disarm it. Two got
+    /// through the one-hop form and both were measured as a glibc `double free
+    /// detected in tcache 2` at -O0:
+    ///
+    ///   * `cls(id(id(b)))` — the outer passthrough's argument is a CALL, so
+    ///     the identifier match fails and the walk stops before reaching `b`.
+    ///   * `let c = id(b); cls(c)` — `c` is an identifier but registers
+    ///     nothing; the let site recorded it as an ALIAS of `b`, and the owner
+    ///     is one map lookup away.
+    ///
+    /// So this resolves both directions to a fixpoint: through the alias map
+    /// for an identifier, and through the passthrough argument for a call.
+    /// The alias walk is bounded rather than trusting the map to be acyclic —
+    /// a cycle here would hang the compiler, and the bound costs nothing since
+    /// real chains are one or two hops.
+    pub(super) fn nested_boxed_owner_source_of(&self, value: &Expr) -> Option<String> {
+        match &value.kind {
+            ExprKind::Identifier(n) => {
+                let mut cur = n.clone();
+                for _ in 0..8 {
+                    if self.nested_boxed_payload_vars.contains(cur.as_str()) {
+                        return Some(cur);
+                    }
+                    match self.nested_boxed_passthrough_owner_alias.get(cur.as_str()) {
+                        Some(next) if *next != cur => cur = next.clone(),
+                        _ => return None,
+                    }
+                }
+                None
+            }
+            ExprKind::Call { callee, args, .. } => {
+                let ExprKind::Identifier(callee_name) = &callee.kind else {
+                    return None;
+                };
+                args.iter().enumerate().find_map(|(i, a)| {
+                    self.call_arg_flows_into_return(callee_name, i)
+                        .then(|| self.nested_boxed_owner_source_of(&a.value))
+                        .flatten()
+                })
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn call_passthrough_armed_nested_source(&self, value: &Expr) -> Option<String> {
         let ExprKind::Call { callee, args, .. } = &value.kind else {
             return None;

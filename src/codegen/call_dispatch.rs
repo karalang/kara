@@ -1989,6 +1989,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
                 self.suppress_inline_option_result_binding_move(&a.value);
+                // B-2026-08-07-2 shapes 1+2 — the NESTED-box sibling of the
+                // suppressor above. The callee's owned non-escaping param now
+                // registers a `NestedBoxedEnumDrop` of its own (functions.rs),
+                // so a binding argument that keeps its let-site registration
+                // would make two owners of one pointer — the double free this
+                // family's CAUTION is about, not a leak.
+                //
+                // Retraction rather than the slot-zeroing the direct sibling
+                // uses: this action's guard is a TWO-tag walk, and `Result`'s
+                // `Ok` is tag 0, so zeroing the slot leaves the outer guard
+                // PASSING and relies on the inner tag and null check to save
+                // it. Removing the action says what is meant and does not
+                // depend on which variant happens to be tag 0.
+                //
+                // Gated by the same `!flows_into_return` as its siblings, which
+                // is what keeps the escape shape (`fn id(r) -> r`) with exactly
+                // one owner: the callee registers nothing when the param can
+                // escape, so the caller must keep its own.
+                // Every spelling that still aliases a live owner has to disarm
+                // it, not just a bare identifier: `cls(id(b))`, `cls(id(id(b)))`
+                // and `let c = id(b); cls(c)` each hand the callee a temp that
+                // is `b`'s box, and each was measured as a glibc `double free
+                // detected in tcache 2` at -O0 while the resolver was too
+                // shallow to reach `b`.
+                if let Some(src) = self.nested_boxed_owner_source_of(&a.value) {
+                    self.suppress_nested_boxed_drop_for_var(&src);
+                }
                 // B-2026-07-28-16 — the same move, but from a FIELD rather than
                 // a binding: `consume(nd.hp)` where `nd` is an owned struct with
                 // an `Option`/`Result` field. The suppressor above is
