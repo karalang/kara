@@ -35938,6 +35938,104 @@ fn main() {
         );
     }
 
+    /// B-2026-08-07-2 shape 3 — a STRUCT between the levels. The envelope is
+    /// heap even when what it holds is not, and nobody owned it.
+    ///
+    /// `struct W { o: Option[Option[i64]] }` boxes: an `Option` is 4 LLVM words
+    /// against `Option`'s own 3-word payload area, so the inner one is spilled
+    /// behind a pointer with not a byte of heap inside it. Every predicate in
+    /// this family asks whether the PAYLOAD owns heap and so answers no, which
+    /// left `field_copy_supported` reading `W` as caller-retains — and that in
+    /// turn switches off `emit_struct_drop_synthesis`'s entire `OptionInline`
+    /// pass, so the field got no drop at all.
+    ///
+    /// THE ROW POINTED SOMEWHERE ELSE, and the `never_read` / `bare` arms are
+    /// why. It filed this as a `Result[W, E]` problem and proposed widening the
+    /// Result-level `nested_boxed_enum_payload_variants` to walk struct fields,
+    /// naming `__karac_drop_struct_W` as the rival owner to rule out. That
+    /// widening was implemented and reverted for double-freeing. The wrapper is
+    /// irrelevant: a bare `let w: W` whose field is NEVER READ leaks the same
+    /// 320 B / 10, so this was always the struct's own field drop.
+    ///
+    /// THE CONTESTED OWNER RESOLVES ITSELF once the fix is at the field. The
+    /// `moved_out` arms are the shapes the row said made the owner contested —
+    /// `let inner = w.o` gives `inner`'s let site a `BoxedEnumDrop` over the
+    /// same box — and they are clean here because classifying the field the way
+    /// its heap-payload sibling is classified also inherits that sibling's
+    /// move-out neutralization, which keys on the same classifier.
+    ///
+    /// CONTROLS. `W2` is the heap-interior sibling that always worked and must
+    /// not start double-freeing. `H` is a boxed all-scalar STRUCT payload,
+    /// admitted by the same predicate. `Outer` nests `W` a level down and
+    /// `Vec[W]` puts it in a container, both of which reach the field drop by
+    /// different routes.
+    ///
+    /// NOT COVERED, deliberately, so this fixture stays green on what it
+    /// asserts: a fresh-temp `W` passed BY VALUE still orphans the caller's
+    /// envelope (B-2026-08-07-12 leg 2 — that gate declines correctly on heap
+    /// grounds and the envelope is not heap by its reckoning), and an
+    /// `Option[(i64, i64, i64, i64)]` tuple payload still leaks because the
+    /// entry copy cannot duplicate it, which is exactly why the predicate here
+    /// refuses it rather than pairing a drop with a copy that does nothing.
+    ///
+    /// Expected value is COMPUTED: 1+2+4+8+16+32+64+128+256 = 511 per
+    /// iteration, x40 = 20440.
+    #[test]
+    fn asan_struct_field_boxed_heapless_option_envelope_owned() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct W { o: Option[Option[i64]] }
+struct W2 { o: Option[Option[String]] }
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+struct H { o: Option[Wide] }
+struct Outer { w: W, tag: i64 }
+fn cls(r: Result[W, i64]) -> i64 {
+    match r { Result.Ok(w) => match w.o { Option.Some(Option.Some(_)) => 1, _ => -1 }, Result.Err(e) => e }
+}
+fn cls_moved(r: Result[W, i64]) -> i64 {
+    match r {
+        Result.Ok(w) => {
+            let inner: Option[Option[i64]] = w.o;
+            match inner { Option.Some(Option.Some(_)) => 8, _ => -1 }
+        },
+        Result.Err(e) => e,
+    }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        acc = acc + cls(Result.Ok(W { o: Option.Some(Option.Some(n + i)) }));
+        let never_read: W = W { o: Option.Some(Option.Some(n + i)) };
+        acc = acc + 2;
+        let bare: W = W { o: Option.Some(Option.Some(n + i)) };
+        let moved: Option[Option[i64]] = bare.o;
+        acc = acc + match moved { Option.Some(Option.Some(_)) => 4, _ => -1 };
+        acc = acc + cls_moved(Result.Ok(W { o: Option.Some(Option.Some(n + i)) }));
+        let h: H = H { o: Option.Some(Wide { a: n + i, b: 2, c: 3, d: 4 }) };
+        acc = acc + match h.o { Option.Some(_) => 16, Option.None => -1 };
+        let s: W2 = W2 { o: Option.Some(Option.Some(f"p{n + i}")) };
+        acc = acc + match s.o { Option.Some(Option.Some(_)) => 32, _ => -1 };
+        let s2: W2 = W2 { o: Option.Some(Option.Some(f"q{n + i}")) };
+        let smoved: Option[Option[String]] = s2.o;
+        acc = acc + match smoved { Option.Some(Option.Some(t)) => if t.len() > 0 { 64 } else { 0 }, _ => -1 };
+        let ou: Outer = Outer { w: W { o: Option.Some(Option.Some(n + i)) }, tag: 1 };
+        acc = acc + match ou.w.o { Option.Some(Option.Some(_)) => 128, _ => -1 };
+        let mut v: Vec[W] = Vec.new();
+        v.push(W { o: Option.Some(Option.Some(n + i)) });
+        acc = acc + match v[0].o { Option.Some(Option.Some(_)) => 256, _ => -1 };
+        i = i + 1;
+    }
+    println(acc);
+}
+"#,
+            &["20440"],
+            "struct_field_boxed_heapless_option_envelope_owned",
+            40,
+        );
+    }
+
     /// B-2026-08-07-2 shape 4 — a box inside a box. The nested-box action freed
     /// the OUTERMOST envelope and every one below it leaked.
     ///

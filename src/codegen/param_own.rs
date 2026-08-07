@@ -582,6 +582,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             || Self::option_payload_te(fte)
                                 .map(|pt| self.option_payload_struct_or_enum_copyable(&pt, stack))
                                 .unwrap_or(false)
+                            // B-2026-08-07-2 shape 3 — the same admission for a
+                            // BOXED payload that owns no heap of its own. The
+                            // disjunct above routes through
+                            // `option_payload_struct_or_enum_drop_ok`, which
+                            // requires the payload to be droppable, so
+                            // `Option[Option[i64]]` fails it and the whole struct
+                            // reads as caller-retains — which in turn switches off
+                            // `emit_struct_drop_synthesis`'s entire `OptionInline`
+                            // pass (gated on this predicate) and orphans the
+                            // envelope, 320 B / 10 at -O0 for a bare `let w: W`
+                            // whose field is never read.
+                            //
+                            // Copy == drop still holds, which is the only reason
+                            // this is admissible: the entry copy allocates a fresh
+                            // box and duplicates the payload value into it, and the
+                            // drop side frees exactly that box (nothing inside it to
+                            // free). Both sides consult the SAME predicate so they
+                            // cannot drift apart.
+                            || Self::option_payload_te(fte)
+                                .map(|pt| self.option_payload_boxed_envelope_only(&pt))
+                                .unwrap_or(false)
                     }
                     // B-2026-07-21-15 — a `Result` field in the DIRECT
                     // String/Vec-halves class IS copyable: the entry copy

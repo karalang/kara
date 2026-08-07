@@ -2683,6 +2683,41 @@ impl<'ctx> super::Codegen<'ctx> {
             && side_ok(err_te)
     }
 
+    /// B-2026-08-07-2 shape 3 — an `Option[P]` whose `P` is heap-BOXED and owns
+    /// no heap of its own, so the only allocation is the ENVELOPE.
+    ///
+    /// `Option[Option[i64]]` is the canonical member: an `Option` is 4 LLVM
+    /// words against `Option`'s own 3-word payload area, so the inner one is
+    /// spilled behind a pointer by `coerce_to_payload_words` even though there
+    /// is not a byte of heap inside it. Every existing predicate in this family
+    /// asks whether the PAYLOAD owns heap and therefore answers no —
+    /// `te_recursive_drop_fully_supported` says so in as many words ("boxed
+    /// non-shared … stay false") — which leaves the 32-byte box owned by
+    /// nobody.
+    ///
+    /// Restricted to a payload the ENTRY COPY actually descends into: a
+    /// non-shared `Path` head that is a user struct or a seeded enum, which is
+    /// `deep_copy_option_struct_enum_payload_in_place`'s own admission test.
+    /// That restriction is the soundness condition, not a convenience. Copy and
+    /// drop are a pair here, and a TUPLE payload shows what happens if they
+    /// part: `Option[(i64, i64, i64, i64)]` is boxed too, but the copy's
+    /// `TypeKind::Path` bind fails and it silently duplicates nothing — so
+    /// admitting it would give the callee's struct and the caller's original
+    /// one box between them and two frees.
+    pub(super) fn option_payload_boxed_envelope_only(&self, payload_te: &TypeExpr) -> bool {
+        if !self.option_payload_is_boxed(payload_te) {
+            return false;
+        }
+        let TypeKind::Path(p) = &payload_te.kind else {
+            return false;
+        };
+        let head = p.segments.first().map(String::as_str).unwrap_or("");
+        if self.shared_types.contains_key(head) {
+            return false;
+        }
+        self.struct_types.contains_key(head) || self.enum_layouts.contains_key(head)
+    }
+
     pub(super) fn option_payload_inline_recursive_drop_ok(&self, payload_te: &TypeExpr) -> bool {
         match &payload_te.kind {
             TypeKind::Path(p) => {

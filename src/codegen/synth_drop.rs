@@ -1719,6 +1719,45 @@ impl<'ctx> super::Codegen<'ctx> {
                             || self.option_payload_struct_or_enum_drop_ok(&pt)
                     })
                     .unwrap_or(false);
+                // B-2026-08-07-2 shape 3 — the ENVELOPE is heap even when what
+                // it holds is not. Every test above asks whether the PAYLOAD
+                // owns heap, so `Option[Option[i64]]` answers no three times
+                // (`te_recursive_drop_fully_supported` bottoms out at a scalar
+                // and its own comment says "boxed non-shared … stay false") and
+                // the field gets no drop. But a payload wider than the 3-word
+                // area was heap-BOXED by `coerce_to_payload_words`, and that
+                // 32-byte box is owned by nobody: measured 320 B / 10 at -O0 for
+                // a bare `let w: W` whose field is never even read.
+                //
+                // The `Result` wrapper this row was filed against is irrelevant
+                // — the bare struct leaks identically, which is what makes this
+                // the struct's own field drop to fix rather than the
+                // Result-level descriptor the row proposed widening. That
+                // widening was tried and reverted for double-freeing, because it
+                // gave a SECOND owner to a box the field-move binding already
+                // claims; putting the drop on the field instead reuses the
+                // move-out neutralization the heap-payload sibling already has.
+                //
+                // `emit_option_drop_fn` needs no box-only variant: its boxed
+                // branch already calls the payload's drop and then frees the
+                // box, and for a heapless payload that inner call is the no-op
+                // `emit_drop_fn_for_type_expr` synthesizes. So this is the deep
+                // drop applied to a payload with nothing deep in it.
+                let boxed_envelope_only = !payload_droppable
+                    && self
+                        .option_inner_shared_type_for_type_expr(&field_te)
+                        .is_none()
+                    && Self::option_payload_te(&field_te)
+                        .is_some_and(|pt| self.option_payload_boxed_envelope_only(&pt));
+                if boxed_envelope_only {
+                    if let Some(pt) = Self::option_payload_te(&field_te) {
+                        if let Some(f) = self.emit_option_drop_fn(&pt) {
+                            option_drops[idx] = Some(f);
+                            kinds[idx] = FieldDrop::OptionInline;
+                        }
+                    }
+                    continue;
+                }
                 if !payload_droppable {
                     continue;
                 }
