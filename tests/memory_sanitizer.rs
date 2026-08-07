@@ -36093,16 +36093,20 @@ fn main() {
     /// the double-free assertion bites: the pre-fix abort reproduced at BOTH
     /// levels, so the default leg catches any regression on its own.
     ///
-    /// NOT COVERED, and still corrupting on main: binding the whole payload out
-    /// and destructuring it in a SECOND match (`Some(inner) => match inner {
-    /// Some(s) => … }`). Verified pre-existing by measuring it with this change
-    /// stashed — identical abort — so it is a sibling shape, not a residue of
-    /// this fix, and it is exactly the case the second bullet above forbids
-    /// reaching for.
+    /// The `whole` arm is B-2026-08-07-9, the two-step spelling of the same
+    /// reach: `Some(inner) => match inner { Some(s) => … }` gets to the
+    /// interior via a binding instead of a nested pattern, and double-freed
+    /// identically. It cannot be admitted by widening the pattern test — that
+    /// is precisely the over-fire the second bullet above forbids, since at the
+    /// arm it and `asan_b04_7`'s correct `Some(v) => ident_len(v)` are both
+    /// `Some(<binding>)`. What separates them is what happens to the binding
+    /// NEXT, so the gate asks the arm BODY: a plain binding qualifies only when
+    /// the body goes on to destructure it. `asan_b04_7` consumes `v` whole and
+    /// stays untouched, which the -O0 leg checks on every run.
     ///
-    /// Expected value is COMPUTED: per iteration the two `String` arms give
+    /// Expected value is COMPUTED: per iteration the three `String` arms give
     /// 1 each, the scalar arm gives `i`, and the two payload-absent arms -1
-    /// each — `i` per iteration, so `0+…+39 = 780`.
+    /// each — `i + 1` per iteration, so `(0+…+39) + 40 = 820`.
     #[test]
     fn asan_struct_field_boxed_payload_interior_match_out_no_double_free() {
         assert_clean_asan_run_min_allocs(
@@ -36115,6 +36119,9 @@ fn bound(w: W) -> i64 {
 fn unbound(w: W) -> i64 {
     match w.o { Option.Some(Option.Some(_)) => 1, _ => -1 }
 }
+fn whole(w: W) -> i64 {
+    match w.o { Option.Some(inner) => match inner { Option.Some(s) => if s.len() > 0 { 1 } else { 0 }, Option.None => -1 }, Option.None => -1 }
+}
 fn scalar(v: V) -> i64 {
     match v.o { Option.Some(Option.Some(x)) => x, _ => -1 }
 }
@@ -36125,6 +36132,7 @@ fn main() {
     while i < 40 {
         acc = acc + bound(W { o: Option.Some(Option.Some(f"p{n + i}")) });
         acc = acc + unbound(W { o: Option.Some(Option.Some(f"p{n + i}")) });
+        acc = acc + whole(W { o: Option.Some(Option.Some(f"p{n + i}")) });
         acc = acc + scalar(V { o: Option.Some(Option.Some(n + i)) }) - n;
         let w2: W = W { o: Option.Some(Option.None) };
         acc = acc + bound(w2);
@@ -36135,7 +36143,7 @@ fn main() {
     println(acc);
 }
 "#,
-            &["780"],
+            &["820"],
             "struct_field_boxed_payload_interior_match_out",
             30,
         );

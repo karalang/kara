@@ -543,7 +543,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // B-2026-08-07-7 — the BOXED-payload struct-field channel
                     // the call above cannot reach (`is_heap_bearing()` is false
                     // for `BoxedOptRes`, so it skips boxed payloads by design).
-                    self.suppress_struct_field_boxed_payload_match_out(scrutinee, &arm.pattern);
+                    self.suppress_struct_field_boxed_payload_match_out(
+                        scrutinee,
+                        &arm.pattern,
+                        &arm.body,
+                    );
                     // B-2026-06-10-6 companion: the erased-`Option` drop
                     // switch can't classify an inline `String`/`Vec` payload,
                     // so the suppression above no-ops for it. Zero the source
@@ -2670,6 +2674,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
+        arm_body: &Expr,
     ) {
         if self.pattern_binding_is_borrow {
             return;
@@ -2694,12 +2699,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // A wildcard or literal sub-pattern consumes nothing and leaves the
         // interior to the struct's drop — the population the box-only attempt
         // broke, excluded here by the same test.
+        //
+        // B-2026-08-07-9 — a plain binding qualifies too, but ONLY when the arm
+        // body goes on to destructure it. `match w.o { Some(inner) => match
+        // inner { Some(s) => … } }` reaches the same interior by two steps
+        // instead of one and double-freed identically; the `let inner = w.o;`
+        // spelling of it is clean because the let-move runs its own source
+        // suppression, which is precisely what the arm binding lacks.
+        //
+        // Looking at the BODY is what separates it from `asan_b04_7`'s
+        // `Some(v) => ident_len(v)`, which is correct today and must stay
+        // untouched. At the arm both are `Some(<binding>)` and nothing about
+        // the pattern tells them apart — what differs is what happens to the
+        // binding next, so that is what this asks.
         let consumes = match &pattern.kind {
             PatternKind::TupleVariant { patterns, .. } => patterns.iter().any(|sub| {
-                matches!(
+                if matches!(
                     &sub.kind,
                     PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
-                ) && pattern_consumes_field(sub)
+                ) {
+                    return pattern_consumes_field(sub);
+                }
+                match &sub.kind {
+                    PatternKind::Binding(n) => Self::expr_destructures_binding(arm_body, n),
+                    _ => false,
+                }
             }),
             _ => false,
         };
@@ -2742,6 +2766,54 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some(field_ptr) = self.field_chain_place_ptr(scrutinee) {
             self.zero_option_field_tag_at(field_ptr);
+        }
+    }
+
+    /// Does `e` contain a `match <name> { … }` (or `if let … = <name>`) whose
+    /// pattern destructures INTO the payload rather than binding it whole?
+    /// B-2026-08-07-9.
+    ///
+    /// Syntactic on purpose. The alternative is alias tracking from an arm
+    /// binding to the struct field it came from, and the question here is
+    /// narrower than that: this only needs to know whether the binding's own
+    /// interior gets claimed by a second destructure, which is visible in the
+    /// arm body. A conservative FALSE just leaves the pre-existing double free
+    /// alone; a conservative TRUE would orphan an envelope, so the walk matches
+    /// the same "nested variant sub-pattern" shape the direct case requires
+    /// rather than any use of the name.
+    fn expr_destructures_binding(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } => {
+                if let ExprKind::Identifier(n) = &scrutinee.kind {
+                    if n == name
+                        && arms.iter().any(|a| match &a.pattern.kind {
+                            PatternKind::TupleVariant { patterns, .. } => {
+                                patterns.iter().any(pattern_consumes_field)
+                            }
+                            _ => false,
+                        })
+                    {
+                        return true;
+                    }
+                }
+                arms.iter()
+                    .any(|a| Self::expr_destructures_binding(&a.body, name))
+            }
+            // A block body reaches the same match one level in; the tail is the
+            // common spelling and a statement position the rest.
+            ExprKind::Block(b) => {
+                b.final_expr
+                    .as_deref()
+                    .is_some_and(|t| Self::expr_destructures_binding(t, name))
+                    || b.stmts.iter().any(|st| match &st.kind {
+                        crate::ast::StmtKind::Expr(x) => Self::expr_destructures_binding(x, name),
+                        crate::ast::StmtKind::Let { value, .. } => {
+                            Self::expr_destructures_binding(value, name)
+                        }
+                        _ => false,
+                    })
+            }
+            _ => false,
         }
     }
 
