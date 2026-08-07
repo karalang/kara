@@ -10237,26 +10237,39 @@ fn frozen_self_receiver_is_subject_to_the_freeze_site_check() {
             "par struct Q { v: i64 }\nimpl Q { fn m(frozen self) -> i64 { self.v } }",
             "so `frozen` adds nothing",
         ),
+        // B-2026-08-01-33 stage 3b step 2 REPLACED the `mut`-bearing rows here.
+        // A `frozen self` receiver is a Param site, and a Param site no longer
+        // demands type-level deep immutability: its guarantee comes from the
+        // caller's `freeze`, and the par CAPTURE refuses an unfrozen handle.
+        // So the receiver DECLARATION is admitted, and what still refuses is
+        // the body reading the `mut` field — the projection guard, untouched.
+        // The program stays rejected; the guard that rejects it moved.
         (
-            "a type with mutable state",
+            "a type with mutable state: the receiver is admitted, the mut READ is not",
             "shared struct M { mut seen: i64 }\nimpl M { fn m(frozen self) -> i64 { self.seen } }",
-            "has mutable state",
+            "cannot be projected through `.seen`",
         ),
         (
-            "mutable state reachable only THROUGH a field",
+            "mutable state reachable only THROUGH a field: admitted, body reads nothing",
             "shared struct Bump { mut n: i64 }\n\
              shared struct Outer { b: Bump }\n\
-             impl Outer { fn m(frozen self) -> i64 { 0 } }",
-            "has mutable state",
+             impl Outer { fn m(frozen self) -> i64 { self.b.n } }",
+            "cannot be projected through `.n`",
         ),
     ];
     for (label, body, expected) in cases {
         let src = format!("{body}\nfn main() {{ println(\"x\"); }}\n");
         let errors = ownership_errors(&src);
+        // The KIND is no longer uniform across these rows. Stage 3b step 2
+        // admits a `mut`-bearing PARAMETER / `frozen self` receiver, so those
+        // rows are now refused by the PROJECTION guard rather than the
+        // freeze-site classifier. What every row still shares — and the thing
+        // worth asserting — is that the program is REFUSED for the named
+        // reason; pinning the kind as well would assert which guard fires,
+        // which is exactly what this step changes on purpose.
         assert!(
-            errors.iter().any(|e| e.message.contains(expected)
-                && e.kind == OwnershipErrorKind::FrozenTypeNotFreezable),
-            "[{label}] expected a FrozenTypeNotFreezable error containing {expected:?}; got {:?}",
+            errors.iter().any(|e| e.message.contains(expected)),
+            "[{label}] expected an error containing {expected:?}; got {:?}",
             errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
         );
     }
@@ -10497,15 +10510,6 @@ fn freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source() {
             "has mutable state",
         ),
         (
-            // The asymmetry that keeps this mechanism 3 rather than mechanism
-            // 1: a parameter's instance belongs to the caller, so no local
-            // proof can be had and the type-level demand stays.
-            "a `frozen` PARAMETER of the same type — never relaxed",
-            "fn frz(n: frozen Node) -> i64 { n.val }\n\
-             fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; frz(t) }",
-            "has mutable state",
-        ),
-        (
             // Step 3 is deliberately untouched, so the `mut` field itself is
             // still unreachable through the frozen handle. If this ever starts
             // passing without step 3 landing, the relaxation has over-widened.
@@ -10551,19 +10555,35 @@ fn freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source() {
             .map(|e| e.suggestion.clone())
             .collect::<Vec<_>>()
     );
-    let param = ownership_errors(&format!(
+    // Stage 3b step 2 — a PARAMETER of the same `mut`-bearing type is now
+    // ADMITTED, which is what makes the callee traversal (#133's shape)
+    // expressible. The guarantee is not established at the parameter; it comes
+    // from the caller's `freeze`.
+    ownership_ok(&format!(
         "{prelude}fn frz(n: frozen Node) -> i64 {{ n.val }}\n\
+         fn f() -> i64 {{ let t = Node {{ val: 1, neighbors: [] }}; let g = freeze t; frz(g) }}\n\
+         fn main() {{ println(\"x\"); }}\n"
+    ));
+
+    // ... and the PAR CAPTURE is what pays for admitting it, so it must still
+    // bite. This is the load-bearing control for the whole step: if it ever
+    // starts passing, the parameter admission has become a race rather than a
+    // relaxation.
+    let unfrozen_par = ownership_errors(&format!(
+        "{prelude}fn frz(n: frozen Node) -> i64 {{ n.val }}\n\
+         fn f() -> i64 {{ let t = Node {{ val: 1, neighbors: [] }}; \
+         let (a, b) = par {{ let a = frz(t); let b = frz(t); (a, b) }}; a + b }}\n\
          fn main() {{ println(\"x\"); }}\n"
     ));
     assert!(
-        param.iter().any(|e| e
-            .suggestion
-            .as_deref()
-            .is_some_and(|s| s.contains("belongs to the caller"))),
-        "the parameter-site suggestion must explain why no local proof exists; got {:?}",
-        param
+        unfrozen_par.iter().any(|e| e
+            .message
+            .contains("cannot be accessed from multiple concurrent")),
+        "an UNFROZEN shared root must still be refused at the par capture — that gate is what \
+         the parameter admission leans on; got {:?}",
+        unfrozen_par
             .iter()
-            .map(|e| e.suggestion.clone())
+            .map(|e| e.message.clone())
             .collect::<Vec<_>>()
     );
 }
@@ -10804,27 +10824,37 @@ fn frozen_freeze_site_refuses_types_that_cannot_be_frozen() {
             "fn f(x: frozen P) -> i64 { 0 }",
             "so `frozen` adds nothing",
         ),
+        // Stage 3b step 2 — same move as the receiver rows above. The
+        // PARAMETER is admitted; the `mut` field is what stays unreachable.
+        // A body of `0` would now compile, so the body has to touch the field
+        // for this row to assert anything at all.
         (
-            "shared type with a `mut` field",
-            "fn f(x: frozen M) -> i64 { 0 }",
-            "has mutable state",
+            "shared type with a `mut` field: admitted, the mut READ is not",
+            "fn f(x: frozen M) -> i64 { x.count }",
+            "cannot be projected through `.count`",
         ),
         // The transitive case is the one that makes this a DEEP check rather
         // than a field scan: `Outer` is itself mut-free and only reaches
         // mutable state through `Inner`.
         (
-            "mutable state reached transitively",
-            "fn f(x: frozen Outer) -> i64 { 0 }",
-            "has mutable state",
+            "mutable state reached transitively: admitted, the deep read is not",
+            "fn f(x: frozen Outer) -> i64 { x.inner.bump }",
+            "cannot be projected through",
         ),
     ];
     for (label, body, expected) in cases {
         let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
         let errors = ownership_errors(&src);
+        // The KIND is no longer uniform across these rows. Stage 3b step 2
+        // admits a `mut`-bearing PARAMETER / `frozen self` receiver, so those
+        // rows are now refused by the PROJECTION guard rather than the
+        // freeze-site classifier. What every row still shares — and the thing
+        // worth asserting — is that the program is REFUSED for the named
+        // reason; pinning the kind as well would assert which guard fires,
+        // which is exactly what this step changes on purpose.
         assert!(
-            errors.iter().any(|e| e.message.contains(expected)
-                && e.kind == OwnershipErrorKind::FrozenTypeNotFreezable),
-            "[{label}] expected a FrozenTypeNotFreezable error containing {expected:?}; got {:?}",
+            errors.iter().any(|e| e.message.contains(expected)),
+            "[{label}] expected an error containing {expected:?}; got {:?}",
             errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
         );
     }

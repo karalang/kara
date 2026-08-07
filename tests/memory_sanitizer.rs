@@ -15416,6 +15416,64 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 stage 3b step 2 — the shape the whole entry exists for,
+    /// on a `mut`-bearing type: a RECURSIVE traversal IN A CALLEE, shared
+    /// read-only across two `par` branches.
+    ///
+    /// The sibling above keeps its traversal inline because a `frozen Node`
+    /// PARAMETER of a `mut`-bearing type was refused. Step 2 admits it — the
+    /// parameter's guarantee comes from the caller's `freeze`, not from its own
+    /// type — and this is what that buys. It is #133's structure exactly;
+    /// #133 itself additionally READS its `mut` field, which the projection
+    /// guard still refuses (step 3).
+    ///
+    /// The load-bearing control lives in tests/ownership.rs
+    /// (`freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source`): an
+    /// UNFROZEN root reaching a branch must still be refused at the par
+    /// capture, because that gate is the entire reason admitting the parameter
+    /// is safe. Read the two together.
+    #[test]
+    fn asan_frozen_param_traversal_of_a_mut_bearing_graph_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { tag: String, val: i64, kids: Vec[Node], mut visits: i64 }
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 {
+        return Node { tag: f"leaf-{seed}-runtime-heap", val: seed, kids: [], visits: 0 };
+    }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { tag: f"node-{seed}-runtime-heap", val: seed, kids: [a, b], visits: 0 };
+}
+
+// A `frozen` parameter of a `mut`-bearing type: refused outright before step 2.
+fn sum(n: frozen Node) -> i64 {
+    let mut s: i64 = n.val + n.tag.len();
+    for k in n.kids { s = s + sum(k); }
+    return s;
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(7, seed);
+    let g = freeze root;
+    let (a, b) = par {
+        let a = sum(g);
+        let b = sum(g);
+        (a, b)
+    };
+    println(a + b);
+}
+"#,
+            // 255 nodes x (val 1 + tag len 19) x 2 branches.
+            &["10200"],
+            "frozen_param_traversal_of_a_mut_bearing_graph",
+            // 255 tag Strings plus the 127 interior kids buffers.
+            300,
+        );
+    }
+
     /// B-2026-07-11-26: a fresh-temp HEAP-bearing enum scrutinee with a user
     /// `impl Drop`, matched in an if-let that MOVES the heap payload into a
     /// binding. The user Drop body runs (side effect `D`) AND the moved-out Vec

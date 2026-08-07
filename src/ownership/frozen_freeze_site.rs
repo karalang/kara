@@ -149,33 +149,24 @@ impl super::OwnershipChecker<'_> {
                      already works"
                         .to_string(),
                 ),
-                // Two different programs, two different fixes — which is why
-                // `FreezeSite` is an enum. A STATEMENT that failed uniqueness
-                // has a local, mechanical repair (drop the other name); a
-                // PARAMETER has none, because the aliasing it would have to
-                // rule out is the caller's.
+                // One message again: there is now exactly one way to reach
+                // this arm — a STATEMENT whose source failed uniqueness. A
+                // parameter of a `mut`-bearing type is admitted, so the
+                // parameter-shaped advice this briefly carried described a
+                // refusal that can no longer happen. A suggestion for an
+                // unreachable state is worse than none; this row already
+                // records an ownership `suggestion` that reached nobody at all.
                 Refusal::MutableState => (
                     format!("`{shown}` has mutable state, so it cannot be frozen yet"),
-                    match site {
-                        FreezeSite::Statement { .. } => format!(
-                            "freezing claims the value is deeply immutable for the region. For a \
-                             `mut`-bearing type like `{shown}` that claim rests on this being the \
-                             ONLY live name for the instance, and something else here names it \
-                             too — an earlier use of the source, or a source that is itself bound \
-                             from another place. Move or remove that other binding so the \
-                             `freeze` is the first thing to touch the value, or remove `mut` from \
-                             the fields reachable from `{shown}`"
-                        ),
-                        FreezeSite::Param => format!(
-                            "freezing claims the value is deeply immutable for the region. A \
-                             PARAMETER cannot carry that claim for a `mut`-bearing type — the \
-                             instance belongs to the caller, whose other handles this check \
-                             cannot see — so it requires the TYPE to guarantee it: no `mut` field \
-                             anywhere reachable from `{shown}`. Either remove `mut` from the \
-                             reachable fields, or `freeze` the value in the caller and pass the \
-                             frozen handle in"
-                        ),
-                    },
+                    format!(
+                        "freezing claims the value is deeply immutable for the region. For a \
+                         `mut`-bearing type like `{shown}` that claim rests on this being the \
+                         ONLY live name for the instance, and something else here names it too \
+                         — an earlier use of the source, or a source that is itself bound from \
+                         another place. Move or remove that other binding so the `freeze` is \
+                         the first thing to touch the value, or remove `mut` from the fields \
+                         reachable from `{shown}`"
+                    ),
                 ),
             };
             self.errors.push(OwnershipError {
@@ -204,6 +195,48 @@ impl super::OwnershipChecker<'_> {
     /// header to skip, or an atomic one that needs no skipping), which no fact
     /// about aliasing can change.
     ///
+    /// ## Why a PARAMETER is admitted without a proof of its own
+    ///
+    /// The design expects a `frozen T` parameter to "inherit the guarantee from
+    /// its caller's already-frozen argument, which is how the mode composes
+    /// today". MEASURED, that composition does not exist: a `frozen` slot
+    /// accepts an ordinary binding (`frz(t)` checks clean), so there is nothing
+    /// to inherit. Building it would mean demanding a frozen argument at every
+    /// call site — and two call forms resolve no signature today (a free
+    /// function taken as a VALUE, `let f = frz; f(t)`; and a `frozen` parameter
+    /// on a method whose RECEIVER is not frozen), so that enforcement would
+    /// have carried exactly the silent hole this family keeps producing.
+    ///
+    /// It is not needed, because the parameter is not where the guarantee is
+    /// established — the PAR CAPTURE is. Probed with this arm relaxed, every
+    /// route for an unfrozen `mut`-bearing handle to reach a `frozen` parameter
+    /// concurrently was refused, and refused at the capture:
+    ///
+    /// * an unfrozen `shared` root reaching a branch — refused, "cannot be
+    ///   accessed from multiple concurrent branches" — through a direct call,
+    ///   through a function-as-value, and through a method;
+    /// * a FROZEN place passed to a slot whose signature cannot be resolved —
+    ///   refused as a non-`frozen` slot, i.e. the unresolvable case fails
+    ///   CLOSED rather than open;
+    /// * the `mut` field unreadable and unwritable through the parameter, the
+    ///   `frozen self` receiver, and the frozen source alike — the projection
+    ///   guard, untouched;
+    /// * a non-counting handle escaping the call — refused, E0511, untouched.
+    ///
+    /// So a `mut`-bearing `frozen` parameter can only be reached with a handle
+    /// some caller already froze, and the freeze is where the per-instance
+    /// proof is taken. Demanding a second proof here would refuse the callee
+    /// traversal — the shape #133 is written in — while adding nothing.
+    ///
+    /// HONEST CHARACTERISATION, because it differs in kind from the statement
+    /// check above and the difference should not be lost: that one is
+    /// FAIL-CLOSED (refuse unless uniqueness is proven), this one is FAIL-OPEN
+    /// (admit because no unsafe route was found). The probe list is broad but
+    /// it is evidence of absence. What pays for it is that every guard it leans
+    /// on — the capture gate, the projection walk, the escape check — is itself
+    /// fail-closed, so a route this reasoning missed still has three refusals
+    /// to get past.
+    ///
     /// What keeps the relaxation sound is that it does not stand alone. The
     /// escape walk freezes the SOURCE root for the rest of the scope, so the
     /// owner cannot be moved, reassigned, returned or captured while the
@@ -231,16 +264,16 @@ impl super::OwnershipChecker<'_> {
         // 2 uses to decide what it may promote.
         match self.deep_immutability_closure(type_name) {
             Some(_) => None,
-            None if matches!(
-                site,
+            // A `mut`-bearing type: refused only when this is a STATEMENT
+            // whose source failed uniqueness. A PARAMETER is admitted without a
+            // proof of its own — see the doc comment above for why that is not
+            // a hole.
+            None => match site {
                 FreezeSite::Statement {
-                    uniquely_bound: true
-                }
-            ) =>
-            {
-                None
-            }
-            None => Some(Refusal::MutableState),
+                    uniquely_bound: false,
+                } => Some(Refusal::MutableState),
+                _ => None,
+            },
         }
     }
 }
