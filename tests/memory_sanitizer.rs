@@ -36796,6 +36796,17 @@ fn main() {
     /// gate on. `h.ig` and `ig_gen` carry the same shape through the METHOD and
     /// MONOMORPH arg loops, which have their own copies of the registration.
     ///
+    /// TWO ROWS SAY THE CLASS IS WIDER THAN "a `Map`/`Set` field", which is how
+    /// the bug was first titled. What matters is only that
+    /// `field_copy_supported` DECLINES; a collection field is the commonest way
+    /// to make it, not the condition:
+    ///   * `ig_nest` reaches it through a NESTED struct — `Outer { a: String,
+    ///     i: Inner }` over `Inner { m: Map[..] }`, where the outer struct names
+    ///     no collection at all. 480 errors pre-fix.
+    ///   * `ig_arr` has NO `Map` or `Set` anywhere in it: an `Array[i64, 4]`
+    ///     field hits `field_copy_supported`'s conservative `_ => false` arm.
+    ///     10 errors pre-fix — the row a search for "Map" would never find.
+    ///
     /// FIVE CONTROLS, and each one is a way the fix could have been wrong:
     ///   * `ig_mo` — the same struct with NO sibling heap field. The gate never
     ///     fired for it, so it was already clean and must stay clean.
@@ -36815,8 +36826,8 @@ fn main() {
     ///   * the `named` binding — the half of the lockstep that always worked,
     ///     here so a fix that broke it cannot pass.
     ///
-    /// Expected value is COMPUTED: 1+2+4+8+16+32+64+128+256+1 = 512 per
-    /// iteration, x40 = 20480.
+    /// Expected value is COMPUTED: 1+2+4+8+16+32+64+128+256+1+512+1024 = 2048
+    /// per iteration, x40 = 81920.
     #[test]
     fn asan_fresh_temp_struct_arg_owned_by_transfer_no_double_free() {
         assert_clean_asan_run_min_allocs(
@@ -36826,6 +36837,9 @@ struct Vs { a: Vec[i64], m: Map[String, i64] }
 struct Ss { a: String, s: Set[i64] }
 struct Mo { m: Map[String, i64] }
 struct Ps { a: String }
+struct Inner { m: Map[String, i64] }
+struct Outer { a: String, i: Inner }
+struct Ar { a: String, arr: Array[i64, 4] }
 shared struct Shr { v: i64 }
 struct Sh2 { a: String, sh: Shr }
 struct Host { k: i64 }
@@ -36840,6 +36854,8 @@ fn ig_ps(x: Ps) -> i64 { 32 }
 fn ig_sh(x: Sh2) -> i64 { 64 }
 fn ig_ref(x: ref Ms) -> i64 { 128 }
 fn ig_gen[T](x: Ms, t: T) -> i64 { 256 }
+fn ig_nest(x: Outer) -> i64 { 512 }
+fn ig_arr(x: Ar) -> i64 { 1024 }
 fn mk_map(k: i64) -> Map[String, i64] {
     let mut m: Map[String, i64] = Map.new();
     m.insert(f"key-padded-out-so-it-heap-allocates-{k}", k);
@@ -36864,6 +36880,9 @@ fn main() {
         acc = acc + ig_sh(Sh2 { a: f"sh-padded-out-so-it-heap-allocates-{n + i}", sh: Shr { v: n + i } });
         acc = acc + ig_ref(Ms { a: f"rf-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) });
         acc = acc + ig_gen(Ms { a: f"gn-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) }, i);
+        acc = acc + ig_nest(Outer { a: f"nt-padded-out-so-it-heap-allocates-{n + i}", i: Inner { m: mk_map(n + i) } });
+        let arr: Array[i64, 4] = [n + i, 1, 2, 3];
+        acc = acc + ig_arr(Ar { a: f"ar-padded-out-so-it-heap-allocates-{n + i}", arr: arr });
         let named: Ms = Ms { a: f"nm-padded-out-so-it-heap-allocates-{n + i}", m: mk_map(n + i) };
         acc = acc + ig_ms(named);
         i = i + 1;
@@ -36871,7 +36890,7 @@ fn main() {
     println(acc);
 }
 "#,
-            &["20480"],
+            &["81920"],
             "fresh_temp_struct_arg_owned_by_transfer",
             100,
         );
