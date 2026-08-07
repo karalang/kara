@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 218 | 0 |
-| leak | 150 | 2 |
+| leak | 150 | 1 |
 | double-free | 112 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 88 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 734 | 4 |
+| codegen | 734 | 3 |
 | interp | 128 | 1 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
@@ -124,22 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1008 surfaced · 6 open · 992 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1008 surfaced · 5 open · 993 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-07-10 | 2026-08-07 | codegen | medium | kata:170 is 1.09x slower from CODE PLACEMENT ALONE: 36a7fa5a's println line-staging helper moves `main` and costs 9% on a program that calls println ONCE — identical instruction count AND identical binary size on both sides | 36a7fa5a (2026-07-30, B-2026-07-30-9) — `__karac_write_console_line`; parent b84477dd is the fast side |
-| B-2026-08-07-19 | 2026-08-07 | codegen | medium | the `Result` twin of B-2026-08-07-12 leg 1: a `Result[Map[K,V], E]` STRUCT FIELD leaks its whole handle tree, 720 B / 10 iterations on a DEFAULT -O2 build, because the promotion loop's Result gates admit no Map/Set half -- the `Option[Map]` sibling is fixed, this is the same defect one wrapper over | src/codegen/synth_drop.rs -- the `Result` arm of the OptionInline promotion loop, gated on `result_field_direct_vecstr_halves_ok` / `result_field_struct_enum_payload_ok`; paired move sites in src/codegen/control_flow_match.rs::place_optres_field_move_info_ex and the destructure-leaf registrations in src/codegen/stmts.rs |
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct -- one approach (the third disjunct) built and REVERTED: it fixes every measured shape but double-frees the self-hosted-parser destructure fixture, because struct destructure is a SECOND move-out gate; the three sites it must widen with are named in the detail | One approach BUILT AND REVERTED 2026-08-07 — the third disjunct this row proposed. It is right about the diagnosis and fixes all five measured shapes plus both `place_optres_field_move_info_ex` pairing guards, but double-frees `asan_vec_of_struct_shared_and_option_field_consumed_no_leak` because STRUCT DESTRUCTURE is a second move-out gate that does not move with it. Next attempt must widen `pattern_binding.rs:813`, `pattern_binding.rs:846` and `control_flow_match.rs:8418` in lockstep — see the detail's closing section. |
 | B-2026-08-07-21 | 2026-08-07 | codegen | low | ELEMENTWISE checked arithmetic loses auto-vectorization too -- 4.22x measured in kara (99.74M vs 23.62M Ir on 20M element-ops; the checked loop is scalar 3x-unrolled with `jo` after every add, the wrapping loop is AVX2 16-wide) -- and UNLIKE the reduction case of B-2026-08-07-14 this one is LEGAL to fix, because per-element overflow conditions are order-independent, so an OR-accumulated flag checked once after the loop traps on exactly the same SET of programs; clang confirms that branchless form vectorizes (36 ymm vs 0). The real blocker is not soundness of the trap set but PANIC TIMING AND SITE ATTRIBUTION | Split out of B-2026-08-07-14 when that row closed. That row proved the REDUCTION case cannot be fixed (checked add is non-associative, so vectorizing deletes traps); this row is the ELEMENTWISE case, where the same mechanism costs the same kind of money but the fix is not blocked on soundness. SEVERITY IS `low` DELIBERATELY: the 4.22x below is a real measurement on a kernel built to isolate the shape, but how often the shape occurs in the corpus is UNMEASURED, and the blocker (below) is diagnostics quality rather than difficulty. Raise it if a corpus scan finds the shape is common. |
 | B-2026-08-07-22 | 2026-08-07 | interp | high | a `par {}` block inside a `while` loop HANGS under `--interp` (the DEFAULT for `karac check`-adjacent workflows and the Mend oracle) while the identical program builds and runs correctly AOT -- no shared type, no `frozen`, no captures needed to reproduce | — |
 
-### Fixed (992)
+### Fixed (993)
 
-<details><summary>992 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>993 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1157,6 +1156,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-16 | codegen | low | the x86 hash-tag probe spills 2 of the caller's registers per key-probe (4 memory ops) because `ctrl` puts the loop one value over x86-64's 15 GPRs —… | 1d0fe05d lands NO speedup: the `KARAC_MAP_PROBE` A/B lever and the three LOOKUP probe sites folded into one `emit_lookup_probe_cursor` helper (default `Bounded` proven byte-identical to the pre-refactor compiler on all three katas), plus a comment on `runtime/src/map.rs`'s growth guard naming the termination invariant the off-default forms depend on. The row closes because every lever it named is now priced: cachegrind says -25% / -32% instructions on kata:170, the clock says -3% at best and +11% on kata:217. Two instruments, opposite signs, second time in this family after B-2026-08-05-5. |
 | B-2026-08-07-17 | codegen | high | B-2026-08-07-15's own-by-transfer gate exempted EVERY generic struct, and a generic struct at a CONCRETE param (`fn take(x: Mix[String])` over `Mix[T… | 0cf32de |
 | B-2026-08-07-18 | codegen | high | naming a generic fn's type param differently from the struct's silently miscompiles: `fn f[U](x: Mix[U])` is 30 valgrind errors / 10 invalid frees /… | 592216a0. Half 1 (callee): `compile_mono_function` hoists `concrete_generic_struct_inst(param.ty)` above the ownership call and passes it to `make_aggregate_param_callee_owned_inst`, so the own-by-transfer drop binds the STRUCT's params positionally instead of being synthesized against the erased layout. `inst` reaches only `track_struct_var_inst`, never an arm-selection predicate, so no ownership arm moves — which is what the rejected scoped-subst overlay got wrong. Half 2 (caller): `compile_generic_call` asks `struct_param_owned_by_transfer` per IDENTIFIER argument under the callee's substitution and retracts via `move_declined_copy_struct_arg`; that lockstep existed on the concrete path only, and half 1 alone turned its absence into double frees in C/D/Pair/Trip. 32/32 matrix cells clean (8 shapes x 2 spellings x 2 opt levels). Fixture `asan_diverging_type_param_name_generic_struct_param`, stash-proven red. |
+| B-2026-08-07-19 | codegen | medium | the `Result` twin of B-2026-08-07-12 leg 1: a `Result[Map[K,V], E]` STRUCT FIELD leaks its whole handle tree, 720 B / 10 iterations on a DEFAULT -O2… | 31755b38. New scoped `result_field_map_or_set_half_ok` (runtime.rs) admitting a `Map`/`Set` handle half, routed straight to `emit_result_drop_fn` from the promotion loop's Result arm, and threaded through the three paired move sites (`place_optres_field_move_info_ex`'s Result branch + two destructure-leaf registrations in stmts.rs). Neither trap predicate was widened. The pairing rule fired exactly as this row predicted: classifier alone turned four clean shapes into 470 valgrind errors. 18/18 matrix cells clean at both opt levels; fixture `asan_result_map_half_struct_field_freed_and_move_paired`, stash-proven red. |
 
 </details>
 
