@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 108 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
-| missing-feature | 81 | 2 |
+| missing-feature | 81 | 1 |
 | false-positive | 56 | 0 |
 | perf | 53 | 3 |
 | diagnostics | 42 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 723 | 7 |
 | interp | 127 | 0 |
-| typecheck | 127 | 1 |
+| typecheck | 127 | 0 |
 | ownership | 39 | 1 |
 | autopar | 33 | 1 |
 | other | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced · 9 open · 976 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced · 8 open · 977 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,11 +138,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced 
 | B-2026-08-07-7 | 2026-08-07 | codegen | medium | a struct field of type `Option[Option[String]]` DOUBLE-FREED the String at BOTH opt levels when a match arm bound it out -- FIXED (c25c949) by disarming the struct's deep field drop at the arm. The 32 B ENVELOPE now leaks in that case (quarantined), and a sibling shape -- whole payload bound out, destructured in a SECOND match -- still corrupts | — |
 | B-2026-08-07-9 | 2026-08-07 | codegen | high | a match ARM that binds a struct field's whole boxed payload out and destructures it in a SECOND match double-frees the interior at both opt levels; the `let` spelling of the same shape is clean | — |
 | B-2026-08-07-6 | 2026-08-07 | codegen | low | the DIRECT sibling of the nested-box chain: `Option[Option[Option[i64]]]` with no `Result` wrapper leaks its inner envelope -- `BoxedEnumDrop` frees one box and has no chain | — |
-| B-2026-08-07-8 | 2026-08-07 | typecheck | low | `self` cannot be passed to a BORROW parameter from any receiver mode — `byref(self)` from `ref self` is `expected 'ref Inner', found 'Inner'`, and so is every other receiver/borrow-param combination | — |
 
-### Fixed (976)
+### Fixed (977)
 
-<details><summary>976 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>977 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1144,6 +1143,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-4 | codegen | medium | reassigning a `let mut` binding whose enum payload is heap-BOXED leaks the OVERWRITTEN value's box -- the store site frees nothing; 32 B per overwrit… | da29013 |
 | B-2026-08-07-3 | codegen | high | `<Result/Option binding>.map(f)` whose ABSENT branch (`Err`/`None`) carries a heap payload double-frees when the map result is CONSUMED or DISCARDED:… | 94ead2dc |
 | B-2026-08-07-5 | codegen | medium | `b = c` between two boxed-payload enum bindings leaves BOTH slots holding one box and both armed -- glibc double free at -O0 | a635ffe |
+| B-2026-08-07-8 | typecheck | low | `self` cannot be passed to a BORROW parameter from any receiver mode — `byref(self)` from `ref self` is `expected 'ref Inner', found 'Inner'`, and so… | aa3b394 |
 
 </details>
 
