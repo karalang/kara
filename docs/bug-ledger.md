@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 218 | 0 |
 | leak | 147 | 3 |
-| double-free | 108 | 1 |
+| double-free | 108 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 87 | 0 |
 | missing-feature | 81 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 723 | 7 |
+| codegen | 723 | 6 |
 | interp | 127 | 0 |
 | typecheck | 127 | 0 |
 | ownership | 39 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced · 8 open · 977 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced · 7 open · 978 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,12 +136,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **995 surfaced 
 | B-2026-08-06-33 | 2026-08-06 | codegen | medium | the x86_64 sign for DROPPING the map hash-tag compare on PRIMITIVE keys is disputed between two container lanes (1.20x slower vs 2.0% faster) -- which is the only reason B-2026-08-05-5's fix is arch-conditional instead of a plain key-type gate | src/codegen/mono.rs::map_tag_compare (the `!self.target_is_aarch64` arm) |
 | B-2026-08-07-2 | 2026-08-07 | codegen | medium | the remaining owner sites for a box nested in a `Result`'s INLINE payload area. FIXED: no binding (fresh temp), `Vec.push` (the only -O2 leak), escape-by-return, and the BOX-INSIDE-A-BOX chain. OPEN: a struct between the levels, whose owner is CONTESTED — a fix was implemented and reverted for double-freeing. Shape 6 was never a member of this family | — |
 | B-2026-08-07-7 | 2026-08-07 | codegen | medium | a struct field of type `Option[Option[String]]` DOUBLE-FREED the String at BOTH opt levels when a match arm bound it out -- FIXED (c25c949) by disarming the struct's deep field drop at the arm. The 32 B ENVELOPE now leaks in that case (quarantined), and a sibling shape -- whole payload bound out, destructured in a SECOND match -- still corrupts | — |
-| B-2026-08-07-9 | 2026-08-07 | codegen | high | a match ARM that binds a struct field's whole boxed payload out and destructures it in a SECOND match double-frees the interior at both opt levels; the `let` spelling of the same shape is clean | — |
 | B-2026-08-07-6 | 2026-08-07 | codegen | low | the DIRECT sibling of the nested-box chain: `Option[Option[Option[i64]]]` with no `Result` wrapper leaks its inner envelope -- `BoxedEnumDrop` frees one box and has no chain | — |
 
-### Fixed (977)
+### Fixed (978)
 
-<details><summary>977 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>978 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1140,6 +1139,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-06-32 | codegen | medium | a heap-BOXED `Option` payload nested inside a `Result`'s INLINE payload area has no owner on any side -- 32 B per construction at -O0 | c6eaeea |
 | B-2026-08-06-34 | other | medium | MAIN IS NOT RED and the four cells are NOT fixed: the ownership-matrix ratchet reported four `Leak`->`Clean` flips because LeakSanitizer was INERT (t… | 8452994b |
 | B-2026-08-07-1 | codegen | high | a BOXED-payload enum binding that is RETURNED is freed by its own frame -- the caller reads and frees the same box: double free + use-after-free at B… | ae74c7f |
+| B-2026-08-07-9 | codegen | high | a match ARM that binds a struct field's whole boxed payload out and destructures it in a SECOND match double-frees the interior at both opt levels; t… | ba64b21 |
 | B-2026-08-07-4 | codegen | medium | reassigning a `let mut` binding whose enum payload is heap-BOXED leaks the OVERWRITTEN value's box -- the store site frees nothing; 32 B per overwrit… | da29013 |
 | B-2026-08-07-3 | codegen | high | `<Result/Option binding>.map(f)` whose ABSENT branch (`Err`/`None`) carries a heap payload double-frees when the map result is CONSUMED or DISCARDED:… | 94ead2dc |
 | B-2026-08-07-5 | codegen | medium | `b = c` between two boxed-payload enum bindings leaves BOTH slots holding one box and both armed -- glibc double free at -O0 | a635ffe |
