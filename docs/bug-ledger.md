@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 220 | 1 |
 | leak | 151 | 1 |
-| double-free | 113 | 0 |
-| codegen-gap | 95 | 1 |
+| double-free | 114 | 1 |
+| codegen-gap | 96 | 2 |
 | run-vs-build | 90 | 0 |
 | missing-feature | 85 | 0 |
 | perf | 59 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 744 | 3 |
+| codegen | 746 | 5 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1031 surfaced · 5 open · 1016 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1033 surfaced · 7 open · 1016 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1031 surfaced
 | B-2026-08-08-17 | 2026-08-08 | autopar+codegen | high | a closure's write through a captured `String` is SILENTLY LOST when the analyzer parallelizes the enclosing function -- `karac build` and `karac run` both print 0, `KARAC_AUTO_PAR=0` and `--interp` print 52 | probe: a closure mutating a captured `String` via `push_str`, in a `main` the analyzer splits — `karac build` prints 0 for `buf.len()`, `KARAC_AUTO_PAR=0` and `--interp` print 52 |
 | B-2026-08-08-18 | 2026-08-08 | autopar+codegen | medium | a `Column` arithmetic chain passed to a two-arg fn emits a malformed call under auto-par -- LLVM module verification rejects `call i64 @fst(i64 %m8, i64 0)`, a `ptr` argument lowered as `i64` | probe: `Column[i64]` arithmetic chain (`a + b + b`, `-(a * 2)`) passed to `fn fst(c: Column[i64], i: i64)` — `karac build` fails LLVM module verification; `KARAC_AUTO_PAR=0` builds |
 | B-2026-08-08-19 | 2026-08-08 | autopar+codegen | medium | a user method on a `shared struct` loses its dispatcher under auto-par -- `codegen: no handler for method 'total' on variable 'b' (method dispatch fell through)` | probe: `shared struct SBag { mut items: Vec[String], base: i64 }` with `fn total(ref self)` iterating `self.items.iter()`; calling `b.total()` in a parallelized `main` — `no handler for method 'total' on variable 'b'` |
+| B-2026-08-08-20 | 2026-08-08 | codegen | high | `Vec[String].first()` / `.last()` CONSUMED AS A VALUE double-frees under EVERY codegen backend -- `println(v.first().unwrap())` on a two-element `Vec[String]` is `free(): double free detected in tcache 2` under JIT, AOT -O2 and AOT -O0 alike, while `karac check` says "All checks passed" and `--interp` prints the right answer. `.get(0).unwrap()` and `v[0]` on the SAME Vec are clean, and `Vec[i64].first().unwrap()` is clean -- so it is first/last-specific AND heap-element-specific. Two quieter symptoms in the same family: `.first().map(..)` prints an EMPTY string, and `.first().map(|s| s.len() as i64).unwrap_or(0)` SILENTLY prints 0 instead of 7 | Found by a fresh dogfood probe, not by a kata. `.get(i)` on the SAME Vec is clean, which is the lead: the borrow-accessor family does not share one consuming path. Zero existing test coverage — `grep -c 'first().unwrap()' tests/*.rs` with String is 0, so this is an uncovered gap rather than a regression from a test that rotted. |
+| B-2026-08-08-21 | 2026-08-08 | codegen | low | `Option/Result.map` with an UN-ANNOTATED closure returning a String/Vec is refused by `karac build` -- a loud, actionable bail ("annotate the closure parameter or run with --interp"), and annotating `|s: String| ..` does work on both JIT and AOT, but the annotation is redundant everywhere else and the interpreter accepts the bare form, so the two backends disagree about what is valid Kāra | Found alongside B-2026-08-08-20 in the same dogfood probe. Loud, actionable bail with a working documented workaround, hence low. |
 
 ### Fixed (1016)
 
