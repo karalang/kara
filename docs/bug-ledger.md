@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 57 | 0 |
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
-| crash | 40 | 1 |
+| crash | 40 | 0 |
 | other | 22 | 1 |
 | use-after-free | 15 | 0 |
 
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 746 | 5 |
+| codegen | 746 | 4 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
-| autopar | 37 | 3 |
+| autopar | 37 | 2 |
 | other | 33 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,23 +124,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1033 surfaced · 7 open · 1016 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1033 surfaced · 6 open · 1017 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-16 | 2026-08-08 | other | medium | the ASAN memory suite compiles every fixture with AUTO-PAR DISABLED, so ~1000 leak/UAF fixtures cover sequential codegen only -- the hole that hid B-2026-08-08-15 | tests/memory_sanitizer.rs `run_under_asan_opts` passes `None` for `ConcurrencyAnalysis`, so every fixture compiles with auto-par disabled |
 | B-2026-08-08-17 | 2026-08-08 | autopar+codegen | high | a closure's write through a captured `String` is SILENTLY LOST when the analyzer parallelizes the enclosing function -- `karac build` and `karac run` both print 0, `KARAC_AUTO_PAR=0` and `--interp` print 52 | probe: a closure mutating a captured `String` via `push_str`, in a `main` the analyzer splits — `karac build` prints 0 for `buf.len()`, `KARAC_AUTO_PAR=0` and `--interp` print 52 |
-| B-2026-08-08-18 | 2026-08-08 | autopar+codegen | medium | a `Column` arithmetic chain passed to a two-arg fn emits a malformed call under auto-par -- LLVM module verification rejects `call i64 @fst(i64 %m8, i64 0)`, a `ptr` argument lowered as `i64` | probe: `Column[i64]` arithmetic chain (`a + b + b`, `-(a * 2)`) passed to `fn fst(c: Column[i64], i: i64)` — `karac build` fails LLVM module verification; `KARAC_AUTO_PAR=0` builds |
 | B-2026-08-08-19 | 2026-08-08 | autopar+codegen | medium | a user method on a `shared struct` loses its dispatcher under auto-par -- `codegen: no handler for method 'total' on variable 'b' (method dispatch fell through)` | probe: `shared struct SBag { mut items: Vec[String], base: i64 }` with `fn total(ref self)` iterating `self.items.iter()`; calling `b.total()` in a parallelized `main` — `no handler for method 'total' on variable 'b'` |
 | B-2026-08-08-20 | 2026-08-08 | codegen | high | `Vec[String].first()` / `.last()` CONSUMED AS A VALUE double-frees under EVERY codegen backend -- `println(v.first().unwrap())` on a two-element `Vec[String]` is `free(): double free detected in tcache 2` under JIT, AOT -O2 and AOT -O0 alike, while `karac check` says "All checks passed" and `--interp` prints the right answer. `.get(0).unwrap()` and `v[0]` on the SAME Vec are clean, and `Vec[i64].first().unwrap()` is clean -- so it is first/last-specific AND heap-element-specific. Two quieter symptoms in the same family: `.first().map(..)` prints an EMPTY string, and `.first().map(|s| s.len() as i64).unwrap_or(0)` SILENTLY prints 0 instead of 7 | Found by a fresh dogfood probe, not by a kata. `.get(i)` on the SAME Vec is clean, which is the lead: the borrow-accessor family does not share one consuming path. Zero existing test coverage — `grep -c 'first().unwrap()' tests/*.rs` with String is 0, so this is an uncovered gap rather than a regression from a test that rotted. |
 | B-2026-08-08-21 | 2026-08-08 | codegen | low | `Option/Result.map` with an UN-ANNOTATED closure returning a String/Vec is refused by `karac build` -- a loud, actionable bail ("annotate the closure parameter or run with --interp"), and annotating `|s: String| ..` does work on both JIT and AOT, but the annotation is redundant everywhere else and the interpreter accepts the bare form, so the two backends disagree about what is valid Kāra | Found alongside B-2026-08-08-20 in the same dogfood probe. Loud, actionable bail with a working documented workaround, hence low. |
 
-### Fixed (1016)
+### Fixed (1017)
 
-<details><summary>1016 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1017 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1182,6 +1181,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-10 | codegen | medium | a generic struct with a `Vec[T]` FIELD returned by value from a generic function fails codegen — `ret { { ptr, i64, i64 } } %field` against a `ptr` r… | f773c317. `llvm_type_for_type_expr` (`src/codegen/types_lowering.rs`) now lowers a user-declared struct through its own (mono) struct type when its name collides with a prelude type, ahead of the hard-coded `name == "Column"` / `"DataFrame"` / `"Tensor"` / `"Interner"` handle arms that keyed on the NAME alone and returned a bare `ptr`. Guarded on `user_shadowed_prelude_types`, the declaration pass's existing record, which excludes `stdlib_origin` items. NOT the generic-struct-return gap this row describes: a non-generic `struct Column { data: Vec[i64] }` fails identically pre-fix, and renaming the struct is a one-token fix. The complement of `reject_shadowed_prelude_types` (B-2026-08-02-13), which still refuses built-in machinery over a user value — all 17 of its tests pass unchanged, as do the 159 built-in Column/DataFrame/Tensor/Interner/Arrow codegen tests. Fixture `user_struct_shadowing_a_prelude_type_name_keeps_its_own_layout`, stash-proven red. |
 | B-2026-08-08-11 | typecheck | low | a type error about a `frozen` parameter names its type `ref T` -- the surface keyword and the diagnostic disagree, because `frozen T` lowers to `Ref(… | 4f32b1e1 |
 | B-2026-08-08-15 | autopar+codegen | high | an RC-bearing `shared struct` published as an auto-par return slot is never adopted by the joining scope -- it LEAKS when the branch suppresses its r… | 62619a88 |
+| B-2026-08-08-18 | autopar+codegen | medium | a `Column` arithmetic chain passed to a two-arg fn emits a malformed call under auto-par -- LLVM module verification rejects `call i64 @fst(i64 %m8,… | 31208e3a |
 
 </details>
 
