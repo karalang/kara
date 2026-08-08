@@ -24,6 +24,25 @@ use super::helpers::{
 };
 use super::state::{B2Role, ReturnSlot, SharedTypeInfo, VarSlot};
 
+/// B-2026-08-08-3 — the `Type.method` keys (as the typechecker spells them in
+/// `method_callee_types`) whose result is unconditionally `i64`. Used to size a
+/// par-block return slot whose branch body is a block expression ending in a
+/// container/string `len()`; see the `MethodCall` arm of
+/// [`Codegen::infer_expr_llvm_type`]. Keep this list to methods with ONE
+/// possible return type across every receiver — a slot sized wrong is silent
+/// corruption, where a slot left un-sized is only a diagnostic.
+const BUILTIN_LEN_CALLEES: &[&str] = &[
+    "Vec.len",
+    "VecDeque.len",
+    "Slice.len",
+    "String.len",
+    "str.len",
+    "Map.len",
+    "SortedMap.len",
+    "Set.len",
+    "SortedSet.len",
+];
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Reclaim the value a `mut ref` AGGREGATE parameter is about to have
     /// overwritten — B-2026-08-05-39.
@@ -1796,6 +1815,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-08-08-3 — a builtin container/string `len()`, which is
+                // the natural tail of a block-expression branch body
+                // (`{ let mut m: Map[..] = Map.new(); …; m.len() }`). Neither
+                // arm above reaches it: there is no `Map.len` LLVM function to
+                // read a return type from, and `len` makes no `-> Self` claim.
+                //
+                // Resolved from `method_callee_types` rather than from the
+                // receiver's shape, so this is the TYPECHECKER's answer about
+                // what the receiver is, not a second inference that could
+                // disagree with it. Every entry listed returns `i64`, and a user
+                // `impl` method is matched by the arm above before reaching here,
+                // so a same-named user method cannot be mis-sized. An absent
+                // entry (typecheck side-tables not threaded) falls through to
+                // the existing conservative `None`.
+                let span_key = (expr.span.offset, expr.span.length);
+                if self
+                    .method_callee_types
+                    .get(&span_key)
+                    .is_some_and(|k| BUILTIN_LEN_CALLEES.contains(&k.as_str()))
+                {
+                    return Some(self.context.i64_type().into());
+                }
                 let returns_receiver_numeric = matches!(method.as_str(), "abs" | "sqrt")
                     || crate::float_math::classify(method).is_some();
                 if returns_receiver_numeric {
@@ -1829,17 +1870,37 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Option<BasicTypeEnum<'ctx>> {
         let mut inner = outer.clone();
         for stmt in &block.stmts {
-            if let StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } =
-                &stmt.kind
+            if let StmtKind::Let {
+                pattern, ty, value, ..
+            }
+            | StmtKind::LetElse {
+                pattern, ty, value, ..
+            } = &stmt.kind
             {
                 if let PatternKind::Binding(name) = &pattern.kind {
-                    if let Some(t) = self.infer_expr_llvm_type(value, &inner) {
-                        inner.insert(name.clone(), t);
-                    } else {
-                        // Un-inferrable inner binding: remove any stale
-                        // outer entry so a later reference doesn't
-                        // resolve to the wrong (shadowed) type.
-                        inner.remove(name);
+                    // B-2026-08-08-3 — the ANNOTATION first, exactly as the
+                    // caller `infer_let_binding_llvm_type` does for the branch's
+                    // own `let`. Only the RHS was consulted here, so
+                    // `{ let mut va: Map[i64, i64] = Map.new(); …; va.len() }`
+                    // lost `va` (nothing infers `Map.new()`), the tail could not
+                    // resolve its receiver, the whole slot was dropped, and the
+                    // join expression's read of the BRANCH binding surfaced as
+                    // `Undefined variable` — a build failure on a program
+                    // `karac check` accepts and the interpreter runs. An
+                    // annotation is the one piece of type information that needs
+                    // no inference at all; ignoring it here while honouring it
+                    // one frame up was the asymmetry.
+                    let annotated = ty.as_ref().map(|te| self.llvm_type_for_type_expr(te));
+                    match annotated.or_else(|| self.infer_expr_llvm_type(value, &inner)) {
+                        Some(t) => {
+                            inner.insert(name.clone(), t);
+                        }
+                        None => {
+                            // Un-inferrable inner binding: remove any stale
+                            // outer entry so a later reference doesn't
+                            // resolve to the wrong (shadowed) type.
+                            inner.remove(name);
+                        }
                     }
                 }
             }

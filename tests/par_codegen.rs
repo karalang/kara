@@ -10842,6 +10842,112 @@ fn main() {
             );
         }
     }
+    /// B-2026-08-08-3 — a `par` branch whose body is a BLOCK EXPRESSION ending
+    /// in a container `len()` failed codegen with `Undefined variable '<branch
+    /// binding>'`, while `karac check` passed and the interpreter ran it. A
+    /// clean run-vs-build divergence, and a hard build failure rather than a
+    /// wrong answer.
+    ///
+    /// The chain: `infer_let_binding_llvm_type` sizes each branch's return slot
+    /// before any branch body is emitted, and drops the slot when it cannot
+    /// infer a type — at which point the join expression's read of that binding
+    /// falls through to the generic "Undefined variable" diagnostic, which names
+    /// the binding rather than the un-inferrable RHS. Two independent holes let
+    /// this shape through: `infer_block_tail_llvm_type` consulted only the inner
+    /// `let`'s RHS and never its type ANNOTATION (so `let mut va: Map[..] =
+    /// Map.new()` lost `va`), and the `MethodCall` arm had no way to type a
+    /// builtin `len()` (no `Map.len` LLVM function to read, and `len` makes no
+    /// `-> Self` claim).
+    ///
+    /// The controls matter as much as the repro. `scalar` and `literal_tail`
+    /// always built — the trigger is not "a block-expression body" and not "a
+    /// heap local in the block", but a tail whose type depends on one. And the
+    /// Vec/String/Set arms are here because the row was originally filed as a
+    /// `Map` slot-ownership problem; it is neither Map-specific nor about
+    /// ownership.
+    #[test]
+    fn par_branch_block_body_ending_in_container_len() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "map",
+                "{ let mut va: Map[i64, i64] = Map.new(); let _ = va.insert(1, 2); va.len() }",
+                "6",
+            ),
+            (
+                "vec",
+                "{ let mut va: Vec[i64] = Vec.new(); va.push(2); va.len() }",
+                "6",
+            ),
+            (
+                "set",
+                "{ let mut va: Set[i64] = Set.new(); let _ = va.insert(1); va.len() }",
+                "6",
+            ),
+            (
+                "string",
+                "{ let s: String = \"hello\".to_string(); s.len() }",
+                "10",
+            ),
+            // The `len()` reached through an UNANNOTATED intermediate binding:
+            // the annotation fix alone does not carry this one, the `len` arm
+            // does.
+            (
+                "via_intermediate",
+                "{ let mut va: Vec[i64] = Vec.new(); va.push(2); let n = va.len(); n }",
+                "6",
+            ),
+            // Controls that built before the fix and must keep their answers.
+            ("scalar", "{ let z: i64 = 1; z + 1 }", "7"),
+            (
+                "literal_tail",
+                "{ let mut va: Vec[i64] = Vec.new(); va.push(2); 7 }",
+                "12",
+            ),
+        ];
+        for (name, body, expected) in cases {
+            let src = format!(
+                r#"
+fn main() {{
+    let (p, q) = par {{
+        let a = {body};
+        let b = 5;
+        (a, b)
+    }};
+    println(p + q);
+}}
+"#
+            );
+            if let Some(out) = run_program(&src) {
+                assert_eq!(
+                    out.trim(),
+                    *expected,
+                    "par branch block body case `{name}` produced the wrong value"
+                );
+            }
+        }
+    }
+
+    /// The branch binding must keep its own name in the join expression — the
+    /// original repro named the branch binding and the outer destructured
+    /// binding the same thing (`x`), which made the diagnostic look like it
+    /// pointed at the OUTER name. It points at the branch binding; this pins
+    /// that the two are distinct and both resolve.
+    #[test]
+    fn par_branch_block_body_binding_distinct_from_destructured_name() {
+        let src = r#"
+fn main() {
+    let (outer_left, outer_right) = par {
+        let branch_a = { let mut va: Map[i64, i64] = Map.new(); let _ = va.insert(1, 2); va.len() };
+        let branch_b = { let s: String = "abcd".to_string(); s.len() };
+        (branch_a, branch_b)
+    };
+    println(outer_left + outer_right);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "5");
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
