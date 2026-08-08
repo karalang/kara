@@ -426,6 +426,21 @@ pub enum Value {
     /// a semantic stand-in — the codegen lowers to a 1-byte flag per
     /// design.md § cost notes).
     SharedStruct(Arc<SharedStructInner>),
+    /// A `weak T` handle held somewhere that is NOT a struct field —
+    /// today, a container element (`Vec[weak N]`). B-2026-08-08-14.
+    ///
+    /// A `weak` FIELD needs no variant: it lives in `SharedStructInner`'s
+    /// dedicated `weak_immutable_fields` / `weak_mut_fields` maps and is
+    /// upgraded at the field-read site. A container element has no such home,
+    /// so before this the push stored an ordinary strong
+    /// [`Value::SharedStruct`] — which made a cycle through the container
+    /// uncollectable in the interpreter AND made the element read hand a bare
+    /// struct to a `match` expecting `Option[T]`.
+    ///
+    /// Never observed directly by user code: every read site upgrades it
+    /// through [`upgrade_weak_to_option`] first, exactly as a weak field read
+    /// does, so what a program sees is always an `Option[T]`.
+    WeakRef(std::sync::Weak<SharedStructInner>),
     EnumVariant {
         enum_name: String,
         variant: String,
@@ -1196,6 +1211,15 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, " }}")
             }
+            // B-2026-08-08-14 — rendered through the upgrade, so a live
+            // target prints as the struct it points at and a dead one prints
+            // `None`. Displaying the handle itself would leak the
+            // representation into user-visible output; every other read site
+            // upgrades first, and so does this one.
+            Value::WeakRef(w) => match w.upgrade() {
+                Some(arc) => write!(f, "{}", Value::SharedStruct(arc)),
+                None => write!(f, "None"),
+            },
             Value::SharedStruct(inner) => {
                 write!(f, "{} {{ ", inner.name)?;
                 let mut first = true;
@@ -1485,6 +1509,7 @@ impl Value {
             Value::Map(_) => "Map",
             Value::Struct { .. } => "Struct",
             Value::SharedStruct(_) => "SharedStruct",
+            Value::WeakRef(_) => "WeakRef",
             Value::EnumVariant { .. } => "EnumVariant",
             Value::Function { .. } => "Function",
             Value::TotalFloat32(_) => "TotalFloat32",

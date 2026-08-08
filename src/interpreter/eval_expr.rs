@@ -18,7 +18,28 @@ use super::exec::{add_pattern_bindings, collect_free_idents_expr, ControlFlow};
 use super::value::{primitive_const_to_value, EnumData, IteratorSource, OrdValue, Value};
 
 impl<'a> super::Interpreter<'a> {
+    /// B-2026-08-08-14 — upgrade a `weak` CONTAINER ELEMENT wherever a read
+    /// surfaces one, so what user code observes is always an `Option[T]`,
+    /// exactly as for a `weak` FIELD.
+    ///
+    /// A single post-step rather than an arm inside the `Index` evaluation,
+    /// because [`Value::WeakRef`] has exactly one producer — the downgrade at a
+    /// `Vec[weak T]` push — so ANY expression that yields one is a read of that
+    /// element and owes the upgrade. The push's own downgrade runs AFTER this
+    /// returns (inside the push handler, on the already-evaluated argument), so
+    /// it is not undone here. Before this, the raw strong handle reached a
+    /// `match` expecting `Option[T]` and the interpreter reported
+    /// "non-exhaustive match ... the typechecker should have rejected this" —
+    /// blaming the wrong phase for a gap that was its own.
     pub(crate) fn eval_expr_inner(&mut self, expr: &Expr) -> Value {
+        let v = self.eval_expr_inner_unwrapped(expr);
+        match &v {
+            Value::WeakRef(w) => super::value::upgrade_weak_to_option(w),
+            _ => v,
+        }
+    }
+
+    fn eval_expr_inner_unwrapped(&mut self, expr: &Expr) -> Value {
         // If a control flow signal is pending, short-circuit
         if self.check_cf() {
             return Value::Unit;

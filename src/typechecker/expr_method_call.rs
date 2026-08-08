@@ -4095,6 +4095,13 @@ impl<'a> super::TypeChecker<'a> {
                 // than a call to `check_expr`. Widening it is a codegen change
                 // first and a typechecker change second.
                 if let Type::Weak(referent) = &elem {
+                    // B-2026-08-08-14 — record the store for the interpreter,
+                    // which has no static element type of its own to consult.
+                    // Keyed by the ARGUMENT's span rather than the call's: a
+                    // method call shares its receiver's span here, so the call
+                    // span is not unique to this push.
+                    self.weak_elem_store_sites
+                        .insert(crate::resolver::SpanKey::from_span(&args[0].value.span));
                     let actual = self.infer_expr(&args[0].value);
                     let ok = matches!(actual, Type::Error | Type::Never)
                         || super::types::types_compatible(&actual, referent);

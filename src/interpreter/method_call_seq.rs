@@ -478,6 +478,25 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         Value::Unit
                     };
+                    // B-2026-08-08-14 — a `Vec[weak T]` push DOWNGRADES, the
+                    // exact twin of a `weak` field store. Storing the strong
+                    // handle (what happened before) made a container-mediated
+                    // cycle uncollectable here and made the element read hand a
+                    // bare struct to a `match` expecting `Option[T]`, which
+                    // surfaced as "non-exhaustive match ... the typechecker
+                    // should have rejected this". The site set comes from the
+                    // typechecker because the interpreter has no static element
+                    // type to consult.
+                    let val = match (&val, args.first()) {
+                        (Value::SharedStruct(arc), Some(arg))
+                            if self.typecheck_result.weak_elem_store_sites.contains(
+                                &crate::resolver::SpanKey::from_span(&arg.value.span),
+                            ) =>
+                        {
+                            Value::WeakRef(std::sync::Arc::downgrade(arc))
+                        }
+                        _ => val,
+                    };
                     // A bare-identifier arg moves its WHOLE value into the
                     // Vec — own `impl Drop` body included; the container's
                     // element walk runs it now (codegen twin:

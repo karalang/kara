@@ -1346,6 +1346,18 @@ pub struct TypeCheckResult {
     /// generic binding and are resolved against the runtime substitution
     /// stack at execution time. Consumed by the interpreter to dispatch
     /// `T.method()` calls inside generic function bodies.
+    /// Spans of expressions that touch a `weak T` CONTAINER ELEMENT — the
+    /// `Vec.push(..)` method-call spans that store one, and the `Index` spans
+    /// that read one back. B-2026-08-08-14.
+    ///
+    /// Plain-data side channel for the INTERPRETER, which models `weak` per
+    /// struct FIELD (dedicated maps on `SharedStructInner`, upgraded at the
+    /// field-read site) and has no static element type of its own to consult.
+    /// Codegen needs neither set — it reads the element `TypeExpr` directly —
+    /// so this exists to keep the two backends agreeing rather than to inform
+    /// lowering.
+    pub weak_elem_store_sites: std::collections::HashSet<SpanKey>,
+    pub weak_elem_read_sites: std::collections::HashSet<SpanKey>,
     pub call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
     /// Per-call-site generic-param substitutions as ELEMENT-AWARE mono-mangle
     /// TOKENS (`T` → `"Vec_i64"` / `"Vec_String"` / `"String"`), the sibling of
@@ -1782,6 +1794,9 @@ pub struct TypeChecker<'a> {
     /// pushes the resolved frame so `T.method()` and bare-method calls inside
     /// the callee's body can look up `T`'s concrete binding.
     pub(super) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    /// B-2026-08-08-14 — see the public copies on `TypeCheckResult`.
+    pub(super) weak_elem_store_sites: std::collections::HashSet<SpanKey>,
+    pub(super) weak_elem_read_sites: std::collections::HashSet<SpanKey>,
     /// Element-aware mono-mangle tokens per call site. See the public copy on
     /// `TypeCheckResult` for the consumer doc.
     pub(super) call_type_subs_mangle: HashMap<SpanKey, HashMap<String, String>>,
@@ -2003,6 +2018,8 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: HashMap::new(),
             path_call_method_dispatch: HashSet::new(),
             call_type_subs: HashMap::new(),
+            weak_elem_store_sites: std::collections::HashSet::new(),
+            weak_elem_read_sites: std::collections::HashSet::new(),
             call_type_subs_mangle: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
@@ -2197,6 +2214,8 @@ impl<'a> TypeChecker<'a> {
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
+            weak_elem_store_sites: self.weak_elem_store_sites,
+            weak_elem_read_sites: self.weak_elem_read_sites,
             call_type_subs_mangle: self.call_type_subs_mangle,
             pattern_binding_types: self.pattern_binding_types,
             pattern_binding_inner_types: self.pattern_binding_inner_types,

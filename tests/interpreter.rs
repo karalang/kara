@@ -5094,6 +5094,32 @@ fn test_shared_struct_per_field_independence_across_methods() {
 // ── Weak references on shared struct fields ────────────────────
 
 #[test]
+fn test_weak_container_element_upgrades_like_a_weak_field() {
+    // B-2026-08-08-14 — the interpreter modelled `weak` per struct FIELD
+    // (dedicated maps on `SharedStructInner`, upgraded at the field-read site)
+    // and had no home for a weak CONTAINER element, so a `Vec[weak T]` push
+    // stored an ordinary STRONG handle. Two consequences: a cycle through the
+    // container was uncollectable here, and the element read handed a bare
+    // struct to a `match` expecting `Option[T]` — reported as "non-exhaustive
+    // match ... the typechecker should have rejected this", which blamed the
+    // wrong phase for a gap that was the interpreter's own.
+    //
+    // Both rows must agree with codegen, which is what
+    // `test_e2e_vec_of_weak_read_back_upgrades_and_leaves_the_target_intact`
+    // pins on the other side. The second row is the one that makes it a WEAK
+    // ref rather than an awkward strong one: the target dies with the helper's
+    // frame, so the read must report `None`.
+    assert_eq!(
+        run("shared struct N { mut v: i64 }\n             fn main() {\n                 let a: N = N { v: 41i64 };\n                 let mut w: Vec[weak N] = Vec.new();\n                 w.push(a);\n                 println(a.v);\n                 match w[0] { Some(x) => { println(x.v); } None => { println(0 - 1); } }\n             }\n"),
+        "41\n41\n"
+    );
+    assert_eq!(
+        run("shared struct N { mut v: i64 }\n             fn fill(w: mut ref Vec[weak N]) {\n                 let a: N = N { v: 7i64 };\n                 w.push(a);\n                 match w[0] { Some(x) => { println(x.v); } None => { println(0 - 1); } }\n             }\n             fn main() {\n                 let mut w: Vec[weak N] = Vec.new();\n                 fill(mut w);\n                 match w[0] { Some(x) => { println(x.v); } None => { println(0 - 2); } }\n             }\n"),
+        "7\n-2\n"
+    );
+}
+
+#[test]
 fn test_weak_field_alive_yields_some() {
     // Per design.md § Shared Types — Weak references: a `weak` field
     // read is the upgrade point. While a strong holder of the referent

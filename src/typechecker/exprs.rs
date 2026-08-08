@@ -3937,6 +3937,10 @@ impl<'a> super::TypeChecker<'a> {
                 // `infer_field_access`, which resets the flag.
                 if !index_is_lhs {
                     if let Type::Weak(inner) = &elem_result {
+                        // B-2026-08-08-14 — record the read for the interpreter
+                        // (see the store twin in `infer_method_call`).
+                        self.weak_elem_read_sites
+                            .insert(SpanKey::from_span(&expr.span));
                         return Type::Named {
                             name: "Option".to_string(),
                             args: vec![(**inner).clone()],
