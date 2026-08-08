@@ -8201,7 +8201,7 @@ Key definitions:
 
 **One decision per value, not per region.** A value is `Rc`, `Arc`, or owned for its *entire* live range in the function. Phase 2 never produces a value that is `Rc` inside one region and `Arc` inside another — that would be as observable as a per-branch RC decision and fails the same invariant. If two disjoint regions both overlap a value's live range, a single `Arc` decision covers both.
 
-**Arc and synchronization:** `shared struct` values cannot cross parallel region boundaries with multi-task access — the compiler rejects this at Phase 2 (see rule above). For types that genuinely need concurrent access from multiple tasks, use `par struct` (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)) — its `mut` field constraints (`Atomic[T]` / `Mutex[T]`) are enforced at the definition site, providing a structural compile-time guarantee rather than a runtime check. The promotion pass handles only non-shared RC values and `par struct` (which is always Arc); `shared struct` no longer participates in Arc promotion. See Part 5 for `lock` block syntax details.
+**Arc and synchronization:** `shared struct` values cannot cross parallel region boundaries with multi-task access — the compiler rejects this at Phase 2 (see rule above). For types that genuinely need concurrent *mutation* from multiple tasks, use `par struct` (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)); for a value that is only READ concurrently, `frozen` shares it with no refcount traffic at all and without converting the type (see [Part 5c](#part-5c-frozen-handles-frozen-t-and-freeze)) — its `mut` field constraints (`Atomic[T]` / `Mutex[T]`) are enforced at the definition site, providing a structural compile-time guarantee rather than a runtime check. The promotion pass handles only non-shared RC values and `par struct` (which is always Arc); `shared struct` no longer participates in Arc promotion. See Part 5 for `lock` block syntax details.
 
 **Cycles:** The compiler analyzes the type graph at compile time and rejects types that form ownership cycles. The `weak` annotation breaks back-edges (returns `Option[T]` on access, matching Swift's `weak` semantics). No runtime cycle collector — zero overhead, deterministic deallocation.
 
@@ -8392,7 +8392,7 @@ fn connect(a: GraphNode, b: GraphNode) {
   This is the most common per-field-borrow-flag footgun for tree-walking workloads. The compiler does not statically reject the panicking form in v1 — flagging it would require flow-sensitive borrow tracking that v1's per-field flags deliberately avoid. The error surfaces at runtime as `borrow conflict on <field>`, includes the source spans of both the conflicting access sites, and points to this idiom doc.
 - **Field visibility** — follows the same rules as regular structs: private by default, opt-in `pub` per field. See Struct Field Visibility above for `pub mut` semantics and concurrency safety.
 - **Rc only** — `shared struct` is always RC; Arc promotion is not available. Cross-task access is a compile error. For types that need concurrent access, use `par struct`.
-- **Concurrency synchronization** — `shared struct` is single-task only; cross-task access with multi-task reachability is a compile error. If a type needs to be shared across concurrent tasks, define it as `par struct` instead (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)). `Mutex[T]` + `lock` block syntax remains available within `par struct` field types and for any single-task mutual exclusion need. The `lock` block acquires the lock on entry and releases on exit (including early return, break, or panic). No `.lock()` method or guard values — scope is always visible. An optional second identifier provides a positional alias for the locked variable within the block:
+- **Concurrency synchronization** — `shared struct` is single-task only; cross-task access with multi-task reachability is a compile error. If a type needs to be *mutated* across concurrent tasks, define it as `par struct` instead (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)); if it is only READ across them, freeze it rather than converting it (see [Part 5c](#part-5c-frozen-handles-frozen-t-and-freeze)). `Mutex[T]` + `lock` block syntax remains available within `par struct` field types and for any single-task mutual exclusion need. The `lock` block acquires the lock on entry and releases on exit (including early return, break, or panic). No `.lock()` method or guard values — scope is always visible. An optional second identifier provides a positional alias for the locked variable within the block:
   ```
   lock node { node.val = 42 }                              // single access
   lock node { node.left = Some(child); node.right = None }  // multi-step atomic
@@ -8864,6 +8864,71 @@ In every row, Drop may *also* run a cleanup action (releasing a file descriptor,
 **Implication for `defer` / `errdefer`.** Same rule. `defer` blocks are documented at [defer/errdefer rules](#defer-and-cleanup) as cleanup that runs at scope exit; they share the same LIFO stack with Drop. They are *also* not soundness primitives — a `defer { close(fd) }` block leaks the file descriptor if it doesn't run, but cannot violate type safety. This is why both the defer mechanism and `Drop` are correctly described as "cleanup is guaranteed except in the two named exceptions" (double-panic and `panic = "abort"`) without that exception cascading into a soundness hazard. The cleanup contract is an *operational guarantee* (resources are released when the scope exits normally), not a *type-system guarantee* (the invariant holds whether or not the cleanup runs).
 
 The single conceptual rule across the whole Kāra design: **soundness lives in the type system; cleanup lives in the runtime**. The two layers cooperate — the type system guarantees that cleanup *will* run on every normal path, and the runtime executes it — but the type system's soundness story does not depend on the runtime's execution of cleanup. This is what makes Kāra safe in the face of double-panic, abort, leak-via-cycle, and any future explicit-skip primitive.
+
+---
+
+### Part 5c: Frozen Handles (`frozen T` and `freeze`)
+
+**The gap `frozen` fills.** Parts 5 and 5b give two answers to "who may see this value", and neither covers read-only sharing. A `shared struct` is single-task by construction: its refcount is a plain load/add/store, so two tasks *reading* the same handle race the header even though neither touches the payload, and the compiler rejects the capture (`E_CONCURRENT_SHARED_STRUCT`). A `par struct` shares fine but pays for it — every handle operation becomes an atomic RMW, on every use of the type, including the sequential ones. Neither answer fits a structure that is built once and then only read, which is what a graph traversal, a parsed AST, an interned table, or a loaded config all are.
+
+`frozen` is the third answer, and it removes the raced header rather than making it atomic:
+
+```kara
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+
+fn sum(n: frozen Node, depth: i64) -> i64 {
+    if depth <= 0 { return n.val; }
+    let mut t: i64 = n.val;
+    for k in n.neighbors.iter() { t = t + sum(k, depth - 1); }
+    return t;
+}
+
+fn main() {
+    let root: Node = build();
+    let g = freeze root;                 // the freeze site
+    let (a, b) = par {                   // both branches read the same graph
+        let a = sum(g, 3);
+        let b = sum(g, 3);
+        (a, b)
+    };
+    print(a + b);
+}
+```
+
+**Four properties, each load-bearing.** A `frozen T` is a handle to a `shared` value that is (1) **non-counting** — it emits no retain/release at all, which is what makes concurrent reads safe without atomics; (2) **deeply immutable for the region** — nothing reachable through it may be written, which is what makes the absence of a refcount safe; (3) **non-escaping** — it may not outlive its owner, which is the condition that pays for being non-counting, since a non-counting handle that outlives its source is a use-after-free; and (4) **signature-crossing** — it is a parameter mode, so a traversal in a callee can take one. Dropping any of the four reintroduces the hazard the other three remove.
+
+**Two spellings, and nothing is inferred.** `frozen T` is a parameter mode beside `ref T` and `mut ref T` (`fn sum(n: frozen Node)`, and `frozen self` for a receiver). `freeze` is a statement-level expression producing a frozen binding (`let g = freeze root;`). A value never becomes frozen by inference — the author writes one of the two, which is what keeps the cost model legible and keeps the compiler from silently changing a type's representation program-wide.
+
+**What a frozen place permits.** Frozen-ness is a property of a *place*, not of a binding: the parameter, and any chain of `.field` / `[i]` / `.0` rooted at it, is frozen. Within that set:
+
+| Form | Permitted | Why |
+|---|---|---|
+| `n.inner.deep.d` — scalar read at any depth | yes | a projection is a deref; no handle is materialized |
+| `n.kids[i].val` — read through an index | yes | same |
+| `g(n.kids[i])` — whole handle into another `frozen` slot | yes | frozen-ness is preserved across the call |
+| `n.kids.len()` / `n.kids.is_empty()` | yes | read-only builtin queries |
+| `for k in n.kids` and `for k in n.kids.iter()` | yes | both spellings lower identically |
+| `let k = n.kids[i];` | yes | the binding is itself a frozen place |
+| `n.count = 5` and every other write form | **no** | property 2 — deep immutability is the guarantee |
+| `return n;`, storing the **handle** in a non-frozen slot, capturing it in a closure | **no** | property 3 — the handle must not outlive its owner |
+
+(A *scalar* read out of a frozen place is an ordinary value and goes wherever any `i64` may go — it is the handle, not the data behind it, that cannot escape.)
+
+A `mut` field is **readable** through a frozen place and never **writable**. That distinction is the whole point of the per-instance freeze: a graph algorithm that reads `mut neighbors` on a shared root while writing `mut neighbors` on its own fresh local clones is doing nothing wrong, and a type-level rule cannot tell those apart because they have the same type.
+
+**Local worklists.** A `Vec[S]` local whose elements are frozen handles is recognized without new syntax — declare it `let mut q: Vec[Node] = Vec.new();` and `q.push(<frozen place>)`, `q.len()`, `q.is_empty()` and `q[i]` are permitted, with `q[i]` itself a frozen place. This is what lets an *iterative* traversal keep a worklist, and it is `Vec`-only: `pop_front` on a `VecDeque` returns a value rather than a place, so it cannot preserve frozen-ness. An index cursor over a `Vec` is the supported shape.
+
+**The freeze site.** `freeze` refuses three things, each fail-closed on an unresolvable type:
+
+- a **non-`shared`** type — a plain struct is copied by value and a scalar is a register, so there is no refcount for `frozen` to skip and the mode would claim a representation the value does not have;
+- a **`par struct`** — already atomic and already shareable, so `frozen` would be a no-op dressed as a guarantee;
+- a **non-unique source** for a `mut`-bearing type — `let root = nodes[0]; let g = freeze root;` is refused while `nodes` stays live, because it genuinely holds another handle to the same value and the immutability claim cannot be checked against it. A type with no `mut` field anywhere in its reachable closure is immutable structurally, so aliasing it is harmless and no uniqueness is required.
+
+**Interaction with the two parallelism surfaces.** Both admit a frozen handle, and they answer from the same fact. A multi-branch `par {}` capture of a frozen handle is accepted; the same program with the keyword removed is still refused, which is the control that keeps the guarantee honest. Auto-concurrency exempts places rooted at a frozen parameter from the cross-task-safety gate, so a loop touching one reports `gate: "proven"` and fans out instead of reporting `not_cross_task_safe`. The exemption is keyed on **place roots, never on types** — a body holding both a `frozen S` and an ordinary `S` parameter must keep the second refused, and a type-keyed exemption would clear both.
+
+**Cost.** A frozen parameter emits zero refcount traffic — measured as `rc_inc=0 / rc_dec=0` against `rc_inc=1 / rc_dec=1` for the same pass-through taken by value. That is the same zero a `ref` borrow reaches, because non-owning is what `ref` already means; what `frozen` adds on top is the freeze-site guarantee that licenses the concurrent capture, which borrow semantics alone do not. The comparison that matters is against the alternative: converting the type to `par struct` shares it too, but makes its reference counting atomic everywhere, measured at roughly an order of magnitude on RC-saturated sequential code. `frozen` removes the traffic instead of paying for it.
+
+**What the spec does not commit to in v1.** Three things are deliberately left open. Whether a `freeze` may be scoped to a *region* shorter than the owner's lifetime, rather than to the binding, is unspecified. Whether frozen-ness should be expressible in a type position (`Vec[frozen Node]` as a declared local type) rather than inferred for containers is unspecified — the inference covers the shapes measured so far, and a type-position spelling is the natural extension if it does not. And whole-program atomicity promotion — inferring that a `shared` type is captured concurrently anywhere and making *all* its reference counting atomic program-wide — is implemented but ships inert, because it imposes an unattributable slowdown on sequential code the author never parallelized; if per-type promotion is wanted, the defensible shape is an opt-in attribute on the declaration rather than whole-program inference.
 
 ---
 
@@ -9363,7 +9428,7 @@ User code can rely on this order: the counter side-effect is visible to any obse
 
 Auto-concurrency handles the common case — the compiler finds independent operations and parallelizes them. Two explicit constructs complement it for cases the compiler cannot handle alone:
 
-**`par {}` — explicit fork-join scope.** Each top-level statement in a `par {}` block becomes a branch that runs concurrently. The block is a structured scope with an implicit join barrier — all branches must complete (or be cancelled) before execution continues past the block. `par {}` is the counterpart to `seq {}`: where `seq {}` forces serialization the compiler would otherwise parallelize, `par {}` makes the programmer's intent to parallelize explicit. For types that are shared across `par {}` branches, use `par struct` / `par enum` (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)) — the `par` keyword is shared intentionally: `par struct` is the type-level commitment that a value is designed for `par` contexts.
+**`par {}` — explicit fork-join scope.** Each top-level statement in a `par {}` block becomes a branch that runs concurrently. The block is a structured scope with an implicit join barrier — all branches must complete (or be cancelled) before execution continues past the block. `par {}` is the counterpart to `seq {}`: where `seq {}` forces serialization the compiler would otherwise parallelize, `par {}` makes the programmer's intent to parallelize explicit. For types that are shared and MUTATED across `par {}` branches, use `par struct` / `par enum` (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)); a `shared struct` that branches only read may instead be frozen (see [Part 5c](#part-5c-frozen-handles-frozen-t-and-freeze)) — the `par` keyword is shared intentionally: `par struct` is the type-level commitment that a value is designed for `par` contexts.
 
 ```kara
 fn load_dashboard(user_id: u64) -> Result[Dashboard, AppError] {

@@ -10927,6 +10927,86 @@ fn main() {{
         }
     }
 
+    /// design.md § Feature 4 Part 5c — the spec's normative `frozen` example,
+    /// pinned so the section cannot rot away from the compiler.
+    ///
+    /// It is the whole feature in one program: a `shared struct` with a `mut`
+    /// field, frozen at an explicit `freeze` site, read through a recursive
+    /// CALLEE that takes it as a `frozen` parameter, walked with `.iter()`, and
+    /// captured by two `par` branches at once — the capture `shared struct`
+    /// exists to forbid, licensed here by the freeze-site guarantee rather than
+    /// by borrow semantics.
+    ///
+    /// The control is what makes it a guarantee rather than a coincidence: the
+    /// same program with the two keywords removed is still refused, so deleting
+    /// the admission would turn this red instead of silently reopening the
+    /// non-atomic-refcount race (B-2026-07-28-13).
+    #[test]
+    fn design_md_part_5c_frozen_example_compiles_and_runs() {
+        let shared = r#"
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+fn build() -> Node {
+    let leaf: Node = Node { val: 1, neighbors: Vec.new() };
+    let mut kids: Vec[Node] = Vec.new();
+    kids.push(leaf);
+    return Node { val: 10, neighbors: kids };
+}
+"#;
+        let frozen_src = format!(
+            "{shared}\
+fn sum(n: frozen Node, depth: i64) -> i64 {{\n\
+    if depth <= 0 {{ return n.val; }}\n\
+    let mut t: i64 = n.val;\n\
+    for k in n.neighbors.iter() {{ t = t + sum(k, depth - 1); }}\n\
+    return t;\n\
+}}\n\
+fn main() {{\n\
+    let root: Node = build();\n\
+    let g = freeze root;\n\
+    let (a, b) = par {{ let a = sum(g, 3); let b = sum(g, 3); (a, b) }};\n\
+    println((a + b).to_string());\n\
+}}\n"
+        );
+        if let Some(out) = run_program(&frozen_src) {
+            assert_eq!(out.trim(), "22");
+        }
+
+        // Control: drop `frozen` and `freeze`, keep everything else. The capture
+        // must still be refused — borrow semantics alone do not license it.
+        let unfrozen_src = format!(
+            "{shared}\
+fn sum(n: Node, depth: i64) -> i64 {{\n\
+    if depth <= 0 {{ return n.val; }}\n\
+    return n.val;\n\
+}}\n\
+fn main() {{\n\
+    let root: Node = build();\n\
+    let (a, b) = par {{ let a = sum(root, 3); let b = sum(root, 3); (a, b) }};\n\
+    println((a + b).to_string());\n\
+}}\n"
+        );
+        let mut parsed = karac::parse(&unfrozen_src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        assert!(
+            ownership
+                .errors
+                .iter()
+                .any(|e| e.message.contains("multiple concurrent tasks")),
+            "a non-frozen `shared` root captured by two par branches must still \
+             be refused BY THE CAPTURE GATE — the frozen admission is licensed by \
+             the freeze site, not by the capture being read-only. Got: {:?}",
+            ownership
+                .errors
+                .iter()
+                .map(|e| &e.message)
+                .collect::<Vec<_>>()
+        );
+    }
+
     /// The branch binding must keep its own name in the join expression — the
     /// original repro named the branch binding and the outer destructured
     /// binding the same thing (`x`), which made the diagnostic look like it
