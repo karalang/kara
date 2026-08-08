@@ -97,9 +97,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 112 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 88 | 1 |
-| missing-feature | 82 | 1 |
+| missing-feature | 83 | 2 |
 | perf | 59 | 1 |
-| false-positive | 56 | 0 |
+| false-positive | 57 | 1 |
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 735 | 1 |
 | interp | 128 | 1 |
 | typecheck | 127 | 0 |
-| ownership | 40 | 1 |
+| ownership | 42 | 3 |
 | autopar | 33 | 1 |
 | other | 30 | 1 |
 | cli | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1011 surfaced · 4 open · 997 fixed** (2026-05-20 → 2026-08-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1013 surfaced · 6 open · 997 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1011 surfaced
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct -- one approach (the third disjunct) built and REVERTED: it fixes every measured shape but double-frees the self-hosted-parser destructure fixture, because struct destructure is a SECOND move-out gate; the three sites it must widen with are named in the detail | One approach BUILT AND REVERTED 2026-08-07 — the third disjunct this row proposed. It is right about the diagnosis and fixes all five measured shapes plus both `place_optres_field_move_info_ex` pairing guards, but double-frees `asan_vec_of_struct_shared_and_option_field_consumed_no_leak` because STRUCT DESTRUCTURE is a second move-out gate that does not move with it. Next attempt must widen `pattern_binding.rs:813`, `pattern_binding.rs:846` and `control_flow_match.rs:8418` in lockstep — see the detail's closing section. |
 | B-2026-08-07-22 | 2026-08-07 | interp | high | a `par {}` block inside a `while` loop HANGS under `--interp` (the DEFAULT for `karac check`-adjacent workflows and the Mend oracle) while the identical program builds and runs correctly AOT -- no shared type, no `frozen`, no captures needed to reproduce | — |
 | B-2026-08-07-25 | 2026-08-07 | other | medium | A BENCHED KATA'S HEADLINE NUMBER CAN CARRY A 1.31x PLACEMENT RANGE BEHIND IT AND THE CORPUS HAS NEVER BEEN CHECKED FOR IT: kata:170's recorded figure is one draw from a distribution spanning 0.970..1.269, so a reader who rebuilds it on their own machine can legitimately get a number ~30% off ours and we have no explanation on file -- the exposure is confined to katas whose headline is a CLOSE CALL against a comparator, which is a small and enumerable subset | — |
+| B-2026-08-08-1 | 2026-08-08 | ownership | medium | the `par` capture gate is keyed on binding NAMES, so two branches that each declare their own local `let n = <shared>` read as ONE binding reachable from both and are refused — renaming one is the entire fix, which is the proof it is a false positive | src/ownership/concurrent_shared.rs (the E_CONCURRENT_SHARED_STRUCT capture gate) |
+| B-2026-08-08-2 | 2026-08-08 | ownership | high | a `frozen` handle can now be stored in a local `Vec` but not in a `Map`, and kata #133 carries `visited: Map[i64, Node]` in BOTH variants — so the kata is still blocked after B-2026-08-07-23 | src/ownership/frozen_escape.rs (stage 3c container admission, `container_candidate_type`) |
 
 ### Fixed (997)
 
