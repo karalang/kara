@@ -1721,9 +1721,28 @@ impl<'a> super::TypeChecker<'a> {
         // The expectation is published by `check_expr` for a path-callee call,
         // which `Tensor.from` is. Peeked rather than taken: this intercept
         // returns before the generic-call path that would consume it.
+        //
+        // B-2026-08-08-7 — peel a `ref` / `mut ref` wrapper off the expectation
+        // first. At an ARGUMENT position the published expectation is the
+        // formal param's type verbatim, so a `ref Tensor[f32, [?]]` param
+        // published `Ref(Tensor[..])`, the `Named { "Tensor" }` arm missed, and
+        // the leaves fell back to their own default — `Tensor.from([1.0, 2.0])`
+        // minted `f64` and was then rejected against the `f32` slot. The owned
+        // spelling of the same param (`v: Tensor[f32, [?]]`) always worked,
+        // which is the tell that the borrow wrapper is the whole difference and
+        // not anything about the literal. `Tensor.from` returns a VALUE, so a
+        // `ref T` expectation on it can only mean "produce a T"; peeling is
+        // sound here for the same reason `contextual_scalar_collection_type`
+        // peels it for a collection literal. Found via the three `#[ignore]`d
+        // autograd/fresh-temp ASAN fixtures, whose leaf inputs are inline
+        // `Tensor.from([…])` args to `ref Tensor` params.
         let expected_elem = self
             .pending_expected_call_return
             .as_ref()
+            .map(|t| match t {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            })
             .and_then(|t| match t {
                 Type::Named { name, args } if name == "Tensor" && args.len() == 2 => {
                     Some(args[0].clone())

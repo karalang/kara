@@ -1673,7 +1673,25 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        let mut obj_ty = self.infer_expr(object);
+        // B-2026-08-08-7 — `let v: Vec[i64] = Vec.try_with_capacity(0).unwrap()`.
+        // `check_expr` publishes the binding's expected type here (see the
+        // `pending_unwrap_receiver_expectation` set-site in `exprs.rs`) so the
+        // fallible constructor can be CHECKED against `Result[Vec[i64], _]`
+        // rather than inferred into `Result[Vec[?T], _]` — the element typevar
+        // otherwise has no source and is rejected downstream.
+        //
+        // Pinned HERE, at the receiver, rather than by short-circuiting the
+        // whole method call in `check_expr`: an early return skips the rest of
+        // this function, which is what populates `method_unwrap_inner_types`.
+        // A first cut did short-circuit, and the program then typechecked but
+        // died in codegen with "no handler for method 'unwrap' on
+        // non-identifier receiver" — the dispatcher reads exactly that table.
+        // The typechecker must admit only what codegen can lower.
+        let pinned_receiver = self.pending_unwrap_receiver_expectation.take();
+        let mut obj_ty = match &pinned_receiver {
+            Some(wrapped) => self.check_expr(object, wrapped),
+            None => self.infer_expr(object),
+        };
         if obj_ty == Type::Error {
             for arg in args {
                 self.infer_expr(&arg.value);

@@ -306,6 +306,43 @@ impl<'a> super::TypeChecker<'a> {
                 return result;
             }
         }
+        // B-2026-08-08-7 — the `.unwrap()` sibling of the `?` arm above.
+        // `let v: Vec[i64] = Vec.try_with_capacity(0)?` pinned its element and
+        // `let v: Vec[i64] = Vec.try_with_capacity(0).unwrap()` did not, purely
+        // because an expectation reaches a `?` OPERAND but not a method
+        // RECEIVER: the receiver is inferred, so the constructor synth-returned
+        // `Result[Vec[?T], _]`, `.unwrap()` handed back `Vec[?T]`, and the
+        // fresh typevar was then rejected against the declared `Vec[i64]`.
+        // Naming the intermediate (`let r: Result[Vec[i64], _] = …;
+        // r.unwrap()`) always worked, which is the tell that this is
+        // expectation plumbing and not the constructor's own typing.
+        //
+        // Deliberately narrow: only a zero-arg `.unwrap()` directly on a
+        // `try_with_capacity` call, which is the one receiver shape whose
+        // element type has no other source. Widening this to "push the
+        // Result-wrapped expectation through any `.unwrap()`" would guess at
+        // the error arm for receivers that do have their own typing.
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        {
+            if method == "unwrap" && args.is_empty() && Self::is_try_with_capacity_call(object) {
+                // Published for `infer_method_call` to consume at its receiver
+                // (`pending_unwrap_receiver_expectation`), NOT returned from
+                // here: short-circuiting the method call skips the side-table
+                // recording codegen's `unwrap` dispatcher depends on. Taken by
+                // the very next `infer_method_call`, which is this one.
+                self.pending_unwrap_receiver_expectation =
+                    Some(self.result_alloc_error_type(expected.clone()));
+                let actual = self.infer_expr(expr);
+                self.pending_unwrap_receiver_expectation = None;
+                self.check_assignable(expected, &actual, expr.span.clone());
+                return actual;
+            }
+        }
         // Weak-field STORE coercion (the downgrade). A `weak T` field slot
         // accepts a bare strong `T` / `shared T`, an `Option[T]`, or `None` —
         // codegen lowers all of them to the single nullable weak pointer via
@@ -1092,8 +1129,49 @@ impl<'a> super::TypeChecker<'a> {
         // the check compares `Vec[u16]` with `Vec[u16]`; the block further down
         // still re-records and still range-checks each element, so a genuinely
         // out-of-range literal (`let v: Vec[i8] = [200]`) is unaffected.
+        // B-2026-08-08-7 — adopt only from a NUMERIC source. The adoption keys
+        // on the expression being a collection literal and the context naming a
+        // scalar element; it never looked at what the literal actually holds, so
+        // `let v: Vec[u32] = ["a", "b"]` had `Vec[String]` overwritten with
+        // `Vec[u32]` and sailed through the `check_assignable` on the next line.
+        // That hole predates this row (it is reachable with no generics in
+        // sight), but the seeded-generic-argument change above routes
+        // `Column.from_vec(["a", "b"])` into check-mode too, which would have
+        // widened it to a call shape that previously rejected correctly.
+        // An unsolved element (the empty literal `[]`) still adopts — there is
+        // nothing to disagree with.
+        //
+        // A FLOAT source may not adopt an INTEGER element either: `[1.5, 2.5]`
+        // into a `Vec[u32]` slot is a silent truncation, not a width choice.
+        // That direction was already rejected at a generic call (the argument
+        // was inferred, so `Vec[f64]` met `Vec[u32]` head-on) and accepted at a
+        // `let`; the change above would otherwise have resolved that
+        // disagreement toward the permissive side. The reverse — an integer
+        // literal adopting a float element, `let v: Vec[f32] = [1, 2, 3]` — is
+        // ordinary and stays.
+        let source_elem = match &actual {
+            Type::Named { name, args }
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+            {
+                Some(&args[0])
+            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => Some(element.as_ref()),
+            _ => None,
+        };
+        let adoptable = source_elem.is_some_and(|src| {
+            let numeric = matches!(
+                src,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::TypeVar(_)
+            );
+            let truncating = matches!(src, Type::Float(_))
+                && matches!(
+                    Self::contextual_scalar_collection_type(expr, expected),
+                    Some(Type::Named { ref args, .. }) if matches!(args.first(), Some(Type::Int(_) | Type::UInt(_)))
+                );
+            numeric && !truncating
+        });
         let actual = match Self::contextual_scalar_collection_type(expr, expected) {
-            Some(t) if actual != Type::Error => t,
+            Some(t) if actual != Type::Error && adoptable => t,
             _ => actual,
         };
         self.check_int_widening_coercion(expr, expected, &actual);
@@ -1496,6 +1574,11 @@ impl<'a> super::TypeChecker<'a> {
         // permissive on mismatch (it simply fails to bind), so an expectation
         // that does not match the return shape leaves inference exactly as it
         // was rather than forcing a wrong binding.
+        //
+        // B-2026-08-08-7 — recorded so pass 1 below can CHECK (rather than
+        // infer) an argument whose slot this seeding just made concrete. See
+        // the comment there for why the two halves have to move together.
+        let mut seeded_from_expectation = false;
         if let Some(expected_ret) = self.pending_expected_call_return.take() {
             // Gate on the instantiated RETURN carrying an unsolved metavar, not
             // on `formal_generic_params`. An `impl[T] Box[T] { fn new(..) }`
@@ -1510,6 +1593,7 @@ impl<'a> super::TypeChecker<'a> {
                     &mut self.env.substitutions,
                     &mut self.env.const_substitutions,
                 );
+                seeded_from_expectation = true;
             }
         }
 
@@ -1552,7 +1636,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         let mut arg_tys: Vec<Option<Type>> = Vec::with_capacity(args.len());
-        for (arg, formal_param_ty) in args.iter().zip(params.iter()) {
+        for (idx, (arg, formal_param_ty)) in args.iter().zip(params.iter()).enumerate() {
             if matches!(arg.value.kind, ExprKind::Closure { .. }) {
                 arg_tys.push(None);
             } else {
@@ -1566,7 +1650,65 @@ impl<'a> super::TypeChecker<'a> {
                 let saved_mut_through = self.mut_through_param_arg;
                 self.borrow_context = borrow_context_for_param(formal_param_ty);
                 self.mut_through_param_arg = param_mutates_through(formal_param_ty);
-                let inferred = self.infer_expr(&arg.value);
+                // B-2026-08-08-7 — when the expected-return seeding above
+                // already bound this slot to something fully concrete, CHECK
+                // the argument against it instead of inferring it. Inferring
+                // lets a context-adopting argument mint its default first —
+                // `let h: Holder[u32] = wrap([30, 10, 20])` seeded `?T = u32`,
+                // then pass 1 inferred the array literal as `Vec[i64]` anyway,
+                // and pass 2 rejected it. The non-generic arm above has always
+                // used `check_expr` for exactly this reason; this makes the
+                // seeded generic arm agree with it. The literal spelling
+                // (`[30u32, …]`) always worked, which is the tell that this is
+                // adoption and not a real type disagreement.
+                //
+                // THREE gates, each paid for by a measured regression:
+                //
+                //  1. The seeding fired. Otherwise there is no expectation and
+                //     nothing to check against.
+                //  2. The resolved slot is free of metavars/type params. A
+                //     partially-solved slot would have `check_expr` report a
+                //     mismatch pass 1 is not entitled to judge — arguments
+                //     still to come may bind it.
+                //  3. The argument is a COLLECTION LITERAL. `check_expr` is not
+                //     just a narrower `infer_expr`: it also runs
+                //     `check_int_widening_coercion`, which is stricter than the
+                //     `check_assignable` pass 2 applies. Running it on an
+                //     arbitrary argument broke `return Some(i)` with `i: i64`
+                //     into an `Option[u64]` — the exact shape the seeding's own
+                //     comment promises is unaffected, "because seeding binds the
+                //     RETURN type and the payload is then an ordinary scalar
+                //     assignment where numeric coercion stays permissive". A
+                //     collection literal has no such coercion to preserve: its
+                //     element type is minted by literal defaulting and has no
+                //     other source, which is the whole reason it needs the
+                //     context. (`Column.from_vec(Vec.new())` — a constructor
+                //     argument whose element is an unsolved var rather than a
+                //     default — is left alone for now; widening gate 3 to reach
+                //     it is a separate question with its own regression risk.)
+                let arg_adopts_from_context = matches!(
+                    &arg.value.kind,
+                    ExprKind::ArrayLiteral(_)
+                        | ExprKind::PrefixCollectionLiteral { .. }
+                        | ExprKind::RepeatLiteral { .. }
+                );
+                let seeded_slot = if seeded_from_expectation && arg_adopts_from_context {
+                    let resolved = resolve_type_vars(
+                        &sub_params[idx],
+                        &self.env.substitutions,
+                        &id_to_name,
+                        &self.env.const_substitutions,
+                        &const_id_to_name,
+                    );
+                    let resolved = self.resolve_assoc_projections(&resolved);
+                    expectation_is_concrete(&resolved).then_some(resolved)
+                } else {
+                    None
+                };
+                let inferred = match &seeded_slot {
+                    Some(slot) => self.check_expr(&arg.value, slot),
+                    None => self.infer_expr(&arg.value),
+                };
                 self.borrow_context = saved_borrow_ctx;
                 self.mut_through_param_arg = saved_mut_through;
                 arg_tys.push(Some(inferred));
@@ -1604,6 +1746,16 @@ impl<'a> super::TypeChecker<'a> {
             let resolved = self.resolve_assoc_projections(&resolved);
             match arg_ty_opt {
                 Some(arg_ty) => {
+                    // B-2026-08-08-7 — pass 2 still judges an argument that
+                    // pass 1 checked. Skipping it here (the first cut did)
+                    // silently LOST a rejection: `let c: Column[u32] =
+                    // Column.from_vec(["a", "b"])` errored before the change and
+                    // passed after it, because check-mode's collection-literal
+                    // adoption stamps the expected type on the literal without
+                    // validating the elements — a pre-existing hole that
+                    // `check_assignable` was the thing catching. Pass 1's
+                    // `check_expr` narrows the argument's type; it does not
+                    // replace the verdict.
                     self.check_assignable(&resolved, arg_ty, arg.value.span.clone());
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, arg_ty);

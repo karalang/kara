@@ -1703,6 +1703,16 @@ pub struct TypeChecker<'a> {
     /// `infer_expr` and TAKEN by the first generic call that runs, so it cannot
     /// leak into a nested call inside an argument.
     pub(super) pending_expected_call_return: Option<Type>,
+    /// B-2026-08-08-7 — the `Result`-wrapped expected type for the RECEIVER of a
+    /// `Coll.try_with_capacity(n).unwrap()`. Set by `check_expr` immediately
+    /// before that method call's `infer_expr` and TAKEN by `infer_method_call`
+    /// at its receiver, so the fallible constructor is checked against
+    /// `Result[Vec[i64], _]` instead of minting an unsolvable element typevar.
+    /// A separate channel from `pending_expected_call_return` because it
+    /// targets the receiver rather than the call's own return, and because
+    /// pinning has to happen WITHOUT short-circuiting the method call — that is
+    /// what populates codegen's `method_unwrap_inner_types`.
+    pub(super) pending_unwrap_receiver_expectation: Option<Type>,
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
@@ -1978,6 +1988,7 @@ impl<'a> TypeChecker<'a> {
             method_unwrap_inner_types: HashMap::new(),
             method_unwrap_err_types: HashMap::new(),
             pending_expected_call_return: None,
+            pending_unwrap_receiver_expectation: None,
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             temp_recv_len_elem_types: HashMap::new(),

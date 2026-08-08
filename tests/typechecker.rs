@@ -29464,6 +29464,163 @@ fn tensor_from_adopts_expected_element_type() {
     .is_empty());
 }
 
+/// B-2026-08-08-7 — the same adoption reaches an ARGUMENT position through a
+/// `ref` parameter.
+///
+/// At an argument the published expectation is the formal param's type
+/// verbatim, so a `ref Tensor[f32, [?]]` param handed the adoption site
+/// `Ref(Tensor[..])`; the peek matched only a bare `Named { "Tensor" }`, missed,
+/// and the leaves fell back to their `f64` default. The OWNED spelling of the
+/// identical param always worked, which is the tell that the borrow wrapper was
+/// the entire difference.
+///
+/// Surfaced by three ASAN fixtures (autograd end-to-end, and both fresh-temp
+/// `ref Tensor` arg paths) whose leaf inputs are inline `Tensor.from([…])` args
+/// — they were `#[ignore]`d as vacuous when the harness gained a typecheck gate.
+#[test]
+fn tensor_from_adopts_expected_element_through_a_ref_param() {
+    // The trio's shape: an inline `Tensor.from` as a `ref Tensor[f32, _]` arg.
+    typecheck_ok(
+        "fn take(v: ref Tensor[f32, [?]]) -> f32 { v[0] }\n\
+         fn main() { println(take(Tensor.from([1.0, 2.0]))); }",
+    );
+    // `mut ref` peels the same way (with the call-site mutation marker a fresh
+    // temporary argument requires — design.md Feature 4 Part 1½).
+    typecheck_ok(
+        "fn take(v: mut ref Tensor[f32, [2]]) -> f32 { v[0] }\n\
+         fn main() { println(take(mut Tensor.from([1.0, 2.0]))); }",
+    );
+    // The owned spelling, which always worked — kept so a fix that swings the
+    // other way and breaks it shows up here.
+    typecheck_ok(
+        "fn take(v: Tensor[f32, [?]]) -> f32 { v[0] }\n\
+         fn main() { println(take(Tensor.from([1.0, 2.0]))); }",
+    );
+    // Adoption is not blanket coercion: a non-numeric leaf still errors.
+    assert!(!typecheck_errors(
+        "fn take(v: ref Tensor[f32, [2]]) -> f32 { v[0] }\n\
+         fn main() { println(take(Tensor.from([1.0, \"no\"]))); }"
+    )
+    .is_empty());
+}
+
+/// B-2026-08-08-7 — a generic PATH call whose slot the expected-return seeding
+/// already made concrete CHECKS its argument instead of inferring it.
+///
+/// `let c: Column[u32] = Column.from_vec([30, 10, 20])` seeded `?T = u32` from
+/// the annotation and then inferred the array literal as `Vec[i64]` anyway, so
+/// pass 2 rejected the argument it had just told itself to expect. The
+/// non-generic call path has always used `check_expr` here; this makes the
+/// seeded generic path agree. Spelling the element (`[30u32, …]`) always
+/// worked — the adoption tell again.
+#[test]
+fn seeded_generic_call_checks_its_argument_against_the_concrete_slot() {
+    typecheck_ok(
+        "fn main() { let c: Column[u32] = Column.from_vec([30, 10, 20]); println(c.len()); }",
+    );
+    typecheck_ok(
+        "fn main() { let c: Column[f32] = Column.from_vec([3.0, 1.0]); println(c.len()); }",
+    );
+    // Unseeded (no annotation) still infers from the literal as before.
+    typecheck_ok("fn main() { let c = Column.from_vec([30, 10, 20]); println(c.len()); }");
+    // Checking the argument must not become blanket acceptance. Both of these
+    // rejected BEFORE the change; a first cut that suppressed pass 2's
+    // `check_assignable` for a pass-1-checked argument silently lost them, and
+    // the second cut still lost them because check-mode's collection-literal
+    // adoption stamped the expected type without reading the elements. See
+    // `contextual_collection_literal_adoption_requires_a_numeric_source`.
+    assert!(!typecheck_errors(
+        "fn main() { let c: Column[u32] = Column.from_vec([\"a\", \"b\"]); println(c.len()); }"
+    )
+    .is_empty());
+    assert!(!typecheck_errors(
+        "fn main() { let c: Column[u32] = Column.from_vec([1.5, 2.5]); println(c.len()); }"
+    )
+    .is_empty());
+}
+
+/// B-2026-08-08-7 — a collection literal adopts its contextual element type only
+/// from a NUMERIC source, and never across the float→integer truncation.
+///
+/// The adoption (B-2026-08-05-19) keyed purely on the expression being a
+/// collection literal and the CONTEXT naming a scalar element; it never looked
+/// at what the literal holds. So `let v: Vec[u32] = ["a", "b"]` had its
+/// `Vec[String]` overwritten with `Vec[u32]` and passed the assignability check
+/// on the next line. That hole needs no generics to reach, and it predates the
+/// seeded-argument change — but that change routes generic call arguments
+/// through check-mode too, so leaving it would have turned a call shape that
+/// rejected correctly into one that did not.
+#[test]
+fn contextual_collection_literal_adoption_requires_a_numeric_source() {
+    // The adoption this exists for: unsuffixed integer literals taking a
+    // narrower or unsigned element from the context.
+    typecheck_ok("fn main() { let v: Vec[u16] = [1, 2, 3]; println(v.len()); }");
+    typecheck_ok("fn main() { let v: Vec[f32] = [1, 2, 3]; println(v.len()); }");
+    typecheck_ok("fn main() { let v: Vec[f32] = [1.5, 2.5]; println(v.len()); }");
+    // A non-numeric literal has nothing to adopt and must not be re-stamped.
+    assert!(
+        !typecheck_errors("fn main() { let v: Vec[u32] = [\"a\", \"b\"]; println(v.len()); }")
+            .is_empty()
+    );
+    // Nor may a float literal adopt an integer element — that is a silent
+    // truncation, not a width choice.
+    assert!(
+        !typecheck_errors("fn main() { let v: Vec[u32] = [1.5, 2.5]; println(v.len()); }")
+            .is_empty()
+    );
+    assert!(
+        !typecheck_errors("fn main() { let v: Vec[i64] = [1.5, 2.5]; println(v.len()); }")
+            .is_empty()
+    );
+}
+
+/// B-2026-08-08-7 — `Coll.try_with_capacity(n).unwrap()` pins its element from
+/// the binding, like the `?` form already did.
+///
+/// An expectation reaches a `?` OPERAND but not a method RECEIVER, so the
+/// constructor synth-returned `Result[Vec[?T], _]`, `.unwrap()` handed back
+/// `Vec[?T]`, and the element var — which has no other source — was rejected
+/// against the declared `Vec[i64]`. Naming the intermediate always worked.
+///
+/// The pinning happens at the receiver inside `infer_method_call`, NOT by
+/// short-circuiting the method call in check-mode: an early return skips the
+/// `method_unwrap_inner_types` recording that codegen's `unwrap` dispatcher
+/// reads, and a first cut that did short-circuit typechecked but died in
+/// codegen with "no handler for method 'unwrap' on non-identifier receiver".
+#[test]
+fn try_with_capacity_unwrap_pins_its_element_from_the_binding() {
+    typecheck_ok(
+        "fn main() { let v: Vec[i64] = Vec.try_with_capacity(0).unwrap(); println(v.len()); }",
+    );
+    typecheck_ok(
+        "fn main() { let v: Vec[u32] = Vec.try_with_capacity(4).unwrap(); println(v.len()); }",
+    );
+    // The `?` form and the named intermediate, which always worked.
+    typecheck_ok(
+        "fn f() -> Result[i64, AllocError] {\n\
+             let v: Vec[i64] = Vec.try_with_capacity(0)?;\n\
+             Result.Ok(v.len())\n\
+         }\n\
+         fn main() { println(f().unwrap()); }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+             let r: Result[Vec[i64], AllocError] = Vec.try_with_capacity(0);\n\
+             let v: Vec[i64] = r.unwrap();\n\
+             println(v.len());\n\
+         }",
+    );
+    // `String` has no element to pin and must keep working unchanged.
+    typecheck_ok(
+        "fn main() { let s: String = String.try_with_capacity(0).unwrap(); println(s.len()); }",
+    );
+    // Pinning is not blanket acceptance — a disagreeing annotation still errors.
+    assert!(!typecheck_errors(
+        "fn main() { let v: Vec[i64] = String.try_with_capacity(0).unwrap(); println(v.len()); }"
+    )
+    .is_empty());
+}
+
 #[test]
 fn test_tensor_body_annotation_generic_shape_param_ok() {
     // B-2026-07-13-5 leg B: a BODY type annotation may mention the enclosing

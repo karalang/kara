@@ -818,7 +818,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "B-2026-08-08-7: program fails typecheck (`ref Tensor[f32,[?]]` vs `Tensor[f64,[N]]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_freshtemp_tensor_ref_arg_assoc_call_no_crash() {
         // B-2026-07-18-9: a FRESH-TEMP tensor (`Tensor.from(...)`) passed as a
         // `ref Tensor` arg to an ASSOCIATED fn (`S.ins(...)`) that pushes
@@ -856,7 +855,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "B-2026-08-08-7: program fails typecheck (`ref Tensor[f32,[?]]` vs `Tensor[f64,[N]]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_freshtemp_tensor_ref_arg_free_fn_no_leak() {
         // B-2026-07-18-10 residual: the FREE-FN sibling — an inline
         // `Tensor.from([…])` passed as a `ref Tensor` arg to a free fn. The
@@ -1303,7 +1301,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "B-2026-08-08-7: program fails typecheck (`ref Tensor[f32,[?]]` vs `Tensor[f64,[N]]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_autograd_activations_and_losses() {
         // The Phase-11 autograd activations (`silu`/`softmax`/`gelu`) and losses
         // (`bce`/`cross_entropy`) end-to-end: each forward pushes value/grad
@@ -4003,7 +4000,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "B-2026-08-08-7: program fails typecheck (`Vec[i64]` vs `Vec[?T0]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_with_capacity_zero_no_leak() {
         // B-2026-07-11-15 — a `with_capacity(n)` whose `n` evaluates to 0 at
         // runtime leaked one byte per call. `karac_alloc_or_panic(0)` normalizes
@@ -33331,7 +33327,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "B-2026-08-08-7: program fails typecheck (`Vec[u32]` vs `Vec[i64]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_column_sorted_argsort_narrow_widths_no_leak() {
         // S6c follow-on: the NARROW-width `Column.sorted` path mallocs a separate
         // `Vec[T]`-width buffer and frees the 8-byte scratch key buffer; the
@@ -42816,8 +42811,16 @@ fn main() {
     // it is a genuine leak of a malloc'd box plus its String and Vec buffers.
     // Both bindings are kept so a fix that swings too far and double-frees the
     // annotated case shows up here as an ASAN error rather than silently.
+    //
+    // B-2026-08-08-7 — `d` used to be `let d = Result.Ok(mkres(i))`, which does
+    // not typecheck and never did: an unannotated `Result.Ok(x)` leaves `E`
+    // with no source, and "cannot infer type parameter 'E'" is the CORRECT
+    // answer, not a gap. (The harness only asserted ownership, so the whole
+    // fixture ran on a program `karac build` rejects.) The unannotated-`let`
+    // shape under test is preserved by binding a call whose declared return
+    // type supplies `E` — still no annotation on the binding, still a boxed
+    // `Result` payload reaching the drop path, and now a legal program.
     #[test]
-    #[ignore = "B-2026-08-08-7: program fails typecheck (cannot infer type parameter 'E') — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_unannotated_boxed_optres_let_frees_its_box() {
         assert_clean_asan_run(
             r#"
@@ -42829,6 +42832,8 @@ fn mkres(tag: i64) -> Res {
     return Res { name: "boxed-payload-wide-enough-to-spill", buf: b };
 }
 
+fn mkok(tag: i64) -> Result[Res, i64] { return Result.Ok(mkres(tag)); }
+
 fn main() {
     let mut n = 0i64;
     let mut i = 0i64;
@@ -42836,7 +42841,7 @@ fn main() {
         let a: Option[Res] = Option.Some(mkres(i));   // annotated — always worked
         let b = Option.Some(mkres(i));                // unannotated — leaked
         let c: Result[Res, i64] = Result.Ok(mkres(i));
-        let d = Result.Ok(mkres(i));
+        let d = mkok(i);                             // unannotated — leaked
         n = n + 4i64;
         i = i + 1i64;
     }
