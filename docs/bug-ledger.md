@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 222 | 2 |
-| leak | 151 | 1 |
+| leak | 152 | 1 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 90 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 751 | 2 |
-| typecheck | 133 | 1 |
+| codegen | 752 | 3 |
+| typecheck | 134 | 1 |
 | interp | 129 | 0 |
-| ownership | 44 | 1 |
+| ownership | 44 | 0 |
 | autopar | 38 | 0 |
 | other | 35 | 1 |
 | cli | 28 | 0 |
@@ -124,20 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1040 surfaced · 4 open · 1026 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1041 surfaced · 4 open · 1027 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-24 | 2026-08-08 | codegen | medium | an ANNOTATED concat mapper `|s: String| s + "!"` builds and returns an EMPTY String -- silent, pre-existing, and the exact workaround two successive codegen gates advised | probe: `s.map(|x: String| x + "!")` on `Option[String]` — `karac build` prints an empty string, `--interp` prints `hi!`; the UN-annotated spelling is correct after B-2026-08-08-22 |
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
 | B-2026-08-08-27 | 2026-08-08 | other | low | the dark-llvm-target audit has never been RE-RUN as a check -- B-2026-07-31-44 swept 19 targets by hand and B-2026-08-08-26 found the 20th the same way, so the next gap will also be found by accident unless the audit becomes a script | Spun out of B-2026-08-08-26 rather than folded into it: -26 is a coverage-gap row with a landed fix, this is a standing question about whether the remaining dark surface is worth the CI minutes. Needs a measurement, not a debugging session. |
+| B-2026-08-08-29 | 2026-08-08 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is clean -- the annotation does the opposite of its purpose, silently | probe: `let mut m: Map[i64, weak N] = Map.new(); m.insert(1i64, a);` vs the `Map[i64, N]` twin |
 
-### Fixed (1026)
+### Fixed (1027)
 
-<details><summary>1026 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1027 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1169,6 +1169,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-1 | ownership | medium | the `par` capture gate is keyed on binding NAMES, so two branches that each declare their own local `let n = <shared>` read as ONE binding reachable… | 8c26ad4a |
 | B-2026-08-08-2 | typecheck+ownership | high | this row's PREMISE WAS WRONG -- kata #133 was never blocked on `Map[K, frozen V]` (its `visited` map holds the CLONES, which are mutated and can neve… | d174d04c |
 | B-2026-08-08-3 | codegen | medium | a `par` branch whose body is a BLOCK EXPRESSION containing a `Map` fails codegen with `Undefined variable '<outer destructured name>'`, while `karac… | da9ae409. Two holes in the par-branch return-slot type inference (`src/codegen/stmts.rs`): `infer_block_tail_llvm_type` now honours an inner `let`'s type ANNOTATION (it consulted only the RHS, while its own caller checks the annotation first), and `infer_expr_llvm_type`'s `MethodCall` arm types a builtin container/string `len()` from `method_callee_types` — the typechecker's own span-keyed record of the receiver — restricted to methods with one possible return type across every receiver. Neither the `Map` nor the slot-ownership transfer this row named is involved; Vec/String/Set reproduce identically, and the reported name is the BRANCH binding, not the outer destructured one. 18 variants build and agree with the interpreter; valgrind clean at both opt levels. Fixtures `par_branch_block_body_ending_in_container_len` and `par_branch_block_body_binding_distinct_from_destructured_name`, both stash-proven red. |
+| B-2026-08-08-4 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph -- design.md s… | 68d0b86b |
 | B-2026-08-08-13 | codegen | high | a `Vec[weak N]` push SILENTLY CORRUPTED the target's first field — `w.push(a)` changed `a.v` from 41 to 42, because the weak-target scan never saw th… | f869989f |
 | B-2026-08-08-14 | interp | medium | the interpreter has no weak CONTAINER element, so a `Vec[weak T]` read-back reports `non-exhaustive match .. | f0c47394 |
 | B-2026-08-08-5 | typecheck+codegen | high | the `weak` downgrade store coercion reaches a direct FIELD store but not a container-ELEMENT store, so `Vec[weak N]` cannot be built -- which makes d… | 1bb5328a |
