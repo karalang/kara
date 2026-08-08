@@ -11305,6 +11305,158 @@ fn a_frozen_handle_can_be_stored_in_a_local_vec_worklist() {
     }
 }
 
+/// B-2026-08-01-33 — `for k in <frozen place>.iter()`, which is the spelling
+/// the corpus actually uses.
+///
+/// Stage 2.6 admitted `for k in n.kids` only. That reads like a spelling detail
+/// and is not one: across kara-katas' leetcode corpus `for x in <place>.iter()`
+/// appears 22 times and the bare-place form over a field ZERO times — kata
+/// #133's own traversal is `for nb in curr.neighbors.iter()`. Refusing the
+/// adapter meant every adopting kata had to be rewritten into a form nobody
+/// writes, which kara-katas CLAUDE.md forbids outright.
+///
+/// The reject rows pin the three axes the carve-out is narrow on, one each: the
+/// exact method name is not enough on its own (a user `impl` on the receiver
+/// type excludes it), the loop is still not admitted inside a closure, and the
+/// element still may not escape.
+#[test]
+fn frozen_place_may_be_iterated_through_a_bare_iter_adapter() {
+    let prelude = "shared struct Inner { d: i64 }\n\
+                   shared struct Node { val: i64, mut kids: Vec[Node],\n\
+                                        inner: Inner, tags: Vec[i64] }\n";
+
+    let accept: &[(&str, &str)] = &[
+        (
+            "a scalar read off each element",
+            "fn f(n: frozen Node) -> i64 {\n\
+                 let mut s: i64 = 0;\n\
+                 for k in n.kids.iter() { s = s + k.val; }\n\
+                 return s; }\n",
+        ),
+        (
+            "the element re-aliased and projected further",
+            "fn f(n: frozen Node) -> i64 {\n\
+                 let mut s: i64 = 0;\n\
+                 for k in n.kids.iter() { let m = k; s = s + m.inner.d; }\n\
+                 return s; }\n",
+        ),
+        (
+            "a SCALAR element, which joins no frozen set at all",
+            "fn f(n: frozen Node) -> i64 {\n\
+                 let mut s: i64 = 0;\n\
+                 for t in n.tags.iter() { s = s + t; }\n\
+                 return s; }\n",
+        ),
+        (
+            "the element passed whole to another `frozen` slot",
+            "fn g(m: frozen Node) -> i64 { m.val }\n\
+             fn f(n: frozen Node) -> i64 {\n\
+                 let mut s: i64 = 0;\n\
+                 for k in n.kids.iter() { s = s + g(k); }\n\
+                 return s; }\n",
+        ),
+    ];
+    for (label, body) in accept {
+        eprintln!("[iter accept] {label}");
+        ownership_ok(&format!("{prelude}{body}fn main() {{ println(\"x\"); }}\n"));
+    }
+
+    let reject: &[(&str, &str)] = &[
+        (
+            // The name alone must not carry it: a user `impl` on the receiver
+            // type means `iter` could resolve to a body that keeps the handle.
+            "`iter` on a receiver type that carries a user `impl` block",
+            "impl Vec { fn tally(ref self) -> i64 { 0 } }\n\
+             fn f(n: frozen Node) -> i64 {\n\
+                 let mut s: i64 = 0;\n\
+                 for k in n.kids.iter() { s = s + k.val; }\n\
+                 return s; }\n",
+        ),
+        (
+            "the loop inside a closure",
+            "fn f(n: frozen Node) -> i64 {\n\
+                 let c = || { let mut s: i64 = 0;\n\
+                     for k in n.kids.iter() { s = s + k.val; } s };\n\
+                 return c(); }\n",
+        ),
+        (
+            "an element that ESCAPES out of the loop",
+            "fn f(n: frozen Node) -> Node {\n\
+                 for k in n.kids.iter() { return k; }\n\
+                 return n; }\n",
+        ),
+    ];
+    for (label, body) in reject {
+        eprintln!("[iter reject] {label}");
+        let errors = ownership_errors(&format!("{prelude}{body}fn main() {{ println(\"x\"); }}\n"));
+        assert!(
+            errors.iter().any(|e| e.message.contains("frozen")),
+            "`{label}` must be refused — the adapter is admitted on three \
+             independent conditions and this row removes one of them; \
+             got {errors:?}"
+        );
+    }
+}
+
+/// B-2026-08-01-33 — a frozen-element container declared INSIDE a closure is
+/// not a frozen-element container.
+///
+/// Stage 3c disqualified a container declared OUTSIDE the closure and touched
+/// from within (`restricted_region`), but one declared INSIDE passed that test
+/// while the handle pushed into it still came from the enclosing frame. Every
+/// other admission in `frozen_escape` is suppressed by `in_closure` for exactly
+/// this reason: a closure's environment can outlive the call, so the container
+/// carries a non-counting handle past its owner.
+///
+/// It was previously unreachable for a `frozen` PARAMETER because the push was
+/// a type error first; the peel above removes that mask, so the gate has to be
+/// real. `leak` below — a closure holding the parameter, RETURNED from the
+/// function — checks clean without it.
+#[test]
+fn a_frozen_container_store_is_refused_inside_a_closure() {
+    let prelude = "shared struct Node { val: i64, mut kids: Vec[Node] }\n\
+                   fn build() -> Node { let r = Node { val: 1, kids: [] }; r }\n";
+    let reject: &[(&str, &str)] = &[
+        (
+            "a `frozen` parameter pushed into a container inside an ESCAPING closure",
+            "fn leak(n: frozen Node) -> OnceFn() -> i64 {\n\
+                 return || { let mut v: Vec[Node] = Vec.new(); v.push(n); v.len() };\n\
+             }\n",
+        ),
+        (
+            "a `frozen` parameter pushed into a container inside a local closure",
+            "fn f(n: frozen Node) -> i64 {\n\
+                 let c = || { let mut v: Vec[Node] = Vec.new(); v.push(n); v.len() };\n\
+                 return c(); }\n",
+        ),
+        (
+            "a `freeze`-statement local pushed into a container inside a closure",
+            "fn f() -> i64 { let root = build(); let g = freeze root;\n\
+                 let c = || { let mut v: Vec[Node] = Vec.new(); v.push(g); v.len() };\n\
+                 return c(); }\n",
+        ),
+    ];
+    for (label, body) in reject {
+        let src = format!("{prelude}{body}fn main() {{ println(\"x\"); }}\n");
+        eprintln!("[frozen-closure reject] {label}");
+        let errors = ownership_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains("frozen")),
+            "`{label}` must be refused: the closure can outlive the call, so the \
+             container would carry a non-counting handle past the value whose \
+             refcount it skips; got {errors:?}"
+        );
+    }
+
+    // The control that keeps the gate from being "refuse every container": the
+    // identical push OUTSIDE a closure is still admitted.
+    ownership_ok(&format!(
+        "{prelude}fn f(n: frozen Node) -> i64 {{\n\
+             let mut v: Vec[Node] = Vec.new(); v.push(n); v.len() }}\n\
+         fn main() {{ println(\"x\"); }}\n"
+    ));
+}
+
 /// B-2026-08-08-1 — the `par` capture gate must resolve a name to its BINDING,
 /// not conflate every binding that happens to share a spelling.
 ///

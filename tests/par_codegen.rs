@@ -627,6 +627,22 @@ fn main() {
                 "a scalar element",
                 "let mut s: i64 = 0; for k in n.nums { s = s + k; } s",
             ),
+            // B-2026-08-01-33 — the `.iter()` spelling, which is the one the
+            // kata corpus actually writes (22 uses against 0 of the bare-place
+            // form over a field). The ownership walk peels the adapter, and
+            // this row is what says the peel is safe rather than plausible:
+            // `codegen/control_flow_for.rs` peels the same call before
+            // compiling the loop, so the emitted traffic must be identical to
+            // the bare-place rows above. If it ever diverges, the ownership
+            // peel is admitting a lowering nobody measured.
+            (
+                "a shared element read as a scalar, through `.iter()`",
+                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + k.v; } s",
+            ),
+            (
+                "a shared element passed to a frozen slot, through `.iter()`",
+                "let mut s: i64 = 0; for k in n.kids.iter() { s = s + g(k); } s",
+            ),
         ];
         for (label, body) in bodies {
             assert_eq!(
@@ -10688,6 +10704,141 @@ fn main() {
                 "7,7",
                 "two `par` branches must each walk the whole shared graph \
                  (1+2+4) through their own frozen-element worklist"
+            );
+        }
+    }
+
+    /// B-2026-08-01-33 — the same worklist, filled from a `frozen` PARAMETER
+    /// rather than from the `freeze` statement's own local.
+    ///
+    /// This is the spelling kata #133 has — its traversal is in a callee — and
+    /// it was unreachable until B-2026-08-08-2 (200fa8d6) stopped the
+    /// parser's `Ref` from reaching the container store. That fix is a TYPING
+    /// change, so the load-bearing assertion here is the one that says it
+    /// stayed one: a `frozen` parameter must still emit BORROW traffic, and the
+    /// worklist must still take no counts. If the relaxation ever leaked into
+    /// the calling convention, this function's numbers would move to the owned
+    /// column and the test would fail rather than silently start retaining.
+    /// Nothing else measures the callee shape at the IR level.
+    ///
+    /// Paired with an executed value per this family's rule (B-2026-08-05-10:
+    /// a passing traffic count shipped over a miscompile once already), and
+    /// the expected sum is computed from the graph's shape rather than read
+    /// off a run.
+    #[test]
+    fn frozen_parameter_worklist_traversal_computes_correctly_across_par_branches() {
+        let prelude = "shared struct Node { val: i64, mut kids: Vec[Node] }\n\
+                       fn build() -> Node {\n\
+                           let r = Node { val: 1, kids: [] };\n\
+                           let b = Node { val: 2, kids: [] };\n\
+                           let c = Node { val: 4, kids: [] };\n\
+                           b.kids.push(c);\n\
+                           r.kids.push(b);\n\
+                           r\n\
+                       }\n";
+        // The callee: one index-cursor BFS over whatever frozen graph it is
+        // handed. No `freeze` anywhere in it — the guarantee arrives with the
+        // parameter.
+        let bfs = "fn bfs(root: frozen Node) -> i64 {\n\
+                       let mut work: Vec[Node] = Vec.new();\n\
+                       work.push(root);\n\
+                       let mut i: i64 = 0;\n\
+                       let mut total: i64 = 0;\n\
+                       while i < work.len() {\n\
+                           let n = work[i as u64];\n\
+                           total = total + n.val;\n\
+                           for k in n.kids { work.push(k); }\n\
+                           i = i + 1;\n\
+                       }\n\
+                       total\n\
+                   }\n";
+
+        // Counted on SSA definitions inside ONE function, exactly as the
+        // sibling test above: a module-wide count cannot see this, because
+        // `main` and the drop helpers carry traffic in every variant.
+        fn traffic(ir: &str, func: &str) -> (usize, usize, usize) {
+            let mut inside = false;
+            let (mut inc, mut dec, mut drain) = (0, 0, 0);
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside {
+                    inc += line.matches("= add i64 %rc").count();
+                    dec += line.matches("= sub i64 %rc").count();
+                    drain += line.matches("call void @__karac_vec_elem_rc_dec").count();
+                }
+            }
+            (inc, dec, drain)
+        }
+
+        let driver = "fn main() { let r = build(); let g = freeze r; println(f\"{bfs(g)}\"); }\n";
+        let frozen_ir = ir_for_analyzed(&format!("{prelude}{bfs}{driver}"));
+        // Non-vacuity floor: the assertion below is "this function emits no
+        // refcount traffic", which an EMPTY module satisfies perfectly.
+        assert!(
+            frozen_ir.contains("@bfs("),
+            "there is no `bfs` in the module to measure — a zero here would \
+             mean nothing"
+        );
+        // AND THIS TEST IS NOT THE RED PROOF FOR THE TYPING RULE, stated here
+        // because it looks like one. `ir_for_analyzed` compiles PAST type
+        // errors (the `run_program` bypass), so this program emits `@bfs` and
+        // prints 7,7 even on a compiler that refuses it at `karac check` —
+        // measured, not assumed: with the typing relaxation reverted every
+        // assertion in this function still passes. What it pins is that the
+        // relaxation did not reach the calling convention. The red proof for
+        // the typing rule itself is
+        // `a_frozen_param_is_storable_as_a_vec_element_but_a_ref_param_is_not`
+        // in tests/typechecker.rs.
+        let frozen = traffic(&frozen_ir, "bfs");
+        // The DISCRIMINATOR: the identical body over an OWNED parameter. Its
+        // traffic is what the frozen column is a difference from — without it
+        // the zeros below would also be produced by a build that emitted no
+        // refcount traffic at all.
+        let owned_bfs = bfs.replace("root: frozen Node", "root: Node");
+        let owned = traffic(
+            &ir_for_analyzed(&format!(
+                "{prelude}{owned_bfs}fn main() {{ println(f\"{{bfs(build())}}\"); }}\n"
+            )),
+            "bfs",
+        );
+
+        assert!(
+            owned.0 >= 2 && owned.2 == 1,
+            "the OWNED-parameter traversal is the baseline this is a \
+             difference from — if it stopped retaining, the frozen column \
+             would prove nothing; got inc={} dec={} drain={}",
+            owned.0,
+            owned.1,
+            owned.2
+        );
+        assert_eq!(
+            frozen,
+            (0, 0, 0),
+            "a `frozen` parameter is a BORROW: the callee takes no count on \
+             receipt, its worklist takes none per element, and nothing is \
+             drained at scope exit. A non-zero here means the typechecker's \
+             value-typed view of the parameter reached the calling convention, \
+             which it must not"
+        );
+
+        // ── The value, not just the shape ──
+        let out = run_program(&format!(
+            "{prelude}{bfs}fn main() {{\n\
+                 let r = build();\n\
+                 let g = freeze r;\n\
+                 let (a, b) = par {{ let a = bfs(g); let b = bfs(g); (a, b) }};\n\
+                 println(f\"{{a}},{{b}}\");\n\
+             }}\n"
+        ));
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "7,7",
+                "two `par` branches must each enter the callee and walk the \
+                 whole shared graph (1+2+4) through their own worklist"
             );
         }
     }

@@ -587,6 +587,62 @@ impl<'a> Cx<'a, '_> {
         }
     }
 
+    /// The place a `for` loop iterates, seeing through a bare `.iter()`.
+    ///
+    /// WHY THE ADAPTER HAS TO BE HERE. Stage 2.6 admitted `for k in n.kids` and
+    /// nothing else, which reads as a spelling detail and is not one: across
+    /// kara-katas' leetcode corpus `for x in <place>.iter()` is written 22
+    /// times and the bare-place form over a field ZERO times. Refusing the
+    /// adapter therefore refuses the idiom, and a kata rewritten to dodge it
+    /// has stopped doing its job (kara-katas CLAUDE.md § "Katas are
+    /// bug-finders").
+    ///
+    /// It is admitted on exactly the terms `len` / `is_empty` already are, and
+    /// on the same three independent axes: the method name is one exact name;
+    /// the receiver must resolve to a BUILTIN container, so no user body ever
+    /// receives the handle; and a type carrying a user `impl` block is
+    /// excluded, so `impl Vec { fn iter(...) }` cannot smuggle a body in
+    /// through the builtin name. `.iter()` on a builtin container yields the
+    /// same elements the place form does and lowers the same way — stage 2.6
+    /// measured that loop as a pointer load and a store, with no clone, retain
+    /// or release — so nothing about an element's counting changes.
+    ///
+    /// The two forms are not merely similar, they are the same lowering:
+    /// `codegen/control_flow_for.rs` peels exactly this call off a `for`
+    /// iterable before compiling the loop, so admitting it here changes what is
+    /// CHECKED and nothing about what is emitted.
+    ///
+    /// Only a BARE `iter` is peeled — NOT `into_iter`, which codegen's peel does
+    /// accept. The names differ in intent (`into_iter` reads as consuming the
+    /// receiver) and this pass has measured neither that nor what a future
+    /// divergence would mean for a non-counting element, so the fail-closed
+    /// half of the pair is the one to take. Anything further along a chain
+    /// (`.iter().map(..)`, `.iter().rev()`) is likewise a different expression
+    /// whose element provenance is unmeasured, and falls through to the
+    /// ordinary walk that reports it.
+    fn frozen_iterable_place<'e>(&self, e: &'e Expr) -> &'e Expr {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        else {
+            return e;
+        };
+        if method != "iter" || !args.is_empty() {
+            return e;
+        }
+        // `permits_builtin_query`'s receiver test, reused rather than
+        // reimplemented: two opinions about what counts as a builtin container
+        // is how this module's guards drift apart.
+        if self.permits_builtin_query(object, "len") {
+            object
+        } else {
+            e
+        }
+    }
+
     fn flag(&mut self, name: &str, span: &Span, reason: Reason) {
         self.found.push(Rejection {
             is_alias: self.aliases.contains(name),
@@ -1273,6 +1329,22 @@ fn try_admit_container_method<'a>(
     let Some(c) = cx.container_receiver(object) else {
         return false;
     };
+    // NO CONTAINER ADMISSION INSIDE A CLOSURE, whatever `restricted_region`
+    // says. That test only disqualifies a container declared OUTSIDE the
+    // closure; one declared INSIDE it passes, and the frozen root pushed into
+    // it still comes from the enclosing frame. A closure's environment can
+    // outlive the call, so the handle it carries is exactly the non-counting
+    // handle outliving its owner that property 3 forbids — the same reason
+    // every other admission in this module is suppressed by `in_closure`
+    // (stage 1's first draft accepted a scalar read inside a closure body for
+    // want of this). Rejecting rather than merely declining is deliberate: it
+    // takes the container out of the candidate set, so `c[i]` inside the
+    // closure stops being a frozen place too, and the push falls through to
+    // the ordinary walk that reports it as the capture it is.
+    if cx.in_closure {
+        cx.reject_container(c);
+        return false;
+    }
     // A container declared outside the closure / `defer` / `par` body this
     // call sits in — see `restricted_region`.
     if !cx.container_visible_here(c) {
@@ -1606,6 +1678,11 @@ fn try_admit_frozen_for_element<'a>(
     let PatternKind::Binding(name) = &pattern.kind else {
         return false;
     };
+    // See through a bare `.iter()` — the spelling the corpus actually uses.
+    // Everything below judges the underlying PLACE, and consuming the whole
+    // `for` is what keeps the peeled-away method call from reaching the
+    // ordinary walk and reporting its receiver.
+    let iterable = cx.frozen_iterable_place(iterable);
     if cx.frozen_place_root(iterable).is_none() {
         return false;
     }
