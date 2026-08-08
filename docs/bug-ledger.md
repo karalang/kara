@@ -103,19 +103,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
 | crash | 39 | 0 |
-| other | 21 | 0 |
-| use-after-free | 15 | 1 |
+| other | 22 | 1 |
+| use-after-free | 15 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 741 | 1 |
+| codegen | 741 | 0 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
-| autopar | 33 | 0 |
-| other | 32 | 0 |
+| autopar | 34 | 0 |
+| other | 33 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1027 surfaced · 2 open · 1015 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1028 surfaced · 2 open · 1016 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
-| B-2026-08-08-15 | 2026-08-08 | codegen | high | an RC-bearing `shared struct` published as an auto-par return slot is never adopted by the joining scope -- it LEAKS when the branch suppresses its release and is a USE-AFTER-FREE when it does not; `SlotOwnership` has no RC variant, and auto-par is ON by default | probe: `let p: P = P{..}; let q: Q = Q{..};` in `main` under default auto-par -- read-only in the joining scope gives `Invalid read of size 8` from a block freed in `__par_branch_0_0`; pushed into a container gives a definitely-lost box. Both clean under `KARAC_AUTO_PAR=0`. |
+| B-2026-08-08-16 | 2026-08-08 | other | medium | the ASAN memory suite compiles every fixture with AUTO-PAR DISABLED, so ~1000 leak/UAF fixtures cover sequential codegen only -- the hole that hid B-2026-08-08-15 | tests/memory_sanitizer.rs `run_under_asan_opts` passes `None` for `ConcurrencyAnalysis`, so every fixture compiles with auto-par disabled |
 
-### Fixed (1015)
+### Fixed (1016)
 
-<details><summary>1015 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1016 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1176,6 +1176,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-9 | typecheck | high | a generic slot bound by the EXPECTATION skipped the narrowing check — `let x: u8 = id(big)` with `big: i64 = 5000000000` typechecked and printed 5000… | a2ce6b79 |
 | B-2026-08-08-10 | codegen | medium | a generic struct with a `Vec[T]` FIELD returned by value from a generic function fails codegen — `ret { { ptr, i64, i64 } } %field` against a `ptr` r… | f773c317. `llvm_type_for_type_expr` (`src/codegen/types_lowering.rs`) now lowers a user-declared struct through its own (mono) struct type when its name collides with a prelude type, ahead of the hard-coded `name == "Column"` / `"DataFrame"` / `"Tensor"` / `"Interner"` handle arms that keyed on the NAME alone and returned a bare `ptr`. Guarded on `user_shadowed_prelude_types`, the declaration pass's existing record, which excludes `stdlib_origin` items. NOT the generic-struct-return gap this row describes: a non-generic `struct Column { data: Vec[i64] }` fails identically pre-fix, and renaming the struct is a one-token fix. The complement of `reject_shadowed_prelude_types` (B-2026-08-02-13), which still refuses built-in machinery over a user value — all 17 of its tests pass unchanged, as do the 159 built-in Column/DataFrame/Tensor/Interner/Arrow codegen tests. Fixture `user_struct_shadowing_a_prelude_type_name_keeps_its_own_layout`, stash-proven red. |
 | B-2026-08-08-11 | typecheck | low | a type error about a `frozen` parameter names its type `ref T` -- the surface keyword and the diagnostic disagree, because `frozen T` lowers to `Ref(… | 4f32b1e1 |
+| B-2026-08-08-15 | autopar+codegen | high | an RC-bearing `shared struct` published as an auto-par return slot is never adopted by the joining scope -- it LEAKS when the branch suppresses its r… | 62619a88 |
 
 </details>
 
