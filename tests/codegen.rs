@@ -22463,23 +22463,27 @@ fn main() {
         );
     }
 
-    /// B-2026-08-08-25 — a SECOND still-miscompiling shape in this family,
-    /// found the same way and pinned the same way.
+    /// B-2026-08-08-25 — matching a payload out of a live `Option[String]`
+    /// binding leaves the binding DANGLING, so any later read of it is garbage.
     ///
-    /// Calling `.map` TWICE on one `Option[String]` binding corrupts the second
-    /// result: garbage bytes, or an abort in the UTF-8 validator
-    /// (`internal: String buffer was not valid UTF-8`). `--interp` prints both
-    /// correctly. The mapper bodies here are ordinary method calls that have
-    /// lowered correctly all along, so this is about the RECEIVER, not the
-    /// closure — `map` on a heap payload moves the payload out to hand it to
-    /// the mapper, and the binding stays in scope holding a moved-from header.
+    /// Found as "`.map` twice", but `map` is not involved: the hand-written
+    /// `match o { Some(v) => … }` twice corrupts identically, and so does one
+    /// `.map` followed by a plain `match o`. `map` reaches it only because it
+    /// lowers to exactly that match.
     ///
-    /// Independent of B-2026-08-08-22 and B-2026-08-08-24 (a different shape
-    /// each), and NOT fixed by B-2026-08-08-20's inline-consume fix —
-    /// re-measured after that landed.
+    /// THE ASYMMETRY IS THE LEAD: the same shape with an `Option[Vec[i64]]`
+    /// payload is correct, including with a consuming arm body, and a plain
+    /// `String` binding read twice is correct. So the payload move-out is not a
+    /// deliberate model that String happens to expose — the Vec path already
+    /// does the right thing and the String path is missing it. `Result[String,
+    /// _]` breaks the same way, as does `match Some(h.s)` over a struct field.
+    ///
+    /// `--interp` prints correctly in every one of those, which makes this a
+    /// run-vs-build divergence with the interpreter as the reference.
     #[test]
-    #[ignore = "B-2026-08-08-25: second `.map` on the same Option[String] reads a moved-from payload"]
-    fn test_e2e_option_map_twice_on_one_binding() {
+    #[ignore = "B-2026-08-08-25: matching out of a live Option[String] leaves the binding dangling"]
+    fn test_e2e_match_out_of_option_string_leaves_source_usable() {
+        // The `map` spelling the row was filed as.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -22490,6 +22494,32 @@ fn main() {
             )
             .as_deref(),
             Some("HI\nhi\n")
+        );
+        // The same defect with no combinator anywhere — this is the real shape.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o { Some(v) => { println(v.to_uppercase()); } None => {} }\n\
+                     match o { Some(v) => { println(v.to_lowercase()); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\nhi\n")
+        );
+        // The control that says the move-out is not the intended model: the
+        // identical program with a `Vec` payload is correct today.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new(); v.push(7);\n\
+                     let o: Option[Vec[i64]] = Some(v);\n\
+                     match o { Some(x) => { println(x.len()); } None => {} }\n\
+                     match o { Some(x) => { println(x.len()); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1\n1\n")
         );
     }
 
