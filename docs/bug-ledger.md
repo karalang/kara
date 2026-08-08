@@ -101,9 +101,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
 | diagnostics | 42 | 0 |
-| soundness | 39 | 0 |
+| soundness | 40 | 0 |
 | crash | 39 | 0 |
-| other | 19 | 0 |
+| other | 20 | 1 |
 | use-after-free | 14 | 0 |
 
 ### By surface
@@ -113,9 +113,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 737 | 3 |
 | typecheck | 130 | 2 |
 | interp | 128 | 0 |
-| ownership | 43 | 2 |
+| ownership | 44 | 2 |
 | autopar | 33 | 1 |
-| other | 30 | 0 |
+| other | 31 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,21 +124,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1016 surfaced · 5 open · 1001 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1018 surfaced · 6 open · 1002 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct -- one approach (the third disjunct) built and REVERTED: it fixes every measured shape but double-frees the self-hosted-parser destructure fixture, because struct destructure is a SECOND move-out gate; the three sites it must widen with are named in the detail | One approach BUILT AND REVERTED 2026-08-07 — the third disjunct this row proposed. It is right about the diagnosis and fixes all five measured shapes plus both `place_optres_field_move_info_ex` pairing guards, but double-frees `asan_vec_of_struct_shared_and_option_field_consumed_no_leak` because STRUCT DESTRUCTURE is a second move-out gate that does not move with it. Next attempt must widen `pattern_binding.rs:813`, `pattern_binding.rs:846` and `control_flow_match.rs:8418` in lockstep — see the detail's closing section. |
+| B-2026-08-07-27 | 2026-08-07 | other | medium | kata #133's par lane compiles and runs after B-2026-08-01-33, but restoring it is the whole bench pipeline -- the .kara's "DOES NOT COMPILE" header, bench.sh's skip, results.json and the README all still say the lane is withdrawn | — |
 | B-2026-08-08-3 | 2026-08-08 | codegen | medium | a `par` branch whose body is a BLOCK EXPRESSION containing a `Map` fails codegen with `Undefined variable '<outer destructured name>'`, while `karac check` passes — a clean run-vs-build divergence | src/codegen/par_blocks.rs (par branch outlining) + the let-stmt Map arm |
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-5 | 2026-08-08 | typecheck+codegen | high | the `weak` downgrade store coercion reaches a direct FIELD store but not a container-ELEMENT store, so `Vec[weak N]` cannot be built -- which makes design.md's own worked cycle-breaking example uncompilable and leaves B-2026-08-08-4 with no fix | src/typechecker/expr_method_call.rs (the Vec push element check) + the weak downgrade codegen (B-2026-07-19-8 slices 3-4) |
 
-### Fixed (1001)
+### Fixed (1002)
 
-<details><summary>1001 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1002 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1163,6 +1164,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-23 | ownership | high | a `frozen` handle has no legal place to be STORED, so no iterative traversal can use one: a local `VecDeque[Node]` worklist refuses `queue.push_back(… | 63caea3e |
 | B-2026-08-07-24 | codegen | medium | 64-BYTE BASIC-BLOCK ALIGNMENT is a MEASURED 10.0% on kata:170 -- its aligned placement DISTRIBUTION entirely dominates the unaligned one, worst align… | DECLINED, PRICED, no code change -- and closed rather than parked, because all three shipping paths are settled noes rather than deferrals. (a) Carrying an LLVM patch for the Apple subtargets' `PrefLoopLogAlignment` is disqualified by DISTRIBUTION, not effort: karac builds against whatever LLVM the user has, so a fork breaks `cargo install karac --features llvm`, which is a launch gate traded for one kata. (b) Upstreaming needs multi-host, multi-workload data and would reach users only at LLVM 21+; the measurement here is a decent seed for it and nothing more. (c) Shipping the blanket flag as a documented opt-in is WORSE than doing nothing: `-align-all-nofallthru-blocks` is an internal cl::opt in MachineBlockPlacement.cpp with no stability guarantee, and `KARAC_LLVM_ARGS` silently ignores an unknown flag (verified), so an LLVM upgrade that drops it would revert the optimization with zero signal -- acceptable for a measurement lever, a trap for a user-facing recipe. REOPEN CONDITION, and it is a real one: if a Kara workload that actually ships -- not a kata -- is found placement-pathological the way kata:170 is, the 10% becomes worth an LLVM dependency and (b) gets its justification. `KARAC_TEXT_PAD` makes that detectable on any program in minutes, so the condition is testable rather than aspirational. |
 | B-2026-08-07-25 | other | medium | A BENCHED KATA'S HEADLINE NUMBER CAN CARRY A 1.31x PLACEMENT RANGE BEHIND IT AND THE CORPUS HAS NEVER BEEN CHECKED FOR IT: kata:170's recorded figure… | No compiler change -- the row was a reporting risk, not a defect. Discharged in kara-katas f152a64 (the screen + the spread/margin join), ba7872d (interleaving + per-kata control, which corrected the screen's first corpus run) and 22baac1 (the 258-pair corpus measurement, the 13 README caveats, and BENCHMARKS.md's new 'Code placement (arm64)' section). Keeping it current needs no new machinery: re-run `placement-spread.py --all` then `stamp-placement-caveat.py`, both idempotent, whenever benchmark numbers are refreshed for publication. Deliberately NOT wired into every bench run -- it adds minutes per kata to measure something that moves only when emitted code size moves. |
+| B-2026-08-07-26 | ownership | high | a frozen-element container declared INSIDE a closure was still admitted -- `try_admit_container_method` had no `in_closure` gate, so an escaping clos… | 6673e162 |
 | B-2026-08-08-1 | ownership | medium | the `par` capture gate is keyed on binding NAMES, so two branches that each declare their own local `let n = <shared>` read as ONE binding reachable… | 8c26ad4a |
 | B-2026-08-08-2 | typecheck+ownership | high | this row's PREMISE WAS WRONG -- kata #133 was never blocked on `Map[K, frozen V]` (its `visited` map holds the CLONES, which are mutated and can neve… | d174d04c |
 
