@@ -97,10 +97,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 113 | 0 |
 | codegen-gap | 94 | 0 |
 | run-vs-build | 89 | 0 |
-| missing-feature | 85 | 1 |
+| missing-feature | 85 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
-| diagnostics | 42 | 0 |
+| diagnostics | 43 | 1 |
 | soundness | 41 | 0 |
 | crash | 39 | 0 |
 | other | 21 | 0 |
@@ -111,10 +111,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 739 | 0 |
-| typecheck | 132 | 1 |
+| typecheck | 133 | 2 |
 | interp | 128 | 0 |
-| ownership | 44 | 2 |
-| autopar | 33 | 1 |
+| ownership | 44 | 1 |
+| autopar | 33 | 0 |
 | other | 32 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1023 surfaced · 2 open · 1011 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1024 surfaced · 2 open · 1012 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
+| B-2026-08-08-11 | 2026-08-08 | typecheck | low | a type error about a `frozen` parameter names its type `ref T` -- the surface keyword and the diagnostic disagree, because `frozen T` lowers to `Ref(T)` at parse time and the typechecker only ever sees the borrow | src/parser.rs (`frozen T` lowers to `TypeKind::Ref(T)` at parse time) |
 
-### Fixed (1011)
+### Fixed (1012)
 
-<details><summary>1011 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1012 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -978,6 +978,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1023 surfaced
 | B-2026-08-01-30 | codegen+interp | medium | Displacement residuals probed live (the b173/b174 recorded residuals): a DEEP-chain field assign `o.h.r = Res{..}` fires no displaced Drop body on EI… | e23c570 |
 | B-2026-08-01-31 | codegen | high | Deep-chain field move-out (`let x = o.h.r` / `let s = o.h.name`) never cap-zeroes the source: the moved-out binding AND the root's StructDrop both fr… | e23c570 |
 | B-2026-08-01-32 | codegen | low | Vec.filled's calloc fast path only recognises a SCALAR constant zero, so Vec.filled(n, Vec.new()) store-loops an all-zero aggregate instead of calloc… | 0872d65 |
+| B-2026-08-01-33 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined vi… | e061ab29. `frozen` adopted into the authoritative spec as design.md § Feature 4 Part 5c ('Frozen Handles'), which is the remainder this row's own last section named. The feature itself shipped across earlier commits (surface, escape check E0511, freeze-site check E0512, RC suppression via the borrow lowering, `par` + auto-par admission, projection stickiness, per-instance freeze, frozen-element containers) and the motivating kata is published with a measured par lane. Every rule in the new section was re-measured on the current compiler before being written, which corrected two of this row's own claims: the freeze site requires a unique source only for a `mut`-bearing type, and the frozen-element container is an ordinary `Vec[S]` local with no `frozen` in its spelling. The spec's normative example is pinned end to end by `design_md_part_5c_frozen_example_compiles_and_runs` with a keyword-stripped control that must still be refused by the capture gate. |
 | B-2026-08-01-34 | codegen | medium | Generic-monomorph field moved out of a deep chain (`let g = o.h.b` where `b: Boxy[String]`) still double-frees — the B-2026-08-01-31 suppressor decli… | f82c0db |
 | B-2026-08-01-35 | codegen | high | Field store through a FIELD-ROOTED indexed container (`o.hs[i].field = x` where `hs: Vec[P]` is itself a struct field) is SILENTLY DROPPED under kara… | 38d2d23 |
 | B-2026-08-01-36 | parser+resolver | medium | A module-level `let` whose name starts with a LOWERCASE letter is not recognized as a module binding at all — it falls through to a top-level stateme… | FIXED 0584af0. The open question in the filing — how to disambiguate script mode from a module binding — resolves cleanly against design.md § Script mode, which makes script mode and an explicit `fn main()` MUTUALLY EXCLUSIVE (a file with both is already an error). So in a file with explicit main, a top-level `let` cannot be a script statement; it can only be an incorrectly-named module binding. src/parser.rs now reclassifies those into Item::ModuleBinding BEFORE the ambiguity check, so the resolver's existing E_MODULE_BINDING_NAMING fires — exactly the 'widen the recognizer and let the good diagnostic do its job' shape the filing proposed.
