@@ -2575,7 +2575,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // skipping the call. Paired with the scope-exit element-drain
                 // skip in `stmts.rs`; neither is correct alone.
                 let frozen_elem_target = self.frozen_elem_vec_owners.contains(var_name);
-                self.suppress_source_vec_cleanup_for_arg_ex(&args[0].value, !frozen_elem_target);
+                // B-2026-08-08-5 — a `weak T` element takes NO strong count.
+                // Computed here rather than at the store because the transfer
+                // inc below happens first, and leaving it in place is a leak
+                // the store cannot undo: the container releases through
+                // `karac_weak_drop`, so a strong retain here is never balanced
+                // and the target's strong count never reaches zero. Measured
+                // exactly that way — the payloads freed and the control blocks
+                // did not.
+                let weak_elem = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)));
+                self.suppress_source_vec_cleanup_for_arg_ex(
+                    &args[0].value,
+                    !frozen_elem_target && !weak_elem,
+                );
                 // Container-bodies twin of the cap-zero above: a bare-
                 // identifier arg moves its container value in, so retract
                 // its `__karac_dropelems_*` action or the body fires over
@@ -2685,7 +2700,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // container have to close, or the container ends up counting
                 // some elements and not others and its all-or-nothing drop
                 // cannot be right for both.
-                if !frozen_elem_target {
+                if !frozen_elem_target && !weak_elem {
                     self.share_shared_struct_ref_for_arg(&args[0].value, elem_val);
                 }
 
@@ -2791,6 +2806,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 // an exact-size-class allocation (heap overflow → corruption,
                 // ASLR-intermittent crash). Mirrors `coerce_to_struct_field_ty`
                 // for struct fields and the index-store path below.
+                // B-2026-08-08-5 — a `weak T` ELEMENT slot. The typechecker
+                // now accepts a strong handle here (the same downgrade
+                // coercion a `weak` FIELD store has always had), so the store
+                // must perform the downgrade or the container would hold a
+                // STRONG pointer in a slot the author declared `weak` — the
+                // cycle would still leak while the source says it does not,
+                // which is strictly worse than the error this replaced.
+                //
+                // `emit_weak_field_init` is the right sibling rather than
+                // `emit_weak_field_store`: a push writes a FRESH slot at
+                // `data[len]`, so there is no prior occupant to weak-drop. The
+                // matching decrement is the per-element
+                // `__karac_vec_elem_weak_drop` the container's scope-exit
+                // drain now runs (`vec_elem_agg_drop_for_type_expr`); the two
+                // are a pair on the same terms as every other container
+                // ownership rule here.
+                if weak_elem {
+                    if let BasicValueEnum::PointerValue(p) = elem_val {
+                        self.emit_weak_field_init(elem_ptr, p);
+                        let one_w = i64_t.const_int(1, false);
+                        let new_len = self.builder.build_int_add(len, one_w, "new_len").unwrap();
+                        self.builder.build_store(len_ptr, new_len).unwrap();
+                        return Ok(self.context.i64_type().const_zero().into());
+                    }
+                }
                 let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(elem_ptr, elem_val).unwrap();
                 // A for-loop struct-element binding aliases the SOURCE

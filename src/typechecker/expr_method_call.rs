@@ -4061,6 +4061,47 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(elem) = element_ty {
+                // B-2026-08-08-5 — a `weak T` ELEMENT. The downgrade coercion
+                // lives in `check_expr`, keyed on the EXPECTED type, so a site
+                // that infers-then-compares never reaches it: that is why
+                // `Vec[weak N].push(strong)` reported `expected 'weak N', found
+                // 'N'` while the field store `c.parent = p` accepted the same
+                // value.
+                //
+                // NARROWER THAN THE FIELD RULE, ON PURPOSE. A `weak` FIELD also
+                // accepts `Option[T]` and `None`; the container store lowers
+                // only a BARE strong handle, and admitting the `Option` form
+                // here compiled a program that SEGFAULTED at runtime — the
+                // typechecker must not admit what codegen does not implement,
+                // which is the whole reason this is a hand-written gate rather
+                // than a call to `check_expr`. Widening it is a codegen change
+                // first and a typechecker change second.
+                if let Type::Weak(referent) = &elem {
+                    let actual = self.infer_expr(&args[0].value);
+                    let ok = matches!(actual, Type::Error | Type::Never)
+                        || super::types::types_compatible(&actual, referent);
+                    if !ok {
+                        self.type_error(
+                            format!(
+                                "cannot push a value of type '{}' into a `Vec[weak {}]`; \
+                                 a container element takes a BARE `{}` handle, which is \
+                                 downgraded on the way in. The `Option[{}]` / `None` forms a \
+                                 `weak` FIELD accepts are not lowered for a container element \
+                                 yet — bind the handle first and push that",
+                                type_display(&actual),
+                                type_display(referent),
+                                type_display(referent),
+                                type_display(referent),
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        self.record_expr_type(&args[0].value.span, &Type::Error);
+                        return Type::Unit;
+                    }
+                    self.record_expr_type(&args[0].value.span, &elem);
+                    return Type::Unit;
+                }
                 let arg_ty = self.infer_expr(&args[0].value);
                 // B-2026-08-08-2 — a `frozen` parameter reads as `ref T`; the
                 // ownership pass decides whether this store is legal.

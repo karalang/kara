@@ -35730,3 +35730,55 @@ fn a_frozen_param_is_storable_as_a_vec_element_but_a_ref_param_is_not() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
+
+/// B-2026-08-08-5 — a `Vec[weak T]` accepts a bare strong handle, which is what
+/// makes design.md's own cycle-breaking example compile.
+///
+/// The downgrade coercion lives in `check_expr`, keyed on the EXPECTED type, so
+/// a site that infers-then-compares never reached it: `c.parent = p` into a
+/// `weak P` field was accepted while `a.ns.push(b)` into `Vec[weak N]` reported
+/// `expected 'weak N', found 'N'`. Every real graph holds its back-edges in a
+/// container, so the container store is the only form that matters for the
+/// mechanism's purpose, and it was the one form missing.
+///
+/// THE REJECT ROW IS DELIBERATELY NARROWER THAN THE FIELD RULE. A `weak` FIELD
+/// also accepts `Option[T]` and `None`; the container store lowers only the
+/// bare handle, and admitting the `Option` form compiled a program that
+/// SEGFAULTED. So the gate is hand-written rather than delegating to
+/// `check_expr` — the typechecker must not admit what codegen has not
+/// implemented, and this row is what keeps those two in step.
+#[test]
+fn a_vec_of_weak_accepts_a_bare_handle_and_refuses_the_option_forms() {
+    let prelude = "shared struct N { v: i64, mut ns: Vec[weak N] }\n";
+    let body = |push: &str| {
+        format!(
+            "{prelude}fn f() -> i64 {{\n\
+                 let a = N {{ v: 1, ns: Vec.new() }};\n\
+                 let b = N {{ v: 2, ns: Vec.new() }};\n\
+                 {push}\n\
+                 a.ns.len()\n\
+             }}\n\
+             fn main() {{ println(\"x\"); }}\n"
+        )
+    };
+
+    typecheck_ok(&body("a.ns.push(b);"));
+
+    for (label, push) in [
+        (
+            "an `Option[T]`-typed binding",
+            "let ob: Option[N] = Some(b); a.ns.push(ob);",
+        ),
+        ("a bare `None`", "a.ns.push(None);"),
+    ] {
+        let errors = typecheck_errors(&body(push));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("a container element takes a BARE")),
+            "{label} must be refused at a `Vec[weak N]` element until codegen \
+             lowers it — admitting it compiled a segfaulting program; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}

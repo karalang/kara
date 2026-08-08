@@ -3185,6 +3185,77 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// B-2026-08-08-5 — a `Vec[weak T]` push DOWNGRADES, takes no strong count,
+    /// and the container weak-drops each element at scope exit.
+    ///
+    /// Asserted on the IR rather than only end-to-end, and that is deliberate:
+    /// the LSan fixture for this
+    /// (`asan_vec_of_weak_back_edges_reclaims_a_cycle_no_leak`) gates the
+    /// TYPECHECK half but NOT these two codegen halves. Reverting them leaves a
+    /// program that leaks its whole graph — 288 bytes, measured under valgrind
+    /// — while LeakSanitizer still reports it clean (B-2026-08-08-4 records why
+    /// LSan under-reports this class). So without the assertions below, a
+    /// codegen regression here would be invisible to the whole suite.
+    ///
+    /// Three things, and each is a way this went wrong while being built:
+    ///
+    /// * `karac_weak_downgrade` at the push — without it the container holds a
+    ///   STRONG pointer in a slot the source declares `weak`, so the cycle
+    ///   leaks while the program says it does not;
+    /// * NO strong retain from the push — the first cut left the ordinary
+    ///   transfer inc in place, and the payloads then freed while every control
+    ///   block stayed, because the strong count never reached zero;
+    /// * `__karac_vec_elem_weak_drop` registered — without it the container
+    ///   never releases what its pushes took.
+    ///
+    /// The strong-`Vec[N]` control row is what makes the first two mean
+    /// anything: it must show the opposite of each.
+    #[test]
+    fn vec_of_weak_push_downgrades_and_takes_no_strong_count() {
+        let program = |elem: &str| {
+            format!(
+                "shared struct N {{ v: i64, mut ns: Vec[{elem}] }}\n\
+                 fn build(s: i64) -> i64 {{\n\
+                     let a = N {{ v: s, ns: Vec.new() }};\n\
+                     let b = N {{ v: s + 1, ns: Vec.new() }};\n\
+                     a.ns.push(b);\n\
+                     b.ns.push(a);\n\
+                     a.ns.len() + b.ns.len()\n\
+                 }}\n\
+                 fn main() {{ println(f\"{{build(1)}}\"); }}\n"
+            )
+        };
+
+        let weak_ir = ir_for(&program("weak N"));
+        assert!(
+            weak_ir.contains("karac_weak_downgrade"),
+            "a `Vec[weak N]` push must downgrade on the way in; without it the \
+             container stores a strong pointer into a weak slot"
+        );
+        assert!(
+            weak_ir.contains("__karac_vec_elem_weak_drop"),
+            "a `Vec[weak N]` must weak-drop each element at scope exit, or it \
+             never releases what its pushes took"
+        );
+        // Counted on the SSA definition, not on substring hits: an `rc_inc`
+        // name appears twice per retain.
+        let weak_incs = weak_ir.matches("= add i64 %rc").count();
+
+        let strong_ir = ir_for(&program("N"));
+        let strong_incs = strong_ir.matches("= add i64 %rc").count();
+        assert!(
+            !strong_ir.contains("karac_weak_downgrade"),
+            "the strong control must NOT downgrade — otherwise the weak rows \
+             above prove nothing about the `weak` spelling"
+        );
+        assert!(
+            strong_incs > weak_incs,
+            "a weak element takes no strong count, so the weak build must emit \
+             FEWER retains than the identical strong-element build; got \
+             weak={weak_incs} strong={strong_incs}"
+        );
+    }
+
     /// Like [`ir_for`] but runs `desugar_program` first, so AST-rewriting
     /// pre-resolve passes (e.g. `#[derive(Default)]` → synthetic
     /// `default()` impl) are reflected in the IR.

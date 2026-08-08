@@ -152,6 +152,35 @@ mod memory_sanitizer_tests {
         // `None` here leaves the RC-fallback boxing surface untested —
         // exactly the divergence that hid the Option[shared] boxing
         // collision (b027fc15 bug 3) from the whole ASAN corpus.
+        // B-2026-08-08-5 — TYPECHECK errors are a hard failure here, on exactly
+        // the same grounds as the ownership gate below.
+        //
+        // This harness drives the phases by hand and, until now, only asserted
+        // the OWNERSHIP result. A fixture whose program failed TYPECHECK was
+        // still handed to codegen, which happily emitted something — so a test
+        // written for a not-yet-supported shape could report `ok` for a program
+        // `karac build` REFUSES. Found while stash-proving the `Vec[weak T]`
+        // store: the fixture passed against a compiler that rejected its own
+        // source, which means it was gating nothing.
+        //
+        // Same discrimination as the codegen-failure panic further down: a
+        // signal that always means "the compiler rejected the program under
+        // test" fails loudly instead of sliding through.
+        if !typed.errors.is_empty() {
+            panic!(
+                "[{label}] TYPECHECK FAILED — this is a real failure, not missing setup.\n\
+                 {}\n\
+                 `karac build` would reject this program, so the fixture asserts nothing. \
+                 Fix the test program, or mark the test `#[ignore = \"<gap>\"]` so it is \
+                 visibly deferred rather than silently green.",
+                typed
+                    .errors
+                    .iter()
+                    .map(|e| format!("   {} @ line {}", e.message, e.span.line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_ownership_clean(&ownership, src);
 
@@ -789,6 +818,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-08-6: program fails typecheck (`ref Tensor[f32,[?]]` vs `Tensor[f64,[N]]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_freshtemp_tensor_ref_arg_assoc_call_no_crash() {
         // B-2026-07-18-9: a FRESH-TEMP tensor (`Tensor.from(...)`) passed as a
         // `ref Tensor` arg to an ASSOCIATED fn (`S.ins(...)`) that pushes
@@ -826,6 +856,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-08-6: program fails typecheck (`ref Tensor[f32,[?]]` vs `Tensor[f64,[N]]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_freshtemp_tensor_ref_arg_free_fn_no_leak() {
         // B-2026-07-18-10 residual: the FREE-FN sibling — an inline
         // `Tensor.from([…])` passed as a `ref Tensor` arg to a free fn. The
@@ -1272,6 +1303,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-08-6: program fails typecheck (`ref Tensor[f32,[?]]` vs `Tensor[f64,[N]]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_autograd_activations_and_losses() {
         // The Phase-11 autograd activations (`silu`/`softmax`/`gelu`) and losses
         // (`bce`/`cross_entropy`) end-to-end: each forward pushes value/grad
@@ -3971,6 +4003,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-08-6: program fails typecheck (`Vec[i64]` vs `Vec[?T0]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_with_capacity_zero_no_leak() {
         // B-2026-07-11-15 — a `with_capacity(n)` whose `n` evaluates to 0 at
         // runtime leaked one byte per call. `karac_alloc_or_panic(0)` normalizes
@@ -15695,6 +15728,70 @@ fn main() {
             // 4 source nodes, plus a 4-node clone graph per round, 6 rounds x
             // 2 branches, plus each round's visited map and worklist buffers.
             200,
+        );
+    }
+
+    /// B-2026-08-08-5 — a cyclic graph whose back-edges live in a
+    /// `Vec[weak N]` is reclaimed completely.
+    ///
+    /// This is design.md § Cycles' own worked example (`mut neighbors:
+    /// Vec[weak GraphNode]`, `b.neighbors.push(a); // bidirectional, no cycle
+    /// leak`), which did not compile until the container store learned the
+    /// downgrade. The strong-`Vec[N]` twin of this graph leaks its entire self
+    /// — 72 bytes per node — and is tracked as B-2026-08-08-4.
+    ///
+    /// THE GRAPH IS BUILT IN A HELPER AND THE STACK IS THEN CHURNED, and that
+    /// is load-bearing rather than incidental. LSan scans the stack region
+    /// conservatively, so handles left in a dead frame read as reachable and
+    /// the leak goes UNREPORTED: the identical 2-node cycle passes this suite
+    /// when built inline in `main`, and reports 144 bytes the moment a
+    /// recursion overwrites the frame (B-2026-08-08-4). Without the churn this
+    /// test would be green against a completely broken implementation.
+    ///
+    /// Three counts have to balance for this to pass, which is why it is one
+    /// fixture rather than three: the push must NOT take a strong count (it
+    /// took one at first, and the payloads freed while every control block
+    /// stayed — measured), the push MUST downgrade (or the slot holds a strong
+    /// pointer the container later weak-drops), and the container's scope-exit
+    /// drain must weak-drop each element (or the counts never reach zero).
+    #[test]
+    fn asan_vec_of_weak_back_edges_reclaims_a_cycle_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct N { v: i64, mut ns: Vec[weak N] }
+
+fn build(seed: i64) -> i64 {
+    let a = N { v: seed, ns: Vec.new() };
+    let b = N { v: seed + 1, ns: Vec.new() };
+    let c = N { v: seed + 2, ns: Vec.new() };
+    let d = N { v: seed + 3, ns: Vec.new() };
+    a.ns.push(b); a.ns.push(d);
+    b.ns.push(a); b.ns.push(c);
+    c.ns.push(b); c.ns.push(d);
+    d.ns.push(a); d.ns.push(c);
+    return a.ns.len() + b.ns.len() + c.ns.len() + d.ns.len();
+}
+
+// Overwrites the dead frame the handles lived in, so LSan cannot mistake
+// stack residue for reachability. See the doc comment.
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let edges = build(seed);
+    let noise = churn(2000);
+    println(edges + noise - noise);
+}
+"#,
+            // 8 back-edges across the 4-node cycle.
+            &["8"],
+            "vec_of_weak_back_edges_reclaims_a_cycle",
+            // 4 node boxes + 4 element buffers.
+            8,
         );
     }
 
@@ -33234,6 +33331,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "B-2026-08-08-6: program fails typecheck (`Vec[u32]` vs `Vec[i64]`) — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_column_sorted_argsort_narrow_widths_no_leak() {
         // S6c follow-on: the NARROW-width `Column.sorted` path mallocs a separate
         // `Vec[T]`-width buffer and frees the 8-byte scratch key buffer; the
@@ -42719,6 +42817,7 @@ fn main() {
     // Both bindings are kept so a fix that swings too far and double-frees the
     // annotated case shows up here as an ASAN error rather than silently.
     #[test]
+    #[ignore = "B-2026-08-08-6: program fails typecheck (cannot infer type parameter 'E') — was passing vacuously before the harness gained a typecheck gate"]
     fn asan_unannotated_boxed_optres_let_frees_its_box() {
         assert_clean_asan_run(
             r#"

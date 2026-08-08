@@ -2381,6 +2381,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // `FieldDrop::NestedTuple` arm uses — it frees Vec/String, Map/Set,
         // enum and nested-struct leaves, and its fn takes a pointer to one
         // tuple, which is exactly the per-element drop ABI here.
+        // B-2026-08-08-5 — a `weak T` element. Checked FIRST: the name-keyed
+        // dispatch below unwraps to the REFERENT's type, which would hand back
+        // the strong `rc_dec` drop and over-release a count this container
+        // never took.
+        if matches!(&elem_te.kind, TypeKind::Weak(_)) {
+            return Some(self.emit_vec_elem_weak_drop_fn());
+        }
         if let TypeKind::Tuple(elem_tes) = &elem_te.kind {
             if elem_tes.is_empty() {
                 return None;
@@ -3185,6 +3192,56 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_unconditional_branch(ret_bb).unwrap();
         self.builder.position_at_end(ret_bb);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        drop_fn
+    }
+
+    /// Per-element drop for a `Vec[weak T]` (B-2026-08-08-5).
+    ///
+    /// The `FreeVecBuffer` drain calls it once per live element with a pointer
+    /// to the element SLOT, which for a weak element is the single nullable
+    /// weak pointer `emit_weak_field_init` stored there. The body is one
+    /// `karac_weak_drop` — weak -= 1, freeing the control block iff strong ==
+    /// 0 && weak == 0 — and the runtime entry is null-safe, so an empty slot
+    /// (a stored `None`) needs no guard here.
+    ///
+    /// WITHOUT THIS the container never decrements what its pushes
+    /// incremented, so every target's control block outlives the program even
+    /// after its strong count reaches zero: a leak of exactly the header per
+    /// element, and the reason `Vec[weak T]` could not be part of the cycle
+    /// story until now.
+    ///
+    /// Element-type-agnostic (a weak slot is a bare pointer whatever it points
+    /// at), so one shared fn serves every `Vec[weak T]`; memoized by symbol
+    /// name exactly as the closure-env sibling above is.
+    pub(super) fn emit_vec_elem_weak_drop_fn(&mut self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "__karac_vec_elem_weak_drop";
+        if let Some(f) = self.module.get_function(fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn =
+            self.module
+                .add_function(fn_name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let elem_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let w = self
+            .builder
+            .build_load(ptr_ty, elem_ptr, "vecelem.weak")
+            .unwrap()
+            .into_pointer_value();
+        let weak_drop = self.weak_runtime_fn("karac_weak_drop", false);
+        self.builder.build_call(weak_drop, &[w.into()], "").unwrap();
         self.builder.build_return(None).unwrap();
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
