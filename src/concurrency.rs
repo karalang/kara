@@ -1487,6 +1487,30 @@ pub struct ConcurrencyChecker<'a> {
     function_bodies: HashMap<String, &'a Function>,
     /// Impl method bodies: "TypeName.method" -> &Function.
     method_bodies: HashMap<String, &'a Function>,
+    /// Bodies of `let`-bound closures, keyed by the BINDING name
+    /// (`let mut append = |s| { buf.push_str(s); }` -> "append").
+    ///
+    /// B-2026-08-08-17. Calling such a binding mutates whatever the closure
+    /// CAPTURED, and captures are invisible at the call site: `append(s)` has
+    /// no `mut` marker and no declared `mut ref` parameter, so the `Call` arm
+    /// of [`Self::collect_expr_inner_writes`] recorded no write at all. The
+    /// auto-parallelizer then saw `append(s)` and `println(buf.len())` as two
+    /// independent reads, split them across branches, and captured `buf` into
+    /// the par env BY VALUE — so the closure's write landed in the real
+    /// binding while the sibling branch printed a stale snapshot. Exactly the
+    /// kata-22 failure the `Call` arm's own comment describes for `mut ref`
+    /// params, one level over: through a capture instead of an argument.
+    ///
+    /// Keyed program-wide by binding name, like `function_bodies`. A same-named
+    /// closure in another function can therefore contribute its writes here
+    /// too; that only ever ADDS serialization, which is the safe direction.
+    closure_bodies: HashMap<String, &'a Expr>,
+    /// Closure binding names whose bodies are currently being expanded by
+    /// [`Self::collect_expr_inner_writes`], so a cycle (`a` calls `b` calls
+    /// `a`) terminates. Re-entering a name already on the stack is skipped:
+    /// the outer expansion of that same closure has already collected its
+    /// body's writes, so nothing is lost.
+    closure_expansion_stack: std::cell::RefCell<Vec<String>>,
     /// Type info (when available). Its `method_callee_types` map (receiver type
     /// name per method-call span) drives method-receiver classification for
     /// A2b-2 Phase 2 Slice 2 (method-call network fan-out). `None` disables it.
@@ -1533,6 +1557,8 @@ impl<'a> ConcurrencyChecker<'a> {
             effects,
             function_bodies: HashMap::new(),
             method_bodies: HashMap::new(),
+            closure_bodies: HashMap::new(),
+            closure_expansion_stack: std::cell::RefCell::new(Vec::new()),
             types,
             shared_type_names,
             drop_observable_type_names,
@@ -1600,7 +1626,131 @@ impl<'a> ConcurrencyChecker<'a> {
         set
     }
 
+    /// Record every `let <name> = <closure>` in `block`, at any depth, into
+    /// `out`. B-2026-08-08-17 — see the field doc on `closure_bodies`.
+    ///
+    /// Walks nested blocks so a closure defined inside an `if` / loop body is
+    /// found too; a call to it can still be grouped against a read of what it
+    /// captures. Re-binding the same name in two scopes keeps the FIRST body
+    /// here, which is fine for the purpose: this map only ever adds writes, and
+    /// missing a re-bound sibling costs serialization, never soundness.
+    fn collect_closure_bindings(block: &'a Block, out: &mut HashMap<String, &'a Expr>) {
+        for stmt in &block.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                if let (PatternKind::Binding(name), ExprKind::Closure { body, .. }) =
+                    (&pattern.kind, &value.kind)
+                {
+                    out.entry(name.clone()).or_insert(body);
+                }
+            }
+            // Explicit walk rather than `rc_elide::walk_stmt_children_pub`:
+            // that helper hands out `&Expr` with an anonymous lifetime, and the
+            // map stores `&'a Expr`.
+            match &stmt.kind {
+                StmtKind::Let { value, .. } => Self::collect_closure_bindings_in_expr(value, out),
+                StmtKind::LetElse {
+                    value, else_block, ..
+                } => {
+                    Self::collect_closure_bindings_in_expr(value, out);
+                    Self::collect_closure_bindings(else_block, out);
+                }
+                StmtKind::Expr(e) => Self::collect_closure_bindings_in_expr(e, out),
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    Self::collect_closure_bindings(body, out)
+                }
+                StmtKind::Assign { target, value } => {
+                    Self::collect_closure_bindings_in_expr(target, out);
+                    Self::collect_closure_bindings_in_expr(value, out);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    Self::collect_closure_bindings_in_expr(target, out);
+                    Self::collect_closure_bindings_in_expr(value, out);
+                }
+                StmtKind::MultiAssign { targets, values } => {
+                    for t in targets {
+                        Self::collect_closure_bindings_in_expr(t, out);
+                    }
+                    for v in values {
+                        Self::collect_closure_bindings_in_expr(v, out);
+                    }
+                }
+                StmtKind::LetUninit { .. } => {}
+            }
+        }
+        if let Some(tail) = &block.final_expr {
+            Self::collect_closure_bindings_in_expr(tail, out);
+        }
+    }
+
+    fn collect_closure_bindings_in_expr(expr: &'a Expr, out: &mut HashMap<String, &'a Expr>) {
+        match &expr.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) | ExprKind::Par(b) => {
+                Self::collect_closure_bindings(b, out)
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                Self::collect_closure_bindings_in_expr(condition, out);
+                Self::collect_closure_bindings(then_block, out);
+                if let Some(e) = else_branch {
+                    Self::collect_closure_bindings_in_expr(e, out);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                Self::collect_closure_bindings_in_expr(value, out);
+                Self::collect_closure_bindings(then_block, out);
+                if let Some(e) = else_branch {
+                    Self::collect_closure_bindings_in_expr(e, out);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                Self::collect_closure_bindings_in_expr(condition, out);
+                Self::collect_closure_bindings(body, out);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                Self::collect_closure_bindings_in_expr(value, out);
+                Self::collect_closure_bindings(body, out);
+            }
+            ExprKind::Loop { body, .. } | ExprKind::For { body, .. } => {
+                Self::collect_closure_bindings(body, out)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                Self::collect_closure_bindings_in_expr(scrutinee, out);
+                for arm in arms {
+                    Self::collect_closure_bindings_in_expr(&arm.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn collect_functions(&mut self) {
+        // Closure bindings first, so the `Call` arm can resolve a callee that
+        // names a closure defined anywhere in the program.
+        let mut closures: HashMap<String, &'a Expr> = HashMap::new();
+        for item in &self.program.items {
+            match item {
+                Item::Function(f) => Self::collect_closure_bindings(&f.body, &mut closures),
+                Item::ImplBlock(imp) => {
+                    for it in &imp.items {
+                        if let ImplItem::Method(m) = it {
+                            Self::collect_closure_bindings(&m.body, &mut closures);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.closure_bodies = closures;
         for item in &self.program.items {
             match item {
                 Item::Function(f) => {
@@ -5470,6 +5620,25 @@ impl<'a> ConcurrencyChecker<'a> {
                 //     this program (`function_bodies`) — covers the unmarked
                 //     mut-ref forwarding form (`x` already `mut ref` in
                 //     scope) and any future marker-elision sites.
+                // B-2026-08-08-17: calling a `let`-bound CLOSURE mutates what it
+                // captured, and the capture is invisible here — no `mut` marker
+                // on the argument, no declared `mut ref` param to inspect. Walk
+                // the closure's body so its writes (`buf.push_str(s)` on the
+                // captured `buf`) are attributed to this call site. Without it
+                // the parallelizer classed `append(s)` and `println(buf.len())`
+                // as independent and raced them, with `buf` copied into the par
+                // env by value — the write landed in the real binding and the
+                // sibling branch printed the stale snapshot.
+                if let Some(name) = self.extract_callee_name(callee) {
+                    let recursing = self.closure_expansion_stack.borrow().contains(&name);
+                    if !recursing {
+                        if let Some(body) = self.closure_bodies.get(&name).copied() {
+                            self.closure_expansion_stack.borrow_mut().push(name.clone());
+                            self.collect_expr_inner_writes(body, writes);
+                            self.closure_expansion_stack.borrow_mut().pop();
+                        }
+                    }
+                }
                 let callee_params = self
                     .extract_callee_name(callee)
                     .and_then(|n| self.function_bodies.get(&n))

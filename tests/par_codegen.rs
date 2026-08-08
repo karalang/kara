@@ -10908,6 +10908,54 @@ fn main() {
     /// Vec/String/Set arms are here because the row was originally filed as a
     /// `Map` slot-ownership problem; it is neither Map-specific nor about
     /// ownership.
+    /// B-2026-08-08-17 — calling a `let`-bound CLOSURE counts as a write to
+    /// whatever it captured, so the analyzer cannot race the call against a
+    /// read of that capture.
+    ///
+    /// Pre-fix this printed `20 0 1`: the closure's `buf.push_str(s)` and the
+    /// `println(buf.len())` landed in SEPARATE concurrent branches, with `buf`
+    /// copied into the par env by value. The write went through the closure
+    /// env's pointer to the real binding while the sibling branch printed its
+    /// stale `{ptr,len,cap}` snapshot. Silent: correct exit status, no
+    /// diagnostic, no sanitizer report.
+    ///
+    /// A capture is invisible at the call site — `append(s)` carries no `mut`
+    /// marker and the callee has no declared `mut ref` parameter — which is why
+    /// the existing `Call` arm, built for exactly this failure on `mut ref`
+    /// params (kata 22), did not cover it.
+    ///
+    /// THE PROGRAM DOES NOT REDUCE THE OBVIOUS WAY. Cut to just the closure and
+    /// the `push_str` it is CLEAN, and so is closure + `while` + `push_str`.
+    /// The trailing Map section is what makes the analyzer split `main` at all.
+    /// Trim it and the repro evaporates because auto-par stops firing — so keep
+    /// all three sections, and if you must reduce, watch the `__par_branch`
+    /// count rather than the source size.
+    ///
+    /// The `Vec` and `Map` arms were CORRECT pre-fix and are kept as controls:
+    /// only the `String` capture lost its write, and a fix that serialized
+    /// everything would be indistinguishable from one that fixed the bug
+    /// without them. The interpreter agreed with the sequential build
+    /// throughout, so this was a run-vs-build divergence too.
+    #[test]
+    fn closure_captured_write_is_not_raced_against_a_read_of_the_capture() {
+        let src = "fn main() {\n\
+             \x20   let mut acc: Vec[i64] = Vec.new();\n\
+             \x20   let mut push = |x: i64| { acc.push(x); };\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < 20 { push(i); i = i + 1; }\n\
+             \x20   println(acc.len());\n\
+             \x20   let mut buf: String = \"\";\n\
+             \x20   let mut append = |s: String| { buf.push_str(s); };\n\
+             \x20   append(\"alpha beta gamma delta epsilon zeta well past inline\");\n\
+             \x20   println(buf.len());\n\
+             \x20   let mut m: Map[String, i64] = Map.new();\n\
+             \x20   let mut record = |k: String, v: i64| { m.insert(k, v); };\n\
+             \x20   record(\"one\", 1);\n\
+             \x20   println(m.len());\n\
+             }\n";
+        assert_eq!(run_program(src).as_deref(), Some("20\n52\n1\n"));
+    }
+
     #[test]
     fn par_branch_block_body_ending_in_container_len() {
         let cases: &[(&str, &str, &str)] = &[

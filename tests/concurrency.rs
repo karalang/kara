@@ -126,6 +126,58 @@ fn test_data_dependency_serializes() {
     );
 }
 
+/// B-2026-08-08-17 — calls to a `let`-bound CLOSURE that mutates a captured
+/// binding must NOT be grouped with each other or with a read of that capture.
+///
+/// A capture is invisible at the call site: `pa(1)` carries no `mut` marker and
+/// the callee has no declared `mut ref` parameter, so the analyzer saw only
+/// reads and grouped freely. Pre-fix this function produced SIX parallel
+/// branches, racing three `a.push` calls against each other — and the resulting
+/// binary was measurably flaky, printing 5 instead of 6 on roughly 1 run in 40.
+///
+/// Asserted on the ANALYSIS rather than on program output on purpose: the race
+/// is nondeterministic, so an output assertion would be a test that usually
+/// passes against a broken compiler. The deterministic end-to-end companion is
+/// `closure_captured_write_is_not_raced_against_a_read_of_the_capture` in
+/// tests/par_codegen.rs, where the `String` shape loses its write EVERY time.
+#[test]
+fn test_closure_captured_writes_serialize() {
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            let mut pa = |x: i64| { a.push(x); };
+            pa(1);
+            pa(2);
+            pa(3);
+            println(a.len());
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    for g in &main_fc.parallel_groups {
+        let calls = g
+            .statement_indices
+            .iter()
+            .filter(|i| (2..=4).contains(*i))
+            .count();
+        assert!(
+            calls < 2,
+            "two calls to a closure that mutates the captured `a` were grouped \
+             into one parallel branch set — they race. Group: {:?}",
+            g
+        );
+        assert!(
+            !(g.statement_indices.iter().any(|i| (2..=4).contains(i))
+                && g.statement_indices.contains(&5)),
+            "a closure call writing `a` was grouped with the read `a.len()` — \
+             the read can observe a stale value. Group: {:?}",
+            g
+        );
+    }
+}
+
 #[test]
 fn test_mut_ref_self_calls_serialize() {
     // B-2026-07-09-12: two sequential `let x = self.mut_method()` calls that
