@@ -1538,6 +1538,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`trim`/case/`to_string`/`repeat`/`replace`), recursing through a block
     /// tail. Gates an un-annotated `.map()` mapper whose heap return the
     /// typechecker can't infer without a param annotation (B-2026-07-12-10).
+    /// Does this closure body evaluate to a String VALUE directly, rather than
+    /// through a call that returns one?
+    ///
+    /// B-2026-08-08-21 — the residue of the old, much broader gate. That one
+    /// refused every un-annotated closure whose body produced a String and told
+    /// the author to annotate the parameter. Both halves were wrong once the
+    /// typechecker started seeding `map`'s closure param
+    /// (`expr_method_call.rs`): the METHOD-call bodies it named
+    /// (`to_uppercase`, `trim`, `repeat`, …) all lower correctly now, measured
+    /// on both backends, and for the two shapes that still do NOT lower the
+    /// suggested annotation does not help — `|s: String| "fixed"` fails
+    /// identically, which was verified against a stashed tree.
+    ///
+    /// What actually fails is narrower and has nothing to do with the
+    /// parameter: the closure is declared with a POINTER return, and a bare
+    /// literal or a `+` concatenation yields the `{ptr,len,cap}` struct by
+    /// value, so LLVM rejects the `ret`. An INTERPOLATED literal (`f"[{s}]"`)
+    /// is fine — it builds its String through a call — which is why it is not
+    /// listed here even though the old predicate caught it. `.to_string()` on
+    /// the body is a measured workaround for both, hence the message.
+    fn closure_body_is_bare_string_value(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => true,
+            // A `+` whose result the typechecker typed as `String`.
+            ExprKind::Binary { .. } => self
+                .string_typed_exprs
+                .contains(&(expr.span.offset, expr.span.length)),
+            ExprKind::Block(b) | ExprKind::Seq(b) => b
+                .final_expr
+                .as_ref()
+                .is_some_and(|e| self.closure_body_is_bare_string_value(e)),
+            _ => false,
+        }
+    }
+
+    #[allow(dead_code)]
     fn closure_body_produces_heap_string(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::StringLit(_)
@@ -1834,14 +1870,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // would silently miscompile. Detect it syntactically and gate
                 // cleanly (annotate the param, or use --interp). Scalar / move /
                 // annotated / named-fn mappers resolve concretely and proceed.
-                if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
-                    let all_unannotated = params.iter().all(|p| p.ty.is_none());
-                    if all_unannotated && Self::closure_body_produces_heap_string(body) {
+                if let ExprKind::Closure { body, .. } = &args[0].value.kind {
+                    if self.closure_body_is_bare_string_value(body) {
                         return Err(
-                            "codegen: Option/Result.map with an un-annotated closure that \
-                             returns a String/Vec is not yet supported under `karac build`; \
-                             annotate the closure parameter (`|x: T| ...`) or run with \
-                             `--interp` (or `KARAC_RUN_JIT=0`)"
+                            "codegen: Option/Result.map with a closure whose body IS a String \
+                             value (a bare literal, or a `+` concatenation) is not yet \
+                             supported under `karac build` — the closure is declared with a \
+                             pointer return but such a body yields a `{ptr,len,cap}` struct. \
+                             Append `.to_string()` to the closure body, or run with `--interp` \
+                             (or `KARAC_RUN_JIT=0`)"
                                 .to_string(),
                         );
                     }

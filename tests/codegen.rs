@@ -3314,6 +3314,53 @@ mod codegen_tests {
     /// The strong-`Vec[N]` control row is what makes the first two mean
     /// anything: it must show the opposite of each.
     #[test]
+    fn test_e2e_optres_map_unannotated_closure_returning_a_string() {
+        // B-2026-08-08-21 — `out.first().map(|s| s.to_uppercase())` passed
+        // `karac check` and ran under `--interp`, then `karac build` refused it
+        // and told the author to annotate the closure parameter. The two
+        // backends disagreed about what is valid Kara, and the disagreement was
+        // invisible until the DEFAULT execution path.
+        //
+        // The cause was upstream of codegen: `Option/Result.map` inferred its
+        // closure argument WITHOUT publishing a `closure_param_seeds` entry,
+        // while every sibling that takes a payload closure (`map_or`,
+        // `map_or_else`, `map_err`, `and_then`) seeds through
+        // `infer_closure_ret`. So the param stayed a metavar, the closure's
+        // surface types were not recoverable, and the heap-payload path bailed
+        // loudly rather than miscompile — the bail was doing its job over a gap
+        // one phase up.
+        //
+        // Every method body the old gate named is covered here, on the ONE
+        // spelling the gate rejected (un-annotated). An interpolated literal is
+        // included because the old predicate caught it too and it lowers fine.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    out.push("  Hello  ".to_string());
+    match out.first().map(|s| s.to_uppercase()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.trim()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.to_lowercase()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.replace("l", "L")) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| s.to_string()) { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| f"[{s}]") { Some(v) => println(v), None => println("-") }
+    match out.first().map(|s| { let t = s.to_uppercase(); t }) { Some(v) => println(v), None => println("-") }
+    let empty: Vec[String] = Vec.new();
+    match empty.first().map(|s| s.to_uppercase()) { Some(v) => println(v), None => println("-") }
+}
+"#,
+        );
+        if let Some(out) = out {
+            // `trim_end` only — the first line legitimately begins with the
+            // receiver's own leading spaces.
+            assert_eq!(
+                out.trim_end(),
+                "  HELLO  \nHello\n  hello  \n  HeLLo  \n  Hello  \n[  Hello  ]\n  HELLO  \n-"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_of_weak_read_back_upgrades_and_leaves_the_target_intact() {
         // B-2026-08-08-4 gap B (read-back). B-2026-08-08-5 landed the STORE
         // half and left a `Vec[weak T]` store-only: `match v[i] { Some(x) => .. }`
@@ -22332,23 +22379,42 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_option_map_heap_unannotated_gated() {
-        // The un-annotated heap-RETURNING mapper (`|s| s.to_uppercase()`)
-        // remains a clean loud build gate (B-2026-07-12-10 residual: the
-        // typechecker can't infer the mapper's return without a param
-        // annotation, and codegen can't recover String-vs-Vec from the shared
-        // LLVM type). It must NOT silently miscompile — it fails the build with
-        // an actionable message, while `--interp` still runs it.
-        let err = ir_result(
+    fn test_e2e_option_map_heap_body_gate_is_now_the_bare_string_value() {
+        // B-2026-08-08-21 — this test used to pin the OPPOSITE: that
+        // `|x| x.to_uppercase()` was gated at codegen, on the reasoning that
+        // the typechecker could not infer the mapper's return without a param
+        // annotation. That reasoning was true of `map` alone, and only because
+        // `map` was the one payload-closure method that did not publish a
+        // `closure_param_seeds` entry. With the seed it infers, so the shape
+        // this test was built around now COMPILES AND RUNS.
+        //
+        // What is still gated is much narrower and unrelated to the parameter:
+        // a body that IS a String value (a bare literal, or a `+`
+        // concatenation) yields a `{ptr,len,cap}` struct where the closure is
+        // declared with a pointer return. The old gate's advice — annotate the
+        // parameter — does NOT fix that shape (`|s: String| "fixed"` fails
+        // identically), so the message now names the workaround that does.
+        let ir = ir_result(
             "fn main() {\n\
                  let s: Option[String] = Some(f\"hi\");\n\
                  match s.map(|x| x.to_uppercase()) { Some(x) => { println(x); } None => {} }\n\
              }",
-        )
-        .expect_err("un-annotated heap-returning map mapper must be gated at codegen");
+        );
         assert!(
-            err.contains("un-annotated closure that returns a String/Vec"),
-            "expected the un-annotated heap-map gate, got: {err}"
+            ir.is_ok(),
+            "an un-annotated method-call mapper body must lower now: {:?}",
+            ir.err()
+        );
+        let err = ir_result(
+            "fn main() {\n\
+                 let s: Option[String] = Some(f\"hi\");\n\
+                 match s.map(|x| \"fixed\") { Some(x) => { println(x); } None => {} }\n\
+             }",
+        )
+        .expect_err("a bare String-value mapper body must still be gated at codegen");
+        assert!(
+            err.contains("body IS a String value"),
+            "expected the bare-String-value gate, got: {err}"
         );
     }
 

@@ -2842,6 +2842,24 @@ impl<'a> super::TypeChecker<'a> {
                 // is subtyping, not unification, so it never solves the return
                 // var. (Fully inferring an un-annotated `|x| ..` param from `T`
                 // is the separate closure-param-inference gap B-2026-07-12-10.)
+                //
+                // B-2026-08-08-21 — publish the param SEED first
+                // (B-2026-07-15-16's mechanism), so an un-annotated `|s| ..`
+                // sees the payload type `T` while its body is inferred rather
+                // than relying on post-hoc unification to solve it. Every
+                // sibling that takes a payload closure already does this
+                // through `infer_closure_ret` (`map_or`, `map_or_else`,
+                // `map_err`, `and_then`); `map` was the one that did not, which
+                // is why `out.first().map(|s| s.to_uppercase())` passed
+                // `karac check` and was then REFUSED by codegen — the param
+                // stayed a metavar, so the closure's surface types were not
+                // recoverable and the heap-payload path bailed loudly rather
+                // than miscompile. An explicit annotation still wins, in the
+                // synth-mode closure arm.
+                if matches!(&args[0].value.kind, ExprKind::Closure { .. }) {
+                    self.closure_param_seeds
+                        .insert(SpanKey::from_span(&args[0].value.span), vec![t_ty.clone()]);
+                }
                 let f_actual = self.infer_expr(&args[0].value);
                 let f_resolved = resolve_type_var_top(&f_actual, &self.env.substitutions);
                 let r_resolved = match &f_resolved {
