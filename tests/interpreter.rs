@@ -6556,6 +6556,82 @@ fn test_par_block_empty() {
     assert!(output.contains("ok"));
 }
 
+#[test]
+fn test_par_block_join_does_not_shadow_enclosing_bindings() {
+    // B-2026-08-07-22 — the SILENT half, and the one worth guarding hardest.
+    //
+    // The join merges each branch's bindings into the enclosing scope. It used
+    // to merge the whole seeded environment snapshot, so every enclosing
+    // variable was re-`define`d into the parent's CURRENT scope. At function
+    // top level that rewrites bindings in their own scope and nothing is
+    // observable — which is exactly why every par test above passed. One block
+    // deeper the current scope is the block's, so `n` gained a shadow there and
+    // `n = n + 5` updated the shadow, which died with the block: this printed
+    // `0` under `--interp` while the AOT twin printed `5`.
+    //
+    // Two statements in the par block is load-bearing: at one or fewer,
+    // `eval_par_block` returns early and never reaches the join.
+    let output = run("fn main() {
+             let mut n: i64 = 0;
+             if 1 < 2 {
+                 par { let a = 1; let b = 2; }
+                 n = n + 5;
+             }
+             println(n);
+         }");
+    assert_eq!(
+        output.trim(),
+        "5",
+        "an assignment after a par join must reach the ENCLOSING binding, not a \
+         shadow created in the current block scope"
+    );
+}
+
+#[test]
+fn test_par_block_inside_while_loop_terminates() {
+    // B-2026-08-07-22 — the loud half of the same defect. When the shadowed
+    // binding is a loop counter, `i = i + 1` never reaches the real `i`, the
+    // condition stays true forever, and `karac run --interp` hangs on a program
+    // whose AOT twin prints instantly.
+    //
+    // Run on a worker with a deadline: a regression here does not fail, it
+    // spins, and an un-timed assertion would hang the whole suite rather than
+    // report.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            let out = run("fn main() {
+                     let mut total: i64 = 0;
+                     let mut i: i64 = 0;
+                     while i < 2 {
+                         let (a, b) = par {
+                             let a = i + 1;
+                             let b = i + 2;
+                             (a, b)
+                         };
+                         total = total + a + b;
+                         i = i + 1;
+                     }
+                     println(total);
+                 }");
+            let _ = tx.send(out);
+        })
+        .expect("failed to spawn worker");
+
+    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(out) => assert_eq!(
+            out.trim(),
+            "8",
+            "par inside a while loop must produce the same value as the AOT build"
+        ),
+        Err(_) => panic!(
+            "`par {{}}` inside a `while` loop did not terminate within 60s — the loop \
+             counter's update is being lost to a shadow created by the par join"
+        ),
+    }
+}
+
 // ── IEEE 754 Float Semantics ──────────────────────────────────
 
 #[test]

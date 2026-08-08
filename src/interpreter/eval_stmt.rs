@@ -368,6 +368,28 @@ impl<'a> super::Interpreter<'a> {
                     // Register top-level items so function calls work
                     branch_interp.register_items();
 
+                    // B-2026-08-07-22 — separate the SEEDED environment from
+                    // what this branch actually introduces, by giving the
+                    // branch's own bindings a scope of their own.
+                    //
+                    // The join below merges `scopes.last()` back into the
+                    // enclosing scope. Without this push, that map is the
+                    // whole flattened `env.snapshot()` seeded just above —
+                    // `snapshot()` collapses every scope into one map and
+                    // `define()` writes them all into the branch's single
+                    // scope — so the join re-`define`d EVERY enclosing
+                    // variable into the parent's CURRENT scope. At function
+                    // top level that is harmless (it rewrites the bindings in
+                    // their own scope), which is why every existing par test
+                    // passed. One block deeper it is not: inside a `while` or
+                    // `if` body the current scope is the block's, so each
+                    // outer variable gained a SHADOW there, and the next
+                    // `i = i + 1` updated the shadow and lost it when the
+                    // block scope popped. A loop counter that never advances
+                    // is an infinite loop; everywhere else it is a silently
+                    // wrong answer.
+                    branch_interp.env.push_scope();
+
                     // Execute the statement
                     let result = branch_interp.eval_stmt_cf(&stmt_clone);
                     // Also check pending_cf
