@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 88 | 1 |
 | missing-feature | 83 | 2 |
 | perf | 59 | 1 |
-| false-positive | 57 | 1 |
+| false-positive | 57 | 0 |
 | diagnostics | 42 | 0 |
 | soundness | 39 | 0 |
 | crash | 39 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 735 | 1 |
 | interp | 128 | 1 |
 | typecheck | 127 | 0 |
-| ownership | 42 | 3 |
+| ownership | 42 | 2 |
 | autopar | 33 | 1 |
 | other | 30 | 1 |
 | cli | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1013 surfaced · 6 open · 997 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1013 surfaced · 5 open · 998 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,12 +134,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1013 surfaced
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct -- one approach (the third disjunct) built and REVERTED: it fixes every measured shape but double-frees the self-hosted-parser destructure fixture, because struct destructure is a SECOND move-out gate; the three sites it must widen with are named in the detail | One approach BUILT AND REVERTED 2026-08-07 — the third disjunct this row proposed. It is right about the diagnosis and fixes all five measured shapes plus both `place_optres_field_move_info_ex` pairing guards, but double-frees `asan_vec_of_struct_shared_and_option_field_consumed_no_leak` because STRUCT DESTRUCTURE is a second move-out gate that does not move with it. Next attempt must widen `pattern_binding.rs:813`, `pattern_binding.rs:846` and `control_flow_match.rs:8418` in lockstep — see the detail's closing section. |
 | B-2026-08-07-22 | 2026-08-07 | interp | high | a `par {}` block inside a `while` loop HANGS under `--interp` (the DEFAULT for `karac check`-adjacent workflows and the Mend oracle) while the identical program builds and runs correctly AOT -- no shared type, no `frozen`, no captures needed to reproduce | — |
 | B-2026-08-07-25 | 2026-08-07 | other | medium | A BENCHED KATA'S HEADLINE NUMBER CAN CARRY A 1.31x PLACEMENT RANGE BEHIND IT AND THE CORPUS HAS NEVER BEEN CHECKED FOR IT: kata:170's recorded figure is one draw from a distribution spanning 0.970..1.269, so a reader who rebuilds it on their own machine can legitimately get a number ~30% off ours and we have no explanation on file -- the exposure is confined to katas whose headline is a CLOSE CALL against a comparator, which is a small and enumerable subset | — |
-| B-2026-08-08-1 | 2026-08-08 | ownership | medium | the `par` capture gate is keyed on binding NAMES, so two branches that each declare their own local `let n = <shared>` read as ONE binding reachable from both and are refused — renaming one is the entire fix, which is the proof it is a false positive | src/ownership/concurrent_shared.rs (the E_CONCURRENT_SHARED_STRUCT capture gate) |
 | B-2026-08-08-2 | 2026-08-08 | ownership | high | a `frozen` handle can now be stored in a local `Vec` but not in a `Map`, and kata #133 carries `visited: Map[i64, Node]` in BOTH variants — so the kata is still blocked after B-2026-08-07-23 | src/ownership/frozen_escape.rs (stage 3c container admission, `container_candidate_type`) |
 
-### Fixed (997)
+### Fixed (998)
 
-<details><summary>997 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>998 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1162,6 +1161,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-21 | codegen | low | CLOSED AS PRICED, PREVALENCE ZERO: elementwise checked arithmetic does lose auto-vectorization (4.22x measured in kara) and, unlike the reduction cas… | No code change — closed as priced, on the prevalence number this row itself said should decide it. Scanned 230 local `.kara` files (stdlib, examples, example projects, selfhost) for an indexed-destination assignment with trapping arithmetic: 121 raw hits, 100 of them in one generated compile-speed benchmark, 21 in real code, and ZERO surviving hand-verification against the row's own conditions — each disqualified independently (a call in the RHS in sha256/sigv4, a real loop-carried dependence in coin_change, a data-dependent scatter index in grade_histogram, division-plus-calls in embeddings, and a five-iteration trip count in the one structurally-qualifying case, slice_basics). Two findings recorded on the way: (a) this row's blocker (1), site attribution, is WRONG to call fatal — it dissolves under a single-checked-op restriction, because `emit_panic` takes a static string and one candidate site means the deferred trap reports an identical message and location, and the single-op body is the vectorizing shape anyway; (b) `src/codegen/accum_overflow.rs` (B-2026-07-26-1) is the repo's one successful attack on this class and it took ELISION with a trip-count proof, paying none of the four observability blockers, for a 7.9x win — a route unavailable here because the operand is an unbounded heap value, which is exactly the residual `docs/spikes/overflow-check-elision.md` declined to build a prover for. Reopen criterion: run the same scan over the kata corpus (absent from a cloud clone) and reopen if more than a couple of loops survive. |
 | B-2026-08-07-23 | ownership | high | a `frozen` handle has no legal place to be STORED, so no iterative traversal can use one: a local `VecDeque[Node]` worklist refuses `queue.push_back(… | 63caea3e |
 | B-2026-08-07-24 | codegen | medium | 64-BYTE BASIC-BLOCK ALIGNMENT is a MEASURED 10.0% on kata:170 -- its aligned placement DISTRIBUTION entirely dominates the unaligned one, worst align… | DECLINED, PRICED, no code change -- and closed rather than parked, because all three shipping paths are settled noes rather than deferrals. (a) Carrying an LLVM patch for the Apple subtargets' `PrefLoopLogAlignment` is disqualified by DISTRIBUTION, not effort: karac builds against whatever LLVM the user has, so a fork breaks `cargo install karac --features llvm`, which is a launch gate traded for one kata. (b) Upstreaming needs multi-host, multi-workload data and would reach users only at LLVM 21+; the measurement here is a decent seed for it and nothing more. (c) Shipping the blanket flag as a documented opt-in is WORSE than doing nothing: `-align-all-nofallthru-blocks` is an internal cl::opt in MachineBlockPlacement.cpp with no stability guarantee, and `KARAC_LLVM_ARGS` silently ignores an unknown flag (verified), so an LLVM upgrade that drops it would revert the optimization with zero signal -- acceptable for a measurement lever, a trap for a user-facing recipe. REOPEN CONDITION, and it is a real one: if a Kara workload that actually ships -- not a kata -- is found placement-pathological the way kata:170 is, the 10% becomes worth an LLVM dependency and (b) gets its justification. `KARAC_TEXT_PAD` makes that detectable on any program in minutes, so the condition is testable rather than aspirational. |
+| B-2026-08-08-1 | ownership | medium | the `par` capture gate is keyed on binding NAMES, so two branches that each declare their own local `let n = <shared>` read as ONE binding reachable… | 8c26ad4a |
 
 </details>
 
