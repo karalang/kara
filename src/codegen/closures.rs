@@ -3871,10 +3871,25 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Bool(_) => self.context.bool_type().into(),
             ExprKind::CharLit(_) => self.context.i32_type().into(),
             ExprKind::ByteLit(_) => self.context.i8_type().into(),
-            ExprKind::StringLit(_) => self.context.ptr_type(AddressSpace::default()).into(),
+            // B-2026-08-08-22: the `{ptr, len, cap}` String aggregate, NOT a
+            // bare `ptr` into rodata. This arm used to say `ptr` on the reading
+            // that a literal is a BORROWED `str` — true of the literal, false
+            // of what the closure body actually emits. Compiling `|x| "fixed"`
+            // materializes an owned String constant and returns it by value
+            // (`ret { ptr, i64, i64 } { ptr @str.1, i64 5, i64 0 }`), so the
+            // `ptr` signature disagreed with the body's own `ret` and LLVM
+            // module verification rejected the function. The sibling arm below
+            // already had this right for f-strings; a bare literal reaches the
+            // same place by the same coercion.
+            //
+            // Not `map`-specific despite the row that found it: `let f = |x:
+            // i64| "fixed"; f(1)` fails identically with no combinator in
+            // sight, and the same defect reached through a local
+            // (`|x| { let t = "fixed"; t }`) fails too.
+            ExprKind::StringLit(_) => self.vec_struct_type().into(),
             // An f-string evaluates to an owned `String` — the `{ptr, len,
-            // cap}` heap-string aggregate (distinct from a borrowed string
-            // *literal*, a bare `ptr` into rodata above).
+            // cap}` heap-string aggregate (same representation as the literal
+            // arm above).
             ExprKind::InterpolatedStringLit(_) => self.vec_struct_type().into(),
             ExprKind::Identifier(name) => {
                 // B-2026-07-13-20 sibling: a bare `None` tail (`|n| if n>0 {
@@ -3909,6 +3924,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     let rt = self.infer_closure_return_type(right, param_types);
                     if lt.is_float_type() || rt.is_float_type() {
                         self.context.f64_type().into()
+                    } else if lt == self.vec_struct_type().into()
+                        || rt == self.vec_struct_type().into()
+                    {
+                        // B-2026-08-08-22: String concatenation yields an OWNED
+                        // String, so the `{ptr,len,cap}` aggregate wins over a
+                        // borrowed `ptr` on either side. Returning `lt`
+                        // unconditionally was right only when the left operand
+                        // already carried the owned type: `|s| s + "!"` with an
+                        // UN-ANNOTATED `s` sees `param_types["s"]` as a bare
+                        // `ptr`, so the signature said `ptr` while the body
+                        // returned `%cat.cap`, the concatenated aggregate —
+                        // `ret { ptr, i64, i64 } … ptr` at verification. The
+                        // annotated spelling built precisely because the
+                        // annotation put the owned type on the left.
+                        self.vec_struct_type().into()
                     } else {
                         lt
                     }

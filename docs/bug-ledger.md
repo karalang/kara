@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 220 | 0 |
+| miscompile | 221 | 1 |
 | leak | 151 | 1 |
 | double-free | 114 | 0 |
-| codegen-gap | 98 | 1 |
+| codegen-gap | 98 | 0 |
 | run-vs-build | 90 | 0 |
 | missing-feature | 85 | 0 |
 | perf | 59 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 748 | 1 |
+| codegen | 749 | 1 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1035 surfaced · 2 open · 1023 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1036 surfaced · 2 open · 1024 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
-| B-2026-08-08-22 | 2026-08-08 | codegen | low | a closure whose body IS a String value (bare literal or `+` concat) is declared with a POINTER return, so the `{ptr,len,cap}` it yields fails LLVM verification — the annotation the old gate suggested does not help | probe: `opt.map(|s| "fixed")` and `opt.map(|s| s + "!")` — `ret { ptr, i64, i64 } … ptr` at LLVM verification |
+| B-2026-08-08-24 | 2026-08-08 | codegen | medium | an ANNOTATED concat mapper `|s: String| s + "!"` builds and returns an EMPTY String -- silent, pre-existing, and the exact workaround two successive codegen gates advised | probe: `s.map(|x: String| x + "!")` on `Option[String]` — `karac build` prints an empty string, `--interp` prints `hi!`; the UN-annotated spelling is correct after B-2026-08-08-22 |
 
-### Fixed (1023)
+### Fixed (1024)
 
-<details><summary>1023 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1024 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1184,6 +1184,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-19 | autopar+codegen | medium | a user method on a `shared struct` loses its dispatcher under auto-par -- `codegen: no handler for method 'total' on variable 'b' (method dispatch fe… | ce1b8703 |
 | B-2026-08-08-20 | codegen | high | `Vec[String].first()` / `.last()` CONSUMED AS A VALUE double-frees under EVERY codegen backend -- `println(v.first().unwrap())` on a two-element `Vec… | PENDING |
 | B-2026-08-08-21 | codegen | low | `Option/Result.map` with an UN-ANNOTATED closure returning a String/Vec is refused by `karac build` -- a loud, actionable bail ("annotate the closure… | 8521c30e |
+| B-2026-08-08-22 | codegen | low | a closure whose body IS a String value (bare literal or `+` concat) is declared with a POINTER return, so the `{ptr,len,cap}` it yields fails LLVM ve… | — |
 
 </details>
 

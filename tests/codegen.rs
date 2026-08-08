@@ -22379,42 +22379,87 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_option_map_heap_body_gate_is_now_the_bare_string_value() {
-        // B-2026-08-08-21 — this test used to pin the OPPOSITE: that
-        // `|x| x.to_uppercase()` was gated at codegen, on the reasoning that
-        // the typechecker could not infer the mapper's return without a param
-        // annotation. That reasoning was true of `map` alone, and only because
-        // `map` was the one payload-closure method that did not publish a
-        // `closure_param_seeds` entry. With the seed it infers, so the shape
-        // this test was built around now COMPILES AND RUNS.
+    fn test_e2e_option_map_string_value_bodies_compile_and_run() {
+        // B-2026-08-08-22 — THIS TEST PREVIOUSLY ASSERTED A GATE, and before
+        // that it asserted a broader one. Both are gone; the shapes they
+        // refused now compile and agree with the interpreter.
         //
-        // What is still gated is much narrower and unrelated to the parameter:
-        // a body that IS a String value (a bare literal, or a `+`
-        // concatenation) yields a `{ptr,len,cap}` struct where the closure is
-        // declared with a pointer return. The old gate's advice — annotate the
-        // parameter — does NOT fix that shape (`|s: String| "fixed"` fails
-        // identically), so the message now names the workaround that does.
-        let ir = ir_result(
-            "fn main() {\n\
-                 let s: Option[String] = Some(f\"hi\");\n\
-                 match s.map(|x| x.to_uppercase()) { Some(x) => { println(x); } None => {} }\n\
-             }",
-        );
-        assert!(
-            ir.is_ok(),
-            "an un-annotated method-call mapper body must lower now: {:?}",
-            ir.err()
-        );
-        let err = ir_result(
-            "fn main() {\n\
-                 let s: Option[String] = Some(f\"hi\");\n\
-                 match s.map(|x| \"fixed\") { Some(x) => { println(x); } None => {} }\n\
-             }",
-        )
-        .expect_err("a bare String-value mapper body must still be gated at codegen");
-        assert!(
-            err.contains("body IS a String value"),
-            "expected the bare-String-value gate, got: {err}"
+        // The chain is worth keeping visible because each step blamed the
+        // wrong thing. The first gate refused every un-annotated String-bodied
+        // mapper and said "annotate the parameter" (B-2026-08-08-21 removed
+        // that: the typechecker now seeds `map`'s closure param). The second
+        // refused a body that IS a String value and said "append
+        // `.to_string()`". That one was mis-scoped too: the defect was never
+        // about `map` or about parameters, it was that
+        // `infer_closure_return_type` declared a `StringLit` body as a bare
+        // `ptr` while the body emits the owned `{ptr,len,cap}` aggregate. A
+        // plain `let f = |x: i64| "fixed"; f(1)` failed identically with no
+        // combinator present, which is what exposed it.
+        for (label, body, want) in [
+            ("bare literal", "|x| \"fixed\"", "fixed\n"),
+            ("concat", "|x| x + \"!\"", "hi!\n"),
+            ("annotated literal", "|x: String| \"fixed\"", "fixed\n"),
+            ("method call", "|x| x.to_uppercase()", "HI\n"),
+            (
+                "literal .to_string()",
+                "|x| \"fixed\".to_string()",
+                "fixed\n",
+            ),
+            (
+                "parenthesized concat",
+                "|x| (x + \"!\").to_string()",
+                "hi!\n",
+            ),
+            ("f-string", "|x| f\"[{x}]\"", "[hi]\n"),
+            (
+                "block, concat tail",
+                "|x| { let t = x + \"!\"; t }",
+                "hi!\n",
+            ),
+            (
+                "block, literal tail",
+                "|x| { let t = \"fixed\"; t }",
+                "fixed\n",
+            ),
+        ] {
+            let src = format!(
+                "fn main() {{\n\
+                     let s: Option[String] = Some(f\"hi\");\n\
+                     match s.map({body}) {{ Some(x) => {{ println(x); }} None => {{}} }}\n\
+                 }}"
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some(want),
+                "{label} (`{body}`) must compile and match the interpreter"
+            );
+        }
+    }
+
+    /// B-2026-08-08-24 — the one shape in this family that still MISCOMPILES,
+    /// pinned as a visibly-deferred gap rather than left silently green.
+    ///
+    /// `|s: String| s + "!"` — the ANNOTATED concat — builds and prints an
+    /// EMPTY string where the interpreter prints `hi!`. Pre-existing and
+    /// independent of B-2026-08-08-22: it reproduces identically on a tree with
+    /// that fix stashed, so it is not a regression from removing the gate.
+    ///
+    /// It is the nastiest member of the family precisely because it BUILT all
+    /// along. The gates that used to stand here advised annotating the
+    /// parameter, which walks an author out of a loud build error and into a
+    /// silent wrong answer.
+    #[test]
+    #[ignore = "B-2026-08-08-24: annotated `|s: String| s + \"!\"` mapper returns an empty String"]
+    fn test_e2e_option_map_annotated_concat_body_is_empty() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let s: Option[String] = Some(f\"hi\");\n\
+                     match s.map(|x: String| x + \"!\") { Some(x) => { println(x); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi!\n")
         );
     }
 

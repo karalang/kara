@@ -1509,70 +1509,6 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Slice OR (2026-05-16): Option/Result `unwrap` / `expect` / `is_some`
-    /// / `is_none` / `is_ok` / `is_err` dispatch, receiver-shape-agnostic.
-    ///
-    /// Lowers `recv.unwrap()` (and friends) where `recv` is any expression
-    /// of type `Option[T]` or `Result[T, E]`. The receiver is compiled to
-    /// an SSA value (the
-    /// `{ i64 tag, i64 w0, i64 w1, i64 w2 }` aggregate the prelude enum
-    /// layouts produce) and we operate on the value directly — no synth
-    /// identifier / no temporary alloca / no per-receiver-shape gymnastics.
-    /// This is the cleanest path because the existing Index / FieldAccess
-    /// synth arms mint a name tied to *receiver storage*, which doesn't
-    /// exist for method-chain receivers (`m.get(k).unwrap()`).
-    ///
-    /// Returns `Ok(Some(value))` on a recognised Option/Result dispatch.
-    /// Returns `Ok(None)` when the typechecker didn't record an inner type
-    /// (the receiver wasn't Option/Result-shaped after all) — the caller
-    /// falls through to the regular dispatch in `compile_method_call`,
-    /// which will surface its own diagnostic if no arm applies.
-    ///
-    /// Tag semantics (mirroring `compile_question`):
-    ///   Option: None=0, Some=1
-    ///   Result: Err=0,  Ok=1
-    /// Both share the same "tag != 0 ⇒ payload-bearing" shape, so a
-    /// single value-extraction path covers both.
-    /// `true` when `expr` syntactically produces a heap `String` — a string
-    /// literal / f-string, or a String→String builtin method call
-    /// (`trim`/case/`to_string`/`repeat`/`replace`), recursing through a block
-    /// tail. Gates an un-annotated `.map()` mapper whose heap return the
-    /// typechecker can't infer without a param annotation (B-2026-07-12-10).
-    /// Does this closure body evaluate to a String VALUE directly, rather than
-    /// through a call that returns one?
-    ///
-    /// B-2026-08-08-21 — the residue of the old, much broader gate. That one
-    /// refused every un-annotated closure whose body produced a String and told
-    /// the author to annotate the parameter. Both halves were wrong once the
-    /// typechecker started seeding `map`'s closure param
-    /// (`expr_method_call.rs`): the METHOD-call bodies it named
-    /// (`to_uppercase`, `trim`, `repeat`, …) all lower correctly now, measured
-    /// on both backends, and for the two shapes that still do NOT lower the
-    /// suggested annotation does not help — `|s: String| "fixed"` fails
-    /// identically, which was verified against a stashed tree.
-    ///
-    /// What actually fails is narrower and has nothing to do with the
-    /// parameter: the closure is declared with a POINTER return, and a bare
-    /// literal or a `+` concatenation yields the `{ptr,len,cap}` struct by
-    /// value, so LLVM rejects the `ret`. An INTERPOLATED literal (`f"[{s}]"`)
-    /// is fine — it builds its String through a call — which is why it is not
-    /// listed here even though the old predicate caught it. `.to_string()` on
-    /// the body is a measured workaround for both, hence the message.
-    fn closure_body_is_bare_string_value(&self, expr: &Expr) -> bool {
-        match &expr.kind {
-            ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => true,
-            // A `+` whose result the typechecker typed as `String`.
-            ExprKind::Binary { .. } => self
-                .string_typed_exprs
-                .contains(&(expr.span.offset, expr.span.length)),
-            ExprKind::Block(b) | ExprKind::Seq(b) => b
-                .final_expr
-                .as_ref()
-                .is_some_and(|e| self.closure_body_is_bare_string_value(e)),
-            _ => false,
-        }
-    }
-
     #[allow(dead_code)]
     fn closure_body_produces_heap_string(expr: &Expr) -> bool {
         match &expr.kind {
@@ -1862,27 +1798,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // collision fix (Slice 1) keys `method_unwrap_*` on
                 // `args_close_span`. B-2026-07-12-11 heap half.
                 //
-                // Residual gate: an UN-ANNOTATED closure with a heap-String-
-                // producing body (`|s| s.to_uppercase()`). The typechecker
-                // can't infer its return from the payload `T` without a param
-                // annotation (B-2026-07-12-10), and codegen can't recover the
-                // surface type from the shared String/Vec LLVM type — so it
-                // would silently miscompile. Detect it syntactically and gate
-                // cleanly (annotate the param, or use --interp). Scalar / move /
-                // annotated / named-fn mappers resolve concretely and proceed.
-                if let ExprKind::Closure { body, .. } = &args[0].value.kind {
-                    if self.closure_body_is_bare_string_value(body) {
-                        return Err(
-                            "codegen: Option/Result.map with a closure whose body IS a String \
-                             value (a bare literal, or a `+` concatenation) is not yet \
-                             supported under `karac build` — the closure is declared with a \
-                             pointer return but such a body yields a `{ptr,len,cap}` struct. \
-                             Append `.to_string()` to the closure body, or run with `--interp` \
-                             (or `KARAC_RUN_JIT=0`)"
-                                .to_string(),
-                        );
-                    }
-                }
+                // B-2026-08-08-22 DELETED THE GATE THAT STOOD HERE. It refused
+                // a closure whose body IS a String value (`|s| "fixed"`,
+                // `|s| s + "!"`) because the closure was declared with a
+                // POINTER return while such a body yields `{ptr,len,cap}`. That
+                // mismatch is now fixed at its source —
+                // `infer_closure_return_type`'s `StringLit` arm says String, as
+                // its f-string sibling always did — so these shapes compile and
+                // match the interpreter, and there is nothing left to refuse.
+                //
+                // The gate was also mis-scoped in a way worth remembering: it
+                // sat on `Option/Result.map` and named that combinator in its
+                // message, but the defect had nothing to do with `map`. The
+                // same closure fails identically as a plain local
+                // (`let f = |x: i64| "fixed"; f(1)`), which is how the fix was
+                // found — a gate at the call site described the symptom's
+                // neighbourhood rather than its cause, and its advice
+                // ("append `.to_string()`") worked while pointing away from it.
                 let err_te = self.method_unwrap_err_types.get(&key).cloned();
                 return self
                     .compile_map_via_match_synthesis(
