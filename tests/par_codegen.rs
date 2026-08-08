@@ -10908,6 +10908,70 @@ fn main() {
     /// Vec/String/Set arms are here because the row was originally filed as a
     /// `Map` slot-ownership problem; it is neither Map-specific nor about
     /// ownership.
+    /// B-2026-08-08-19 — an unannotated `let` whose callee returns a SHARED
+    /// struct keeps its receiver type across the auto-par join, so a method
+    /// call on it still dispatches.
+    ///
+    /// The return-slot sizer carries a `var_type_name` for the rebind, falling
+    /// back — for `let x = f(..)` with no annotation — to the callee's declared
+    /// return type when that names a known user struct. The test for "known
+    /// user struct" was `struct_types` alone, but `declare_structs` routes a
+    /// `shared struct` / `par struct` into `shared_types` and an ordinary one
+    /// into `struct_types`, EXCLUSIVELY. So every shared type answered "not a
+    /// user struct", crossed the join with no `var_type_names` entry, and lost
+    /// its receiver identity: `codegen: no handler for method 'total' on
+    /// variable 'b'` — a compile FAILURE on a program that builds with
+    /// `KARAC_AUTO_PAR=0`.
+    ///
+    /// The error message that shape produces is actively misleading, which is
+    /// why this comment spells the cause out: it says "add a dispatcher arm in
+    /// `compile_method_call`", but the arm exists and works sequentially. The
+    /// receiver's TYPE is what went missing, one phase earlier.
+    ///
+    /// The shared-ENUM arm is here because `shared_types` holds both, so the
+    /// one-word fix covers both — and a future narrowing of it should have to
+    /// break two tests, not one.
+    #[test]
+    fn par_slot_shared_receiver_keeps_its_type_for_method_dispatch() {
+        let struct_src = "shared struct SBag { mut items: Vec[String], base: i64 }\n\
+             impl SBag {\n\
+             \x20   fn total(ref self) -> i64 {\n\
+             \x20       let mut t = self.base;\n\
+             \x20       for s in self.items.iter() { t = t + s.len(); };\n\
+             \x20       return t;\n\
+             \x20   }\n\
+             }\n\
+             fn make_bag(tag: i64) -> SBag {\n\
+             \x20   let b = SBag { items: Vec.new(), base: tag };\n\
+             \x20   b.items.push(\"shared field string padded well beyond thirty-six bytes ok\");\n\
+             \x20   b.items.push(\"another shared field string well beyond thirty-six byte\");\n\
+             \x20   return b;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a = make_bag(10_i64);\n\
+             \x20   println(a.total());\n\
+             \x20   let b = make_bag(20_i64);\n\
+             \x20   println(b.total());\n\
+             }\n";
+        assert_eq!(run_program(struct_src).as_deref(), Some("123\n133\n"));
+
+        let enum_src = "shared enum Shape { Circle(i64), Square(i64) }\n\
+             impl Shape {\n\
+             \x20   fn area(ref self) -> i64 {\n\
+             \x20       match self { Shape.Circle(r) => { return r * r * 3; } \
+             Shape.Square(s) => { return s * s; } }\n\
+             \x20   }\n\
+             }\n\
+             fn mk(k: i64) -> Shape { if k > 0 { return Shape.Circle(k); } return Shape.Square(2); }\n\
+             fn main() {\n\
+             \x20   let a = mk(2_i64);\n\
+             \x20   println(a.area());\n\
+             \x20   let b = mk(3_i64);\n\
+             \x20   println(b.area());\n\
+             }\n";
+        assert_eq!(run_program(enum_src).as_deref(), Some("12\n27\n"));
+    }
+
     /// B-2026-08-08-17 — calling a `let`-bound CLOSURE counts as a write to
     /// whatever it captured, so the analyzer cannot race the call against a
     /// read of that capture.

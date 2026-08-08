@@ -1518,7 +1518,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         _ => None,
                     };
-                    call_ret_struct.filter(|n| self.struct_types.contains_key(n.as_str()))
+                    // B-2026-08-08-19: `shared_types` as well as `struct_types`.
+                    // `declare_structs` routes a `shared struct` / `par struct`
+                    // into `shared_types` and an ordinary one into
+                    // `struct_types` — the two are EXCLUSIVE, so a
+                    // `struct_types`-only test silently answers "not a user
+                    // struct" for every shared type. `let b = make_bag(..)`
+                    // returning a `shared struct` therefore crossed the join
+                    // with no `var_type_names` entry, and `b.total()` had no
+                    // receiver type to dispatch on: "no handler for method
+                    // 'total' on variable 'b'", a compile FAILURE on a program
+                    // that builds with auto-par off. Same shape as the
+                    // struct-of-Vecs case this fallback was added for; that fix
+                    // just reached for the wrong half of the pair.
+                    call_ret_struct.filter(|n| {
+                        self.struct_types.contains_key(n.as_str())
+                            || self.shared_types.contains_key(n.as_str())
+                    })
                 });
                 slots.push(ReturnSlot {
                     binding_name: name,
