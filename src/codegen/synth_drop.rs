@@ -1721,7 +1721,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .aggregate_param_copy_supported_struct(struct_name, &mut Vec::new())
             || (struct_non_generic && self.struct_param_owned_by_transfer(struct_name, false))
             || self.shared_owning_struct_sole_field_owner(struct_name);
-        if struct_callee_owned {
+        // B-2026-08-08-6 — when the type-wide gate declined, the caller-retains
+        // arm gets a SECOND, per-field chance. Its whole-struct scope condition
+        // ("is this type ever a bare by-value param") is a signature question,
+        // and it declines every promoted field as soon as ONE callee could move
+        // ONE of them out — including fields no callee ever touches, whose
+        // payload is then freed by nobody. `struct Sa { n: Option[Node], m:
+        // Option[Map[..]] }` with a `fn reads_n(a: Sa)` that reads only `a.n`
+        // leaked 720 direct / 5,740 indirect bytes over 10 iterations at both
+        // opt levels, with the Map field never mentioned at a call boundary at
+        // all. The per-field gate consults the callee BODIES instead, so `m`
+        // arms and `n` keeps today's behaviour.
+        //
+        // Purely additive: only consulted for fields the type-wide gate already
+        // refused, and it can only ever arm MORE of them. The field CLASS is
+        // untouched — B-2026-08-07-20 already paired this drop with the move
+        // sites for exactly these payloads, so widening WHICH STRUCTS qualify
+        // does not owe the move sites a matching widening the way changing the
+        // class would.
+        let per_field_caller_retains = !struct_callee_owned;
+        if struct_callee_owned || self.shared_owning_struct_sole_field_owner_base(struct_name) {
             let mut option_idxs: Vec<usize> = Vec::new();
             for (idx, k) in kinds.iter().enumerate() {
                 if *k == FieldDrop::None
@@ -1734,6 +1753,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             for idx in option_idxs {
+                if per_field_caller_retains {
+                    let Some(field_name) = self
+                        .struct_field_names
+                        .get(struct_name)
+                        .and_then(|v| v.get(idx))
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    if !self.shared_owning_struct_field_sole_owner(struct_name, &field_name) {
+                        continue;
+                    }
+                }
                 let Some(field_te) = self
                     .struct_field_type_exprs
                     .get(struct_name)

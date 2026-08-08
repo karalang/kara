@@ -217,6 +217,80 @@ fn walk_outside_projection(expr: &Expr, name: &str, bad: &mut bool) {
     });
 }
 
+/// Could `expr` take ownership of `binding`'s `field` — either by naming
+/// `binding.field` directly, or by using `binding` as a whole in any position
+/// that is not a projection to some OTHER field?
+///
+/// B-2026-08-08-6 — the field-granular sibling of
+/// [`expr_mentions_name_outside_field_projection`], and the body half of the
+/// callee predicate that lets a shared-owning struct's caller-retains drop arm
+/// per field instead of declining for the whole type. Deliberately
+/// CONSERVATIVE in the direction that keeps today's behaviour: `true` means
+/// "decline the drop for this field", so an over-approximation costs the
+/// pre-existing leak while an under-approximation would cost a double free.
+///
+/// A projection to a DIFFERENT field is the only thing that reads as safe. Any
+/// bare use of the binding — call argument, method receiver, tail value,
+/// destructuring scrutinee, `par` capture — is treated as taking the whole
+/// struct, and therefore as potentially taking this field with it. `Some(x)`
+/// bound out of a `match binding.field` counts too: the payload binds BY VALUE,
+/// so the match itself is the move (which is why all three spellings in
+/// `asan_shared_owning_struct_option_map_by_value_param_single_owner` behave
+/// identically), and it is reached here through the `binding.field` base.
+pub fn expr_may_take_struct_field(expr: &Expr, binding: &str, field: &str) -> bool {
+    let mut found = false;
+    walk_field_ownership(expr, binding, field, &mut found);
+    found
+}
+
+fn walk_field_ownership(expr: &Expr, binding: &str, field: &str, found: &mut bool) {
+    if *found {
+        return;
+    }
+    match &expr.kind {
+        ExprKind::Identifier(n) => {
+            if n == binding {
+                *found = true;
+            }
+            return;
+        }
+        ExprKind::FieldAccess { object, field: f } => {
+            // A direct `binding.field` base is the move this predicate exists
+            // to catch; `binding.other` is a read of a field whose ownership is
+            // not in question. A deeper base expression is walked normally.
+            if matches!(&object.kind, ExprKind::Identifier(n) if n == binding) {
+                if f == field {
+                    *found = true;
+                }
+                return;
+            }
+            walk_field_ownership(object, binding, field, found);
+            return;
+        }
+        ExprKind::TupleIndex { object, .. } => {
+            if matches!(&object.kind, ExprKind::Identifier(n) if n == binding) {
+                return;
+            }
+            walk_field_ownership(object, binding, field, found);
+            return;
+        }
+        _ => {}
+    }
+    for_each_block(&expr.kind, &mut |b| {
+        for s in &b.stmts {
+            crate::rc_elide::walk_stmt_children_pub(s, &mut |e| {
+                walk_field_ownership(e, binding, field, found)
+            });
+        }
+        if let Some(e) = &b.final_expr {
+            walk_field_ownership(e, binding, field, found);
+        }
+    });
+    crate::rc_elide::walk_children_pub(&expr.kind, &mut |sub| {
+        walk_field_ownership(sub, binding, field, found)
+    });
+}
+
 // ── Candidate collection ────────────────────────────────────────────
 
 fn collect_candidate_stmt_shallow(stmt: &Stmt, out: &mut HashSet<String>) {

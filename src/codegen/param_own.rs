@@ -68,8 +68,27 @@ use inkwell::{AddressSpace, IntPredicate};
 use std::collections::HashMap;
 
 use crate::ast::{
-    Expr, ExprKind, GenericArg, ImplItem, Item, SelfParam, TraitItem, TypeExpr, TypeKind,
+    Block, Expr, ExprKind, GenericArg, ImplItem, Item, PatternKind, SelfParam, TraitItem, TypeExpr,
+    TypeKind,
 };
+
+/// Whole-body wrapper over [`crate::deque_head::expr_may_take_struct_field`]:
+/// could this function body take ownership of `binding`'s `field`? Statements
+/// are reached through the shared statement walker so a move buried in a `let`
+/// initializer, an assignment RHS, or a nested block is not missed.
+/// B-2026-08-08-6.
+fn body_may_take_field(body: &Block, binding: &str, field: &str) -> bool {
+    let mut found = false;
+    for s in &body.stmts {
+        crate::rc_elide::walk_stmt_children_pub(s, &mut |e| {
+            found = found || crate::deque_head::expr_may_take_struct_field(e, binding, field);
+        });
+    }
+    if let Some(e) = &body.final_expr {
+        found = found || crate::deque_head::expr_may_take_struct_field(e, binding, field);
+    }
+    found
+}
 
 use super::state::{EnumDropKind, EnumLayout};
 
@@ -1008,9 +1027,55 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return false;
         }
+        self.shared_owning_struct_sole_field_owner_base(struct_name)
+            && !self.struct_used_as_bare_by_value_param(struct_name)
+    }
+
+    /// [`Self::shared_owning_struct_sole_field_owner_core`] without its
+    /// whole-struct by-value scope condition — the type-level half of the
+    /// caller-retains story, which holds for the struct regardless of whether
+    /// any callee takes it by value. Split out by B-2026-08-08-6 so the scope
+    /// question can be asked per FIELD
+    /// ([`Self::shared_owning_struct_field_sole_owner`]) instead of once for
+    /// the whole type. Not a gate on its own — every caller must add one of the
+    /// two scope conditions.
+    pub(super) fn shared_owning_struct_sole_field_owner_base(&self, struct_name: &str) -> bool {
+        if !self.struct_types.contains_key(struct_name)
+            || self.shared_types.contains_key(struct_name)
+        {
+            return false;
+        }
+        if !self
+            .struct_generic_params
+            .get(struct_name)
+            .is_none_or(|g| g.is_empty())
+        {
+            return false;
+        }
         self.struct_owns_shared_field(struct_name, &mut Vec::new())
             && !self.struct_is_self_referential(struct_name)
-            && !self.struct_used_as_bare_by_value_param(struct_name)
+    }
+
+    /// The per-FIELD caller-retains gate: is this struct's frame the sole owner
+    /// of `field_name`, given that no by-value callee's body can take that
+    /// field out of it?
+    ///
+    /// B-2026-08-08-6. [`Self::shared_owning_struct_sole_field_owner`] answers
+    /// the same question for the whole type and has to decline as soon as the
+    /// struct is a by-value param ANYWHERE, because one callee that moves one
+    /// promoted field out would double-free. That is far more than the evidence
+    /// supports: it also declines every OTHER promoted field, including ones no
+    /// callee touches, and those keep a leak nothing in the program can free.
+    /// Same conjuncts, with the whole-struct scope condition replaced by the
+    /// field-granular one.
+    pub(super) fn shared_owning_struct_field_sole_owner(
+        &self,
+        struct_name: &str,
+        field_name: &str,
+    ) -> bool {
+        self.shared_owning_struct_sole_field_owner_base(struct_name)
+            && !self.struct_by_value_param_body_takes_field(struct_name, field_name)
+            && !self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new())
     }
 
     /// [`Self::shared_owning_struct_sole_field_owner_core`] plus the
@@ -1079,6 +1144,94 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 Item::TraitDef(t) => {
+                    for it in &t.items {
+                        let TraitItem::Method(m) = it else { continue };
+                        if m.params.iter().any(|p| is_bare(&p.ty)) {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Does any callee that takes `struct_name` as a bare by-value param have a
+    /// BODY that could take ownership of `field_name` out of it?
+    ///
+    /// B-2026-08-08-6 — the callee-body predicate
+    /// [`Self::struct_used_as_bare_by_value_param`] promised and deferred. That
+    /// one answers "could this type reach a call boundary at all", which is a
+    /// SIGNATURE question, and it declines the caller-retains drop disjunct for
+    /// the whole struct on a `yes` — preserving a leak (an `Option[Map]` field
+    /// freed by nobody) to avoid a double free on the field a callee moves out.
+    /// The two are not the same field. This asks the ownership question per
+    /// FIELD, and per callee body, so a field that no by-value callee ever
+    /// takes can arm its drop while the moved-out one keeps today's behaviour.
+    ///
+    /// Whole-program and type-keyed for the same reason its predecessor is: the
+    /// drop fn is synthesized once per struct TYPE and runs at every death of
+    /// that type, so the answer has to hold at every site at once. What changes
+    /// is the granularity — `(type, field)` rather than `type`.
+    ///
+    /// Conservative in the safe direction at every step. No snapshot means
+    /// assume the worst; an owned `self` receiver is a by-value param under
+    /// another name; and the body test
+    /// ([`crate::deque_head::expr_may_take_struct_field`]) treats any use of the
+    /// param that is not a projection to a DIFFERENT field as taking the whole
+    /// struct. A false `true` costs the pre-existing leak; a false `false`
+    /// would cost a double free.
+    pub(super) fn struct_by_value_param_body_takes_field(
+        &self,
+        struct_name: &str,
+        field_name: &str,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return true;
+        };
+        let is_bare = |ty: &TypeExpr| -> bool {
+            matches!(&ty.kind, TypeKind::Path(p)
+                if p.segments.last().map(String::as_str) == Some(struct_name))
+        };
+        // A param whose pattern is not a plain binding (a destructure) has no
+        // name to track, so it is treated as taking the whole struct.
+        let fn_takes_field = |f: &crate::ast::Function| -> bool {
+            f.params.iter().any(|p| {
+                if !is_bare(&p.ty) {
+                    return false;
+                }
+                let PatternKind::Binding(name) = &p.pattern.kind else {
+                    return true;
+                };
+                body_may_take_field(&f.body, name, field_name)
+            })
+        };
+        for item in &program.items {
+            match item {
+                Item::Function(f) => {
+                    if fn_takes_field(f) {
+                        return true;
+                    }
+                }
+                Item::ImplBlock(b) => {
+                    let target_is_self = is_bare(&b.target_type);
+                    for it in &b.items {
+                        let ImplItem::Method(m) = it else { continue };
+                        if fn_takes_field(m) {
+                            return true;
+                        }
+                        if target_is_self
+                            && matches!(m.self_param, Some(SelfParam::Owned))
+                            && body_may_take_field(&m.body, "self", field_name)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                Item::TraitDef(t) => {
+                    // A trait method's signature binds no body this struct can
+                    // be reasoned about through — any bare param declines.
                     for it in &t.items {
                         let TraitItem::Method(m) = it else { continue };
                         if m.params.iter().any(|p| is_bare(&p.ty)) {

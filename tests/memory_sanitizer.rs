@@ -30467,14 +30467,18 @@ fn main() {
     // deep-copying the param at entry — a `Map`/`Set` handle is the one thing
     // `deep_copy_owned_struct_param_field_move` cannot duplicate.
     //
-    // So `struct_used_as_bare_by_value_param` declines the disjunct for any
-    // struct that could reach a call boundary at all, and this fixture is what
-    // holds that line: `Sa` here IS a by-value param, so its `Option[Map]` field
-    // keeps today's (correct) behavior — the callee owns the move-out, nothing
-    // double-frees, and the residual leak on the non-moving path stays open
-    // rather than trading a leak for a double free. Closing it needs a
-    // callee-BODY predicate ("does this callee move this promoted field out of
-    // this param"), which is its own slice.
+    // So the disjunct declines for a field a by-value callee's body could take
+    // out, and this fixture is what holds that line: all three callees here move
+    // `a.m`, so that field keeps today's (correct) behavior — the callee owns the
+    // move-out and nothing double-frees.
+    //
+    // B-2026-08-08-6 narrowed the decline from the whole TYPE to the individual
+    // FIELD (`struct_by_value_param_body_takes_field`), so this fixture no longer
+    // stands for "any struct that could reach a call boundary at all". `Sa`'s
+    // OTHER promoted field is now armed whenever no callee body takes it — see
+    // `asan_shared_owning_struct_untouched_option_map_field_freed`, which pins
+    // the leak that decline used to preserve. What this fixture still pins is the
+    // moved-out field itself.
     #[test]
     fn asan_shared_owning_struct_option_map_by_value_param_single_owner() {
         assert_clean_asan_run(
@@ -30507,6 +30511,59 @@ fn main() {
 "#,
             &["60"],
             "shared_owning_struct_option_map_by_value_param",
+        );
+    }
+
+    // B-2026-08-08-6 — the residual leak the scope guard above preserved, and
+    // the reason its decline is now per FIELD rather than per type.
+    //
+    // `struct_used_as_bare_by_value_param` asks a SIGNATURE question, so one
+    // callee that could move one promoted field out declined the caller-retains
+    // drop for EVERY promoted field of the struct — including fields no callee
+    // ever mentions, whose payload was then freed by nobody. `reads_n` here
+    // reads only `a.n`; the `Option[Map]` field never reaches a call boundary at
+    // all, and it leaked 720 direct / 5,740 indirect bytes over 10 iterations at
+    // both opt levels. `struct_by_value_param_body_takes_field` consults the
+    // callee BODIES instead, so `m` arms its drop while `n` keeps the behaviour
+    // the fixture above pins.
+    //
+    // The second and third shapes are the pairing check. Widening a drop obliges
+    // the move sites to widen with it, so a caller-side `let mm = y.m` and a
+    // `match w.m` on the SAME struct that is also a by-value param elsewhere are
+    // exercised here: if the newly-armed drop and the move-site zeroing
+    // disagreed, these would double-free rather than leak. The field CLASS is
+    // untouched by this row — B-2026-08-07-20 already paired the two for these
+    // payloads — which is why widening WHICH STRUCTS qualify is safe.
+    #[test]
+    fn asan_shared_owning_struct_untouched_option_map_field_freed() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node { v: i64 }
+struct Sa { n: Option[Node], m: Option[Map[String, i64]] }
+fn mk(i: i64) -> Map[String, i64] {
+    let mut mm: Map[String, i64] = Map.new();
+    mm.insert("map_key_long_enough_to_force_a_heap_allocation".to_string(), i);
+    mm
+}
+fn reads_n(a: Sa) -> i64 { match a.n { Some(nn) => { nn.v } None => { 0 } } }
+fn main() {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 10 {
+        let x: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        t = t + reads_n(x);
+        let y: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let mm = y.m;
+        match mm { Some(z) => { t = t + z.len(); } None => {} }
+        let w: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        match w.m { Some(z) => { t = t + z.len(); } None => {} }
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+            &["65"],
+            "shared_owning_struct_untouched_option_map_field",
         );
     }
 
