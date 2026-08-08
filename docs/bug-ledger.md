@@ -97,25 +97,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 113 | 1 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 89 | 1 |
-| missing-feature | 84 | 2 |
+| missing-feature | 84 | 1 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
 | diagnostics | 42 | 0 |
 | soundness | 40 | 0 |
 | crash | 39 | 0 |
-| other | 20 | 1 |
+| other | 21 | 2 |
 | use-after-free | 14 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 738 | 3 |
-| typecheck | 130 | 2 |
+| codegen | 738 | 2 |
+| typecheck | 130 | 1 |
 | interp | 128 | 0 |
 | ownership | 44 | 2 |
 | autopar | 33 | 1 |
-| other | 31 | 1 |
+| other | 32 | 2 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1019 surfaced · 6 open · 1003 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1020 surfaced · 6 open · 1004 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -134,12 +134,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1019 surfaced
 | B-2026-08-07-27 | 2026-08-07 | other | medium | kata #133's par lane compiles and runs after B-2026-08-01-33, but restoring it is the whole bench pipeline -- the .kara's "DOES NOT COMPILE" header, bench.sh's skip, results.json and the README all still say the lane is withdrawn | — |
 | B-2026-08-08-3 | 2026-08-08 | codegen | medium | a `par` branch whose body is a BLOCK EXPRESSION containing a `Map` fails codegen with `Undefined variable '<outer destructured name>'`, while `karac check` passes — a clean run-vs-build divergence | src/codegen/par_blocks.rs (par branch outlining) + the let-stmt Map arm |
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
-| B-2026-08-08-5 | 2026-08-08 | typecheck+codegen | high | the `weak` downgrade store coercion reaches a direct FIELD store but not a container-ELEMENT store, so `Vec[weak N]` cannot be built -- which makes design.md's own worked cycle-breaking example uncompilable and leaves B-2026-08-08-4 with no fix | src/typechecker/expr_method_call.rs (the Vec push element check) + the weak downgrade codegen (B-2026-07-19-8 slices 3-4) |
 | B-2026-08-08-6 | 2026-08-08 | codegen | medium | a caller-retains struct PARAM whose callee moves a promoted `Option`/`Result` field out has two owners -- 470 valgrind errors / 26 invalid frees at BOTH opt levels, in all three spellings. This is the half B-2026-08-07-20 scoped OUT rather than fixed: its `struct_used_as_bare_by_value_param` condition declines the caller-retains drop disjunct for any struct that could reach a call boundary, so the shape keeps today's (correct) behavior and its residual leak on the non-moving path | src/codegen/param_own.rs (`shared_owning_struct_sole_field_owner`'s `struct_used_as_bare_by_value_param` conjunct) |
+| B-2026-08-08-7 | 2026-08-08 | other | medium | six ASAN fixtures were passing VACUOUSLY — their programs fail typecheck and `karac build` would refuse them, but the harness only ever asserted the OWNERSHIP result, so codegen ran anyway and the tests reported ok | tests/memory_sanitizer.rs — the six `#[ignore]`d fixtures carry their own error text |
 
-### Fixed (1003)
+### Fixed (1004)
 
-<details><summary>1003 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1004 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1168,6 +1168,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-26 | ownership | high | a frozen-element container declared INSIDE a closure was still admitted -- `try_admit_container_method` had no `in_closure` gate, so an escaping clos… | 6673e162 |
 | B-2026-08-08-1 | ownership | medium | the `par` capture gate is keyed on binding NAMES, so two branches that each declare their own local `let n = <shared>` read as ONE binding reachable… | 8c26ad4a |
 | B-2026-08-08-2 | typecheck+ownership | high | this row's PREMISE WAS WRONG -- kata #133 was never blocked on `Map[K, frozen V]` (its `visited` map holds the CLONES, which are mutated and can neve… | d174d04c |
+| B-2026-08-08-5 | typecheck+codegen | high | the `weak` downgrade store coercion reaches a direct FIELD store but not a container-ELEMENT store, so `Vec[weak N]` cannot be built -- which makes d… | 1bb5328a |
 
 </details>
 
