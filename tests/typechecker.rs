@@ -29539,6 +29539,45 @@ fn seeded_generic_call_checks_its_argument_against_the_concrete_slot() {
     .is_empty());
 }
 
+/// B-2026-08-08-11 — a type error about a `frozen` parameter names the
+/// spelling the author wrote, not the `ref T` it lowers to.
+///
+/// `frozen T` becomes `TypeKind::Ref(T)` at parse time (B-2026-08-01-33 —
+/// non-owning is what `ref` already means, and reusing the borrow vocabulary is
+/// what let codegen stay untouched), so every phase past the parser sees a
+/// borrow, including the one that formats type names. The result was
+/// `expected 'Node', found 'ref Node'` sitting directly above an ownership
+/// error about the same parameter that named it `frozen` — two diagnostics
+/// describing one parameter with two spellings, one of which is absent from
+/// the source.
+#[test]
+fn frozen_parameter_mismatch_names_the_surface_spelling() {
+    let errs = typecheck_errors(
+        "shared struct Node { v: i64 }\n         fn leak(n: frozen Node) -> Node { return n; }\n         fn main() { println(1); }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("found 'frozen Node'")),
+        "expected the surface spelling, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(!errs.iter().any(|e| e.message.contains("found 'ref Node'")));
+    // Also at an ARGUMENT position, not just a return.
+    let arg_errs = typecheck_errors(
+        "shared struct Node { v: i64 }\n         fn takes_owned(x: Node) -> i64 { return x.v; }\n         fn use_it(n: frozen Node) -> i64 { return takes_owned(n); }\n         fn main() { println(1); }",
+    );
+    assert!(arg_errs
+        .iter()
+        .any(|e| e.message.contains("found 'frozen Node'")));
+    // A PLAIN `ref` parameter must still render as `ref` — the rewrite is
+    // keyed on the parameter having been declared `frozen`, not on the type
+    // being a borrow.
+    let ref_errs = typecheck_errors(
+        "struct P { v: i64 }\n         fn takes_owned(x: P) -> i64 { return x.v; }\n         fn use_ref(r: ref P) -> i64 { return takes_owned(r); }\n         fn main() { println(1); }",
+    );
+    assert!(ref_errs.iter().any(|e| e.message.contains("found 'ref P'")));
+}
+
 /// B-2026-08-08-4 gap B — a `weak T` ELEMENT read is an UPGRADE, exactly as a
 /// `weak T` FIELD read is: `v[i]` on a `Vec[weak N]` yields `Option[N]`.
 ///

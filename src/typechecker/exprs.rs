@@ -3417,7 +3417,17 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Bool(_) => Type::Bool,
 
             // Identifiers
-            ExprKind::Identifier(name) => self.resolve_identifier_type(name, &expr.span),
+            ExprKind::Identifier(name) => {
+                // B-2026-08-08-11 — note that this span read a `frozen`
+                // parameter, so a mismatch on it can be rendered with the
+                // spelling the author wrote instead of the `ref T` it lowers
+                // to. Recording only; the type is unchanged.
+                if self.current_fn_frozen_params.contains(name.as_str()) {
+                    self.frozen_param_use_spans
+                        .insert(SpanKey::from_span(&expr.span));
+                }
+                self.resolve_identifier_type(name, &expr.span)
+            }
             ExprKind::Path { segments, .. } => self.resolve_path_type(segments, &expr.span),
 
             ExprKind::SelfValue => self.current_self_type.clone().unwrap_or(Type::Error),

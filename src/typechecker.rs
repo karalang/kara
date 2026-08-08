@@ -1653,6 +1653,16 @@ pub struct TypeChecker<'a> {
     /// enforces), and it stays enforced because this set contains only
     /// parameters the escape checker governs.
     pub(super) current_fn_frozen_params: std::collections::HashSet<String>,
+    /// Spans at which a `frozen` PARAMETER was read as a value. B-2026-08-08-11.
+    ///
+    /// `frozen T` lowers to `TypeKind::Ref(T)` at parse time (B-2026-08-01-33 —
+    /// non-owning is what `ref` already means, and reusing the borrow vocabulary
+    /// is what let codegen stay untouched), so every phase past the parser sees
+    /// a borrow — INCLUDING the one that formats type names. A mismatch on such
+    /// a parameter therefore read `found 'ref Node'`: a type the author never
+    /// wrote and cannot find in their source. Recorded here so the renderer can
+    /// name the surface spelling; nothing about lowering changes.
+    pub(super) frozen_param_use_spans: std::collections::HashSet<SpanKey>,
     /// True when type-checking inside a defer/errdefer block.
     pub(super) in_defer: bool,
     /// B-2026-07-02-7: span of a suffixed integer literal that is the direct
@@ -1983,6 +1993,7 @@ impl<'a> TypeChecker<'a> {
             return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
             current_fn_frozen_params: std::collections::HashSet::new(),
+            frozen_param_use_spans: std::collections::HashSet::new(),
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),
             current_self_type: None,
@@ -4003,11 +4014,18 @@ impl<'a> TypeChecker<'a> {
         // helper so the JSON consumer gets `expected` / `got` as
         // structured fields rather than having to parse the prose
         // message body. Line 619 slice 4.
+        // B-2026-08-08-11 — name the SURFACE spelling when `found` is a
+        // `frozen` parameter read. `frozen T` lowers to `ref T` at parse time,
+        // so without this the message reports a type the author never wrote,
+        // immediately above an ownership diagnostic about the same parameter
+        // that names it correctly. Scoped to the renderer: the type itself is
+        // still the borrow every other phase agreed on.
+        let found_display = self.display_type_at_use(found, &span);
         self.type_error_with_types(
             format!(
                 "expected '{}', found '{}'",
                 type_display(expected),
-                type_display(found)
+                found_display
             ),
             span,
             TypeErrorKind::TypeMismatch,
@@ -4015,6 +4033,25 @@ impl<'a> TypeChecker<'a> {
             found,
         );
         false
+    }
+
+    /// Render `ty` for a diagnostic at `span`, preferring the surface spelling
+    /// the author wrote. Today that means one thing: a `frozen` parameter read
+    /// prints `frozen T` rather than the `ref T` it lowers to
+    /// (B-2026-08-08-11). `karac fmt` solves the same problem the same way —
+    /// it unwraps the borrow so `frozen N` round-trips instead of printing
+    /// `frozen ref N`.
+    pub(super) fn display_type_at_use(&self, ty: &Type, span: &Span) -> String {
+        if !self
+            .frozen_param_use_spans
+            .contains(&SpanKey::from_span(span))
+        {
+            return type_display(ty);
+        }
+        match ty {
+            Type::Ref(inner) => format!("frozen {}", type_display(inner)),
+            other => type_display(other),
+        }
     }
 
     /// Returns `true` iff the assignment is a once-callable closure flowing
