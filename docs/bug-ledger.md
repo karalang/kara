@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 219 | 0 |
-| leak | 151 | 1 |
+| leak | 152 | 2 |
 | double-free | 113 | 0 |
 | codegen-gap | 94 | 0 |
 | run-vs-build | 90 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 740 | 0 |
+| codegen | 741 | 1 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1026 surfaced · 1 open · 1015 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1027 surfaced · 2 open · 1015 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
+| B-2026-08-08-15 | 2026-08-08 | codegen | high | a `shared struct` constructed in an auto-par branch, transferred out through the par returns slot and then moved into a container in the joining scope, is never released -- auto-par is ON by default and the shape is ordinary | probe: `let p: P = P{..}; let q: Q = Q{..}; let mut w: Vec[P] = Vec.new(); w.push(p);` in `main` under default auto-par; clean under `KARAC_AUTO_PAR=0` |
 
 ### Fixed (1015)
 
