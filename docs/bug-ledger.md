@@ -92,17 +92,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 219 | 0 |
+| miscompile | 220 | 1 |
 | leak | 151 | 1 |
 | double-free | 113 | 0 |
-| codegen-gap | 94 | 0 |
+| codegen-gap | 95 | 1 |
 | run-vs-build | 90 | 0 |
 | missing-feature | 85 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
-| crash | 39 | 0 |
+| crash | 40 | 1 |
 | other | 22 | 1 |
 | use-after-free | 15 | 0 |
 
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 741 | 0 |
+| codegen | 744 | 3 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
-| autopar | 34 | 0 |
+| autopar | 37 | 3 |
 | other | 33 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,14 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1028 surfaced · 2 open · 1016 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1031 surfaced · 5 open · 1016 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-16 | 2026-08-08 | other | medium | the ASAN memory suite compiles every fixture with AUTO-PAR DISABLED, so ~1000 leak/UAF fixtures cover sequential codegen only -- the hole that hid B-2026-08-08-15 | tests/memory_sanitizer.rs `run_under_asan_opts` passes `None` for `ConcurrencyAnalysis`, so every fixture compiles with auto-par disabled |
+| B-2026-08-08-17 | 2026-08-08 | autopar+codegen | high | a closure's write through a captured `String` is SILENTLY LOST when the analyzer parallelizes the enclosing function -- `karac build` and `karac run` both print 0, `KARAC_AUTO_PAR=0` and `--interp` print 52 | probe: a closure mutating a captured `String` via `push_str`, in a `main` the analyzer splits — `karac build` prints 0 for `buf.len()`, `KARAC_AUTO_PAR=0` and `--interp` print 52 |
+| B-2026-08-08-18 | 2026-08-08 | autopar+codegen | medium | a `Column` arithmetic chain passed to a two-arg fn emits a malformed call under auto-par -- LLVM module verification rejects `call i64 @fst(i64 %m8, i64 0)`, a `ptr` argument lowered as `i64` | probe: `Column[i64]` arithmetic chain (`a + b + b`, `-(a * 2)`) passed to `fn fst(c: Column[i64], i: i64)` — `karac build` fails LLVM module verification; `KARAC_AUTO_PAR=0` builds |
+| B-2026-08-08-19 | 2026-08-08 | autopar+codegen | medium | a user method on a `shared struct` loses its dispatcher under auto-par -- `codegen: no handler for method 'total' on variable 'b' (method dispatch fell through)` | probe: `shared struct SBag { mut items: Vec[String], base: i64 }` with `fn total(ref self)` iterating `self.items.iter()`; calling `b.total()` in a parallelized `main` — `no handler for method 'total' on variable 'b'` |
 
 ### Fixed (1016)
 
