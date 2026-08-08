@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 218 | 0 |
 | leak | 151 | 1 |
 | double-free | 113 | 1 |
-| codegen-gap | 94 | 1 |
+| codegen-gap | 94 | 0 |
 | run-vs-build | 89 | 0 |
 | missing-feature | 85 | 1 |
 | perf | 59 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 739 | 2 |
+| codegen | 739 | 1 |
 | typecheck | 132 | 1 |
 | interp | 128 | 0 |
 | ownership | 44 | 2 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1023 surfaced · 4 open · 1009 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1023 surfaced · 3 open · 1010 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-6 | 2026-08-08 | codegen | medium | a caller-retains struct PARAM whose callee moves a promoted `Option`/`Result` field out has two owners -- 470 valgrind errors / 26 invalid frees at BOTH opt levels, in all three spellings. This is the half B-2026-08-07-20 scoped OUT rather than fixed: its `struct_used_as_bare_by_value_param` condition declines the caller-retains drop disjunct for any struct that could reach a call boundary, so the shape keeps today's (correct) behavior and its residual leak on the non-moving path | src/codegen/param_own.rs (`shared_owning_struct_sole_field_owner`'s `struct_used_as_bare_by_value_param` conjunct) |
-| B-2026-08-08-10 | 2026-08-08 | codegen | medium | a generic struct with a `Vec[T]` FIELD returned by value from a generic function fails codegen — `ret { { ptr, i64, i64 } } %field` against a `ptr` return | probe: `struct Column[T] { data: Vec[T] }` + `fn from_vec[T](v: Vec[T]) -> Column[T]` |
 
-### Fixed (1009)
+### Fixed (1010)
 
-<details><summary>1009 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1010 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1172,6 +1171,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-7 | other | medium | six ASAN fixtures were passing VACUOUSLY — their programs fail typecheck and `karac build` would refuse them, but the harness only ever asserted the… | 7c7de323 |
 | B-2026-08-08-8 | typecheck | low | expected-return seeding reaches only PATH callees, and its argument checking only collection literals — a plain generic free fn still rejects a conte… | a2ce6b79 |
 | B-2026-08-08-9 | typecheck | high | a generic slot bound by the EXPECTATION skipped the narrowing check — `let x: u8 = id(big)` with `big: i64 = 5000000000` typechecked and printed 5000… | a2ce6b79 |
+| B-2026-08-08-10 | codegen | medium | a generic struct with a `Vec[T]` FIELD returned by value from a generic function fails codegen — `ret { { ptr, i64, i64 } } %field` against a `ptr` r… | f773c317. `llvm_type_for_type_expr` (`src/codegen/types_lowering.rs`) now lowers a user-declared struct through its own (mono) struct type when its name collides with a prelude type, ahead of the hard-coded `name == "Column"` / `"DataFrame"` / `"Tensor"` / `"Interner"` handle arms that keyed on the NAME alone and returned a bare `ptr`. Guarded on `user_shadowed_prelude_types`, the declaration pass's existing record, which excludes `stdlib_origin` items. NOT the generic-struct-return gap this row describes: a non-generic `struct Column { data: Vec[i64] }` fails identically pre-fix, and renaming the struct is a one-token fix. The complement of `reject_shadowed_prelude_types` (B-2026-08-02-13), which still refuses built-in machinery over a user value — all 17 of its tests pass unchanged, as do the 159 built-in Column/DataFrame/Tensor/Interner/Arrow codegen tests. Fixture `user_struct_shadowing_a_prelude_type_name_keeps_its_own_layout`, stash-proven red. |
 
 </details>
 
