@@ -15571,6 +15571,133 @@ fn main() {
         );
     }
 
+    /// B-2026-08-08-2 — LeetCode #133 Clone Graph, the kata that motivated the
+    /// whole `frozen` entry, finally running its BFS across `par` branches.
+    ///
+    /// Every branch clones the SAME frozen source graph into its own private
+    /// structures and checksums the result against the source's. Three
+    /// container roles appear at once and they are deliberately not alike,
+    /// because conflating them is what made this row's original diagnosis
+    /// wrong:
+    ///
+    /// * `queue: Vec[Node]` — holds FROZEN SOURCE handles. Non-counting, no
+    ///   per-element drop (stage 3c).
+    /// * `visited: Map[i64, Node]` — holds the CLONES, which are ordinary
+    ///   owned nodes actively mutated through (`curr_clone.neighbors.push`).
+    ///   It needs nothing from `frozen` and must keep every count it takes.
+    /// * `work` / `seen` in the checksum — an ordinary traversal of the
+    ///   finished clone.
+    ///
+    /// So the leak surface is a MIXTURE, and that is the point: the frozen
+    /// container's drop must be skipped while the clone map's must not. A fix
+    /// that suppressed too broadly would leak the entire cloned graph in every
+    /// branch, which at this size is far above the `min_allocs` floor.
+    ///
+    /// THE GRAPH IS ACYCLIC, and that is a limit of the gate rather than of the
+    /// feature. LeetCode #133's real inputs have cycles, and a cyclic `shared
+    /// struct` graph leaks under Kara's non-atomic RC today with NO `frozen`
+    /// and no `par` involved — measured at 288 bytes / 8 allocations for a
+    /// 4-node cycle built and checksummed by itself, and unchanged by cloning
+    /// it. Filed separately as B-2026-08-08-4. Using a cyclic graph here would
+    /// make this test red for that unrelated reason and blind it to the leak it
+    /// exists to catch.
+    ///
+    /// The checksums are asserted EQUAL to the source's, not merely non-zero.
+    /// A traffic count cannot see a wrong answer, and a clone that silently
+    /// shared the source's nodes instead of copying them would still sum
+    /// correctly if only the values were checked — so the checksum walks
+    /// neighbours too.
+    #[test]
+    fn asan_kata133_clone_graph_bfs_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { val: i64, mut neighbors: Vec[Node] }
+
+fn clone_bfs(g: frozen Node) -> Node {
+    let mut visited: Map[i64, Node] = Map.new();
+    let mut queue: Vec[Node] = Vec.new();
+    let root_clone = Node { val: g.val, neighbors: Vec.new() };
+    let _ = visited.insert(g.val, root_clone);
+    queue.push(g);
+    let mut qi: i64 = 0;
+    while qi < queue.len() {
+        let curr = queue[qi as u64];
+        qi = qi + 1;
+        let curr_clone = visited.get(curr.val).unwrap();
+        for nb in curr.neighbors {
+            if let None = visited.get(nb.val) {
+                let fresh = Node { val: nb.val, neighbors: Vec.new() };
+                let _ = visited.insert(nb.val, fresh);
+                queue.push(nb);
+            }
+            let nb_clone = visited.get(nb.val).unwrap();
+            curr_clone.neighbors.push(nb_clone);
+        }
+    }
+    return root_clone;
+}
+
+fn checksum(root: Node) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    let mut work: Vec[Node] = Vec.new();
+    work.push(root);
+    let _ = seen.insert(root.val, 1);
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < work.len() {
+        let n = work[i as u64];
+        i = i + 1;
+        total = total + n.val * 100;
+        for nb in n.neighbors {
+            total = total + nb.val;
+            if let None = seen.get(nb.val) { let _ = seen.insert(nb.val, 1); work.push(nb); }
+        }
+    }
+    return total;
+}
+
+fn build(seed: i64) -> Node {
+    let a = Node { val: seed, neighbors: Vec.new() };
+    let b = Node { val: seed + 1, neighbors: Vec.new() };
+    let c = Node { val: seed + 2, neighbors: Vec.new() };
+    let d = Node { val: seed + 3, neighbors: Vec.new() };
+    b.neighbors.push(c);
+    a.neighbors.push(b); a.neighbors.push(d);
+    return a;
+}
+
+fn clone_and_sum(g: frozen Node, rounds: i64) -> i64 {
+    let mut i: i64 = 0;
+    let mut last: i64 = 0;
+    while i < rounds { last = checksum(clone_bfs(g)); i = i + 1; }
+    return last;
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    // Built twice on purpose: naming `root` before the `freeze` would break
+    // the uniqueness precondition the freeze site checks, and the expected
+    // checksum is a property of the SHAPE, not of this particular instance.
+    let expected = checksum(build(seed));
+    let root = build(seed);
+    let g = freeze root;
+    let (x, y) = par {
+        let x = clone_and_sum(g, 6);
+        let y = clone_and_sum(g, 6);
+        (x, y)
+    };
+    if x == expected { if y == expected { println("match"); } else { println("y"); } }
+    else { println("x"); }
+}
+"#,
+            &["match"],
+            "kata133_clone_graph_bfs_across_par_branches",
+            // 4 source nodes, plus a 4-node clone graph per round, 6 rounds x
+            // 2 branches, plus each round's visited map and worklist buffers.
+            200,
+        );
+    }
+
     /// B-2026-08-01-33 stage 3b step 2 — the shape the whole entry exists for,
     /// on a `mut`-bearing type: a RECURSIVE traversal IN A CALLEE, shared
     /// read-only across two `par` branches.

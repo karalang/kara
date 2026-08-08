@@ -1771,12 +1771,24 @@ impl<'a> super::TypeChecker<'a> {
         // sibling item is unaffected.
         let saved_fn_is_gpu = self.current_fn_is_gpu;
         self.current_fn_is_gpu = f.is_gpu;
+        // B-2026-08-08-2 — this function's `frozen` parameters, saved and
+        // restored on the same terms as the flag above so a nested item walk
+        // (an impl method, a trait default body) does not inherit them.
+        let saved_frozen_params = std::mem::replace(
+            &mut self.current_fn_frozen_params,
+            f.params
+                .iter()
+                .filter(|p| p.is_frozen)
+                .filter_map(|p| p.name().map(str::to_string))
+                .collect(),
+        );
         if f.body.final_expr.is_some() {
             self.check_block_against(&f.body, &return_type);
         } else {
             self.infer_block(&f.body);
         }
         self.current_fn_is_gpu = saved_fn_is_gpu;
+        self.current_fn_frozen_params = saved_frozen_params;
         if comptime_fn {
             self.comptime_depth -= 1;
         }

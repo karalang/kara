@@ -849,6 +849,43 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-08-08-2 — strip the parser's `Ref` from a `frozen` PARAMETER used
+    /// as a container element.
+    ///
+    /// `frozen T` is spelled `ref T` after parsing (see
+    /// `current_fn_frozen_params` for why), so `work.push(root)` with `root:
+    /// frozen Node` reports `expected 'Node', found 'ref Node'` — a mismatch
+    /// against a type the author did not write, at a site the OWNERSHIP pass
+    /// already admits (B-2026-08-01-33 stage 3c proves the container is
+    /// contained, uniformly frozen, and outlived by the element's owner).
+    ///
+    /// DELIBERATELY NOT A GENERAL COERCION. It fires only when the argument is
+    /// a bare identifier naming a `frozen` parameter of the function being
+    /// checked, and only strips one `Ref` whose inner type matches what the
+    /// slot wants. An ordinary `ref` parameter is untouched: storing a plain
+    /// borrow in a container is the double-free `types_compatible`'s `Ref` rule
+    /// exists to stop (B-2026-07-18-31), and nothing here relaxes it.
+    ///
+    /// Admitting the TYPE is not admitting the STORE. Every position this
+    /// unblocks is still judged by the frozen-escape walk, which reports the
+    /// ones it does not model — a `Map` insert and a `VecDeque` push both still
+    /// fail there, and this only stops them failing twice with one of the two
+    /// messages naming a type nobody wrote.
+    pub(super) fn deref_frozen_param_arg(&self, arg: &Expr, arg_ty: Type, slot: &Type) -> Type {
+        let ExprKind::Identifier(name) = &arg.kind else {
+            return arg_ty;
+        };
+        if !self.current_fn_frozen_params.contains(name.as_str()) {
+            return arg_ty;
+        }
+        match &arg_ty {
+            Type::Ref(inner) if crate::typechecker::types_compatible(inner, slot) => {
+                (**inner).clone()
+            }
+            _ => arg_ty,
+        }
+    }
+
     pub(super) fn infer_method_call(
         &mut self,
         object: &Expr,
@@ -4025,6 +4062,9 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);
+                // B-2026-08-08-2 — a `frozen` parameter reads as `ref T`; the
+                // ownership pass decides whether this store is legal.
+                let arg_ty = self.deref_frozen_param_arg(&args[0].value, arg_ty, &elem);
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise

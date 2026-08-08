@@ -35685,3 +35685,48 @@ fn unsigned_suffixed_out_of_range_is_still_rejected() {
         );
     }
 }
+
+/// B-2026-08-08-2 — a `frozen` PARAMETER may be stored as a `Vec` element; an
+/// ordinary `ref` parameter may not.
+///
+/// `frozen T` lowers to `ref T` in the parser, deliberately — that spelling is
+/// what gives codegen the borrow calling convention the mode exists for. The
+/// cost was that `work.push(root)` with `root: frozen Node` reported `expected
+/// 'Node', found 'ref Node'`: a mismatch against a type the author never wrote,
+/// at a site the ownership pass already admits. That was the last thing between
+/// LeetCode #133 and running its traversal across `par` branches.
+///
+/// THE SECOND ROW IS THE LOAD-BEARING ONE. Relaxing `ref T` → `T` in general is
+/// a double-free — the container's drop and the lender both free the same value
+/// — which is exactly what `types_compatible`'s `Ref` rule stops
+/// (B-2026-07-18-31, masked at `-O2` and live under `-O0`). The relaxation
+/// keys on the parameter being `frozen`, so an ordinary borrow is untouched,
+/// and this row is what proves the difference is real rather than asserted.
+#[test]
+fn a_frozen_param_is_storable_as_a_vec_element_but_a_ref_param_is_not() {
+    let prelude = "shared struct Node { val: i64, mut kids: Vec[Node] }\n";
+    let body = |mode: &str| {
+        format!(
+            "{prelude}fn f(n: {mode} Node) -> i64 {{\n\
+                 let mut work: Vec[Node] = Vec.new();\n\
+                 work.push(n);\n\
+                 work.len()\n\
+             }}\n\
+             fn main() {{ println(\"x\"); }}\n"
+        )
+    };
+
+    typecheck_ok(&body("frozen"));
+
+    let errors = typecheck_errors(&body("ref"));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'Node', found 'ref Node'")),
+        "an ordinary `ref` parameter must STILL be refused as a container \
+         element — admitting it lets the container's drop and the lender free \
+         the same value. Only `frozen` carries the escape check that pays for \
+         the store; got {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}

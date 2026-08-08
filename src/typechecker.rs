@@ -1624,6 +1624,23 @@ pub struct TypeChecker<'a> {
     /// reject closures that capture host (non-`GpuSafe`) state. Saved/
     /// restored around each function body in `check_function`.
     pub(super) current_fn_is_gpu: bool,
+    /// B-2026-08-08-2 — the `frozen` PARAMETER names of the function being
+    /// checked.
+    ///
+    /// `frozen T` lowers to `ref T` in the parser, deliberately: that is what
+    /// buys the borrow calling convention codegen needs (measured 0/0 refcount
+    /// traffic, and it stays 0/0 with the rc-elide pass off, so the zero is the
+    /// convention rather than an optimisation). The cost is that a frozen
+    /// parameter reads as `ref Node` where the surface says `Node`, and a
+    /// container store then fails on a mismatch the author never wrote.
+    ///
+    /// Consulted ONLY to strip that one `Ref` at a store site whose ownership
+    /// side already admits the frozen handle. It is not a general `ref T` → `T`
+    /// coercion: for an ordinary `ref` parameter that relaxation is a
+    /// double-free (B-2026-07-18-31, the rule `types_compatible` still
+    /// enforces), and it stays enforced because this set contains only
+    /// parameters the escape checker governs.
+    pub(super) current_fn_frozen_params: std::collections::HashSet<String>,
     /// True when type-checking inside a defer/errdefer block.
     pub(super) in_defer: bool,
     /// B-2026-07-02-7: span of a suffixed integer literal that is the direct
@@ -1940,6 +1957,7 @@ impl<'a> TypeChecker<'a> {
             current_return_impl_trait: None,
             return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
+            current_fn_frozen_params: std::collections::HashSet::new(),
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),
             current_self_type: None,
