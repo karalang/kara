@@ -11160,3 +11160,147 @@ fn element_assign_into_a_wholly_moved_aggregate_is_itself_an_error() {
         errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
+
+/// B-2026-08-01-33 stage 3c (B-2026-08-07-23) — a `frozen` handle may be STORED
+/// in a local `Vec`, which is what makes ITERATIVE traversal reachable.
+///
+/// Before this, `frozen` admitted recursion and nothing else: the escape
+/// whitelist had no position for a container store, so a worklist refused
+/// `work.push(g)` and every BFS / explicit-stack DFS was outside the mechanism.
+/// That is what actually blocked kata #133 — its traversal is iterative, and
+/// the recursive fixture that passed was measuring the wrong axis.
+///
+/// The accepted shape is the INDEX-CURSOR BFS, which needs no `pop`: a method
+/// RETURN is a value and not a place, so a non-counting handle coming back
+/// through one has nothing this pass can track. `work[i]` is an `Index`, which
+/// the place walk already models.
+///
+/// The reject rows are the whole safety argument, and each closes a distinct
+/// way the container could outlive or over-share what it holds. They are not
+/// variations on one theme:
+///
+/// * ESCAPE — the container leaves the frame, so its non-counting elements do
+///   too. This is the one that makes the analysis "every use is whitelisted"
+///   rather than "the pushes look right".
+/// * MIXED — one ordinary push alongside the frozen ones. The scope-exit drop
+///   is all-or-nothing, so skipping it would leak the counted element and
+///   running it would over-release the frozen ones. Neither is available, so
+///   the container is refused outright.
+/// * LIFETIME — the container is declared in a block ENCLOSING the `freeze`,
+///   so it outlives the local whose refcount its elements are skipping. This
+///   one is invisible in the parameter-rooted shape (a caller's value outlives
+///   the whole call) and is exactly what a `freeze` statement adds.
+/// * CROSS-BRANCH — the container itself is declared outside a `par` and
+///   pushed to from inside, which is two threads writing one `{ptr,len,cap}`.
+///   A container declared INSIDE a branch is fine and is the accept row below;
+///   the distinction is positional, and collapsing it to "no containers near
+///   `par`" would refuse the only shape the feature exists for.
+/// * POP — a retrieval whose result is a value, per the note above.
+#[test]
+fn a_frozen_handle_can_be_stored_in_a_local_vec_worklist() {
+    let prelude = "shared struct Node { val: i64, mut kids: Vec[Node] }\n\
+                   fn build() -> Node { let r = Node { val: 1, kids: [] }; r }\n";
+    // The measured traversal: push, index-read, project, push again.
+    let walk = "let mut work: Vec[Node] = Vec.new();\n\
+                work.push(g);\n\
+                let mut i: i64 = 0;\n\
+                let mut total: i64 = 0;\n\
+                while i < work.len() {\n\
+                    let n = work[i as u64];\n\
+                    total = total + n.val;\n\
+                    for k in n.kids { work.push(k); }\n\
+                    i = i + 1;\n\
+                }\n";
+
+    let accept: &[(&str, String)] = &[
+        (
+            "the index-cursor BFS over a frozen graph",
+            format!("fn f() -> i64 {{ let root = build(); let g = freeze root; {walk} total }}"),
+        ),
+        (
+            // The point of the whole mechanism: two branches, two private
+            // worklists, one shared graph, and no refcount traffic anywhere.
+            "a per-branch worklist inside a `par` block",
+            format!(
+                "fn f() -> i64 {{ let root = build(); let g = freeze root;\n\
+                 let (a, b) = par {{\n\
+                     let a = {{ {walk} total }};\n\
+                     let b = {{ let mut w2: Vec[Node] = Vec.new(); w2.push(g); w2.len() }};\n\
+                     (a, b)\n\
+                 }};\n\
+                 a + b }}"
+            ),
+        ),
+        (
+            "a worklist declared INSIDE the freeze's own block",
+            format!(
+                "fn f() -> i64 {{ let mut out: i64 = 0;\n\
+                 {{ let root = build(); let g = freeze root; {walk} out = total; }}\n\
+                 out }}"
+            ),
+        ),
+    ];
+    for (label, body) in accept {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[3c accept] {label}");
+        ownership_ok(&src);
+    }
+
+    let reject: &[(&str, String)] = &[
+        (
+            "the container escapes by being returned",
+            format!(
+                "fn f() -> Vec[Node] {{ let root = build(); let g = freeze root; \
+                 {walk} let _ = total; work }}"
+            ),
+        ),
+        (
+            "the container escapes into a call",
+            format!(
+                "fn take(v: Vec[Node]) -> i64 {{ v.len() }}\n\
+                 fn f() -> i64 {{ let root = build(); let g = freeze root; {walk} \
+                 take(work) + total }}"
+            ),
+        ),
+        (
+            "a MIXED container — one ordinary push beside the frozen ones",
+            format!(
+                "fn f() -> i64 {{ let root = build(); let g = freeze root; {walk} \
+                 let extra = build(); work.push(extra); total }}"
+            ),
+        ),
+        (
+            "the container OUTLIVES the freeze source's block",
+            "fn f() -> i64 { let mut work: Vec[Node] = Vec.new();\n\
+             { let root = build(); let g = freeze root; work.push(g); }\n\
+             work.len() }"
+                .to_string(),
+        ),
+        (
+            "a container declared OUTSIDE a `par` and pushed to from inside",
+            "fn f() -> i64 { let root = build(); let g = freeze root;\n\
+             let mut work: Vec[Node] = Vec.new();\n\
+             let (a, b) = par { let a = { work.push(g); 1 }; let b = 2; (a, b) };\n\
+             a + b }"
+                .to_string(),
+        ),
+        (
+            "retrieval through `pop`, whose result is a value and not a place",
+            "fn f() -> i64 { let root = build(); let g = freeze root;\n\
+             let mut work: Vec[Node] = Vec.new(); work.push(g);\n\
+             let popped = work.pop(); work.len() }"
+                .to_string(),
+        ),
+    ];
+    for (label, body) in reject {
+        let src = format!("{prelude}{body}\nfn main() {{ println(\"x\"); }}\n");
+        eprintln!("[3c reject] {label}");
+        let errors = ownership_errors(&src);
+        assert!(
+            !errors.is_empty(),
+            "`{label}` must be refused — admitting it would let a non-counting \
+             handle outlive the value whose refcount it skips, or leave the \
+             container's all-or-nothing element drop wrong for half its contents"
+        );
+    }
+}

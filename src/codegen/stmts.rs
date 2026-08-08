@@ -5479,7 +5479,34 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // heap-env (or null-env) closure this Vec owns.
                                 let is_heap_env_vec =
                                     self.heap_env_vec_owners.contains(var_name.as_str());
-                                if is_heap_env_vec {
+                                // B-2026-08-01-33 stage 3c — a FROZEN-ELEMENT
+                                // container. Every element is a non-counting
+                                // alias of something the ownership pass proved
+                                // outlives this binding, so the container never
+                                // took a count and must not release one: the
+                                // per-element `__karac_vec_elem_rc_dec_*` drain
+                                // is skipped and only the `{ptr,len,cap}`
+                                // buffer is freed. This is one half of a PAIR —
+                                // the push-site retain is suppressed by the
+                                // same name set (`vec_method.rs`), and either
+                                // suppression alone is a bug: without the drop
+                                // skip the elements are over-released
+                                // (use-after-free), and without the push skip
+                                // the container leaks one ref per element AND
+                                // keeps the non-atomic refcount write that
+                                // `frozen` exists to remove from `par`
+                                // branches.
+                                //
+                                // Checked FIRST, so a frozen container is never
+                                // routed to the aggregate drain by an element
+                                // type that also matches one of the arms below.
+                                if self
+                                    .frozen_element_containers
+                                    .contains(&crate::resolver::SpanKey::from_span(&value.span))
+                                {
+                                    self.frozen_elem_vec_owners.insert(var_name.to_string());
+                                    self.track_vec_var(slot_ptr, Some(elem_ty));
+                                } else if is_heap_env_vec {
                                     let drop_fn = self.emit_vec_elem_closure_env_drop_fn();
                                     self.track_vec_of_aggs_var(slot_ptr, elem_ty, drop_fn);
                                 } else if is_tensor_elem {

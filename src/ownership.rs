@@ -869,6 +869,20 @@ pub struct OwnershipCheckResult {
     /// branches this mode exists to admit. Empty for every program with no
     /// `frozen` parameter, which is every program that does not use the mode.
     pub frozen_alias_bindings: HashSet<SpanKey>,
+    /// B-2026-08-01-33 mechanism 3, stage 3c — the INITIALIZER span of every
+    /// `let mut c: Vec[S] = …` the frozen-escape walk proved to be a
+    /// FROZEN-ELEMENT CONTAINER: a local whose every element is a non-counting
+    /// alias of something that outlives it. Codegen must do two things for such
+    /// a binding, and they are a pair — either alone is a bug:
+    ///
+    /// * skip the retain at every `c.push(x)`, because that retain is a
+    ///   non-atomic write to a SHARED refcount header and a `par` branch doing
+    ///   it is exactly the race `frozen` removes;
+    /// * skip the per-element release in the scope-exit drop, because the
+    ///   container never took those counts. Its buffer is still freed.
+    ///
+    /// Empty for every program with no `freeze` and no `frozen` parameter.
+    pub frozen_element_containers: HashSet<SpanKey>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -1068,6 +1082,11 @@ pub struct OwnershipChecker<'a> {
     /// Accumulated across functions (spans are unique program-wide) and
     /// surfaced via `OwnershipCheckResult::frozen_alias_bindings`.
     pub(crate) frozen_alias_bindings: HashSet<SpanKey>,
+    /// Stage 3c — initializer spans of the `let`s proved to be frozen-element
+    /// containers. Accumulated across functions (spans are unique
+    /// program-wide) and surfaced via
+    /// `OwnershipCheckResult::frozen_element_containers`.
+    pub(crate) frozen_element_containers: HashSet<SpanKey>,
     /// Type name of each binding in scope for the current function.
     /// Used so RC trigger sites can look up `@no_rc` on the type.
     pub(crate) binding_type_names: HashMap<String, String>,
@@ -1307,6 +1326,7 @@ impl<'a> OwnershipChecker<'a> {
             error_fix_diffs: HashMap::new(),
             atomic_promoted_types: std::collections::HashSet::new(),
             frozen_alias_bindings: HashSet::new(),
+            frozen_element_containers: HashSet::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
             immutable_lets: HashMap::new(),
@@ -1451,6 +1471,7 @@ impl<'a> OwnershipChecker<'a> {
             error_fix_diffs: self.error_fix_diffs,
             atomic_promoted_types: self.atomic_promoted_types,
             frozen_alias_bindings: self.frozen_alias_bindings,
+            frozen_element_containers: self.frozen_element_containers,
         }
     }
 

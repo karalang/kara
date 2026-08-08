@@ -3635,6 +3635,18 @@ pub(super) struct Codegen<'ctx> {
     /// caller's value stays the sole owner. Empty unless the program uses the
     /// `frozen` mode.
     pub(crate) frozen_alias_bindings: HashSet<SpanKey>,
+    /// B-2026-08-01-33 mechanism 3, stage 3c — initializer spans of the `let`s
+    /// the ownership pass proved to be FROZEN-ELEMENT CONTAINERS. A hit at a
+    /// `let` means the binding's name joins `frozen_elem_vec_owners`, which
+    /// drives two suppressions that are a matched PAIR: no retain at
+    /// `c.push(x)`, and no per-element release in the scope-exit drop (the
+    /// buffer is still freed). Empty unless the program uses the `frozen` mode.
+    pub(crate) frozen_element_containers: HashSet<SpanKey>,
+    /// Stage 3c, per function — the NAMES of the containers above, resolved at
+    /// each `let` and consulted at the push site and the cleanup registration.
+    /// Reset per function, because the hint set is span-keyed and
+    /// program-wide while these names are not unique across functions.
+    pub(crate) frozen_elem_vec_owners: HashSet<String>,
     /// Per-function parallelization decisions populated from `ConcurrencyAnalysis`.
     /// Function name → `FunctionConcurrency` (parallel groups + total stmt count).
     /// Threaded in by `load_concurrency_analysis`; consumed in slice 2 by the
@@ -8081,6 +8093,8 @@ impl<'ctx> Codegen<'ctx> {
             par_capture_modes: HashMap::new(),
             atomic_promoted_types: HashSet::new(),
             frozen_alias_bindings: HashSet::new(),
+            frozen_element_containers: HashSet::new(),
+            frozen_elem_vec_owners: HashSet::new(),
             concurrency_decisions: HashMap::new(),
             current_fn_name: String::new(),
             track_caller_fns: std::collections::HashSet::new(),
@@ -8258,6 +8272,10 @@ impl<'ctx> Codegen<'ctx> {
         // shared arm; empty unless the program uses the `frozen` mode.
         self.frozen_alias_bindings
             .extend(ow.frozen_alias_bindings.iter().cloned());
+        // B-2026-08-01-33 mechanism 3, stage 3c — the frozen-element container
+        // `let`s. See the field's doc for why its two consumers are a pair.
+        self.frozen_element_containers
+            .extend(ow.frozen_element_containers.iter().cloned());
         // RC-elide-ref (env `KARAC_RC_ELIDE_REF_PARAMS`): consume the ownership
         // pass's *sound* elidability set — `Ref` params that no call site
         // passes a fresh rvalue and whose function never escapes as a value

@@ -15486,6 +15486,91 @@ fn main() {
         );
     }
 
+    /// B-2026-08-01-33 stage 3c (B-2026-08-07-23) — the ITERATIVE traversal, on
+    /// the shape that motivated the whole entry: a per-branch `Vec` worklist
+    /// holding non-counting handles into one shared graph.
+    ///
+    /// This is the leak/UAF gate for a suppression PAIR, and the pair is why
+    /// the sanitizer is the right instrument rather than a traffic count:
+    ///
+    /// * if the push retain were skipped but the element drain kept, the
+    ///   container would release counts it never took and ASAN would report a
+    ///   use-after-free on the second branch's read;
+    /// * if the drain were skipped but the retain kept, every element would
+    ///   leak one ref and the nodes would never be freed — invisible to ASAN
+    ///   on macOS and caught only by LSan, which is why the authoritative
+    ///   answer is the Linux `memory-sanitizer` job.
+    ///
+    /// The graph is deep enough (63 nodes) and the rounds many enough that a
+    /// single stranded ref per element is far above the `min_allocs` floor.
+    /// Each branch suffixes its own bindings because the `par` capture gate is
+    /// name-keyed and two branches declaring `let n = …` of a `shared` type
+    /// read as one binding reachable from both.
+    #[test]
+    fn asan_frozen_vec_worklist_traversal_across_par_branches_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct Node { val: i64, mut kids: Vec[Node] }
+
+fn build(depth: i64, seed: i64) -> Node {
+    if depth <= 0 { return Node { val: seed, kids: [] }; }
+    let a = build(depth - 1, seed);
+    let b = build(depth - 1, seed);
+    return Node { val: seed, kids: [a, b] };
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let root = build(5, seed);
+    let g = freeze root;
+    let (x, y) = par {
+        let x = {
+            let mut rounds: i64 = 0;
+            let mut acc: i64 = 0;
+            while rounds < 5 {
+                let mut worka: Vec[Node] = Vec.new();
+                worka.push(g);
+                let mut ia: i64 = 0;
+                while ia < worka.len() {
+                    let na = worka[ia as u64];
+                    acc = acc + na.val;
+                    for ka in na.kids { worka.push(ka); }
+                    ia = ia + 1;
+                }
+                rounds = rounds + 1;
+            }
+            acc
+        };
+        let y = {
+            let mut roundsb: i64 = 0;
+            let mut accb: i64 = 0;
+            while roundsb < 5 {
+                let mut workb: Vec[Node] = Vec.new();
+                workb.push(g);
+                let mut ib: i64 = 0;
+                while ib < workb.len() {
+                    let nb = workb[ib as u64];
+                    accb = accb + nb.val;
+                    for kb in nb.kids { workb.push(kb); }
+                    ib = ib + 1;
+                }
+                roundsb = roundsb + 1;
+            }
+            accb
+        };
+        (x, y)
+    };
+    println(x + y);
+}
+"#,
+            // 63 nodes, each val==1, 5 rounds, 2 branches.
+            &["630"],
+            "frozen_vec_worklist_traversal_across_par_branches",
+            // The 63-node source graph plus each round's worklist buffer.
+            100,
+        );
+    }
+
     /// B-2026-08-01-33 stage 3b step 2 — the shape the whole entry exists for,
     /// on a `mut`-bearing type: a RECURSIVE traversal IN A CALLEE, shared
     /// read-only across two `par` branches.

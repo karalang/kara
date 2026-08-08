@@ -2341,6 +2341,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.vec_index_borrow_spans =
             crate::codegen::borrow_elision::compute_vec_index_borrow_spans(&func.body, &heap_elem);
 
+        // B-2026-08-01-33 stage 3c — the frozen-element container NAMES are
+        // function-scoped and the hint that fills them is span-keyed and
+        // program-wide, so this must be cleared per function or a container in
+        // one function would silently suppress the push retain for a
+        // same-named ordinary `Vec` in the next. Refilled at each `let` whose
+        // initializer span is in `frozen_element_containers`.
+        self.frozen_elem_vec_owners.clear();
+
         // Vec-length pins (bce_length_pin.rs): the rolling-DP bounds-check
         // elision. Recompute per function (both are function-scoped);
         // `vec_len_pins` starts empty and each pin activates when `compile_while`

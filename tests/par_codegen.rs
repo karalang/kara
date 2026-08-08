@@ -10550,6 +10550,147 @@ fn main() {
             assert_eq!(out, "len 2 v0 30 v1 40\nend\n", "got {out:?}");
         }
     }
+
+    /// B-2026-08-01-33 stage 3c (B-2026-08-07-23) — a frozen-element `Vec`
+    /// worklist emits NO refcount traffic, and its scope-exit drop releases the
+    /// BUFFER without touching the elements.
+    ///
+    /// The two suppressions are a matched pair and the assertions below check
+    /// both, because either alone is a memory bug rather than a missed
+    /// optimisation:
+    ///
+    /// * push retain only — the container never releases, so every element
+    ///   leaks one ref;
+    /// * element drain only — the container releases counts it never took, so
+    ///   the nodes are freed while the graph still points at them.
+    ///
+    /// Measured against the IDENTICAL traversal over an unfrozen root, so the
+    /// numbers are a difference rather than an absolute nobody can check. That
+    /// baseline is what makes the test fail if a future change starts retaining
+    /// again: the ordinary column moving is a different signal from the frozen
+    /// column moving.
+    ///
+    /// Paired with an EXECUTED value, per this family's rule. A traffic count
+    /// cannot see a wrong answer — the suppression commit that exposed
+    /// B-2026-08-05-10 shipped a passing count over a miscompile — so the
+    /// `par` row runs two branches over one shared graph and checks the sums.
+    #[test]
+    fn frozen_element_vec_worklist_emits_no_refcount_traffic() {
+        // Every binding carries a per-branch SUFFIX. The `par` capture gate
+        // is keyed on binding NAMES, so two branches each declaring their own
+        // `let n = …` of a `shared` type read as one binding reachable from
+        // both and are refused before this test's subject is reached.
+        fn walk_body(seed: &str, sfx: &str) -> String {
+            format!(
+                "let mut work{sfx}: Vec[Node] = Vec.new();\n\
+                 work{sfx}.push({seed});\n\
+                 let mut i{sfx}: i64 = 0;\n\
+                 let mut total{sfx}: i64 = 0;\n\
+                 while i{sfx} < work{sfx}.len() {{\n\
+                     let n{sfx} = work{sfx}[i{sfx} as u64];\n\
+                     total{sfx} = total{sfx} + n{sfx}.val;\n\
+                     for k{sfx} in n{sfx}.kids {{ work{sfx}.push(k{sfx}); }}\n\
+                     i{sfx} = i{sfx} + 1;\n\
+                 }}\n"
+            )
+        }
+        let prelude = "shared struct Node { val: i64, mut kids: Vec[Node] }\n\
+                       fn build() -> Node {\n\
+                           let r = Node { val: 1, kids: [] };\n\
+                           let b = Node { val: 2, kids: [] };\n\
+                           let c = Node { val: 4, kids: [] };\n\
+                           b.kids.push(c);\n\
+                           r.kids.push(b);\n\
+                           r\n\
+                       }\n";
+        let program = |head: &str, seed: &str| {
+            format!(
+                "{prelude}fn walk(src: Node) -> i64 {{ {head}{} total }}\n\
+                 fn main() {{ println(f\"{{walk(build())}}\"); }}\n",
+                walk_body(seed, "")
+            )
+        };
+
+        // Counted on the SSA definitions, not on substring hits: `rc_inc`
+        // appears twice per retain (the value name and the store operand).
+        fn traffic(ir: &str, func: &str) -> (usize, usize, usize) {
+            let mut inside = false;
+            let (mut inc, mut dec, mut drain) = (0, 0, 0);
+            for line in ir.lines() {
+                if line.starts_with("define ") {
+                    inside = line.contains(&format!("@{func}("));
+                } else if line == "}" {
+                    inside = false;
+                } else if inside {
+                    inc += line.matches("= add i64 %rc").count();
+                    dec += line.matches("= sub i64 %rc").count();
+                    drain += line.matches("call void @__karac_vec_elem_rc_dec").count();
+                }
+            }
+            (inc, dec, drain)
+        }
+
+        let plain = traffic(&ir_for_analyzed(&program("", "src")), "walk");
+        let frozen = traffic(
+            &ir_for_analyzed(&program("let g = freeze src;\n", "g")),
+            "walk",
+        );
+
+        // The unfrozen baseline: the param receive-inc, the push transfer, the
+        // element read's clone-inc, the loop push — plus the per-element drain.
+        assert!(
+            plain.0 >= 4 && plain.2 == 1,
+            "the unfrozen traversal is the BASELINE this measurement is a \
+             difference from — if it stopped retaining, the frozen column \
+             below would prove nothing; got inc={} dec={} drain={}",
+            plain.0,
+            plain.1,
+            plain.2
+        );
+        // The frozen traversal keeps exactly one pair: the owned `src`
+        // parameter's own receive-inc and scope-exit drop, which is outside
+        // the frozen region and must NOT be suppressed.
+        assert_eq!(
+            (frozen.0, frozen.1, frozen.2),
+            (1, 1, 0),
+            "a frozen-element worklist must emit no push retain and no \
+             per-element release — the one surviving pair is the owned `src` \
+             parameter's own, which this feature does not touch"
+        );
+
+        // The buffer is still freed. Skipping THAT would be a plain leak, and
+        // it is the one thing the container does still own.
+        let frozen_ir = ir_for_analyzed(&program("let g = freeze src;\n", "g"));
+        assert!(
+            frozen_ir.contains("karac_free_buf"),
+            "the container owns its `{{ptr,len,cap}}` buffer even when it owns \
+             none of its elements; that free must survive"
+        );
+
+        // ── The value, not just the shape ──
+        let out = run_program(&format!(
+            "{prelude}fn main() {{\n\
+                 let root = build();\n\
+                 let g = freeze root;\n\
+                 let (a, b) = par {{\n\
+                     let a = {{ {} totala }};\n\
+                     let b = {{ {} totalb }};\n\
+                     (a, b)\n\
+                 }};\n\
+                 println(f\"{{a}},{{b}}\");\n\
+             }}\n",
+            walk_body("g", "a"),
+            walk_body("g", "b"),
+        ));
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "7,7",
+                "two `par` branches must each walk the whole shared graph \
+                 (1+2+4) through their own frozen-element worklist"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

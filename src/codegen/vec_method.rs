@@ -2560,7 +2560,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // → macOS `mfm_free.cold.4` spin / abort). Zero the
                 // source's `cap` so its cleanup's `cap > 0` guard skips
                 // — the container becomes the unique owner.
-                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                //
+                // B-2026-08-01-33 stage 3c — a FROZEN-ELEMENT container takes
+                // no count for what it stores, so the shared-struct transfer
+                // inc this call normally emits must not fire. That inc is a
+                // plain non-atomic load/add/store against a SHARED refcount
+                // header; a `par` branch running this push would race every
+                // other branch on it, which is exactly the hazard `frozen`
+                // removes (B-2026-07-28-13's SIGSEGV came from that write).
+                //
+                // The `_ex(.., false)` form still performs every OTHER
+                // suppression — moved-out caps, container bodies, map handles —
+                // so this narrows the change to the one inc rather than
+                // skipping the call. Paired with the scope-exit element-drain
+                // skip in `stmts.rs`; neither is correct alone.
+                let frozen_elem_target = self.frozen_elem_vec_owners.contains(var_name);
+                self.suppress_source_vec_cleanup_for_arg_ex(&args[0].value, !frozen_elem_target);
                 // Container-bodies twin of the cap-zero above: a bare-
                 // identifier arg moves its container value in, so retract
                 // its `__karac_dropelems_*` action or the body fires over
@@ -2664,7 +2679,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // inc, and the source container's drop would otherwise free the
                 // still-referenced node (use-after-free). Fresh constructions /
                 // call move-outs are not place exprs and are skipped.
-                self.share_shared_struct_ref_for_arg(&args[0].value, elem_val);
+                // Stage 3c: the aliasing-read sibling of the transfer inc
+                // suppressed above (`work.push(g.kids[j])` rather than
+                // `work.push(g)`). Both retain channels into a frozen-element
+                // container have to close, or the container ends up counting
+                // some elements and not others and its all-or-nothing drop
+                // cannot be right for both.
+                if !frozen_elem_target {
+                    self.share_shared_struct_ref_for_arg(&args[0].value, elem_val);
+                }
 
                 // Load current vec fields.
                 let data_ptr_ptr = self

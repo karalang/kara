@@ -325,6 +325,64 @@ struct Cx<'a, 't> {
     /// closed or the check proves nothing: one catches the alias made from the
     /// source, the other the source made from an alias.
     place_bound: HashSet<&'a str>,
+
+    // ── Stage 3c: frozen-element CONTAINERS (B-2026-08-07-23) ───────
+    /// Containers ASSUMED to hold frozen elements for this round, mapped to
+    /// the container's own type (`Vec[Node]`), from which [`element_type`]
+    /// answers what `c[i]` is. See [`collect_frozen_escapes`] for why the
+    /// fixpoint runs downward from "all candidates" rather than upward from
+    /// none.
+    ///
+    /// A container in here is NOT itself a frozen place — `c` is an ordinary
+    /// mutable local and `c.push(..)` / `c.len()` are ordinary calls. Only
+    /// `c[i]` is frozen, because only the ELEMENTS are non-counting aliases.
+    frozen_containers: HashMap<&'a str, Type>,
+    /// Every `let` this walk saw whose annotation names `Vec[S]` for a
+    /// non-generic `shared struct` S — the candidate set the fixpoint starts
+    /// from, discovered by the walk itself rather than by a second pre-pass.
+    container_candidates: HashMap<&'a str, Type>,
+    /// Candidates disqualified during this round, for any of the three
+    /// reasons: an unwhitelisted use, a non-frozen (MIXED) push, or a push
+    /// whose element owner does not outlive the container.
+    container_rejects: HashSet<&'a str>,
+    /// Names bound by a `let` more than once in this function. Shadowing would
+    /// make this name-keyed analysis conflate two different containers, so a
+    /// rebound name is never a container.
+    container_rebound: HashSet<&'a str>,
+    /// The `let` initializer span of each candidate — the codegen key, chosen
+    /// to match `frozen_alias_bindings` (the span codegen already holds at the
+    /// decision point).
+    container_spans: HashMap<&'a str, Span>,
+    /// Block path of each candidate's `let`, for the lifetime test below.
+    container_path: HashMap<&'a str, Vec<usize>>,
+    /// Block path of the OWNER whose refcount each frozen name is skipping. A
+    /// `frozen` parameter / `frozen self` is owned by the CALLER, so its path
+    /// is empty — a prefix of every path, i.e. it outlives everything. A
+    /// `freeze` statement's source is a local, so it is owned by the block it
+    /// was bound in, and a derived alias inherits its root's owner.
+    ///
+    /// This is what makes a container store safe: a container may only hold a
+    /// non-counting alias whose owner's block ENCLOSES the container's, or the
+    /// owner dies first and every element dangles.
+    frozen_owner_path: HashMap<&'a str, Vec<usize>>,
+    /// Path of the block being walked, as a chain of unique block ids. Prefix
+    /// containment on this is exactly "encloses".
+    block_path: Vec<usize>,
+    next_block_id: usize,
+    /// Block path of the innermost enclosing closure body, `defer` /
+    /// `errdefer` body, or `par` / `seq` block — the regions a container
+    /// declared OUTSIDE may not be touched from.
+    ///
+    /// Positional rather than a bare flag, and that distinction is the whole
+    /// feature rather than a refinement of it: a worklist declared INSIDE a
+    /// `par` branch is branch-local and is exactly the shape `frozen` exists
+    /// to admit, while one declared outside and pushed to from two branches is
+    /// two threads writing one `{ptr,len,cap}`. A flag cannot tell those
+    /// apart and refusing both would leave the mechanism with nothing to do.
+    ///
+    /// Only the innermost region is tracked, which loses nothing: a container
+    /// declared inside it is inside every enclosing one too.
+    restricted_region: Option<Vec<usize>>,
 }
 
 impl<'a> Cx<'a, '_> {
@@ -345,11 +403,81 @@ impl<'a> Cx<'a, '_> {
             // parse, check clean, and protect nothing. Found by probing a
             // closure capture of `self`, which passed when it must report.
             ExprKind::SelfValue => self.frozen.get_key_value("self").map(|(k, _)| *k),
+            // Stage 3c — an ELEMENT of a proved frozen-element container is a
+            // frozen place rooted at the container's name. The container
+            // itself is NOT (the `Identifier` arm above does not consult
+            // `frozen_containers`), which is the whole distinction: `c` is an
+            // ordinary mutable local that may be pushed to and measured, and
+            // only what comes OUT of it is non-counting.
+            ExprKind::Index { object, .. }
+                if matches!(&object.kind, ExprKind::Identifier(n)
+                    if self.frozen_containers.contains_key(n.as_str())) =>
+            {
+                let ExprKind::Identifier(n) = &object.kind else {
+                    unreachable!("guarded above")
+                };
+                self.frozen_containers
+                    .get_key_value(n.as_str())
+                    .map(|(k, _)| *k)
+            }
             ExprKind::FieldAccess { object, .. }
             | ExprKind::Index { object, .. }
             | ExprKind::TupleIndex { object, .. } => self.frozen_place_root(object),
             _ => None,
         }
+    }
+
+    /// The container a `c.push(x)` / `c.len()` receiver names, when `c` is a
+    /// candidate frozen-element container. Returns the interned name so the
+    /// caller can record against it.
+    fn container_receiver(&self, object: &Expr) -> Option<&'a str> {
+        let ExprKind::Identifier(n) = &object.kind else {
+            return None;
+        };
+        self.container_candidates
+            .get_key_value(n.as_str())
+            .map(|(k, _)| *k)
+    }
+
+    /// Whether the owner of frozen place root `root` outlives container `c`.
+    ///
+    /// Both are block paths, so "outlives" is exactly "the owner's block
+    /// encloses the container's" — prefix containment. A `frozen` parameter's
+    /// owner path is empty and therefore encloses every block, which is why the
+    /// parameter-rooted shape needs no analysis at all.
+    ///
+    /// Fail-closed: an owner this pass did not record is treated as born at the
+    /// deepest point it could be, so the store is refused.
+    fn owner_outlives_container(&self, root: &str, c: &str) -> bool {
+        let (Some(owner), Some(cont)) =
+            (self.frozen_owner_path.get(root), self.container_path.get(c))
+        else {
+            return false;
+        };
+        owner.len() <= cont.len() && cont[..owner.len()] == owner[..]
+    }
+
+    /// Whether container `c` may be touched at the point being walked: either
+    /// there is no restricted region in scope, or `c` was declared inside it.
+    ///
+    /// Fail-closed: a container whose declaring block this pass did not record
+    /// (it has not been walked yet, which a well-formed program cannot do) is
+    /// not visible.
+    fn container_visible_here(&self, c: &str) -> bool {
+        let Some(region) = &self.restricted_region else {
+            return true;
+        };
+        let Some(path) = self.container_path.get(c) else {
+            return false;
+        };
+        path.len() >= region.len() && path[..region.len()] == region[..]
+    }
+
+    /// Disqualify a candidate container. Idempotent, and deliberately the only
+    /// way a candidate leaves the set — the fixpoint below runs DOWNWARD, so
+    /// every rejection is monotone and the walk can never re-admit one.
+    fn reject_container(&mut self, c: &'a str) {
+        self.container_rejects.insert(c);
     }
 
     /// The static type of a frozen place, resolved one projection at a time.
@@ -387,6 +515,20 @@ impl<'a> Cx<'a, '_> {
                     .iter()
                     .find(|(fname, _, _)| fname == field)
                     .map(|(_, fty, _)| fty.clone())
+            }
+            // Stage 3c — an element of a proved container. Its type comes from
+            // the container's `let` ANNOTATION, recorded when the candidate was
+            // discovered, never from the method-call receiver's recorded type:
+            // that lookup returns `Unit` at a `push` site, which is what made
+            // the first attempt at this decline every element read.
+            ExprKind::Index { object, .. }
+                if matches!(&object.kind, ExprKind::Identifier(n)
+                    if self.frozen_containers.contains_key(n.as_str())) =>
+            {
+                let ExprKind::Identifier(n) = &object.kind else {
+                    unreachable!("guarded above")
+                };
+                element_type(self.frozen_containers.get(n.as_str())?)
             }
             ExprKind::Index { object, .. } => element_type(&self.place_type(object)?),
             ExprKind::TupleIndex { object, index } => match self.place_type(object)? {
@@ -515,7 +657,7 @@ impl super::OwnershipChecker<'_> {
         // Computed through a free function so the immutable borrow of
         // `typecheck_result` / `program` the walk needs is finished before the
         // errors are pushed through `&mut self`.
-        let (found, aliases, freeze_sites) =
+        let (found, aliases, freeze_sites, containers) =
             collect_frozen_escapes(f, impl_type, self.program, self.typecheck_result);
 
         // Stage 3 — every `freeze` site this function contains, classified by
@@ -527,6 +669,11 @@ impl super::OwnershipChecker<'_> {
         // that case, so the set is never read, and gating on `found.is_empty()`
         // would just add a state the tests cannot reach.
         self.frozen_alias_bindings.extend(aliases);
+        // Stage 3c — the container hint, recorded on the same terms: the two
+        // codegen suppressions it drives are a PAIR (skip the push retain,
+        // skip the element release), so they are surfaced through one set and
+        // a container that fails either condition appears in neither.
+        self.frozen_element_containers.extend(containers);
 
         for Rejection {
             name,
@@ -663,12 +810,15 @@ impl super::OwnershipChecker<'_> {
 }
 
 /// What one function's walk produces: the rejected uses, the initializer spans
-/// of the bindings admitted as non-counting aliases, and the freeze sites seen
-/// (each with the type name it resolved to, for the freeze-site classifier).
+/// of the bindings admitted as non-counting aliases, the freeze sites seen
+/// (each with the type name it resolved to, for the freeze-site classifier),
+/// and the initializer spans of the `let`s proved to be frozen-element
+/// containers.
 type WalkResult = (
     Vec<Rejection>,
     HashSet<SpanKey>,
     Vec<(Option<String>, Span, FreezeSite)>,
+    HashSet<SpanKey>,
 );
 
 /// Run the walk over `f` and return every rejected use, plus the initializer
@@ -712,12 +862,47 @@ fn collect_frozen_escapes<'a>(
     // program that does not — which is every program that does not use the
     // mode — without a per-function body scan.
     if frozen.is_empty() && program.freeze_spans.is_empty() {
-        return (Vec::new(), HashSet::new(), Vec::new());
+        return (Vec::new(), HashSet::new(), Vec::new(), HashSet::new());
     }
 
-    let mut cx = Cx {
+    // Stage 3c — the frozen-element container fixpoint (B-2026-08-07-23).
+    //
+    // WHY IT IS A FIXPOINT AT ALL. `work[i]` is walked BEFORE the
+    // `work.push(k)` further down the loop body, while at runtime the
+    // container already holds what earlier iterations pushed. One ordered pass
+    // therefore cannot decide the question: whether `work[i]` yields a frozen
+    // element depends on facts the same pass has not reached yet.
+    //
+    // WHY IT RUNS DOWNWARD. Starting from "nothing is a container" and adding
+    // never converges anywhere useful — `work` is a container only if `work[i]`
+    // is frozen, and `work[i]` is frozen only if `work` is a container, so the
+    // LEAST fixpoint of that is the empty set and the shape stays refused. So
+    // the iteration starts from "every candidate is a container" and REMOVES
+    // the ones the walk disproves, which is the greatest fixpoint.
+    //
+    // WHY THE GREATEST FIXPOINT IS SOUND, since a coinductive rule that
+    // justifies itself is exactly what usually is not. The worry is a cycle
+    // like `c.push(c[0])`, which survives on its own assumption. It cannot
+    // introduce an unfrozen element: a container starts EMPTY, so the first
+    // push into it can never be self-sourced, and by induction on push order
+    // every element traces back to a genuine seed (a `frozen` parameter or a
+    // `freeze` statement). A purely self-referential container stays empty
+    // forever and there is nothing to be wrong about.
+    //
+    // EACH ROUND REBUILDS `frozen` FROM THE INITIAL SET, which is not
+    // incidental: carrying it across rounds means a name frozen LATE in one
+    // round is already frozen at the TOP of the next, so statements ABOVE a
+    // `freeze` get judged against a guarantee that does not exist yet. The
+    // first draft did that and refused a write that legitimately preceded its
+    // `freeze`.
+    //
+    // ROUND 0 IS DISCOVERY ONLY. It finds the candidate `let`s; its rejections
+    // are DISCARDED, because with nothing assumed frozen every element read
+    // looks like an ordinary use and would disqualify every container in the
+    // program.
+    let mk = |assumed: HashMap<&'a str, Type>, candidates: HashMap<&'a str, Type>| Cx {
         tc,
-        frozen,
+        frozen: frozen.clone(),
         fn_frozen_params: collect_fn_frozen_params(program),
         frozen_methods: collect_frozen_methods(program),
         freeze_spans: &program.freeze_spans,
@@ -730,9 +915,91 @@ fn collect_frozen_escapes<'a>(
         sources: HashSet::new(),
         found: Vec::new(),
         alias_spans: HashSet::new(),
+        // A `frozen` parameter / `frozen self` is owned by the CALLER, whose
+        // value lives for the whole call — the empty path, a prefix of every
+        // block, i.e. it outlives anything a local container can be.
+        frozen_owner_path: frozen.keys().map(|k| (*k, Vec::new())).collect(),
+        frozen_containers: assumed,
+        container_candidates: candidates,
+        container_rejects: HashSet::new(),
+        container_rebound: HashSet::new(),
+        container_spans: HashMap::new(),
+        container_path: HashMap::new(),
+        block_path: Vec::new(),
+        next_block_id: 0,
+        restricted_region: None,
     };
+
+    let mut cx = mk(HashMap::new(), HashMap::new());
     walk_block(&f.body, &mut cx);
-    (cx.found, cx.alias_spans, cx.freeze_sites)
+    let mut assumed = cx.container_candidates.clone();
+    for n in cx.container_rebound {
+        assumed.remove(n);
+    }
+    // Bounded by the candidate count: every round but the last removes at
+    // least one, and the `+ 2` covers the discovery round and the confirming
+    // round that changes nothing.
+    let rounds = assumed.len() + 2;
+    for _ in 0..rounds {
+        let candidates = assumed.clone();
+        cx = mk(assumed.clone(), candidates);
+        walk_block(&f.body, &mut cx);
+        let mut next = assumed.clone();
+        for n in &cx.container_rejects {
+            next.remove(*n);
+        }
+        if next.len() == assumed.len() {
+            break;
+        }
+        assumed = next;
+    }
+    let containers = assumed
+        .keys()
+        .filter_map(|n| cx.container_spans.get(*n))
+        .map(SpanKey::from_span)
+        .collect();
+    (cx.found, cx.alias_spans, cx.freeze_sites, containers)
+}
+
+/// Whether a `let`'s ANNOTATION names `Vec[S]` for a non-generic `shared
+/// struct` S — the only shape stage 3c models — and if so the container type
+/// `element_type` will be asked about later.
+///
+/// Deliberately annotation-only and deliberately `Vec`-only. The annotation is
+/// the one place the element type is unambiguously written down (see the
+/// module header's note on why the push site cannot answer it), and `Vec` is
+/// the container the measured traversal actually uses: `VecDeque` additionally
+/// wants `pop_front`, whose result is a VALUE and not a place, so it needs a
+/// second mechanism rather than a wider list here.
+fn container_candidate_type(ty: Option<&TypeExpr>, tc: &TypeCheckResult) -> Option<Type> {
+    let TypeKind::Path(p) = &ty?.kind else {
+        return None;
+    };
+    if p.segments.last().map(String::as_str) != Some("Vec") {
+        return None;
+    }
+    let args = p.generic_args.as_ref()?;
+    let [GenericArg::Type(elem)] = args.as_slice() else {
+        return None;
+    };
+    let TypeKind::Path(ep) = &elem.kind else {
+        return None;
+    };
+    let name = ep.segments.last()?;
+    if ep.generic_args.is_some() {
+        return None;
+    }
+    let info = tc.struct_info.get(name.as_str())?;
+    if !info.is_shared || !info.generic_params.is_empty() {
+        return None;
+    }
+    Some(Type::Named {
+        name: "Vec".to_string(),
+        args: vec![Type::Named {
+            name: name.clone(),
+            args: Vec::new(),
+        }],
+    })
 }
 
 /// The type a `frozen` parameter's place chain starts from.
@@ -853,12 +1120,20 @@ fn binding_names_of(p: &Pattern) -> Vec<&str> {
 // handled explicitly.
 
 fn walk_block<'a>(b: &'a Block, cx: &mut Cx<'a, '_>) {
+    // Stage 3c — each block gets a unique id, so a block's PATH identifies it
+    // and prefix containment on two paths is exactly "one encloses the other".
+    // Ids come from a per-round counter, which makes the paths stable across
+    // fixpoint rounds (the walk order is identical every time).
+    let id = cx.next_block_id;
+    cx.next_block_id += 1;
+    cx.block_path.push(id);
     for s in &b.stmts {
         walk_stmt(s, cx);
     }
     if let Some(fe) = &b.final_expr {
         walk_expr(fe, cx);
     }
+    cx.block_path.pop();
 }
 
 fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
@@ -866,9 +1141,39 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
         StmtKind::Let {
             is_mut,
             pattern,
+            ty,
             value,
-            ..
         } => {
+            // Stage 3c — record a frozen-element container CANDIDATE. Done
+            // before the initializer is walked so a self-referential
+            // initializer would be judged against the candidate, and keyed on
+            // the annotation (see `container_candidate_type`).
+            if let PatternKind::Binding(n) = &pattern.kind {
+                // Keyed on `container_spans`, which only a `let` this ROUND
+                // actually walked can populate — `container_candidates` is
+                // pre-seeded from the previous round, so testing that would
+                // call every container a shadow of itself.
+                if cx.container_spans.contains_key(n.as_str()) {
+                    // A second `let` of the same name. This analysis is
+                    // name-keyed, so shadowing would conflate two containers;
+                    // refuse both rather than pick one.
+                    cx.container_rebound.insert(n.as_str());
+                    cx.reject_container(n.as_str());
+                }
+                if let Some(ct) = container_candidate_type(ty.as_ref(), cx.tc) {
+                    cx.container_candidates.insert(n.as_str(), ct);
+                    cx.container_spans.insert(n.as_str(), value.span.clone());
+                    cx.container_path.insert(n.as_str(), cx.block_path.clone());
+                    // An element read out of the container is owned by whatever
+                    // was pushed in, and every one of those was proved to
+                    // outlive the container — so attributing the container's
+                    // OWN block to its elements is sound, and it is what lets a
+                    // traversal push an element back in (`work.push(k)` where
+                    // `k` came from `work[i]`).
+                    cx.frozen_owner_path
+                        .insert(n.as_str(), cx.block_path.clone());
+                }
+            }
             // Stage 2.5: a `let` whose initializer is a frozen place naming a
             // `shared` handle becomes a non-counting ALIAS rather than an
             // escape. `try_admit_frozen_alias` consumes the initializer when it
@@ -898,8 +1203,11 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
             walk_expr(value, cx);
             walk_block(else_block, cx);
         }
-        StmtKind::Defer { body } => walk_block(body, cx),
-        StmtKind::ErrDefer { body, .. } => walk_block(body, cx),
+        // A `defer` body runs AT scope exit, by which point an element owner
+        // bound in this scope may already be gone — so a container touched
+        // from one is disqualified (stage 3c).
+        StmtKind::Defer { body } => walk_restricted_block(body, cx),
+        StmtKind::ErrDefer { body, .. } => walk_restricted_block(body, cx),
         // ── Stage 3b step 3: WRITE positions ────────────────────────────
         //
         // These three arms are the entire write-position enumeration, and they
@@ -944,7 +1252,116 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
 ///
 /// A non-frozen target is walked normally, so nested frozen uses inside an
 /// index expression (`other[g.i] = 1`) are still judged.
+/// Stage 3c — the two method shapes a frozen-element container permits on its
+/// own name: `c.push(<frozen place>)` / `c.push_back(..)`, and the read-only
+/// `c.len()` / `c.is_empty()`. Returns `true` when the call was consumed, which
+/// means the RECEIVER is not walked — that is what keeps the container's name
+/// from reaching [`walk_expr`]'s `Identifier` arm and disqualifying itself.
+///
+/// The third permitted shape, `c[i]`, needs nothing here: it is a frozen place
+/// by [`Cx::frozen_place_root`] and the prologue consumes it.
+///
+/// EVERY DISQUALIFYING PATH STILL RETURNS `false`, so the call falls through to
+/// the ordinary walk and is reported there. A container this function declines
+/// is refused, never silently allowed.
+fn try_admit_container_method<'a>(
+    object: &'a Expr,
+    method: &str,
+    args: &'a [CallArg],
+    cx: &mut Cx<'a, '_>,
+) -> bool {
+    let Some(c) = cx.container_receiver(object) else {
+        return false;
+    };
+    // A container declared outside the closure / `defer` / `par` body this
+    // call sits in — see `restricted_region`.
+    if !cx.container_visible_here(c) {
+        cx.reject_container(c);
+        return false;
+    }
+    if matches!(method, "len" | "is_empty") && args.is_empty() {
+        return true;
+    }
+    if !matches!(method, "push" | "push_back") {
+        // Any other method — `pop`, `remove`, `sort`, a user `impl Vec` method
+        // — is outside the whitelist. `pop` in particular is not an oversight:
+        // its result is a VALUE, not a place, so a non-counting element handed
+        // back through it has nothing this pass can keep track of.
+        cx.reject_container(c);
+        return false;
+    }
+    let [arg] = args else {
+        cx.reject_container(c);
+        return false;
+    };
+    if arg.label.is_some() || arg.mut_marker {
+        cx.reject_container(c);
+        return false;
+    }
+    let Some(root) = cx.frozen_place_root(&arg.value) else {
+        // An ORDINARY value pushed in. The container would then hold a mix of
+        // counted and non-counting elements, and the scope-exit drop is
+        // all-or-nothing — skipping it would leak the counted ones, running it
+        // would over-release the frozen ones. So the container is disqualified
+        // and any frozen push into it reports on the next round.
+        cx.reject_container(c);
+        return false;
+    };
+    // A scalar element is not a handle; it cannot be what makes this container
+    // frozen, and `container_candidate_type` has already restricted the
+    // element type to a `shared struct`, so this is a place that resolves to
+    // something else entirely (an `i64` field of a frozen node, say).
+    if cx.reads_as_scalar(&arg.value) {
+        cx.reject_container(c);
+        return false;
+    }
+    // THE LIFETIME TEST, and the reason a `freeze` STATEMENT's local can be
+    // stored at all. A non-counting element is only safe while the owner whose
+    // count it skips is still alive; the container must therefore die first.
+    if !cx.owner_outlives_container(root, c) {
+        cx.reject_container(c);
+        return false;
+    }
+    if !cx.frozen_containers.contains_key(c) {
+        // Disproved on an earlier round (or this is the discovery round). The
+        // push falls through and is reported as the ordinary escape it is.
+        return false;
+    }
+    // Consumed. The projection chain is permitted; any index OPERAND inside it
+    // is still an ordinary expression and is walked, exactly as in the
+    // permitted argument position.
+    walk_place_indices(&arg.value, cx);
+    true
+}
+
+/// Walk a block that a container declared OUTSIDE it may not be touched from —
+/// a `defer` / `errdefer` body, a `par` / `seq` block. A container declared
+/// INSIDE is unaffected; see [`Cx::restricted_region`] for why that difference
+/// carries the feature.
+///
+/// The region is identified by the path [`walk_block`] is about to build, which
+/// is why the id is read (not consumed) here: `walk_block` allocates
+/// `next_block_id` as its first action, so `path + [next_block_id]` is exactly
+/// the block being entered.
+fn walk_restricted_block<'a>(b: &'a Block, cx: &mut Cx<'a, '_>) {
+    let mut region = cx.block_path.clone();
+    region.push(cx.next_block_id);
+    let saved = cx.restricted_region.replace(region);
+    walk_block(b, cx);
+    cx.restricted_region = saved;
+}
+
 fn reject_frozen_write<'a>(target: &'a Expr, cx: &mut Cx<'a, '_>) {
+    // Stage 3c — a write THROUGH a container (`c[i] = x`, `c = other`) is not
+    // in the whitelist, so the container is disqualified rather than the write
+    // being judged against a guarantee the container will not end up having.
+    // Recorded from the target's own root, before the frozen-place test below
+    // consumes it.
+    if let Some(c) = place_root_name(target)
+        .and_then(|r| cx.container_candidates.get_key_value(r).map(|(k, _)| *k))
+    {
+        cx.reject_container(c);
+    }
     if let Some(root) = cx.frozen_place_root(target) {
         cx.flag(root, &target.span, Reason::Written);
         // Still walk the INDEX sub-expressions: `g.kids[other.i] = x` has a
@@ -1004,9 +1421,18 @@ fn try_admit_frozen_alias<'a>(
     // The projection chain is consumed by the admission; any index OPERAND
     // inside it is an ordinary expression and still has to be walked, exactly
     // as in the permitted argument position (`let k = n.kids[g(x)];`).
+    // Stage 3c — the alias inherits its ROOT's owner: the object it points at
+    // is the same object, so it can be stored exactly where the root could.
+    // An unrecorded root defaults to the current block, the most restrictive
+    // answer available.
+    let owner = cx
+        .frozen_place_root(value)
+        .and_then(|r| cx.frozen_owner_path.get(r).cloned())
+        .unwrap_or_else(|| cx.block_path.clone());
     walk_place_indices(value, cx);
     cx.alias_spans.insert(SpanKey::from_span(&value.span));
     cx.frozen.insert(name.as_str(), ty);
+    cx.frozen_owner_path.insert(name.as_str(), owner);
     cx.aliases.insert(name.as_str());
     true
 }
@@ -1120,6 +1546,13 @@ fn try_admit_frozen_freeze<'a>(
     walk_place_indices(value, cx);
     cx.alias_spans.insert(SpanKey::from_span(&value.span));
     cx.frozen.insert(name.as_str(), ty.clone());
+    // Stage 3c — a `freeze` STATEMENT's owner is the local it froze, so both
+    // names live and die with THIS block. That is what stops a container
+    // declared in an enclosing scope from holding the resulting alias: the
+    // container would outlive the owner and every element would dangle.
+    cx.frozen_owner_path
+        .insert(name.as_str(), cx.block_path.clone());
+    cx.frozen_owner_path.insert(root, cx.block_path.clone());
     cx.aliases.insert(name.as_str());
     // The source root is frozen from here on. Its own type is looked up the
     // same way; if it cannot be resolved the root is still frozen (with the
@@ -1189,9 +1622,16 @@ fn try_admit_frozen_for_element<'a>(
         // here, so it must not be admitted; report the iterable as before.
         return false;
     }
+    // Stage 3c — the loop variable aliases an element of the iterated place,
+    // so it inherits that place's owner exactly as a `let` alias does.
+    let owner = cx
+        .frozen_place_root(iterable)
+        .and_then(|r| cx.frozen_owner_path.get(r).cloned())
+        .unwrap_or_else(|| cx.block_path.clone());
     walk_place_indices(iterable, cx);
     if let Some(handle) = handle {
         cx.frozen.insert(name.as_str(), handle);
+        cx.frozen_owner_path.insert(name.as_str(), owner);
         cx.aliases.insert(name.as_str());
     }
     true
@@ -1294,6 +1734,13 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
     // scalar; the two handle-carrying positions (a `frozen` argument slot, a
     // builtin `len`/`is_empty` receiver) intercept before reaching here.
     if let Some(root) = cx.frozen_place_root(e) {
+        // Stage 3c — an ELEMENT READ (`c[i]`) reached from a closure /
+        // `defer` / `par` body the container was not declared in. Rejecting
+        // takes effect on the next fixpoint round, which is enough: the
+        // rounds run to a fixed point before any diagnostic is emitted.
+        if cx.container_candidates.contains_key(root) && !cx.container_visible_here(root) {
+            cx.reject_container(root);
+        }
         if cx.in_closure {
             cx.flag(root, &e.span, Reason::Captured);
         } else if !cx.reads_as_scalar(e) {
@@ -1316,6 +1763,24 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
         // their operands rather than inspecting roots themselves.
         ExprKind::Identifier(name) => {
             cx.used_names.insert(name.as_str());
+            // Stage 3c — reaching here with a candidate CONTAINER's name means
+            // the name was used BARE: returned, passed to a call, captured,
+            // iterated, aliased. The three permitted shapes (`push` /
+            // `len`-`is_empty` receiver, `[i]` object) all intercept before the
+            // prologue, so this arm is the single funnel for everything else,
+            // and reaching it disqualifies the container.
+            //
+            // This is the same inverted-whitelist discipline as the rest of the
+            // module: the failure direction is a container refused (its frozen
+            // pushes then report as ordinary escapes), never one admitted whose
+            // elements can leave the frame.
+            if let Some(c) = cx
+                .container_candidates
+                .get_key_value(name.as_str())
+                .map(|(k, _)| *k)
+            {
+                cx.reject_container(c);
+            }
         }
         ExprKind::SelfValue => {}
 
@@ -1381,6 +1846,12 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
             args,
             ..
         } => {
+            // Stage 3c — the container whitelist, checked BEFORE the frozen
+            // receiver logic below, because a container receiver is an
+            // ordinary local and must not be judged as a frozen place.
+            if try_admit_container_method(object, method, args, cx) {
+                return;
+            }
             // Stage 2.7 — a USER method whose receiver is declared `frozen
             // self`. Resolved by the receiver PLACE's type, which this pass
             // already computes, so no typechecker callee map is needed: the
@@ -1424,12 +1895,15 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
             walk_expr(object, cx);
             walk_expr(index, cx);
         }
-        ExprKind::Block(b)
-        | ExprKind::Comptime(b)
-        | ExprKind::Unsafe(b)
-        | ExprKind::Try(b)
-        | ExprKind::Seq(b)
-        | ExprKind::Par(b) => walk_block(b, cx),
+        ExprKind::Block(b) | ExprKind::Comptime(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) => {
+            walk_block(b, cx)
+        }
+        // A container declared OUTSIDE a `par` / `seq` and pushed to from
+        // inside is two branches writing one `{ptr,len,cap}` — a different
+        // question from the one stage 3c answers, so it is disqualified and
+        // the existing capture gate decides it instead. One declared INSIDE a
+        // branch is branch-local and is the shape this exists for.
+        ExprKind::Seq(b) | ExprKind::Par(b) => walk_restricted_block(b, cx),
         ExprKind::If {
             condition,
             then_block,
@@ -1488,7 +1962,15 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
         ExprKind::LabeledBlock { body, .. } => walk_block(body, cx),
         ExprKind::Closure { body, .. } => {
             let saved = std::mem::replace(&mut cx.in_closure, true);
+            // A closure's environment can outlive the call, so a container
+            // declared outside and touched inside is disqualified on the same
+            // terms as a `defer` body. `in_closure` above independently
+            // suppresses every frozen PLACE, which is a separate guarantee.
+            let mut region = cx.block_path.clone();
+            region.push(cx.next_block_id);
+            let saved_region = cx.restricted_region.replace(region);
             walk_expr(body, cx);
+            cx.restricted_region = saved_region;
             cx.in_closure = saved;
         }
         ExprKind::Return(v) => {
