@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
 | crash | 41 | 1 |
-| other | 24 | 1 |
+| other | 24 | 0 |
 | use-after-free | 16 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
-| other | 35 | 1 |
+| other | 35 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1042 surfaced · 4 open · 1028 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1042 surfaced · 3 open · 1029 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
-| B-2026-08-08-27 | 2026-08-08 | other | low | the dark-llvm-target audit has never been RE-RUN as a check -- B-2026-07-31-44 swept 19 targets by hand and B-2026-08-08-26 found the 20th the same way, so the next gap will also be found by accident unless the audit becomes a script | Spun out of B-2026-08-08-26 rather than folded into it: -26 is a coverage-gap row with a landed fix, this is a standing question about whether the remaining dark surface is worth the CI minutes. Needs a measurement, not a debugging session. |
 | B-2026-08-08-29 | 2026-08-08 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is clean -- the annotation does the opposite of its purpose, silently | probe: `let mut m: Map[i64, weak N] = Map.new(); m.insert(1i64, a);` vs the `Map[i64, N]` twin |
 | B-2026-08-08-30 | 2026-08-08 | codegen | high | mapping a BORROWED SCALAR payload panics in codegen instead of diagnosing — `Vec[i64].first().map(|x| x + 1)` hits `load_variable`'s `expected PointerValue`, and it is the exact spelling B-2026-08-08-24 tells authors to write | probe: `let out: Vec[i64] = vec![7, 9]; out.first().map(|x| x + 1)` — `karac build` panics, `--interp` prints 8 |
 
-### Fixed (1028)
+### Fixed (1029)
 
-<details><summary>1028 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1029 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1190,6 +1189,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-22 | codegen | low | a closure whose body IS a String value (bare literal or `+` concat) is declared with a POINTER return, so the `{ptr,len,cap}` it yields fails LLVM ve… | 51ceecab. `infer_closure_return_type` types a `StringLit` body and a `+` chain whose either side is a String as the `{ptr,len,cap}` String struct rather than a bare pointer, so the `ret` matches the declared signature. The `closure_body_is_bare_string_value` gate in the `map` heap-payload path is deleted along with its now-dead helper: it existed only to reject these bodies with advice (annotate the parameter) that measurement showed does not help — `|s: String| "fixed"` failed identically. Pinned by tests/codegen.rs::test_e2e_option_map_string_value_bodies_compile_and_run (9 shapes, each compared against the `--interp` oracle), STASH-PROVEN red pre-fix. Residual, filed separately as B-2026-08-08-24 and pinned by an `#[ignore]`d test: the annotated concat `|s: String| s + "!"` now BUILDS but returns an empty String — a pre-existing silent miscompile this row did not introduce and does not fix. |
 | B-2026-08-08-24 | typecheck+codegen | high | an OWNED closure-param annotation over a BORROWED payload (`out.first().map(\|x: String\| ...)`) was silently accepted and miscompiled -- empty String,… | cdd74e13. `src/typechecker/exprs.rs` no longer combines an explicit closure-param annotation with the combinator seed via `.or_else`: when BOTH exist they are compared first, and a `ref`/`mut ref` seed under a non-ref annotation is a TypeMismatch carrying a machine-applicable fix-it that rewrites the annotation to the borrow spelling (`check_closure_param_annotation_against_seed`). Verified end-to-end: `karac fix` turns `|x: String|` into `|x: ref String|` unattended and the result runs correctly on BOTH backends; `--output=json` carries code E0200 / class TYPE_MISMATCH / expected `ref String` / got `String` plus the fix-it span. Placed at the shared consumption point so it covers `map` and every `infer_closure_ret` sibling. PINS: typechecker `owned_closure_param_annotation_over_borrowed_payload_is_rejected` (STASH-PROVEN red pre-fix) + `borrowed_payload_accepts_the_correct_closure_param_spellings`, and e2e `test_e2e_option_map_over_borrowed_payload_correct_spellings`. Gates: full --features llvm suite GREEN post-rebase (13293 passed / 0 failed / 102 targets), clippy --all-targets, fmt, ledger lint 1042/0. NOTE the row as filed did not reproduce -- see the detail; its `#[ignore]`d pin is un-ignored and renamed to `test_e2e_option_map_owned_payload_annotated_concat_is_correct` as the control documenting that. |
 | B-2026-08-08-26 | other | medium | `tests/cli.rs` is the dark target B-2026-07-31-44 missed, and it was RED the whole time -- 35 of its 43 `#[cfg(feature = "llvm")]` tests run in NO CI… | f68004a |
+| B-2026-08-08-27 | other | low | the dark-llvm-target audit has never been RE-RUN as a check -- B-2026-07-31-44 swept 19 targets by hand and B-2026-08-08-26 found the 20th the same w… | 5b60bd77 |
 | B-2026-08-08-28 | codegen | high | a weak ELEMENT read through a struct FIELD (`a.ns[0]` on `mut ns: Vec[weak N]`) skips the balancing acquire and over-releases -- SIGSEGV under JIT an… | 02f8a0c |
 
 </details>
