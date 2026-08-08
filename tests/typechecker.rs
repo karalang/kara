@@ -29539,6 +29539,35 @@ fn seeded_generic_call_checks_its_argument_against_the_concrete_slot() {
     .is_empty());
 }
 
+/// B-2026-08-08-4 gap B — a `weak T` ELEMENT read is an UPGRADE, exactly as a
+/// `weak T` FIELD read is: `v[i]` on a `Vec[weak N]` yields `Option[N]`.
+///
+/// Without it the element read handed back a bare `weak N`, and `match v[i] {
+/// Some(x) => .. }` TYPECHECKED while binding nothing — codegen then failed
+/// with `Undefined variable 'x'`. B-2026-08-08-5 landed the store half of this
+/// container/field symmetry and left the read half open, which is what made a
+/// `Vec[weak T]` store-only.
+#[test]
+fn weak_container_element_read_upgrades_to_option() {
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n         fn main() { let a: N = N { v: 1i64 }; \n                     let mut w: Vec[weak N] = Vec.new(); w.push(a); \n                     let e: Option[N] = w[0]; println(e.is_some()); }",
+    );
+    // A store LHS keeps the raw `weak T` place type, so the assignment path
+    // still coerces the strong RHS (the downgrade). Upgrading here too would
+    // reject `v[i] = handle`, which compiled before this row.
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n         fn main() { let a: N = N { v: 1i64 }; let b: N = N { v: 2i64 }; \n                     let mut w: Vec[weak N] = Vec.new(); w.push(a); \n                     w[0] = b; println(a.v); }",
+    );
+    // The same split through a FIELD-rooted index. `orig[1].random = x` reaches
+    // the index arm from INSIDE `infer_field_access`, which infers its object
+    // BEFORE capturing its own `is_lhs` — so clearing the flag in the index arm
+    // made the enclosing weak FIELD read as a non-LHS and reject its strong RHS.
+    // Two ASAN fixtures caught that; this keeps it caught here.
+    typecheck_ok(
+        "shared struct Node { val: i64, id: i64, mut random: weak Node }\n         fn main() { let mut orig: Vec[Node] = Vec.new(); \n                     orig.push(Node { val: 7i64, id: 0i64, random: None }); \n                     orig.push(Node { val: 8i64, id: 1i64, random: None }); \n                     orig[1i64].random = orig[0i64]; \n                     match orig[1i64].random { Some(r) => { println(r.val); } None => {} } }",
+    );
+}
+
 /// B-2026-08-08-8 — expected-return seeding also reaches a BARE IDENTIFIER
 /// callee, i.e. an ordinary generic free function.
 ///

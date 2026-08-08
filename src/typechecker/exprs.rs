@@ -3529,6 +3529,17 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             ExprKind::Index { object, index } => {
+                // B-2026-08-08-4 gap B — captured before the sub-expressions
+                // are inferred, and deliberately NOT cleared. `a.b[i]` reaches
+                // this arm from INSIDE `infer_field_access`, which infers its
+                // object BEFORE capturing its own `is_lhs` (the union-read gate
+                // needs the object typed first); clearing here therefore made
+                // the enclosing field access read as a non-LHS, so
+                // `orig[1].random = x` upgraded its `weak` field slot to
+                // `Option[Node]` and rejected the strong RHS the downgrade
+                // coercion is there to accept. Two ASAN fixtures caught it.
+                // A pure read changes nothing for any existing path.
+                let index_is_lhs = self.assigning_lhs;
                 let obj_ty = self.infer_expr(object);
                 let idx_ty = self.infer_expr(index);
                 // `t.0[i]` — indexing a `Vec`/`VecDeque` that lives in a TUPLE
@@ -3848,7 +3859,7 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
-                match &obj_ty {
+                let elem_result = match &obj_ty {
                     Type::Array { element, .. } => *element.clone(),
                     Type::Slice { element, .. } => *element.clone(),
                     // `Vector[T, N]` lane read `v[i] -> T` (design.md § Portable
@@ -3902,7 +3913,37 @@ impl<'a> super::TypeChecker<'a> {
                     },
                     Type::Error => Type::Error,
                     _ => Type::Error,
+                };
+                // B-2026-08-08-4 gap B (read-back) — a `weak T` ELEMENT read is
+                // an UPGRADE, exactly as a `weak T` FIELD read is
+                // (`infer_field_access`): `v[i]` on a `Vec[weak N]` yields
+                // `Option[N]`, `Some` while a strong ref to the target still
+                // exists and `None` once it is gone.
+                //
+                // Without this the element read handed back a bare `weak N`,
+                // and `match v[i] { Some(x) => .. }` then TYPECHECKED while
+                // binding nothing — codegen failed with `Undefined variable
+                // 'x'` and the interpreter errored too. B-2026-08-08-5 landed
+                // the store half of this container/field symmetry and left the
+                // read half open, which is what made a `Vec[weak T]`
+                // store-only: usable for cycle-breaking back-edges (they exist
+                // not to be traversed) and not for a parent-pointer walk.
+                //
+                // A store LHS keeps the raw `weak T` place type so the
+                // assignment path still coerces the RHS (the downgrade) — the
+                // same `is_lhs` split the field read uses, and what keeps
+                // `v[i] = strong_handle` compiling. Captured at the TOP of this
+                // arm rather than read here: inferring the object runs
+                // `infer_field_access`, which resets the flag.
+                if !index_is_lhs {
+                    if let Type::Weak(inner) = &elem_result {
+                        return Type::Named {
+                            name: "Option".to_string(),
+                            args: vec![(**inner).clone()],
+                        };
+                    }
                 }
+                elem_result
             }
 
             // Compound

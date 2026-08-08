@@ -171,6 +171,96 @@ fn weak_target_name(ty: &TypeExpr) -> Option<String> {
     }
 }
 
+/// Every shared type named by a `weak T` ANYWHERE inside `ty`, including
+/// through a container's generic arguments.
+///
+/// B-2026-08-08-4 gap B — [`weak_target_name`] matches only a DIRECT `weak T`
+/// field, so a `Vec[weak N]` field left `N` out of `weak_targeted_types` and
+/// `N` was laid out with a conventional one-word `{ strong, fields… }` box.
+/// `karac_weak_downgrade` then incremented what it took to be the weak count at
+/// word 1 — which in that layout is the struct's FIRST FIELD. A bare
+/// `w.push(a)` silently changed `a.v` from 41 to 42, with no diagnostic and no
+/// sanitizer report: a live silent corruption shipped by B-2026-08-08-5's store
+/// half, not a consequence of the read half added alongside this.
+///
+/// The same container-blindness as gap A's `check_cycles` and gap B's store
+/// coercion, in a third place: the walk followed a field's own type but not its
+/// generic ARGUMENTS. Recurses through every type position so a `Map[K, weak
+/// V]`, a tuple, an array, or a nested `Vec[Vec[weak N]]` is reached too —
+/// forcing the header is what makes those layouts correct, and it costs one
+/// extra word on a type that is a weak target regardless of spelling.
+/// Every `weak T` target reachable from a function's SIGNATURE and from the
+/// type annotation of any `let` in its body, at any block depth.
+///
+/// B-2026-08-08-4 gap B — a struct-field-only scan misses the shape that has no
+/// struct at all: `let mut w: Vec[weak N] = Vec.new();` in a plain function
+/// body. `N` is a weak target there for exactly the same reason it is when a
+/// field says so, and missing it produces the same silent first-field
+/// corruption. Annotations only — an unannotated `let` whose weak-ness comes
+/// from inference is not reachable at declaration time, which is why the
+/// container element types the codegen later relies on are seeded from
+/// spellings the author wrote down.
+fn collect_weak_targets_in_fn(f: &crate::ast::Function, out: &mut HashSet<String>) {
+    for p in &f.params {
+        collect_weak_targets(&p.ty, out);
+    }
+    if let Some(rt) = &f.return_type {
+        collect_weak_targets(rt, out);
+    }
+    collect_weak_targets_in_block(&f.body, out);
+}
+
+fn collect_weak_targets_in_block(block: &Block, out: &mut HashSet<String>) {
+    for s in &block.stmts {
+        match &s.kind {
+            StmtKind::Let { ty: Some(te), .. } | StmtKind::LetElse { ty: Some(te), .. } => {
+                collect_weak_targets(te, out)
+            }
+            StmtKind::LetUninit { ty, .. } => collect_weak_targets(ty, out),
+            _ => {}
+        }
+        crate::rc_elide::walk_stmt_children_pub(s, &mut |e| collect_weak_targets_in_expr(e, out));
+    }
+    if let Some(e) = &block.final_expr {
+        collect_weak_targets_in_expr(e, out);
+    }
+}
+
+fn collect_weak_targets_in_expr(expr: &Expr, out: &mut HashSet<String>) {
+    if let ExprKind::Block(b) | ExprKind::Par(b) | ExprKind::Loop { body: b, .. } = &expr.kind {
+        collect_weak_targets_in_block(b, out);
+    }
+    crate::rc_elide::walk_children_pub(&expr.kind, &mut |sub| {
+        collect_weak_targets_in_expr(sub, out)
+    });
+}
+
+fn collect_weak_targets(ty: &TypeExpr, out: &mut HashSet<String>) {
+    if let Some(name) = weak_target_name(ty) {
+        out.insert(name);
+    }
+    match &ty.kind {
+        TypeKind::Path(p) => {
+            for arg in p.generic_args.iter().flatten() {
+                if let GenericArg::Type(inner) = arg {
+                    collect_weak_targets(inner, out);
+                }
+            }
+        }
+        TypeKind::Tuple(elems) => {
+            for e in elems {
+                collect_weak_targets(e, out);
+            }
+        }
+        TypeKind::Array { element, .. } => collect_weak_targets(element, out),
+        TypeKind::Pointer { inner, .. }
+        | TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::Weak(inner) => collect_weak_targets(inner, out),
+        _ => {}
+    }
+}
+
 /// Body-splitting statement classification used by `emit_state_machine_poll_fns`.
 ///
 /// Slice 8h queued only arg-less void free-fn names per arm; slice 8j
@@ -478,12 +568,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // the two-word path never fires and the existing LSan suite proves the
         // gate is off.
         for it in &program.items {
-            if let Item::StructDef(s) = it {
-                for f in &s.fields {
-                    if let Some(target) = weak_target_name(&f.ty) {
-                        self.weak_targeted_types.insert(target);
+            match it {
+                Item::StructDef(s) => {
+                    for f in &s.fields {
+                        collect_weak_targets(&f.ty, &mut self.weak_targeted_types);
                     }
                 }
+                Item::Function(f) => collect_weak_targets_in_fn(f, &mut self.weak_targeted_types),
+                Item::ImplBlock(b) => {
+                    for it in &b.items {
+                        if let ImplItem::Method(m) = it {
+                            collect_weak_targets_in_fn(m, &mut self.weak_targeted_types);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 

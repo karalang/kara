@@ -2882,6 +2882,21 @@ impl<'ctx> super::Codegen<'ctx> {
         if super::vec_method::is_trivially_copyable_te(&elem_te) {
             return Ok(val);
         }
+        // B-2026-08-08-4 gap B (read-back) — a `weak T` element read never
+        // reaches this clone. `val` is not the element slot's contents: the
+        // upgrade in `compile_vec_index` already replaced it with a
+        // freshly-materialized 4-word `Option[shared T]` niche value, so there
+        // is no container slot being aliased and nothing to defend against.
+        // Cloning it anyway ran `emit_clone_fn_for_type_expr` at the DECLARED
+        // element type (`weak N`, one pointer word) over a 4-word Option, and
+        // the match then read a mangled tag — `match w[0] { Some(x) => .. }`
+        // built cleanly and took the `None` arm with the target plainly alive.
+        // The weak read is a BORROW (no strong retain, see
+        // `emit_weak_field_upgrade`), which is the same reason the `weak` FIELD
+        // read needs no clone either.
+        if matches!(elem_te.kind, TypeKind::Weak(_)) {
+            return Ok(val);
+        }
         // Defensive: only deep-clone a `{ptr,len,cap}` (String / Vec) element
         // when the read value's LLVM type actually IS that struct. A
         // generic-monomorph FIELD-rooted read (`self.xs[i]` in a `Heap[String]`
@@ -3273,6 +3288,27 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let elem_ty = self.vec_elem_type_for_var(name);
         let elem_ptr = self.vec_index_elem_ptr(name, index)?;
+        // B-2026-08-08-4 gap B (read-back) — a `weak T` ELEMENT read is an
+        // UPGRADE, the exact twin of the `weak` FIELD read interceptor in
+        // `compile_field_access`: nil-check the slot against the target's
+        // strong count and materialize the conventional `Option[shared T]`
+        // value (null = None, non-null = Some) the match / let / cleanup
+        // machinery already understands.
+        //
+        // The typechecker half alone would be the silent-wrong outcome
+        // B-2026-08-08-4 names: `match v[i] { Some(x) => .. }` would compile
+        // and hand the arm a RAW weak slot pointer, read as a live handle.
+        // Reusing the field path's own two helpers rather than open-coding the
+        // sequence is what makes the RC behaviour identical by construction —
+        // this is the read side of the store symmetry B-2026-08-08-5 landed.
+        if self
+            .var_elem_type_exprs
+            .get(name)
+            .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+        {
+            let upgraded = self.emit_weak_field_upgrade(elem_ptr);
+            return Ok(self.niche_ptr_to_option_value(upgraded, "weak_elem"));
+        }
         let val = self
             .builder
             .build_load(elem_ty, elem_ptr, "v.elem")

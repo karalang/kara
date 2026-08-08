@@ -705,6 +705,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_of_weak_read_back_balanced_no_use_after_free() {
+        // B-2026-08-08-4 gap B (read-back) — the balancing acquire.
+        //
+        // A weak read is a BORROW: `emit_weak_field_upgrade` hands out a box
+        // pointer with NO strong retain, so an `Option[shared T]` binding
+        // initialized from one owns no +1 and its scope-exit `RcDecOption`
+        // needs a matching inner acquire. `expr_is_weak_field_read` — the gate
+        // for that acquire — matched only `ExprKind::FieldAccess`, so a
+        // container-ELEMENT read got the dec without the inc and over-released
+        // its target: valgrind reported `Invalid read of size 8` against a
+        // 24-byte box already freed, and `karac run` (JIT) printed the right
+        // answer and then died in `malloc(): unaligned tcache chunk detected`.
+        // Exactly the failure B-2026-07-21-21 measured for the field form,
+        // reached through the container instead.
+        //
+        // The read happens in a HELPER whose frame then dies, and the target
+        // dies with it — both because that is the `None` path worth pinning,
+        // and because B-2026-08-08-4 documents that LSan under-reports when the
+        // last handles survive in an unoverwritten dead frame.
+        assert_clean_asan_run(
+            r#"
+shared struct N { mut v: i64 }
+fn fill(w: mut ref Vec[weak N]) {
+    let a: N = N { v: 7i64 };
+    w.push(a);
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+}
+fn churn(d: i64) -> i64 { if d <= 0i64 { 0i64 } else { d + churn(d - 1i64) } }
+fn main() {
+    let mut w: Vec[weak N] = Vec.new();
+    fill(mut w);
+    println(churn(64i64));
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 2); } }
+}
+"#,
+            &["7", "2080", "-2"],
+            "vec_of_weak_read_back_balanced",
+        );
+    }
+
+    #[test]
     fn asan_weak_read_into_option_binding_then_weak_store_no_leak() {
         // B-2026-07-21-21: `let after: Option[N] = nodes[i].link;` (a WEAK-field
         // read) binds an `Option[shared]` that owns NO +1 — the weak read is a

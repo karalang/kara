@@ -3211,6 +3211,51 @@ mod codegen_tests {
     /// The strong-`Vec[N]` control row is what makes the first two mean
     /// anything: it must show the opposite of each.
     #[test]
+    fn test_e2e_vec_of_weak_read_back_upgrades_and_leaves_the_target_intact() {
+        // B-2026-08-08-4 gap B (read-back). B-2026-08-08-5 landed the STORE
+        // half and left a `Vec[weak T]` store-only: `match v[i] { Some(x) => .. }`
+        // failed codegen with `Undefined variable 'x'`, so a weak container was
+        // usable for cycle-breaking back-edges (which exist not to be
+        // traversed) and not for a parent-pointer walk.
+        //
+        // Row 1 is NOT about the read at all — it is the silent corruption the
+        // read exposed. `weak_targeted_types` was collected from DIRECT `weak T`
+        // fields only, so a `Vec[weak N]` never forced `N`'s two-word
+        // `{ strong, weak, … }` box; `karac_weak_downgrade` then incremented
+        // what it took to be the weak count at word 1, which in a one-word
+        // layout is the struct's FIRST FIELD. A bare `w.push(a)` changed `a.v`
+        // from 41 to 42 with no diagnostic and no sanitizer report — shipped,
+        // and reproducible on a stashed tree.
+        //
+        // Rows 2-4 are the read itself: the value while the target is alive,
+        // and `None` once it is gone. The None row is what makes this a weak
+        // ref rather than an awkward strong one.
+        let out = run_program(
+            r#"
+shared struct N { mut v: i64 }
+fn fill(w: mut ref Vec[weak N]) {
+    let a: N = N { v: 7i64 };
+    w.push(a);
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+}
+fn main() {
+    let keep: N = N { v: 41i64 };
+    let mut c: Vec[weak N] = Vec.new();
+    c.push(keep);
+    println(keep.v);
+
+    let mut w: Vec[weak N] = Vec.new();
+    fill(mut w);
+    match w[0] { Some(x) => { println(x.v); } None => { println(0 - 2); } }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "41\n7\n-2");
+        }
+    }
+
+    #[test]
     fn vec_of_weak_push_downgrades_and_takes_no_strong_count() {
         let program = |elem: &str| {
             format!(

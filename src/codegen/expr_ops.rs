@@ -1141,6 +1141,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// via `compile_field_access`. Without it the dec is unbalanced and the
     /// popped node is over-released (B-2026-07-21-21). `docs/spikes/weak-refs.md`.
     pub(super) fn expr_is_weak_field_read(&self, e: &Expr) -> bool {
+        // B-2026-08-08-4 gap B (read-back) — a weak container-ELEMENT read
+        // (`v[i]` on a `Vec[weak N]`) is the same kind of borrow as the field
+        // read below and needs the same balancing acquire. Without this arm the
+        // element read handed out a box pointer with no +1 while the binding
+        // still queued its scope-exit `RcDecOption`, so the dec was unbalanced
+        // and the target was over-released: valgrind reported an `Invalid read
+        // of size 8` against a 24-byte box already freed, at both the direct
+        // `match v[i]` and the named-intermediate spelling. The identical
+        // failure B-2026-07-21-21 measured for the field form, reached through
+        // the container instead.
+        if let ExprKind::Index { object, .. } = &e.kind {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if self
+                    .var_elem_type_exprs
+                    .get(name.as_str())
+                    .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+                {
+                    return true;
+                }
+            }
+        }
         let ExprKind::FieldAccess { object, field } = &e.kind else {
             return false;
         };
