@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 112 | 0 |
 | codegen-gap | 93 | 0 |
 | run-vs-build | 89 | 1 |
-| missing-feature | 83 | 1 |
+| missing-feature | 84 | 2 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
 | diagnostics | 42 | 0 |
@@ -111,9 +111,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 737 | 3 |
+| typecheck | 130 | 2 |
 | interp | 128 | 0 |
-| typecheck | 128 | 0 |
-| ownership | 42 | 1 |
+| ownership | 43 | 2 |
 | autopar | 33 | 1 |
 | other | 30 | 0 |
 | cli | 28 | 0 |
@@ -124,16 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1015 surfaced · 4 open · 1001 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1016 surfaced · 5 open · 1001 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
 | B-2026-08-07-20 | 2026-08-07 | codegen | medium | a SHARED-owning struct never frees its `Option[Map]`/`Option[Set]` field -- 720 B / 10 iterations at BOTH opt levels for a plain `let`, no call in the program. Not the `Option[Map]` gap (B-2026-08-07-12 leg 1 fixed that; the same struct WITHOUT the shared field is clean) and not a shared-struct gap (its `Option[String]` / `Option[Vec]` siblings are freed) -- it is the intersection, where the promotion gate's copy-supported arm is closed by the `Map` field and its own-by-transfer arm by the `shared` one. Both exclusions are individually correct -- one approach (the third disjunct) built and REVERTED: it fixes every measured shape but double-frees the self-hosted-parser destructure fixture, because struct destructure is a SECOND move-out gate; the three sites it must widen with are named in the detail | One approach BUILT AND REVERTED 2026-08-07 — the third disjunct this row proposed. It is right about the diagnosis and fixes all five measured shapes plus both `place_optres_field_move_info_ex` pairing guards, but double-frees `asan_vec_of_struct_shared_and_option_field_consumed_no_leak` because STRUCT DESTRUCTURE is a second move-out gate that does not move with it. Next attempt must widen `pattern_binding.rs:813`, `pattern_binding.rs:846` and `control_flow_match.rs:8418` in lockstep — see the detail's closing section. |
 | B-2026-08-08-3 | 2026-08-08 | codegen | medium | a `par` branch whose body is a BLOCK EXPRESSION containing a `Map` fails codegen with `Undefined variable '<outer destructured name>'`, while `karac check` passes — a clean run-vs-build divergence | src/codegen/par_blocks.rs (par branch outlining) + the let-stmt Map arm |
-| B-2026-08-08-4 | 2026-08-08 | codegen | medium | a CYCLIC `shared struct` graph leaks under RC — 288 bytes / 8 allocations for a bare 4-node cycle with no `frozen`, no `par` and no clone — but a 2-node cycle does NOT, so it is shape-dependent rather than the flat 'RC cannot collect cycles' | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
+| B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
+| B-2026-08-08-5 | 2026-08-08 | typecheck+codegen | high | the `weak` downgrade store coercion reaches a direct FIELD store but not a container-ELEMENT store, so `Vec[weak N]` cannot be built -- which makes design.md's own worked cycle-breaking example uncompilable and leaves B-2026-08-08-4 with no fix | src/typechecker/expr_method_call.rs (the Vec push element check) + the weak downgrade codegen (B-2026-07-19-8 slices 3-4) |
 
 ### Fixed (1001)
 
