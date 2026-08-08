@@ -87040,6 +87040,96 @@ fn main() {
             "the unchained control must keep working"
         );
     }
+    /// B-2026-08-08-10 — a user-declared struct whose name collides with a
+    /// prelude type must get its OWN layout, not the built-in's.
+    ///
+    /// Stdlib and user types share one namespace (B-2026-08-02-13), and
+    /// `llvm_type_for_type_expr` keys its built-in HANDLE lowerings on the NAME
+    /// alone: `Column` / `DataFrame` / `Tensor` / `Interner` all lower to a bare
+    /// `ptr`. So `struct Column { data: Vec[i64] }` returned by value from a
+    /// function declared `-> Column` emitted a body returning the real
+    /// aggregate against a signature returning `ptr`, and the build died at LLVM
+    /// module verification — "Function return type does not match operand type
+    /// of return inst" — with nothing pointing at the source. `karac check`
+    /// passed and the interpreter ran it, so this was a run-vs-build divergence
+    /// presented as a raw verifier message.
+    ///
+    /// Neither generics nor the `Vec` field is the trigger, which is worth
+    /// pinning because the row was filed as a generic-struct-return gap: the
+    /// NON-GENERIC case below failed identically pre-fix, and `Wrap[T]` (a
+    /// generic struct with a heap field and no name collision) always built.
+    /// The collision is the whole story.
+    #[test]
+    fn user_struct_shadowing_a_prelude_type_name_keeps_its_own_layout() {
+        // Generic, the shape the row was filed with.
+        assert_eq!(
+            run_program(
+                "struct Column[T] { data: Vec[T] }\n\
+                 fn from_vec[T](v: Vec[T]) -> Column[T] { return Column { data: v }; }\n\
+                 fn main() {\n\
+                     let v: Vec[u32] = [1, 2, 3];\n\
+                     let c: Column[u32] = from_vec(v);\n\
+                     println(c.data.len().to_string());\n\
+                 }",
+            )
+            .as_deref(),
+            Some("3\n")
+        );
+        // NON-generic — same failure pre-fix, which is what rules out the
+        // generic-monomorph return path as the cause.
+        assert_eq!(
+            run_program(
+                "struct Column { data: Vec[i64], name: String }\n\
+                 fn make(v: Vec[i64]) -> Column {\n\
+                     return Column { data: v, name: \"col\".to_string() };\n\
+                 }\n\
+                 fn main() {\n\
+                     let v: Vec[i64] = [1, 2, 3, 4];\n\
+                     let c: Column = make(v);\n\
+                     println((c.data.len() + c.name.len()).to_string());\n\
+                 }",
+            )
+            .as_deref(),
+            Some("7\n")
+        );
+        // The other handle-shaped prelude names on the same arm, each of which
+        // lowered to `ptr` by name alone.
+        for (ty, n) in [("DataFrame", 3), ("Interner", 5), ("Tensor", 2)] {
+            let elems = (1..=n)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let src = format!(
+                "struct {ty}[T] {{ items: Vec[T] }}\n\
+                 fn of[T](v: Vec[T]) -> {ty}[T] {{ return {ty} {{ items: v }}; }}\n\
+                 fn main() {{\n\
+                     let v: Vec[u32] = [{elems}];\n\
+                     let d: {ty}[u32] = of(v);\n\
+                     println(d.items.len().to_string());\n\
+                 }}"
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some(format!("{n}\n").as_str()),
+                "user `struct {ty}` must keep its own layout"
+            );
+        }
+        // Control: a generic struct with a heap field and NO name collision
+        // always worked, and must keep working.
+        assert_eq!(
+            run_program(
+                "struct Holder[T] { data: Vec[T] }\n\
+                 fn from_vec[T](v: Vec[T]) -> Holder[T] { return Holder { data: v }; }\n\
+                 fn main() {\n\
+                     let v: Vec[u32] = [1, 2, 3];\n\
+                     let h: Holder[u32] = from_vec(v);\n\
+                     println(h.data.len().to_string());\n\
+                 }",
+            )
+            .as_deref(),
+            Some("3\n")
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

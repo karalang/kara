@@ -377,6 +377,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(base) = self.distinct_bases.get(name) {
                     return self.llvm_type_for_type_expr(&base.clone());
                 }
+                // B-2026-08-08-10 — a USER-declared struct whose name collides
+                // with a prelude type gets its OWN layout, not the built-in's.
+                //
+                // Every hard-coded `name == "…"` arm below lowers a built-in
+                // HANDLE shape — `Column`/`DataFrame`/`Tensor`/`Interner` to a
+                // bare `ptr`, the channel trio likewise — and each is keyed on
+                // the NAME alone. Stdlib and user types share one namespace
+                // (B-2026-08-02-13), so `struct Column[T] { data: Vec[T] }`
+                // took the built-in arm and lowered to `ptr` while the body
+                // returned the real `{ { ptr, i64, i64 } }` aggregate: LLVM
+                // module verification failed with a raw "return type does not
+                // match operand type" and no diagnostic pointing at the source.
+                //
+                // The guard is the declaration pass's own record, so it fires
+                // only for a genuinely user-written declaration — `stdlib_origin`
+                // items (the baked `struct Column[=T] { handle_id: i64 }` and
+                // every spliced stdlib type) are excluded there, which is what
+                // keeps this from flagging the stdlib against itself.
+                //
+                // This does NOT make shadowing safe in general; it makes the
+                // user's type behave like the type they wrote. The paths that
+                // consume a BUILT-IN of the shadowed name still refuse, with
+                // the actionable message `reject_shadowed_prelude_types` emits.
+                // The two are complements: refuse to run built-in machinery over
+                // a user value, and stop describing a user value with built-in
+                // machinery's layout.
+                if self.user_shadowed_prelude_types.contains(name) {
+                    if let Some(args) = path.generic_args.as_ref() {
+                        if let Some(st) = self.mono_struct_type(name, args) {
+                            return st.into();
+                        }
+                    }
+                    if let Some(st) = self.struct_types.get(name) {
+                        return (*st).into();
+                    }
+                }
                 if name == "Array" {
                     if let Some(arr_ty) = self.llvm_array_type(&path.generic_args) {
                         return arr_ty;
