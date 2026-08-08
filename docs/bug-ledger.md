@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 219 | 0 |
-| leak | 152 | 2 |
+| leak | 151 | 1 |
 | double-free | 113 | 0 |
 | codegen-gap | 94 | 0 |
 | run-vs-build | 90 | 0 |
@@ -104,7 +104,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 41 | 0 |
 | crash | 39 | 0 |
 | other | 21 | 0 |
-| use-after-free | 14 | 0 |
+| use-after-free | 15 | 1 |
 
 ### By surface
 
@@ -131,7 +131,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1027 surfaced
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
-| B-2026-08-08-15 | 2026-08-08 | codegen | high | a `shared struct` constructed in an auto-par branch, transferred out through the par returns slot and then moved into a container in the joining scope, is never released -- auto-par is ON by default and the shape is ordinary | probe: `let p: P = P{..}; let q: Q = Q{..}; let mut w: Vec[P] = Vec.new(); w.push(p);` in `main` under default auto-par; clean under `KARAC_AUTO_PAR=0` |
+| B-2026-08-08-15 | 2026-08-08 | codegen | high | an RC-bearing `shared struct` published as an auto-par return slot is never adopted by the joining scope -- it LEAKS when the branch suppresses its release and is a USE-AFTER-FREE when it does not; `SlotOwnership` has no RC variant, and auto-par is ON by default | probe: `let p: P = P{..}; let q: Q = Q{..};` in `main` under default auto-par -- read-only in the joining scope gives `Invalid read of size 8` from a block freed in `__par_branch_0_0`; pushed into a container gives a definitely-lost box. Both clean under `KARAC_AUTO_PAR=0`. |
 
 ### Fixed (1015)
 
