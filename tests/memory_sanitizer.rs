@@ -61,6 +61,16 @@ mod memory_sanitizer_tests {
     /// runtime library missing, etc.) — tests should skip rather than fail in
     /// those cases to keep the harness robust on varied hosts.
     ///
+    /// B-2026-08-08-16 — AUTO-PAR IS ON, matching `karac build`'s default. The
+    /// harness used to pass `None` for the concurrency analysis, so ~1000
+    /// leak / use-after-free / double-free fixtures — the codebase's primary
+    /// memory gate — exercised SEQUENTIAL codegen only, while the shipped
+    /// compiler parallelizes. B-2026-08-08-15 existed in shipped codegen
+    /// precisely because of that hole, and flipping it surfaced four more
+    /// defects (-17, -18, -19, and the `while let` capture miss fixed
+    /// alongside this flip), every one of them reproducing with plain
+    /// `karac build`.
+    ///
     /// Leak detection is always on (Linux LSan) — the steady-state default for
     /// clean-run assertions. Panic-path assertions use
     /// [`run_under_asan_no_leak_check`] instead: a program that `emit_panic`s
@@ -68,7 +78,7 @@ mod memory_sanitizer_tests {
     /// abort-time, not steady-state leaks, and would spuriously flip the
     /// process exit code from `emit_panic`'s 1 to LSan's 23.
     fn run_under_asan(src: &str, label: &str) -> Option<(String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, true, false, false).map(|(out, _err, st)| (out, st))
+        run_under_asan_opts(src, label, true, false, true).map(|(out, _err, st)| (out, st))
     }
 
     /// Like [`run_under_asan`] but turns on ASAN's exit-time allocation stats
@@ -79,7 +89,7 @@ mod memory_sanitizer_tests {
         src: &str,
         label: &str,
     ) -> Option<(String, String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, true, true, false)
+        run_under_asan_opts(src, label, true, true, true)
     }
 
     /// Pull ASAN's exit-time malloc count out of a `print_stats=1` stderr dump.
@@ -109,7 +119,47 @@ mod memory_sanitizer_tests {
         src: &str,
         label: &str,
     ) -> Option<(String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, false, false, false).map(|(out, _err, st)| (out, st))
+        run_under_asan_opts(src, label, false, false, true).map(|(out, _err, st)| (out, st))
+    }
+
+    /// B-2026-08-08-16 — the flip's own guard. Every other fixture in this file
+    /// now compiles with auto-par, but a fixture that quietly stops being
+    /// parallelized still passes while covering nothing, and the same is true
+    /// of the whole suite if the analysis ever returns empty. This asserts the
+    /// harness's pipeline actually produces parallel groups, so "999 green with
+    /// auto-par on" keeps meaning what it says.
+    ///
+    /// Deliberately checks the ANALYSIS rather than the emitted object: it is
+    /// the thing the harness threads into codegen, it needs no linker or
+    /// symbol-table reading, and it fails for the one reason worth failing for.
+    #[test]
+    fn asan_harness_actually_parallelizes() {
+        let src = "fn work(n: i64) -> i64 { let mut t = 0; for i in 0..n { t = t + i; } t }\n\
+                   fn main() {\n\
+                       let a = work(1000);\n\
+                       let b = work(2000);\n\
+                       println(a + b);\n\
+                   }\n";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::desugar_program(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+        let groups: usize = analysis
+            .function_decisions
+            .values()
+            .map(|f| f.parallel_groups.len())
+            .sum();
+        assert!(
+            groups > 0,
+            "the ASAN harness threads this analysis into codegen; with zero \
+             parallel groups every fixture in this file silently reverts to \
+             covering sequential codegen only — the exact hole B-2026-08-08-16 \
+             closed"
+        );
     }
 
     /// `auto_par`: run the concurrency analysis and hand it to codegen, so the

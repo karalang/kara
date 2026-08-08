@@ -8393,6 +8393,45 @@ fn main() {
     }
 
     #[test]
+    fn test_par_capture_walks_a_while_let_scrutinee() {
+        // B-2026-08-08-16 — `refs_in_expr`, which builds an auto-par branch's
+        // capture set, had arms for `if let`, `while`, `for`, `loop` and
+        // `match` but NOT for `while let`, so it fell through the catch-all and
+        // neither the scrutinee nor the body contributed a single name.
+        //
+        // An outlined branch containing `while let H.Full(v) = next(i) { … i =
+        // i + 1; }` therefore never captured `i`, and `emit_par_branch_fn`
+        // failed compiling it: `Undefined variable 'i'`. `karac build` REFUSED
+        // a program `KARAC_NO_AUTOPAR=1` compiles and runs — every other walker
+        // in the same file already handled `while let`, so this was an
+        // omission, not a design choice.
+        //
+        // Getting IR at all is the assertion; the pre-fix compiler errored out
+        // here. Two payload shapes because only the HEAP one was reachable —
+        // the scalar shape was not being parallelized, which is what made the
+        // gap look narrower than it was.
+        for payload in ["Vec[i64]", "i64"] {
+            let mk = if payload == "Vec[i64]" {
+                "let mut v: Vec[i64] = Vec.new(); v.push(i); return H.Full(v);"
+            } else {
+                "return H.Full(i);"
+            };
+            let use_ = if payload == "Vec[i64]" {
+                "v.len()"
+            } else {
+                "v"
+            };
+            let ir = ir_for_par(&format!(
+                "enum H {{ Full({payload}), Empty }}\n                 fn next(i: i64) -> H {{ if i < 6 {{ {mk} }} return H.Empty; }}\n                 fn main() {{\n                     let mut i = 0;\n                     while let H.Full(v) = next(i) {{ println({use_}); i = i + 1; }}\n                     println(99);\n                 }}\n"
+            ));
+            assert!(
+                ir.contains("define"),
+                "while-let payload {payload} must lower under auto-par"
+            );
+        }
+    }
+
+    #[test]
     fn test_par_published_column_binding_slot_is_a_pointer() {
         // B-2026-08-08-18 — a handle-backed builtin published out of a par
         // branch must get a POINTER return slot, whatever expression form

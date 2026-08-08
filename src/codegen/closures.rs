@@ -4631,6 +4631,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.refs_in_expr(object, refs, defs);
                 self.refs_in_expr(index, refs, defs);
             }
+            // B-2026-08-08-16 — block-carrying forms that fell through the
+            // catch-all below, so NEITHER their scrutinee/bindings NOR their
+            // body contributed to the capture set.
+            //
+            // `while let` is the one that was reachable and it cost a build:
+            // an auto-par branch containing `while let H.Full(v) = next(i) {
+            // … i = i + 1; }` never captured `i`, so `emit_par_branch_fn`
+            // compiled the outlined statement and `next(i)` failed with
+            // `Undefined variable 'i'` — `karac build` refusing a program
+            // `KARAC_NO_AUTOPAR=1` compiles and runs. The `if let` arm directly
+            // above has always been here; the `while let` twin simply was not,
+            // and every OTHER walker in this file handles both.
+            //
+            // The rest are added together because the failure mode is a MISSED
+            // CAPTURE — a hard "Undefined variable" at the outlining site, not
+            // a conservative miss — so a variant that is merely unreachable
+            // today is one par-analysis widening away from the same bug. Each
+            // mirrors the shape of its sibling arm above.
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                self.refs_in_expr(value, refs, defs);
+                for name in pattern.binding_names() {
+                    defs.insert(name);
+                }
+                self.refs_in_block(body, refs, defs);
+            }
+            ExprKind::LabeledBlock { body, .. } | ExprKind::Comptime(body) => {
+                self.refs_in_block(body, refs, defs)
+            }
+            ExprKind::Providers { bindings, body } => {
+                for b in bindings {
+                    self.refs_in_expr(&b.value, refs, defs);
+                }
+                self.refs_in_block(body, refs, defs);
+            }
             _ => {}
         }
     }
