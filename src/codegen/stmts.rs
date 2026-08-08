@@ -9081,6 +9081,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         // B-2026-08-07-19 — and the `Map`/`Set` handle half,
                         // paired with the same widening in the struct drop.
                         || self.result_field_map_or_set_half_ok(&field_te).is_some()
+                        // B-2026-08-07-20 — the `Option[Map]` / `Option[Set]`
+                        // twin, paired with the caller-retains disjunct that
+                        // makes the SOURCE's drop free this field. Without the
+                        // transfer the source frees it and the leaf's own
+                        // consumer frees it too; `zero_struct_field_move_cap`'s
+                        // `Option` arm zeroes the tag, so the source's
+                        // `OptionInline` free skips it and the leaf is the sole
+                        // owner.
+                        || Self::option_payload_te(&field_te)
+                            .is_some_and(|pt| self.option_payload_map_or_set_drop_ok(&pt))
                         || matches!(
                             &field_te.kind,
                             TypeKind::Path(p) if p.segments.last().is_some_and(|s|
@@ -9109,8 +9119,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-07-03-27 — an `Option[<user struct/enum>]` field. The
                 // branches above don't cover it: `destructure_field_needs_cleanup`
                 // excludes `Option`, and `transferable` (Vec/String/struct) does
-                // too. Struct drop NEVER frees an `Option` field (excluded by
-                // design — B-2026-07-03-28, blocked), so when this destructure
+                // too. (STALE AS WRITTEN, corrected B-2026-08-07-20: this used
+                // to say "struct drop NEVER frees an `Option` field (excluded by
+                // design — B-2026-07-03-28, blocked)". It has freed one since
+                // that row's Facet A landed, and the classes have only widened
+                // since — B-2026-08-07-12 leg 1 for `Option[Map]`, this row for a
+                // shared-owning owner. What still holds, and is what this branch
+                // relies on, is that the classes below are ones the SOURCE's drop
+                // does not reach.) So when this destructure
                 // OWNS the source (a fresh temp, or a moved-in owned binding —
                 // NOT a `ref`/borrow, which still owns the payload elsewhere) the
                 // leaf must free the `Some` payload or it leaks. Independent of
@@ -9862,6 +9878,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload itself (no leak).
         if self.option_inline_payload_elem(te).is_some() {
             self.track_inline_option_payload_var(var_name, alloca, te);
+            return;
+        }
+        // B-2026-08-07-20 — the `Option[Map]` / `Option[Set]` HANDLE sibling of
+        // the arm above. `option_inline_payload_elem` reaches only the inline
+        // `{ptr,len,cap}` overlay shapes, so a handle payload fell through to
+        // "no cleanup" — fine while the owner's struct drop skipped the field,
+        // and a double free the moment the caller-retains disjunct armed it (the
+        // source drop and this leaf's `match m { Some(x) => .. }` both freed).
+        // `track_inline_option_map_payload_var` is the exact peer:
+        // tag-guarded scope-exit free plus membership in
+        // `inline_option_map_payload_vars`, so a `Some`-binding arm suppresses
+        // it the same way it suppresses the inline twin.
+        if Self::option_payload_te(te).is_some_and(|pt| self.option_payload_map_or_set_drop_ok(&pt))
+        {
+            self.track_inline_option_map_payload_var(var_name, alloca, te);
             return;
         }
         // B-2026-07-21-15 — the Result sibling: a direct-String/Vec-halves

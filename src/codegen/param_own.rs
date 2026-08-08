@@ -67,7 +67,9 @@ use inkwell::values::PointerValue;
 use inkwell::{AddressSpace, IntPredicate};
 use std::collections::HashMap;
 
-use crate::ast::{Expr, ExprKind, GenericArg, TypeExpr, TypeKind};
+use crate::ast::{
+    Expr, ExprKind, GenericArg, ImplItem, Item, SelfParam, TraitItem, TypeExpr, TypeKind,
+};
 
 use super::state::{EnumDropKind, EnumLayout};
 
@@ -568,6 +570,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     // drain (synthesized as non-copy-supported) skips Option
                     // fields, so a registered element's aliased Option leaf
                     // would lose its leaf-cleanup and leak.
+                    // B-2026-08-07-20 — the ban above is lifted for exactly the
+                    // structs whose drain DOES free the field. Its premise ("a
+                    // shared-bearing struct's drain skips Option fields") is what
+                    // `shared_owning_struct_sole_field_owner` changes, so the two
+                    // move in lockstep off ONE predicate: admit only when the
+                    // enclosing struct passes it AND the payload is in the class
+                    // `emit_struct_drop_synthesis_impl` promotes. Admitting
+                    // without the drain (or draining without admitting) is the
+                    // leak / double-free pair this row measured.
+                    "Option"
+                        if self.copy_support_for_loop_shared_mode
+                            && stack.last().is_some_and(|s| {
+                                self.shared_owning_struct_sole_field_owner_core(s)
+                            }) =>
+                    {
+                        Self::option_payload_te(fte)
+                            .map(|pt| {
+                                self.is_string_type_expr(&pt)
+                                    || self.extract_vec_elem_type(&pt).is_some()
+                            })
+                            .unwrap_or(false)
+                            || self.option_inner_shared_type_for_type_expr(fte).is_some()
+                    }
                     "Option" if self.copy_support_for_loop_shared_mode => false,
                     "Option" => {
                         Self::option_payload_te(fte)
@@ -932,6 +957,139 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mono_struct_type_from_active_subst(struct_name)
             .is_some()
             && self.aggregate_param_copy_supported_struct_mono(struct_name)
+    }
+
+    /// B-2026-08-07-20 — is `struct_name` the SOLE owner of its own field heap
+    /// at every death of the type?
+    ///
+    /// The gap this answers: the promotion gate in
+    /// `emit_struct_drop_synthesis_impl` has two arms — copy-support and
+    /// own-by-transfer — and a struct that owns a `shared` field plus a
+    /// `Map`/`Set`-payload `Option` closes BOTH, each for its own correct
+    /// reason (the `Map` handle is not duplicable; a shared-owning struct stays
+    /// caller-retains per B-2026-08-05-32). Neither refusal is about ownership,
+    /// which is what the gate actually wants to know, and the shape leaked its
+    /// `Option` payload at every death.
+    ///
+    /// The two refusals are read here as EVIDENCE rather than as obstacles:
+    /// `make_aggregate_param_callee_owned_inst` declines this shape (so no
+    /// callee ever entry-copies it or registers a drop) and
+    /// `move_declined_copy_struct_arg` returns early for it (so no caller ever
+    /// retracts). Callee copies nothing, caller keeps everything — one owner,
+    /// which is the question the gate asks, reached one step shorter than
+    /// either proxy.
+    ///
+    /// The final conjunct is the scope, not a detail — see
+    /// [`Self::struct_used_as_bare_by_value_param`].
+    ///
+    /// SPLIT IN TWO ON PURPOSE, and the split is a termination argument rather
+    /// than a style choice. The `_core` half holds every conjunct that cannot
+    /// re-enter copy-support analysis, and it is what the for-loop
+    /// strict-shared arm in [`Self::field_copy_supported`] consults — that arm
+    /// runs INSIDE `aggregate_param_copy_supported_struct`, so a predicate that
+    /// called back into it would recurse without bound. The full predicate adds
+    /// `!aggregate_param_copy_supported_struct` and is what the drop gate uses.
+    ///
+    /// The two sites still agree, which is the property that matters: when a
+    /// struct IS copy-supported, the drop gate admits it on its FIRST arm and
+    /// `for_loop_copy_supported` registers it on ITS first disjunct, so the
+    /// extra conjunct only decides WHICH arm answers, never whether the two
+    /// halves of the pairing disagree.
+    pub(super) fn shared_owning_struct_sole_field_owner_core(&self, struct_name: &str) -> bool {
+        if !self.struct_types.contains_key(struct_name)
+            || self.shared_types.contains_key(struct_name)
+        {
+            return false;
+        }
+        if !self
+            .struct_generic_params
+            .get(struct_name)
+            .is_none_or(|g| g.is_empty())
+        {
+            return false;
+        }
+        self.struct_owns_shared_field(struct_name, &mut Vec::new())
+            && !self.struct_is_self_referential(struct_name)
+            && !self.struct_used_as_bare_by_value_param(struct_name)
+    }
+
+    /// [`Self::shared_owning_struct_sole_field_owner_core`] plus the
+    /// not-copy-supported conjunct. Used by the drop gate, where the
+    /// copy-support arm is a sibling disjunct rather than the caller's frame.
+    pub(super) fn shared_owning_struct_sole_field_owner(&self, struct_name: &str) -> bool {
+        self.shared_owning_struct_sole_field_owner_core(struct_name)
+            && !self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new())
+    }
+
+    /// Does ANY function, method, or `self` receiver in the program take
+    /// `struct_name` as a BARE BY-VALUE parameter?
+    ///
+    /// B-2026-08-07-20 — the scope condition on the caller-retains disjunct in
+    /// `emit_struct_drop_synthesis_impl`. A shared-owning struct is
+    /// caller-retains at a call boundary (B-2026-08-05-32), so the callee gets a
+    /// shallow copy, registers no drop, and any field it moves out is zeroed in
+    /// ITS copy — a write the caller's frame never sees. Arming the caller's
+    /// drop for a promoted `Option`/`Result` field therefore double-frees
+    /// against a callee that moves that field out, in all three spellings
+    /// (`match a.m { Some(x) => .. }`, `let mm = a.m`, and the escaping
+    /// `Some(x) => x`), measured at 470 valgrind errors / 26 invalid frees at
+    /// both opt levels. Closing that needs a callee-BODY predicate — "does this
+    /// callee move this promoted field out of this param" — which is its own
+    /// slice; until then the disjunct declines for any struct that could reach
+    /// a call boundary at all.
+    ///
+    /// Whole-program and type-keyed ON PURPOSE. The drop fn is synthesized once
+    /// per struct TYPE and runs at every death of that type, so its gate needs
+    /// an answer true at every site at once — a per-site condition does not fit
+    /// the synthesis (the mismatch this row's original text named as the real
+    /// work). "Is this type ever a by-value param" is exactly such an answer,
+    /// and it is conservative in the safe direction: a struct that is BOTH
+    /// let-bound and passed by value keeps today's leak rather than gaining a
+    /// double free.
+    pub(super) fn struct_used_as_bare_by_value_param(&self, struct_name: &str) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            // No snapshot (REPL cell / partial compile): assume the worst.
+            return true;
+        };
+        let is_bare = |ty: &TypeExpr| -> bool {
+            matches!(&ty.kind, TypeKind::Path(p)
+                if p.segments.last().map(String::as_str) == Some(struct_name))
+        };
+        let fn_takes =
+            |f: &crate::ast::Function| -> bool { f.params.iter().any(|p| is_bare(&p.ty)) };
+        for item in &program.items {
+            match item {
+                Item::Function(f) => {
+                    if fn_takes(f) {
+                        return true;
+                    }
+                }
+                Item::ImplBlock(b) => {
+                    let target_is_self = is_bare(&b.target_type);
+                    for it in &b.items {
+                        let ImplItem::Method(m) = it else { continue };
+                        if fn_takes(m) {
+                            return true;
+                        }
+                        // A consuming receiver (`fn into_x(self)`) on an `impl`
+                        // for this struct is a by-value param under another name.
+                        if target_is_self && matches!(m.self_param, Some(SelfParam::Owned)) {
+                            return true;
+                        }
+                    }
+                }
+                Item::TraitDef(t) => {
+                    for it in &t.items {
+                        let TraitItem::Method(m) = it else { continue };
+                        if m.params.iter().any(|p| is_bare(&p.ty)) {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Does an owned by-value struct param of `struct_name` arrive OWN BY

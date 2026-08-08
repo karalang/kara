@@ -30088,31 +30088,30 @@ fn main() {
         );
     }
 
-    // PINNED REPRODUCER for phase-12 #43 (label-in-plain-drop leak), deferred.
-    // `#[ignore]`d because it FAILS under LeakSanitizer (the leak it pins is not
-    // yet fixed) — leaving it un-ignored would red the Linux-CI `memory-sanitizer`
-    // gate. Run it deliberately under the authoritative LSan harness to observe
-    // the leak:
-    //   scripts/lsan-local.sh asan_vec_of_struct_labeled_plain_drop_leaks_pinned_43 -- --ignored
-    // (On macOS — no LeakSanitizer — it passes vacuously; the leak only shows
-    // under LSan.) **Un-ignore when #43 lands.**
-    //
-    // The leak: a LABELED call node (`Arg { label: Some(..), value: Expr }`) is
+    // Phase-12 #43 (label-in-plain-drop leak) — FIXED by B-2026-08-07-20, and
+    // un-ignored here, which is the regression the checklist entry named as the
+    // proof. A LABELED call node (`Arg { label: Some(..), value: Expr }`) is
     // built and PLAIN-DROPPED without consuming (read by `ref`, no `for a in
-    // args` / render). The shared-enum RC box-walker rc-dec's the shared `value`
-    // (refcount-safe) and frees the Vec buffer, but does NOT free the plain
-    // `Option[String]` label — re-adding that free (#42's removed arm) instead
-    // double-frees it against a by-value consumer that ALSO frees it, because
-    // the for-loop's move-out suppression can't reach the box's retained payload
-    // alias. The render/CONSUME path (the real parser path) is leak-free
-    // (`asan_vec_of_struct_shared_and_option_field_consumed_no_leak`); only this
-    // build-then-discard-labeled-call shape leaks. Closing it needs field-granular
-    // move-out suppression for shared-enum payloads (zero the plain-heap caps,
-    // keep the shared-edge pointers) — its own slice. See phase-12 §"Parser in
-    // Kāra" #43. All Strings >=36 bytes for LSan visibility.
+    // args` / render). The shared-enum RC box-walker rc-dec'd the shared `value`
+    // and freed the Vec buffer but never freed the plain `Option[String]` label,
+    // because `Arg`'s struct drop refused to promote an `Option` field: the
+    // copy-support arm is closed by the shared `value` and the own-by-transfer
+    // arm is too (B-2026-08-05-32 keeps a shared-owning struct on
+    // caller-retains). `shared_owning_struct_sole_field_owner` supplies the
+    // third arm.
+    //
+    // #43 predicted the fix would have to be move-out SUPPRESSION (zero the
+    // plain-heap caps in the box's retained payload alias, keep the shared-edge
+    // pointers). It went the other way: the drain frees the label, and the
+    // for-loop element registration DUPLICATES it on extract so the consume path
+    // owns an independent copy — the same clone-on-extract the bare-`shared` and
+    // `String` leaves already take. Duplication rather than suppression, so
+    // nothing has to reach across into the box's alias. The consume peer
+    // (`asan_vec_of_struct_shared_and_option_field_consumed_no_leak`, directly
+    // below) is the other half of that pairing and guards it.
+    // All Strings >=36 bytes for LSan visibility.
     #[test]
-    #[ignore = "phase-12 #43: known label-plain-drop leak, deferred; reproduces under LSan; un-ignore when the field-granular shared-enum move-out suppression lands"]
-    fn asan_vec_of_struct_labeled_plain_drop_leaks_pinned_43() {
+    fn asan_vec_of_struct_labeled_plain_drop_no_leak_43() {
         assert_clean_asan_run(
             r#"
 shared enum Expr { Lit(LitNode), Call(CallNode) }
@@ -30274,6 +30273,147 @@ fn main() {
 "#,
             &["55250"],
             "vec_of_struct_shared_and_option_field_consumed",
+        );
+    }
+
+    // B-2026-08-07-20 — a SHARED-owning struct never freed its `Option[Map]` /
+    // `Option[Set]` field. 4,320 B in 60 blocks at BOTH opt levels for plain
+    // `let` bindings with no call anywhere in the program (stash-proven red).
+    //
+    // The gap is an INTERSECTION, which is why neither sibling row reaches it:
+    // the promotion gate in `emit_struct_drop_synthesis_impl` has two arms and
+    // this shape closes both, each for its own correct reason. The copy-support
+    // arm is closed by the `Map` field (a handle the outer-buffer copy cannot
+    // duplicate — the same fact that keeps `Se` below off that arm), and the
+    // own-by-transfer arm by the `shared` field (B-2026-08-05-32 keeps a
+    // shared-owning struct on caller-retains). Neither refusal is about
+    // ownership. `shared_owning_struct_sole_field_owner` asks that question
+    // directly and supplies a third arm.
+    //
+    // The controls are the diagnosis: `Sb` (`Option[String]`) and `Sc`
+    // (`Option[Vec]`) pass through the FIRST arm and were always clean, so "a
+    // shared-owning struct never frees its Option fields" is false; `Se` (no
+    // shared field) passes through the SECOND since B-2026-08-07-12 leg 1, so
+    // "an `Option[Map]` field is never freed" is false too. `Sd` is the
+    // direct-shared spelling of `Sa` and leaked identically; `Sf` is the `Set`
+    // twin. The three move-out spellings (`match a.m`, `let qm = a.m`, and the
+    // whole-struct destructure `let Sa { n, m } = r`) carry the pairing: the
+    // destructure needed its own `Option[Map]` transfer + leaf tracker, without
+    // which the newly-armed source drop and the leaf's consumer both freed
+    // (940 valgrind errors, measured).
+    #[test]
+    fn asan_shared_owning_struct_option_map_field_freed() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node { v: i64 }
+struct Sa { n: Option[Node], m: Option[Map[String, i64]] }
+struct Sd { n: Node, m: Option[Map[String, i64]] }
+struct Sb { n: Option[Node], m: Option[String] }
+struct Sc { n: Option[Node], m: Option[Vec[i64]] }
+struct Se { m: Option[Map[String, i64]] }
+struct Sf { n: Option[Node], s: Option[Set[String]] }
+fn mk(i: i64) -> Map[String, i64] {
+    let mut mm: Map[String, i64] = Map.new();
+    mm.insert("map_key_long_enough_to_force_a_heap_allocation".to_string(), i);
+    mm
+}
+fn mkset(i: i64) -> Set[String] {
+    let mut ss: Set[String] = Set.new();
+    ss.insert("set_key_long_enough_to_force_a_heap_allocation".to_string());
+    ss
+}
+fn main() {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        match a.n { Some(nn) => { t = t + nn.v; } None => {} }
+        let d: Sd = Sd { n: Node { v: i }, m: Option.Some(mk(i)) };
+        t = t + d.n.v;
+        let b: Sb = Sb { n: Option.Some(Node { v: i }), m: Option.Some("a_string_long_enough_to_force_heap_alloc_x".to_string()) };
+        match b.m { Some(x) => { t = t + x.len(); } None => {} }
+        let c: Sc = Sc { n: Option.Some(Node { v: i }), m: Option.Some(Vec.new()) };
+        match c.m { Some(x) => { t = t + x.len(); } None => {} }
+        let e: Se = Se { m: Option.Some(mk(i)) };
+        match e.m { Some(x) => { t = t + x.len(); } None => {} }
+        let f: Sf = Sf { n: Option.Some(Node { v: i }), s: Option.Some(mkset(i)) };
+        match f.s { Some(x) => { t = t + x.len(); } None => {} }
+        let p: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        match p.m { Some(x) => { t = t + x.len(); } None => {} }
+        let q: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let qm = q.m;
+        match qm { Some(x) => { t = t + x.len(); } None => {} }
+        let r: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let Sa { n, m } = r;
+        match n { Some(nn) => { t = t + nn.v; } None => {} }
+        match m { Some(x) => { t = t + x.len(); } None => {} }
+        let u: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let Sa { n: un, m: um } = u;
+        match un { Some(nn) => { t = t + nn.v; } None => {} }
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+            &["1700"],
+            "shared_owning_struct_option_map_field_freed",
+        );
+    }
+
+    // B-2026-08-07-20's SCOPE GUARD, and the reason the fix above carries a
+    // whole-program condition rather than only a type condition.
+    //
+    // The caller-retains argument holds inside ONE frame. At a call boundary a
+    // shared-owning struct stays caller-retains (B-2026-08-05-32), so the callee
+    // gets a shallow copy, registers no drop, and zeroes any field it moves out
+    // in ITS copy — a write the caller's frame never sees. Arming the caller's
+    // drop for a promoted field therefore double-frees against a callee that
+    // moves that field out: measured at 470 valgrind errors / 26 invalid frees
+    // at both opt levels, in all three spellings (`match a.m { Some(x) => .. }`,
+    // `let mm = a.m`, and the escaping `Some(x) => x`), and NOT fixable by
+    // deep-copying the param at entry — a `Map`/`Set` handle is the one thing
+    // `deep_copy_owned_struct_param_field_move` cannot duplicate.
+    //
+    // So `struct_used_as_bare_by_value_param` declines the disjunct for any
+    // struct that could reach a call boundary at all, and this fixture is what
+    // holds that line: `Sa` here IS a by-value param, so its `Option[Map]` field
+    // keeps today's (correct) behavior — the callee owns the move-out, nothing
+    // double-frees, and the residual leak on the non-moving path stays open
+    // rather than trading a leak for a double free. Closing it needs a
+    // callee-BODY predicate ("does this callee move this promoted field out of
+    // this param"), which is its own slice.
+    #[test]
+    fn asan_shared_owning_struct_option_map_by_value_param_single_owner() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node { v: i64 }
+struct Sa { n: Option[Node], m: Option[Map[String, i64]] }
+fn mk(i: i64) -> Map[String, i64] {
+    let mut mm: Map[String, i64] = Map.new();
+    mm.insert("map_key_long_enough_to_force_a_heap_allocation".to_string(), i);
+    mm
+}
+fn take_match(a: Sa) -> i64 { match a.m { Some(x) => { x.len() } None => { 0 } } }
+fn take_let(a: Sa) -> i64 { let mm = a.m; match mm { Some(x) => { x.len() } None => { 0 } } }
+fn take_escape(a: Sa) -> Option[Map[String, i64]] { a.m }
+fn main() {
+    let mut t: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        t = t + take_match(a);
+        let b: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        t = t + take_let(b);
+        let c: Sa = Sa { n: Option.Some(Node { v: i }), m: Option.Some(mk(i)) };
+        let esc = take_escape(c);
+        match esc { Some(x) => { t = t + x.len(); } None => {} }
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+            &["60"],
+            "shared_owning_struct_option_map_by_value_param",
         );
     }
 

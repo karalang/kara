@@ -1702,9 +1702,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_generic_params
             .get(struct_name)
             .is_none_or(|g| g.is_empty());
+        // B-2026-08-07-20 — the THIRD way to have exactly one owner, beside
+        // copy-support (duplication) and own-by-transfer (transfer):
+        // CALLER-RETAINS, where nothing is duplicated and nothing is
+        // transferred. A struct that owns a `shared` field plus a `Map`/`Set`-
+        // payload `Option` closes both arms above — the `Map` handle is not
+        // duplicable, and B-2026-08-05-32 keeps a shared-owning struct on
+        // caller-retains — so its `Option` payload was freed by nobody (720 B /
+        // 10 iterations at both opt levels for a bare `let`, with no call
+        // anywhere in the program). Neither refusal is about ownership;
+        // `shared_owning_struct_sole_field_owner` reads them as the evidence
+        // they are and asks the ownership question directly.
+        //
+        // It carries its own scope condition (the struct is never a bare
+        // by-value param) because the caller-retains story only holds inside
+        // one frame — see `struct_used_as_bare_by_value_param`.
         let struct_callee_owned = self
             .aggregate_param_copy_supported_struct(struct_name, &mut Vec::new())
-            || (struct_non_generic && self.struct_param_owned_by_transfer(struct_name, false));
+            || (struct_non_generic && self.struct_param_owned_by_transfer(struct_name, false))
+            || self.shared_owning_struct_sole_field_owner(struct_name);
         if struct_callee_owned {
             let mut option_idxs: Vec<usize> = Vec::new();
             for (idx, k) in kinds.iter().enumerate() {
