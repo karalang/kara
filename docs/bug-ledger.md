@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 151 | 1 |
 | double-free | 113 | 1 |
 | codegen-gap | 94 | 1 |
-| run-vs-build | 89 | 1 |
+| run-vs-build | 89 | 0 |
 | missing-feature | 85 | 1 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 739 | 3 |
+| codegen | 739 | 2 |
 | typecheck | 132 | 1 |
 | interp | 128 | 0 |
 | ownership | 44 | 2 |
@@ -124,21 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1023 surfaced · 5 open · 1008 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1023 surfaced · 4 open · 1009 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-01-33 | 2026-08-01 | ownership+autopar | high | `shared struct` was excluded from parallelism on BOTH surfaces — explicit `par {}` hard-errored (E_CONCURRENT_SHARED_STRUCT) and auto-par declined via the concurrency.rs B-2026-07-16-6 gate (reported, NOT silent — see the correction in detail); `frozen` now admits both | — |
-| B-2026-08-08-3 | 2026-08-08 | codegen | medium | a `par` branch whose body is a BLOCK EXPRESSION containing a `Map` fails codegen with `Undefined variable '<outer destructured name>'`, while `karac check` passes — a clean run-vs-build divergence | src/codegen/par_blocks.rs (par branch outlining) + the let-stmt Map arm |
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-6 | 2026-08-08 | codegen | medium | a caller-retains struct PARAM whose callee moves a promoted `Option`/`Result` field out has two owners -- 470 valgrind errors / 26 invalid frees at BOTH opt levels, in all three spellings. This is the half B-2026-08-07-20 scoped OUT rather than fixed: its `struct_used_as_bare_by_value_param` condition declines the caller-retains drop disjunct for any struct that could reach a call boundary, so the shape keeps today's (correct) behavior and its residual leak on the non-moving path | src/codegen/param_own.rs (`shared_owning_struct_sole_field_owner`'s `struct_used_as_bare_by_value_param` conjunct) |
 | B-2026-08-08-10 | 2026-08-08 | codegen | medium | a generic struct with a `Vec[T]` FIELD returned by value from a generic function fails codegen — `ret { { ptr, i64, i64 } } %field` against a `ptr` return | probe: `struct Column[T] { data: Vec[T] }` + `fn from_vec[T](v: Vec[T]) -> Column[T]` |
 
-### Fixed (1008)
+### Fixed (1009)
 
-<details><summary>1008 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1009 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1168,6 +1167,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-07-27 | other | medium | kata #133's par lane compiles and runs after B-2026-08-01-33, but restoring it is the whole bench pipeline -- the .kara's "DOES NOT COMPILE" header,… | kara-katas 2603167 |
 | B-2026-08-08-1 | ownership | medium | the `par` capture gate is keyed on binding NAMES, so two branches that each declare their own local `let n = <shared>` read as ONE binding reachable… | 8c26ad4a |
 | B-2026-08-08-2 | typecheck+ownership | high | this row's PREMISE WAS WRONG -- kata #133 was never blocked on `Map[K, frozen V]` (its `visited` map holds the CLONES, which are mutated and can neve… | d174d04c |
+| B-2026-08-08-3 | codegen | medium | a `par` branch whose body is a BLOCK EXPRESSION containing a `Map` fails codegen with `Undefined variable '<outer destructured name>'`, while `karac… | da9ae409. Two holes in the par-branch return-slot type inference (`src/codegen/stmts.rs`): `infer_block_tail_llvm_type` now honours an inner `let`'s type ANNOTATION (it consulted only the RHS, while its own caller checks the annotation first), and `infer_expr_llvm_type`'s `MethodCall` arm types a builtin container/string `len()` from `method_callee_types` — the typechecker's own span-keyed record of the receiver — restricted to methods with one possible return type across every receiver. Neither the `Map` nor the slot-ownership transfer this row named is involved; Vec/String/Set reproduce identically, and the reported name is the BRANCH binding, not the outer destructured one. 18 variants build and agree with the interpreter; valgrind clean at both opt levels. Fixtures `par_branch_block_body_ending_in_container_len` and `par_branch_block_body_binding_distinct_from_destructured_name`, both stash-proven red. |
 | B-2026-08-08-5 | typecheck+codegen | high | the `weak` downgrade store coercion reaches a direct FIELD store but not a container-ELEMENT store, so `Vec[weak N]` cannot be built -- which makes d… | 1bb5328a |
 | B-2026-08-08-7 | other | medium | six ASAN fixtures were passing VACUOUSLY — their programs fail typecheck and `karac build` would refuse them, but the harness only ever asserted the… | 7c7de323 |
 | B-2026-08-08-8 | typecheck | low | expected-return seeding reaches only PATH callees, and its argument checking only collection literals — a plain generic free fn still rejects a conte… | a2ce6b79 |
