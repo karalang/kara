@@ -8203,7 +8203,9 @@ Key definitions:
 
 **Arc and synchronization:** `shared struct` values cannot cross parallel region boundaries with multi-task access — the compiler rejects this at Phase 2 (see rule above). For types that genuinely need concurrent *mutation* from multiple tasks, use `par struct` (see [Part 5b](#part-5b-concurrent-shared-types-par-struct)); for a value that is only READ concurrently, `frozen` shares it with no refcount traffic at all and without converting the type (see [Part 5c](#part-5c-frozen-handles-frozen-t-and-freeze)) — its `mut` field constraints (`Atomic[T]` / `Mutex[T]`) are enforced at the definition site, providing a structural compile-time guarantee rather than a runtime check. The promotion pass handles only non-shared RC values and `par struct` (which is always Arc); `shared struct` no longer participates in Arc promotion. See Part 5 for `lock` block syntax details.
 
-**Cycles:** The compiler analyzes the type graph at compile time and rejects types that form ownership cycles. The `weak` annotation breaks back-edges (returns `Option[T]` on access, matching Swift's `weak` semantics). No runtime cycle collector — zero overhead, deterministic deallocation.
+**Cycles:** The compiler analyzes the type graph at compile time and rejects types that **cannot be constructed acyclically** — a self-reference with no way to terminate, whether direct (`mut next: Node`) or through a type that has no empty case (`mut kid: (Node, i64)`, since every tuple position must be filled). The `weak` annotation breaks back-edges (returns `Option[T]` on access, matching Swift's `weak` semantics). No runtime cycle collector — zero overhead, deterministic deallocation.
+
+A self-reference through a container that **does** have an empty case — `Option[Node]`, `Vec[Node]`, `Map[K, Node]`, `Set[Node]` — is **accepted**, because `None` and the empty container terminate the recursion. These are the ordinary linked-list, tree, and AST shapes, and built acyclically they are leak-free. The type graph cannot tell such a type apart from one whose instances happen to form a cycle at runtime, and rejecting the shape would be wrong twice over: it would refuse every tree and AST, and the only escape hatch it could name is the wrong tool — `weak` breaks *back-edges*, so `Vec[weak Node]` as a **children** list drops each child as soon as the builder's handle dies. Placing `weak` correctly is therefore the programmer's obligation at the back-edge, not something the compiler can infer; a container-mediated cycle built without one leaks its graph, and that is a documented limit of reference counting rather than a missed rejection.
 
 ```
 struct Parent { children: Vec[Child] }
@@ -8295,7 +8297,7 @@ let alias = root;        // alias and root point to the same node (RC increment)
 | Assignment | Move | RC increment (shared reference) |
 | Mutation | Owned or `mut ref` | Interior mutability |
 | Destruction | Deterministic drop | RC decrement, drop at zero |
-| Cycles | Compile-time rejected | `weak` required on back-edges |
+| Cycles | Rejected when unconstructible | `weak` required on back-edges (container-mediated cycles are accepted and leak without one) |
 
 **Graphs with cycles:**
 

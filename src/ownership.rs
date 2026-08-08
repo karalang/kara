@@ -1490,8 +1490,12 @@ impl<'a> OwnershipChecker<'a> {
     // ── Cycle Detection ─────────────────────────────────────────
 
     fn check_cycles(&mut self) {
-        // Build ownership graph: type name → owned field type names
-        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+        // Build ownership graph: type name → owned field type names, each
+        // tagged with whether every realizing occurrence reached it through a
+        // TUPLE (see `owned_edge_targets` for why the tuple is the one
+        // container this walk descends into, and why the tag is load-bearing
+        // for the diagnostic).
+        let mut graph: HashMap<String, Vec<(String, bool)>> = HashMap::new();
 
         // Dedup a node's outgoing edges by target type NAME, preserving
         // first-occurrence order. A cycle through type `X` is one cycle
@@ -1501,18 +1505,35 @@ impl<'a> OwnershipChecker<'a> {
         // once per realizing field, emitting byte-identical duplicate
         // `ownership cycle detected` diagnostics (same span, same message).
         // Distinct neighbor names (genuinely distinct cycles) are preserved.
-        let dedup_edges = |mut edges: Vec<String>| -> Vec<String> {
-            let mut seen = HashSet::new();
-            edges.retain(|e| seen.insert(e.clone()));
-            edges
+        //
+        // The merged edge is tuple-mediated only when EVERY occurrence was: a
+        // type that reaches `X` both directly and through a tuple has a direct
+        // back-edge, and the direct advice (`weak`) is the one that applies.
+        let dedup_edges = |edges: Vec<(String, bool)>| -> Vec<(String, bool)> {
+            let mut order: Vec<String> = Vec::new();
+            let mut via_tuple: HashMap<String, bool> = HashMap::new();
+            for (name, tupled) in edges {
+                match via_tuple.get_mut(&name) {
+                    Some(seen) => *seen = *seen && tupled,
+                    None => {
+                        order.push(name.clone());
+                        via_tuple.insert(name, tupled);
+                    }
+                }
+            }
+            order
+                .into_iter()
+                .map(|n| {
+                    let tupled = via_tuple[&n];
+                    (n, tupled)
+                })
+                .collect()
         };
 
         for (name, info) in &self.typecheck_result.struct_info {
             let mut edges = Vec::new();
             for (_, field_ty, _) in &info.fields {
-                if let Some(target) = owned_type_name(field_ty) {
-                    edges.push(target);
-                }
+                owned_edge_targets(field_ty, false, &mut edges);
             }
             graph.insert(name.clone(), dedup_edges(edges));
         }
@@ -1523,16 +1544,12 @@ impl<'a> OwnershipChecker<'a> {
                 match variant {
                     crate::typechecker::VariantTypeInfo::Tuple(types) => {
                         for ty in types {
-                            if let Some(target) = owned_type_name(ty) {
-                                edges.push(target);
-                            }
+                            owned_edge_targets(ty, false, &mut edges);
                         }
                     }
                     crate::typechecker::VariantTypeInfo::Struct(fields) => {
                         for (_, ty) in fields {
-                            if let Some(target) = owned_type_name(ty) {
-                                edges.push(target);
-                            }
+                            owned_edge_targets(ty, false, &mut edges);
                         }
                     }
                     crate::typechecker::VariantTypeInfo::Unit => {}
@@ -1562,7 +1579,7 @@ impl<'a> OwnershipChecker<'a> {
     fn dfs_cycle(
         &mut self,
         node: &str,
-        graph: &HashMap<String, Vec<String>>,
+        graph: &HashMap<String, Vec<(String, bool)>>,
         visited: &mut HashSet<String>,
         in_stack: &mut HashSet<String>,
         path: &mut Vec<String>,
@@ -1572,7 +1589,7 @@ impl<'a> OwnershipChecker<'a> {
         path.push(node.to_string());
 
         if let Some(neighbors) = graph.get(node) {
-            for neighbor in neighbors {
+            for (neighbor, via_tuple) in neighbors {
                 if !visited.contains(neighbor) {
                     self.dfs_cycle(neighbor, graph, visited, in_stack, path);
                 } else if in_stack.contains(neighbor) {
@@ -1596,8 +1613,10 @@ impl<'a> OwnershipChecker<'a> {
                     // shared types. A pure `shared struct` cycle (`A { b: B }`,
                     // `B { a: A }`) has no base escape — every instance is forced
                     // to form a runtime reference cycle that leaks — so it keeps
-                    // the `weak` advice. (Non-direct recursion through `Option`/
-                    // `Vec` produces no graph edge here and was always accepted.)
+                    // the `weak` advice. (Recursion through `Option`/`Vec`/`Map`/
+                    // `Set` produces no graph edge here and is accepted by
+                    // design — see `owned_edge_targets` for why, and for why the
+                    // tuple is the one container that DOES produce one.)
                     // A cycle is *breakable* (builds finite, acyclic trees with
                     // no forced runtime reference cycle) when it has BOTH:
                     //   (a) a base escape — some enum variant in the cycle that
@@ -1624,7 +1643,27 @@ impl<'a> OwnershipChecker<'a> {
                     if breakable {
                         continue;
                     }
-                    let (message, suggestion) = if all_shared {
+                    let (message, suggestion) = if *via_tuple {
+                        // A tuple-mediated cycle is UNINHABITABLE, not merely
+                        // leak-prone, so it gets its own message: every value
+                        // of the type would need a complete value of the type
+                        // inside it. Reporting it as "will leak" and advising
+                        // `weak` would be doubly wrong — nothing leaks because
+                        // nothing can be built, and the `weak` downgrade
+                        // coercion reaches a field store and a container
+                        // element store, not a tuple position.
+                        (
+                            format!(
+                                "type cycle detected: {} → {}, recursing through a tuple. A tuple has no empty case, so no value of this type can ever be constructed.",
+                                cycle.join(" → "),
+                                neighbor,
+                            ),
+                            Some(
+                                "wrap the recursive position in a type that can terminate the recursion, such as 'Option[T]' or 'Vec[T]'"
+                                    .to_string(),
+                            ),
+                        )
+                    } else if all_shared {
                         (
                             format!(
                                 "shared-type cycle detected: {} → {}. Shared types use reference counting — a cycle without a 'weak' edge will leak.",
@@ -1669,13 +1708,17 @@ impl<'a> OwnershipChecker<'a> {
     /// recursive field as a pointer). `dfs_cycle` accepts it with no diagnostic.
     /// A cycle with no base escape (a mutual `shared struct` cycle, or an enum
     /// whose every variant recurses) forces a runtime reference cycle that
-    /// genuinely leaks and keeps the `weak` advice. `owned_type_name` captures
-    /// only direct (non-`Option`/`Vec`-wrapped) edges, matching exactly the
-    /// edges `check_cycles` used to build the graph.
+    /// genuinely leaks and keeps the `weak` advice. `owned_edge_targets`
+    /// captures direct and tuple-mediated edges but not `Option`/`Vec`/`Map`/
+    /// `Set`-wrapped ones, matching exactly the edges `check_cycles` used to
+    /// build the graph — using the same function is what keeps them in step.
     fn cycle_has_base_escape(&self, cycle: &[&str]) -> bool {
         let cycle_set: HashSet<&str> = cycle.iter().copied().collect();
-        let leads_into_cycle =
-            |ty: &Type| owned_type_name(ty).is_some_and(|t| cycle_set.contains(t.as_str()));
+        let leads_into_cycle = |ty: &Type| {
+            let mut targets = Vec::new();
+            owned_edge_targets(ty, false, &mut targets);
+            targets.iter().any(|(t, _)| cycle_set.contains(t.as_str()))
+        };
         for &name in cycle {
             let Some(info) = self.typecheck_result.enum_info.get(name) else {
                 continue;
@@ -3136,6 +3179,45 @@ fn demangle_binding(name: &str) -> &str {
 }
 
 /// Extract the owned type name from a Type (returns None for ref/weak/primitive).
+/// Collect the ownership-graph edge targets a field / variant-payload type
+/// contributes, tagging each with whether it was reached through a TUPLE.
+///
+/// A type contributes at most one edge of its own (`owned_type_name`). The one
+/// container this walk descends INTO is the tuple, and the asymmetry is the
+/// deliberate answer to B-2026-08-08-4 gap A rather than an oversight:
+///
+///   * `Option[N]`, `Vec[N]`, `Map[K, N]`, `Set[N]` each have an EMPTY
+///     inhabitant — `None`, the empty container — so a self-reference through
+///     one can always terminate. `shared struct Node { mut kids: Vec[Node] }`
+///     is the ordinary tree/AST shape and is measured valgrind-clean; rejecting
+///     it would break every such program, and the `weak` escape hatch a
+///     rejection would point at is the WRONG tool for downward ownership
+///     (`Vec[weak Node]` compiles, and the children are dead by the time the
+///     builder returns). A rejection with no correct alternative is worse than
+///     the leak it prevents. These stay accepted, and design.md § Cycles is
+///     corrected to say so.
+///   * A TUPLE has no empty inhabitant. `mut kid: (N, i64)` needs a complete
+///     `N` inside every `N`, so the type is uninhabitable — the same class as
+///     the bare `mut kid: N` this checker has always rejected, just one level
+///     down. Descending into it rejects no constructible program.
+///
+/// The same rule keeps `cycle_has_base_escape` honest: it must see exactly the
+/// edges the graph was built from, so it uses this function too.
+fn owned_edge_targets(ty: &Type, via_tuple: bool, out: &mut Vec<(String, bool)>) {
+    match ty {
+        Type::Tuple(elems) => {
+            for elem in elems {
+                owned_edge_targets(elem, true, out);
+            }
+        }
+        _ => {
+            if let Some(target) = owned_type_name(ty) {
+                out.push((target, via_tuple));
+            }
+        }
+    }
+}
+
 fn owned_type_name(ty: &Type) -> Option<String> {
     match ty {
         Type::Named { name, .. } => Some(name.clone()),

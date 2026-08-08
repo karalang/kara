@@ -520,6 +520,92 @@ fn test_ref_field_no_cycle() {
     );
 }
 
+/// B-2026-08-08-4 gap A, the ACCEPT half — and this is the half that decided
+/// the row's shape, so it is asserted first.
+///
+/// A self-reference through `Option`/`Vec`/`Map` stays ACCEPTED. Each of those
+/// has an empty inhabitant (`None`, the empty container), so the recursion can
+/// terminate: these are the ordinary linked-list / tree / AST shapes, they are
+/// measured valgrind-clean when built acyclically, and the `weak` escape hatch
+/// a rejection would point at is the wrong tool for downward ownership
+/// (`Vec[weak Node]` compiles and the children are dead before the builder
+/// returns). design.md § Cycles is corrected to match this rather than the
+/// other way around.
+#[test]
+fn test_container_mediated_self_reference_is_accepted() {
+    ownership_ok("shared struct Cell { mut v: i64, mut next: Option[Cell] }");
+    ownership_ok("shared struct Node { mut v: i64, mut kids: Vec[Node] }");
+    ownership_ok("shared struct Reg { mut v: i64, mut kids: Map[i64, Reg] }");
+    // The tuple below is REJECTED bare, but an `Option` around it terminates
+    // the recursion, so the walk must not descend past the container.
+    ownership_ok("shared struct N { mut v: i64, mut kid: Option[(N, i64)] }");
+}
+
+/// B-2026-08-08-4 gap A, the REJECT half. A tuple has no empty inhabitant, so
+/// a self-reference through one needs a complete value of the type inside every
+/// value of the type — uninhabitable, exactly like the bare `next: Node` above,
+/// one level down. Accepted silently before this; the only symptom was a
+/// confusing innermost `expected '(N, i64)', found '(i64, i64)'` at the first
+/// attempt to construct one.
+#[test]
+fn test_tuple_mediated_cycle_rejected_as_uninhabitable() {
+    for src in [
+        "shared struct N { mut v: i64, mut kid: (N, i64) }",
+        "shared struct A { mut v: i64, mut b: (B, i64) }\n\
+         shared struct B { mut v: i64, mut a: (A, i64) }",
+    ] {
+        let errors = ownership_errors(src);
+        let cycle = errors
+            .iter()
+            .find(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
+            .unwrap_or_else(|| panic!("expected a cycle diagnostic for:\n{src}\ngot {errors:?}"));
+        assert!(
+            cycle.message.contains("recursing through a tuple")
+                && cycle.message.contains("can ever be constructed"),
+            "a tuple cycle is uninhabitable, not leak-prone — got: {}",
+            cycle.message
+        );
+        // `weak` has no coercion at a tuple position, so advising it would send
+        // the reader somewhere that does not compile.
+        let help = cycle.suggestion.clone().unwrap_or_default();
+        assert!(
+            !help.contains("weak") && help.contains("Option[T]"),
+            "tuple cycle must advise a terminating wrapper, not 'weak' — got: {help}"
+        );
+    }
+}
+
+/// A tuple edge must not mask a DIRECT one. When a type reaches the same target
+/// both ways, the direct back-edge is real and `weak` genuinely breaks it, so
+/// the merged edge keeps the direct (leak) diagnostic.
+#[test]
+fn test_direct_edge_wins_over_tuple_edge() {
+    let errors =
+        ownership_errors("shared struct N { mut v: i64, mut direct: N, mut pair: (N, i64) }");
+    let cycle = errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
+        .expect("expected a cycle diagnostic");
+    assert!(
+        cycle.message.contains("shared-type cycle detected"),
+        "a type with a direct back-edge keeps the leak diagnostic — got: {}",
+        cycle.message
+    );
+    assert!(cycle
+        .suggestion
+        .clone()
+        .unwrap_or_default()
+        .contains("weak"));
+}
+
+/// The tuple edge feeds `cycle_has_base_escape` through the same function that
+/// builds the graph, so a recursive enum whose recursion runs through a tuple
+/// keeps its base-variant escape and stays accepted — it builds finite trees.
+#[test]
+fn test_tuple_recursion_with_enum_base_escape_is_accepted() {
+    ownership_ok("shared enum E { Num(i64), Pair((E, E)) }");
+}
+
 // ── Complex Programs ────────────────────────────────────────────
 
 #[test]
