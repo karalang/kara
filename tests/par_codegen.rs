@@ -8393,6 +8393,49 @@ fn main() {
     }
 
     #[test]
+    fn test_par_published_column_binding_slot_is_a_pointer() {
+        // B-2026-08-08-18 — a handle-backed builtin published out of a par
+        // branch must get a POINTER return slot, whatever expression form
+        // produced it.
+        //
+        // `infer_expr_llvm_type` sizes those slots before the branch bodies are
+        // emitted, and it classifies by SYNTAX: `a * 3` on two columns is an
+        // `ExprKind::Binary`, so the arithmetic arm read it as a scalar and
+        // answered `i64`. `main` then allocated the published binding as an
+        // `i64`, loaded 8 bytes of control-block pointer out of it, and handed
+        // that to a `ptr` parameter — LLVM module verification rejected the
+        // call and `karac build` refused the program. The ANNOTATED spelling of
+        // the same binding always worked, because an annotation returns earlier
+        // through `llvm_type_for_type_expr` and never reaches the inference at
+        // all; the two spellings disagreed on the type of one value.
+        //
+        // Getting IR back at all is most of the assertion — the pre-fix
+        // compiler failed verification here. The alloca check pins WHY, so a
+        // future regression that merely stops parallelizing this shape does not
+        // pass by accident.
+        let ir = ir_for_par(
+            "fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -1 } }\n             fn main() {\n                 let mut a: Column[i64] = Column.new();\n                 a.push(10); a.push_null(); a.push(30);\n                 let x = a * 2;\n                 println(fst(x, 0));\n                 let y = a * 3;\n                 println(fst(y, 0));\n             }\n",
+        );
+        assert!(
+            ir.contains("__par_branches"),
+            "the shape must still parallelize, or this pins nothing"
+        );
+        assert!(
+            !ir.contains("alloca i64, align 8\n  %__par_branches"),
+            "a published Column binding must not be sized as a scalar"
+        );
+        for line in ir.lines() {
+            let l = line.trim_start();
+            if (l.starts_with("%x") || l.starts_with("%y")) && l.contains("alloca") {
+                assert!(
+                    l.contains("alloca ptr"),
+                    "published Column slot sized wrong: {l}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_ir_collect_tabulate_worker_for_bare_push() {
         // The canonical map shape — one unconditional push per iteration —
         // must take the tabulate lowering (worker named

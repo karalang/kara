@@ -16143,6 +16143,31 @@ fn main() {
         karac::desugar_program(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
+        // B-2026-08-08-18 — the auto-par helper owed the same discrimination
+        // its sequential sibling gained in B-2026-08-08-5 / -7 and never got: a
+        // TYPECHECK or CODEGEN failure here used to `eprintln!` and return
+        // `None`, which the caller's `let Some(..) else { return }` turns into
+        // a PASS. Measured: with this fixture moved onto the auto-par lane and
+        // the compiler fix reverted, the program failed LLVM verification and
+        // the test still reported ok — the exact vacuous-pass shape
+        // B-2026-08-08-16 is about, one helper further down.
+        //
+        // A missing ARCHIVE or a link failure stays a soft skip (that is real
+        // missing setup); a program the compiler REFUSES is always a defect.
+        if !typed.errors.is_empty() {
+            panic!(
+                "[{label}] TYPECHECK FAILED — this is a real failure, not missing setup.\n   {}\n\
+                 `karac build` would reject this program, so the fixture asserts nothing. \
+                 Fix the test program, or mark the test `#[ignore = \"<gap>\"]` so it is \
+                 visibly deferred rather than silently green.",
+                typed
+                    .errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n   ")
+            );
+        }
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
@@ -16159,8 +16184,13 @@ fn main() {
             None,
             None,
         ) {
-            eprintln!("[{label}] compile_to_object_with_options failed: {e}");
-            return None;
+            panic!(
+                "[{label}] CODEGEN FAILED under auto-par — this is a real failure, not missing \
+                 setup.\n   {e}\n   The program under test does not compile in the DEFAULT \
+                 configuration, so this fixture asserts nothing. Either fix the codegen gap, or \
+                 mark the test `#[ignore = \"<gap>\"]` so it is visibly deferred rather than \
+                 silently green."
+            );
         }
         if !Path::new(&obj_path).exists() {
             panic!("[{label}] object file missing after a SUCCESSFUL compile_to_object");
@@ -27365,6 +27395,16 @@ fn main() {
     /// after the copy (`column_free_if_fresh_temp`) — a missing free leaks
     /// (Linux detect_leaks), a wrong free double-frees. Operand reuse after
     /// the ops pins that nothing was wrongly consumed.
+    ///
+    /// B-2026-08-08-18 — moved onto the AUTO-PAR lane, which is the default
+    /// configuration and the one this fixture never ran in. On the sequential
+    /// lane it had been green throughout; with the parallelizer on, `karac
+    /// build` refused the program outright (a published `Column` binding was
+    /// sized as an `i64` return slot, so its control-block pointer reached a
+    /// `ptr` parameter as an integer and LLVM verification rejected the call).
+    /// Keeping it here rather than adding a second copy: the lifecycle
+    /// behaviour it pins is the same on both lanes, and the default lane is the
+    /// one worth pinning it on.
     #[test]
     fn asan_column_arithmetic_lifecycle_clean() {
         let label = "column_arithmetic_lifecycle";
@@ -27372,7 +27412,7 @@ fn main() {
             eprintln!("[{label}] ASAN unavailable on this host — skipping");
             return;
         }
-        let Some((stdout, status)) = run_under_asan(
+        let Some((stdout, status)) = run_under_asan_with_concurrency(
             r#"
 fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -1 } }
 fn main() {

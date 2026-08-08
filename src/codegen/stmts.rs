@@ -1618,6 +1618,37 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         locals: &HashMap<String, BasicTypeEnum<'ctx>>,
     ) -> Option<BasicTypeEnum<'ctx>> {
+        // B-2026-08-08-18 — a HANDLE-BACKED builtin (`Column` / `Tensor` /
+        // `DataFrame`) is one control-block POINTER whatever expression form
+        // produced it. Checked FIRST, because the arms below classify by SYNTAX:
+        // `a * 3` on two columns is an `ExprKind::Binary`, and the arithmetic
+        // arm reads that as a scalar and answers `i64`. That answer became the
+        // published return slot's type, so `main` allocated `y` as an `i64`,
+        // loaded 8 bytes of control-block pointer out of it, and handed that to
+        // a `ptr` parameter — LLVM module verification rejected the call and
+        // `karac build` refused the program outright.
+        //
+        // The span tables are the authority here and they are already populated
+        // (`lowering.rs` fills them from the typechecker's `expr_types`), which
+        // is why the ANNOTATED spelling of the same binding always worked: it
+        // returns above through `llvm_type_for_type_expr` and never consults
+        // this function at all. Only an UNANNOTATED binding reaches here, so
+        // the two spellings disagreed on the type of the same value.
+        //
+        // Sound for the same reason the annotated path is: these three lower to
+        // a pointer unconditionally, so there is no shape this can guess wrong
+        // — unlike the syntax arms, whose whole contract is "return None rather
+        // than guess". `Vec` / `String` are deliberately NOT here: they are
+        // `{ptr,len,cap}` by value, and the arms below already size them.
+        // `DataFrame` has no span table (it is non-generic, so membership is
+        // tracked per BINDING in `dataframe_var_infos` rather than per
+        // expression) and is left alone.
+        let span_key = (expr.span.offset, expr.span.length);
+        if self.column_typed_exprs.contains_key(&span_key)
+            || self.tensor_typed_exprs.contains_key(&span_key)
+        {
+            return Some(self.context.ptr_type(AddressSpace::default()).into());
+        }
         match &expr.kind {
             // Integer / bool literals carry their type directly. Sized
             // integer suffixes (`0i32`, `5u8`, …) map through
