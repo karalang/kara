@@ -39956,6 +39956,61 @@ fn main() {
     }
 
     #[test]
+    fn asan_inline_vec_first_last_unwrap_heap_elem_no_double_free() {
+        // B-2026-08-08-20: the Vec sibling of the map case above, and a
+        // demonstration of how a misnamed predicate hides a bug. The inline
+        // cap-zero fired on `unwrap_receiver_is_nonshared_heap_value_map_get`,
+        // whose `method == "get"` test read as "Map.get" but ALSO covered
+        // `Vec.get` by accident — the receiver's type is resolved through
+        // `var_elem_type_exprs`, which records a Vec var's ELEMENT type in the
+        // same slot it records a Map var's VALUE type. So `v.get(0).unwrap()`
+        // was protected while `v.first()` / `v.last()` — the same shallow
+        // element load in `vec_method.rs`, the same `build_option_some_via_phis`
+        // — were not. Consumed INLINE the borrow view kept its real `cap`, its
+        // free-guard freed the Vec's own element buffer, and the Vec's
+        // scope-exit per-element drop freed it again: `free(): double free
+        // detected in tcache 2` under JIT and AOT at every opt level, while
+        // `--interp` printed correctly and `let s = v.first().unwrap();` was
+        // clean (the let path is borrow-elided on its own, which is exactly what
+        // made this look like an accessor bug rather than a position bug).
+        //
+        // Covers both element kinds (String and Vec) and every inline
+        // consumption mode that reproduced: bare call arg, `expect` instead of
+        // `unwrap`, an f-string hole, and a `.len()` chain. `get` rides along so
+        // the arm that already worked stays wired. The loop makes a
+        // per-iteration double-free trip ASAN and a per-iteration strand — had
+        // the fix over-corrected into "nobody owns this" — accumulate a leak.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut vs: Vec[String] = Vec.new();
+    vs.push("alpha".to_string());
+    vs.push("bb".to_string());
+    let mut vv: Vec[Vec[i64]] = Vec.new();
+    vv.push([1, 2, 3, 4]);
+    vv.push([9]);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 60 {
+        acc = acc + vs.first().unwrap().len();
+        acc = acc + vs.last().unwrap().len();
+        acc = acc + vv.first().unwrap().len();
+        acc = acc + vv.last().unwrap().len();
+        acc = acc + vs.get(0).unwrap().len();
+        i = i + 1;
+    }
+    println(acc);
+    println(vs.first().unwrap());
+    println(vs.last().expect("empty"));
+    println(f"[{vs.first().unwrap()}]");
+}
+"#,
+            &["1020", "alpha", "bb", "[alpha]"],
+            "inline_vec_first_last_unwrap_heap_elem_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_field_map_get_unwrap_heap_value_no_double_free() {
         // B-2026-07-16-1: `<struct-field-map>.get(k).unwrap()` of a heap value
         // (`Map[_, String]` / `Map[_, Vec]` FIELD) double-freed the value buffer,

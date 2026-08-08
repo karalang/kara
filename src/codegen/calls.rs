@@ -3158,15 +3158,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // so every consumer's free-guard skips it (the map stays the sole owner);
         // reads use ptr+len and are unaffected. Harmless for the let-bound case
         // (borrow-elided, reads only) and closes that binding's latent move-out
-        // double-free too. Only fires for the `<map>.get(k)` receiver shape, so a
-        // genuinely-owned unwrap payload keeps its real `cap`.
+        // double-free too. Only fires for a borrow-returning accessor receiver
+        // (`<map>.get(k)` / `<vec>.get(i)` / `<vec>.first()` / `<vec>.last()`),
+        // so a genuinely-owned unwrap payload keeps its real `cap`.
+        // B-2026-08-08-20 widened the accessor set from `get` alone to include
+        // `first`/`last`: they lower to the SAME shallow element load, so
+        // `println(v.first().unwrap())` was freeing the Vec's own element buffer.
         let value = match value {
             BasicValueEnum::StructValue(sv)
                 if sv.get_type() == self.vec_struct_type()
-                    && self.unwrap_receiver_is_nonshared_heap_value_map_get(object) =>
+                    && self.unwrap_receiver_is_nonshared_heap_borrow_accessor(object) =>
             {
                 self.builder
-                    .build_insert_value(sv, i64_t.const_zero(), 2, "map.get.borrow.cap0")
+                    .build_insert_value(sv, i64_t.const_zero(), 2, "accessor.borrow.cap0")
                     .unwrap()
                     .into_struct_value()
                     .into()

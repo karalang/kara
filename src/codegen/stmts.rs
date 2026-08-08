@@ -11861,7 +11861,32 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    pub(super) fn unwrap_receiver_is_nonshared_heap_value_map_get(&self, object: &Expr) -> bool {
+    /// True when `object` is a BORROW-returning accessor call whose `Option`
+    /// payload is a non-shared heap value — `<map>.get(k)`, `<vec>.get(i)`,
+    /// `<vec>.first()`, `<vec>.last()`. All four load the element/bucket
+    /// `{ptr,len,cap}` shallowly, so the unwrapped payload ALIASES a buffer the
+    /// container still owns; the `unwrap` site zeroes the view's `cap` so no
+    /// consumer's free-guard can free it (B-2026-07-15-26).
+    ///
+    /// B-2026-08-08-20: this used to test `method == "get"`, which read as
+    /// "Map.get" but silently also covered `Vec.get` — `map_receiver_value_type_expr`
+    /// resolves an identifier receiver through `var_elem_type_exprs`, and that
+    /// map records a Vec var's ELEMENT type just as it records a Map var's VALUE
+    /// type. So `v.get(0).unwrap()` got the cap-zero by accident of the shared
+    /// lookup while `v.first()` / `v.last()` — structurally identical loads in
+    /// `vec_method.rs`, same `build_option_some_via_phis` — did not, and freed
+    /// the Vec's own element buffer when consumed INLINE (`println(v.first().unwrap())`,
+    /// an f-string hole, any call-arg position). The Vec's scope-exit per-element
+    /// drop then freed it again: double-free under JIT and AOT at every opt
+    /// level, clean under `--interp`. Binding first (`let s = v.first().unwrap();`)
+    /// masked it because the let path is borrow-elided on its own.
+    ///
+    /// `first`/`last` are Vec/Slice/Array/String methods only — no Map or
+    /// SortedMap exposes them (typecheck rejects) — so widening the method set
+    /// cannot reach a map receiver whose `first()` would mean something else.
+    /// `get_unchecked` returns `T`, not `Option[T]`, so it never reaches an
+    /// `unwrap` payload and stays out of the set.
+    pub(super) fn unwrap_receiver_is_nonshared_heap_borrow_accessor(&self, object: &Expr) -> bool {
         let ExprKind::MethodCall {
             method,
             object: map_recv,
@@ -11870,7 +11895,7 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
-        if method != "get" {
+        if !matches!(method.as_str(), "get" | "first" | "last") {
             return false;
         }
         let Some(te) = self.map_receiver_value_type_expr(map_recv) else {
