@@ -572,6 +572,24 @@ impl<'ctx> super::Codegen<'ctx> {
             SlotOwnership::Tensor => CleanupAction::FreeTensor {
                 tensor_alloca: parent_alloca,
             },
+            // B-2026-08-08-15. Re-registered against the PARENT's alloca and
+            // the same binding name, so the drain-time reload finds the
+            // parent's slot; `ptr` is the fallback for when the name has left
+            // scope, exactly as at the original track site. If the parent then
+            // moves the value on (a `push` into a container, a struct-field
+            // init), the parent's own move-suppression sees a normally
+            // registered cleanup and disarms it — which is the whole point of
+            // routing through the parent rather than leaving the branch to
+            // guess.
+            SlotOwnership::Rc { heap_type } => CleanupAction::RcDec {
+                name: binding_name.to_string(),
+                ptr: parent_alloca,
+                heap_type,
+            },
+            SlotOwnership::SharedElided => CleanupAction::FreeSharedElided {
+                name: binding_name.to_string(),
+                ptr: parent_alloca,
+            },
         };
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(action);
@@ -2413,6 +2431,29 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if Some(*tensor_alloca) == local_ptr =>
                             {
                                 Some(SlotOwnership::Tensor)
+                            }
+                            // B-2026-08-08-15 — the RC arms, which the
+                            // sentinel scan above suppresses (`RcDec`, via
+                            // the null store) or misses entirely
+                            // (`FreeSharedElided`, which it does not match).
+                            // Suppression alone left the box owned by nobody;
+                            // a miss left the branch freeing what it had just
+                            // published. Both need the SAME second half every
+                            // other kind here already has: hand the action to
+                            // the parent so the joining scope becomes the
+                            // unique owner. Keyed on the binding NAME, not on
+                            // `local_ptr`: both actions reload by name at
+                            // drain time and carry their pointer only as an
+                            // out-of-scope fallback.
+                            CleanupAction::RcDec {
+                                name, heap_type, ..
+                            } if *name == slot.binding_name => Some(SlotOwnership::Rc {
+                                heap_type: *heap_type,
+                            }),
+                            CleanupAction::FreeSharedElided { name, .. }
+                                if *name == slot.binding_name =>
+                            {
+                                Some(SlotOwnership::SharedElided)
                             }
                             _ => None,
                         };

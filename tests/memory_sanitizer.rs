@@ -68,7 +68,7 @@ mod memory_sanitizer_tests {
     /// abort-time, not steady-state leaks, and would spuriously flip the
     /// process exit code from `emit_panic`'s 1 to LSan's 23.
     fn run_under_asan(src: &str, label: &str) -> Option<(String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, true, false).map(|(out, _err, st)| (out, st))
+        run_under_asan_opts(src, label, true, false, false).map(|(out, _err, st)| (out, st))
     }
 
     /// Like [`run_under_asan`] but turns on ASAN's exit-time allocation stats
@@ -79,7 +79,7 @@ mod memory_sanitizer_tests {
         src: &str,
         label: &str,
     ) -> Option<(String, String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, true, true)
+        run_under_asan_opts(src, label, true, true, false)
     }
 
     /// Pull ASAN's exit-time malloc count out of a `print_stats=1` stderr dump.
@@ -109,14 +109,31 @@ mod memory_sanitizer_tests {
         src: &str,
         label: &str,
     ) -> Option<(String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, false, false).map(|(out, _err, st)| (out, st))
+        run_under_asan_opts(src, label, false, false, false).map(|(out, _err, st)| (out, st))
     }
 
+    /// `auto_par`: run the concurrency analysis and hand it to codegen, so the
+    /// auto-parallelizer actually fires.
+    ///
+    /// B-2026-08-08-15 — WITHOUT THIS THE HARNESS PASSES `None` FOR
+    /// CONCURRENCY, WHICH DISABLES AUTO-PAR ENTIRELY. Every other fixture in
+    /// this file therefore exercises sequential codegen only, even though
+    /// `karac build` parallelizes by default and the header comment above
+    /// claims this harness "mirrors the real CLI pipeline" — on this axis it
+    /// does not. That is exactly why an auto-par ownership-transfer defect (a
+    /// leak in one shape, a use-after-free in another) lived in shipped
+    /// codegen with ~1000 memory fixtures green: the class was invisible here.
+    ///
+    /// Opt-in rather than always-on deliberately: flipping the whole suite
+    /// changes what a thousand existing fixtures compile, which is a coverage
+    /// change to land and measure on its own, not a rider on a bug fix. The
+    /// broader hole is filed separately.
     fn run_under_asan_opts(
         src: &str,
         label: &str,
         detect_leaks: bool,
         count_allocs: bool,
+        auto_par: bool,
     ) -> Option<(String, String, std::process::ExitStatus)> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -202,7 +219,16 @@ mod memory_sanitizer_tests {
         // Same discrimination `common::link_or_skip` already applies to an
         // undefined-symbol link failure (CLAUDE.md): a signal that always means a
         // real defect panics with an actionable message instead of skipping.
-        if let Err(e) = compile_to_object(&parsed.program, &obj_path, Some(&ownership), None) {
+        let concurrency = auto_par.then(|| {
+            let effects = karac::effectcheck(&parsed.program);
+            karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed))
+        });
+        if let Err(e) = compile_to_object(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            concurrency.as_ref(),
+        ) {
             panic!(
                 "[{label}] CODEGEN FAILED — this is a real failure, not missing setup.\n                   {e}\n                   The program under test does not compile, so this fixture asserts nothing. \
                  Either fix the codegen gap, or mark the test `#[ignore = \"<gap>\"]` so it \
@@ -476,6 +502,44 @@ mod memory_sanitizer_tests {
     ///
     /// Skips the check, rather than failing, when the ASAN runtime prints no
     /// stats line — that is "cannot measure", not "measured zero".
+    /// [`assert_clean_asan_run_min_allocs`] with the AUTO-PARALLELIZER ON —
+    /// i.e. what `karac build` actually does to this program.
+    ///
+    /// B-2026-08-08-15. See `run_under_asan_opts`'s `auto_par` doc for why this
+    /// is a separate entry point and not the default.
+    fn assert_clean_asan_run_min_allocs_auto_par(
+        src: &str,
+        expected_stdout: &[&str],
+        label: &str,
+        min_allocs: u64,
+    ) {
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, stderr, status)) = run_under_asan_opts(src, label, true, true, true)
+        else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error under AUTO-PAR (exit code {:?}). \
+             See stderr above — look for `ERROR: LeakSanitizer`, \
+             `ERROR: AddressSanitizer: heap-use-after-free`, or `double-free`.",
+            status.code()
+        );
+        let got: Vec<&str> = stdout.trim().lines().collect();
+        assert_eq!(got, expected_stdout, "[{label}] stdout mismatch");
+        if let Some(allocs) = asan_malloc_calls(&stderr) {
+            assert!(
+                allocs >= min_allocs,
+                "[{label}] only {allocs} malloc calls — under the {min_allocs} floor, so the \
+                 program was optimized away and the fixture asserts nothing"
+            );
+        }
+    }
+
     fn assert_clean_asan_run_min_allocs(
         src: &str,
         expected_stdout: &[&str],
@@ -15829,6 +15893,142 @@ fn main() {
             "vec_of_weak_back_edges_reclaims_a_cycle",
             // 4 node boxes + 4 element buffers.
             8,
+        );
+    }
+
+    /// B-2026-08-08-15 — an RC-bearing `shared struct` published as an auto-par
+    /// RETURN SLOT is released exactly once, by the JOINING SCOPE.
+    ///
+    /// The branch that constructs the value writes it into the parent's return
+    /// struct and then must not release it; the parent must. `SlotOwnership`
+    /// transfers eight handle/payload cleanup kinds across that boundary and
+    /// carried no RC variant, so the release was suppressed in the branch
+    /// (`nullify_local`) and adopted by nobody.
+    ///
+    /// THIS IS THE LEAK FACE. Its twin below is the same defect presenting as a
+    /// use-after-free; read them together, because which one a program gets is
+    /// decided by an implementation detail (whether the branch's queued release
+    /// was of a shape the sentinel scan recognised), not by anything the author
+    /// wrote.
+    ///
+    /// THE GRAPH IS BUILT IN A HELPER AND THE STACK IS THEN CHURNED, for the
+    /// same reason `asan_vec_of_weak_back_edges_reclaims_a_cycle_no_leak` above
+    /// does it, and it is what makes this fixture mean anything. Built inline in
+    /// `main`, BOTH of these tests PASS against the broken compiler — measured,
+    /// not assumed: the parent's own alloca and its returns-struct are stack
+    /// slots still holding the published pointer at exit, so LSan's
+    /// conservative scan calls the orphaned box reachable and reports nothing.
+    /// A recursion that overwrites the dead frame is what exposes it. (valgrind
+    /// on the inline shape does report it, which is how the divergence surfaced
+    /// — do not take a green ASAN run on an inline shape as evidence here.)
+    ///
+    /// Vacuity guard lives in tests/codegen.rs
+    /// (`par_slot_shared_struct_fixtures_actually_parallelize`): if the
+    /// analyzer stops splitting this shape, the transfer never happens and this
+    /// fixture silently covers nothing. Keep the two bodies in sync.
+    #[test]
+    fn asan_par_slot_shared_struct_into_container_released_once() {
+        assert_clean_asan_run_min_allocs_auto_par(
+            r#"
+shared struct P { v: i64 }
+shared struct Q { a: i64, b: i64, c: i64 }
+
+fn build(seed: i64) -> i64 {
+    let p: P = P { v: seed };
+    let q: Q = Q { a: seed, b: seed, c: seed };
+    let mut w: Vec[P] = Vec.new();
+    w.push(p);
+    return w.len() + q.a - q.a;
+}
+
+// Overwrites the dead frame the published handles lived in, so LSan cannot
+// mistake stack residue for reachability. See the doc comment.
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let k = build(seed);
+    let noise = churn(2000);
+    println(k + noise - noise);
+}
+"#,
+            &["1"],
+            "par_slot_shared_struct_into_container",
+            // 2 struct boxes + the Vec's element buffer.
+            3,
+        );
+    }
+
+    /// B-2026-08-08-15, THE USE-AFTER-FREE FACE — a published slot value that
+    /// the joining scope merely READS.
+    ///
+    /// Same missing transfer as its twin above, opposite symptom. Here the
+    /// branch's queued release was a `FreeSharedElided` — the direct `free` the
+    /// RC-elision analysis collapses `RcDec` to once it proves the count can
+    /// never exceed 1 — which the branch-side sentinel scan did not match at
+    /// all. So the branch FREED the box it had just published, and the parent's
+    /// `p.v` read it back: `Invalid read of size 8` in `main` against a block
+    /// freed in `__par_branch_0_0`.
+    ///
+    /// IT PRINTED THE RIGHT ANSWER while doing so — the freed block had not been
+    /// reused — which is exactly why this shape was first mistaken for a
+    /// passing control. Asserting stdout alone would NOT catch this; the
+    /// sanitizer is the whole test.
+    ///
+    /// Helper + churn for the same reason as its twin above — see that doc
+    /// comment before editing either body.
+    ///
+    /// HONESTY NOTE — THIS FIXTURE IS NOT STASH-PROVEN RED, and you should not
+    /// treat it as the guard for the use-after-free. Against the pre-fix
+    /// compiler it PASSES here: ASAN does not flag this access in this harness,
+    /// for reasons not run to ground. valgrind does, at BOTH opt levels —
+    ///
+    ///     Invalid read of size 8 at main
+    ///     Address is 8 bytes inside a block of size 16 free'd
+    ///       by __par_branch_0_0
+    ///
+    /// so the defect is real and measured; only the detector is blind. It is
+    /// kept because it must stay green (a regression that reintroduces the
+    /// branch-side free may well become ASAN-visible in a slightly different
+    /// shape, and the stdout assertion pins the answer), but the fixture that
+    /// actually FAILS against the broken compiler is its container twin above.
+    /// If you are changing this code path, re-verify with valgrind, not this.
+    #[test]
+    fn asan_par_slot_shared_struct_read_only_join_no_use_after_free() {
+        assert_clean_asan_run_min_allocs_auto_par(
+            r#"
+shared struct P { v: i64 }
+shared struct Q { a: i64, b: i64, c: i64 }
+
+fn build(seed: i64) -> i64 {
+    let p: P = P { v: seed };
+    let q: Q = Q { a: seed, b: seed, c: seed };
+    let mut w: Vec[i64] = Vec.new();
+    w.push(p.v);
+    return w.len() + q.a - q.a;
+}
+
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let k = build(seed);
+    let noise = churn(2000);
+    println(k + noise - noise);
+}
+"#,
+            &["1"],
+            "par_slot_shared_struct_read_only_join",
+            // 2 struct boxes + the scalar Vec's buffer.
+            3,
         );
     }
 

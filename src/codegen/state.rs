@@ -1338,6 +1338,32 @@ pub(crate) enum SlotOwnership<'ctx> {
     /// `FreeTensor` — the null-guarded tensor control-block free at parent
     /// scope exit. Same publish-and-forget transfer as `Column`.
     Tensor,
+    /// `RcDec` — the refcount dec (+ drop-fn + free at zero) for an
+    /// RC-bearing `shared struct` / `shared enum` binding.
+    ///
+    /// B-2026-08-08-15. The branch-side sentinel below nulls the local so
+    /// its queued `RcDec` no-ops, and its comment says the parent rebind
+    /// site "re-registers the equivalent cleanup against its fresh alloca".
+    /// It did not: `SlotOwnership` carried the eight handle/payload kinds
+    /// and had no RC variant, so the release was suppressed in the branch
+    /// and adopted by nobody. The parent received the pointer without the
+    /// obligation and the box leaked — visibly only once the last pointer
+    /// to it died (a push into a container whose buffer is later freed);
+    /// with the pointer still parked in the parent's returns-struct stack
+    /// slot, a conservative leak checker calls it reachable and reports
+    /// nothing.
+    Rc { heap_type: StructType<'ctx> },
+    /// `FreeSharedElided` — the direct `free` the RC-elision analysis
+    /// collapses `RcDec` to when it proves the count can never exceed 1 and
+    /// the type holds no heap fields.
+    ///
+    /// B-2026-08-08-15, the other face. This action was matched by NEITHER
+    /// the sentinel scan (which knows only `RcDec` / `RcDecOption`) nor the
+    /// transfer loop, so the branch ran it on the value it had just
+    /// published and the parent's first read was a use-after-free — the
+    /// same defect as the leak arm above, differing only in whether the
+    /// branch's release happened to be suppressed.
+    SharedElided,
 }
 
 #[derive(Clone)]

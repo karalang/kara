@@ -3185,6 +3185,109 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// B-2026-08-08-15 — THE ANTI-VACUITY GUARD for the two ASAN fixtures in
+    /// `tests/memory_sanitizer.rs` that cover the auto-par slot-ownership
+    /// transfer (`asan_par_slot_shared_struct_*`).
+    ///
+    /// Those fixtures are only meaningful if the analyzer actually SPLITS the
+    /// function — the bug lives in the branch→parent hand-off, so a shape that
+    /// never parallelizes exercises nothing while reporting green. That is not
+    /// hypothetical: during the investigation a weak-vs-strong control was
+    /// written without checking, drew 0 branches, came back clean, and was
+    /// briefly taken as evidence that the defect needed a container.
+    ///
+    /// Asserting the branch count HERE rather than inside the ASAN fixtures is
+    /// deliberate: the ASAN harness shells out to a linked binary and sees no
+    /// IR, and the leak checkers cannot tell "clean because it is fixed" from
+    /// "clean because nothing ran". If a future analyzer heuristic stops
+    /// splitting these shapes, this test fails loudly and points at the
+    /// fixtures that just went hollow.
+    #[test]
+    fn par_slot_shared_struct_fixtures_actually_parallelize() {
+        // The ASAN fixtures' sources VERBATIM — churn and all. Reproduced whole
+        // rather than abbreviated: an earlier draft of this guard trimmed
+        // `churn` and simplified `main`, and the trimmed program did not
+        // parallelize, so the guard and the fixtures disagreed about the very
+        // property the guard exists to certify. If the guard is not compiling
+        // what the fixtures compile, it certifies nothing.
+        let body = |vec_ty: &str, pushed: &str| {
+            format!(
+                "shared struct P {{ v: i64 }}\n\
+                 shared struct Q {{ a: i64, b: i64, c: i64 }}\n\
+                 fn build(seed: i64) -> i64 {{\n\
+                 \x20   let p: P = P {{ v: seed }};\n\
+                 \x20   let q: Q = Q {{ a: seed, b: seed, c: seed }};\n\
+                 \x20   let mut w: {vec_ty} = Vec.new();\n\
+                 \x20   w.push({pushed});\n\
+                 \x20   return w.len() + q.a - q.a;\n\
+                 }}\n\
+                 fn churn(n: i64) -> i64 {{\n\
+                 \x20   if n <= 0 {{ return 0; }}\n\
+                 \x20   let pad: i64 = n * 3;\n\
+                 \x20   return pad + churn(n - 1);\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let seed: i64 = env.args().len();\n\
+                 \x20   let k = build(seed);\n\
+                 \x20   let noise = churn(2000);\n\
+                 \x20   println(k + noise - noise);\n\
+                 }}\n"
+            )
+        };
+        let read_only = body("Vec[i64]", "p.v");
+        let into_container = body("Vec[P]", "p");
+        // Mirror the ASAN harness's pipeline, NOT `ir_for`'s: that helper
+        // passes `ownership: None`, and auto-par grouping differs under it.
+        // The guard must model what the fixtures actually compile.
+        let ir_like_asan = |src: &str| {
+            let mut parsed = karac::parse(src);
+            assert!(
+                parsed.errors.is_empty(),
+                "parse errors: {:?}",
+                parsed.errors
+            );
+            karac::desugar_program(&mut parsed.program);
+            karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            karac::lower(&mut parsed.program, &typed);
+            let ownership = karac::ownershipcheck(&parsed.program, &typed);
+            // The concurrency analysis is what turns auto-par ON. Passing
+            // `None` here (as `ir_for` does, and as the ASAN harness did before
+            // this row) disables the parallelizer outright — which would make
+            // this guard assert the opposite of what it means to.
+            let effects = karac::effectcheck(&parsed.program);
+            let concurrency =
+                karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+            compile_to_ir(&parsed.program, Some(&ownership), Some(&concurrency))
+                .expect("codegen failed")
+        };
+        for (label, src) in [
+            ("read-only join", &read_only),
+            ("moved into a container", &into_container),
+        ] {
+            let ir = ir_like_asan(src);
+            let branches = ir
+                .lines()
+                .filter(|l| l.starts_with("define") && l.contains("@__par_branch"))
+                .count();
+            assert!(
+                branches > 0,
+                "{label}: the analyzer no longer splits this function, so the \
+                 asan_par_slot_shared_struct_* fixtures are now vacuous — they \
+                 cover a branch→parent ownership transfer that never happens. \
+                 Re-shape both fixtures until this parallelizes again."
+            );
+            // The published slot is what the transfer is about; without it the
+            // branch keeps its own value and the hand-off is never exercised.
+            assert!(
+                ir.contains("__par_slot_p_dst"),
+                "{label}: `p` is no longer PUBLISHED as a return slot, so the \
+                 RC ownership hand-off this row fixed is not exercised."
+            );
+        }
+    }
+
     /// B-2026-08-08-5 — a `Vec[weak T]` push DOWNGRADES, takes no strong count,
     /// and the container weak-drops each element at scope exit.
     ///
