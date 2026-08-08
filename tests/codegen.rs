@@ -22463,6 +22463,36 @@ fn main() {
         );
     }
 
+    /// B-2026-08-08-25 — a SECOND still-miscompiling shape in this family,
+    /// found the same way and pinned the same way.
+    ///
+    /// Calling `.map` TWICE on one `Option[String]` binding corrupts the second
+    /// result: garbage bytes, or an abort in the UTF-8 validator
+    /// (`internal: String buffer was not valid UTF-8`). `--interp` prints both
+    /// correctly. The mapper bodies here are ordinary method calls that have
+    /// lowered correctly all along, so this is about the RECEIVER, not the
+    /// closure — `map` on a heap payload moves the payload out to hand it to
+    /// the mapper, and the binding stays in scope holding a moved-from header.
+    ///
+    /// Independent of B-2026-08-08-22 and B-2026-08-08-24 (a different shape
+    /// each), and NOT fixed by B-2026-08-08-20's inline-consume fix —
+    /// re-measured after that landed.
+    #[test]
+    #[ignore = "B-2026-08-08-25: second `.map` on the same Option[String] reads a moved-from payload"]
+    fn test_e2e_option_map_twice_on_one_binding() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o.map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => {} }\n\
+                     match o.map(|x| x.to_lowercase()) { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\nhi\n")
+        );
+    }
+
     #[test]
     fn test_e2e_generic_method_some_over_field_pop() {
         // B-2026-07-12-6 (typecheck) — `Some(self.items.pop())` inside a generic

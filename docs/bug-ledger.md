@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 221 | 1 |
+| miscompile | 222 | 2 |
 | leak | 151 | 1 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 749 | 1 |
+| codegen | 750 | 2 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1036 surfaced · 2 open · 1024 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1037 surfaced · 3 open · 1024 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-24 | 2026-08-08 | codegen | medium | an ANNOTATED concat mapper `|s: String| s + "!"` builds and returns an EMPTY String -- silent, pre-existing, and the exact workaround two successive codegen gates advised | probe: `s.map(|x: String| x + "!")` on `Option[String]` — `karac build` prints an empty string, `--interp` prints `hi!`; the UN-annotated spelling is correct after B-2026-08-08-22 |
+| B-2026-08-08-25 | 2026-08-08 | codegen | high | calling `.map` TWICE on the same `Option[String]` binding corrupts the SECOND result under `karac build` — garbage bytes or an abort in the UTF-8 validator, where `--interp` prints both correctly | tests/codegen.rs::test_e2e_option_map_twice_on_one_binding (#[ignore]d, asserts the CORRECT output) |
 
 ### Fixed (1024)
 
