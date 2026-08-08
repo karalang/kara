@@ -334,10 +334,10 @@ program; lower is faster; everything relative to **Rust = 1.0**.
 
 ![Runtime, parallel lane — Kāra auto-par vs Rust rayon / Go / C-pthreads, relative to Rust](docs/assets/runtime-par.png)
 
-Across the **36 programs** that currently ship the full parallel comparator set,
+Across the **37 programs** that currently ship the full parallel comparator set,
 Kāra's auto-par runs at a median **1.14× of hand-tuned `rayon`** (typically within
-~10–15%), is **faster than `rayon` outright on nine** (best #22 0.58×, #20, #11,
-#86), beats Go's goroutines on **27 of 36** — often by multiples, as dispatch
+~10–15%), is **faster than `rayon` outright on ten** (best #22 0.58×, #20, #11,
+#86), beats Go's goroutines on **28 of 37** — often by multiples, as dispatch
 overhead swamps fine-grained reductions — and **edges or matches the raw-pthreads
 C floor on nine** of the allocation-heavy ones, for **none** of the engineering
 cost. It is not uniformly fastest — a few string-/allocation-churn kernels trail
