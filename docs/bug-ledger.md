@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 41 | 0 |
 | crash | 40 | 0 |
 | other | 24 | 1 |
-| use-after-free | 15 | 0 |
+| use-after-free | 16 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 750 | 2 |
+| codegen | 751 | 2 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1039 surfaced · 4 open · 1025 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1040 surfaced · 4 open · 1026 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1039 surfaced
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
 | B-2026-08-08-27 | 2026-08-08 | other | low | the dark-llvm-target audit has never been RE-RUN as a check -- B-2026-07-31-44 swept 19 targets by hand and B-2026-08-08-26 found the 20th the same way, so the next gap will also be found by accident unless the audit becomes a script | Spun out of B-2026-08-08-26 rather than folded into it: -26 is a coverage-gap row with a landed fix, this is a standing question about whether the remaining dark surface is worth the CI minutes. Needs a measurement, not a debugging session. |
 
-### Fixed (1025)
+### Fixed (1026)
 
-<details><summary>1025 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1026 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1188,6 +1188,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-21 | codegen | low | `Option/Result.map` with an UN-ANNOTATED closure returning a String/Vec is refused by `karac build` -- a loud, actionable bail ("annotate the closure… | 8521c30e |
 | B-2026-08-08-22 | codegen | low | a closure whose body IS a String value (bare literal or `+` concat) is declared with a POINTER return, so the `{ptr,len,cap}` it yields fails LLVM ve… | 51ceecab. `infer_closure_return_type` types a `StringLit` body and a `+` chain whose either side is a String as the `{ptr,len,cap}` String struct rather than a bare pointer, so the `ret` matches the declared signature. The `closure_body_is_bare_string_value` gate in the `map` heap-payload path is deleted along with its now-dead helper: it existed only to reject these bodies with advice (annotate the parameter) that measurement showed does not help — `|s: String| "fixed"` failed identically. Pinned by tests/codegen.rs::test_e2e_option_map_string_value_bodies_compile_and_run (9 shapes, each compared against the `--interp` oracle), STASH-PROVEN red pre-fix. Residual, filed separately as B-2026-08-08-24 and pinned by an `#[ignore]`d test: the annotated concat `|s: String| s + "!"` now BUILDS but returns an empty String — a pre-existing silent miscompile this row did not introduce and does not fix. |
 | B-2026-08-08-26 | other | medium | `tests/cli.rs` is the dark target B-2026-07-31-44 missed, and it was RED the whole time -- 35 of its 43 `#[cfg(feature = "llvm")]` tests run in NO CI… | f68004a |
+| B-2026-08-08-28 | codegen | high | a weak ELEMENT read through a struct FIELD (`a.ns[0]` on `mut ns: Vec[weak N]`) skips the balancing acquire and over-releases -- SIGSEGV under JIT an… | PENDING |
 
 </details>
 

@@ -860,6 +860,59 @@ fn main() {
     }
 
     #[test]
+    fn asan_weak_vec_field_element_read_balanced_no_use_after_free() {
+        // B-2026-08-08-28 — the sibling above fixed the balancing acquire for a
+        // weak element read through a BARE VARIABLE (`w[0]`). The gate it added
+        // matched `ExprKind::Index` only when the receiver was an
+        // `ExprKind::Identifier`, so a Vec held as a struct FIELD (`a.ns[0]`)
+        // fell through both halves of `expr_is_weak_field_read` — the index arm
+        // rejected the receiver, and the field arm never ran because the
+        // expression is an `Index`, not a `FieldAccess`.
+        //
+        // That is the shape every real weak program has: design.md's own graph
+        // example is `shared struct Node { mut neighbors: Vec[weak Node] }`. It
+        // took the dec without the inc and over-released, with three distinct
+        // symptoms depending on how many reads happened:
+        //
+        //   1 read                -> 48 bytes leaked (5 allocs, 4 frees)
+        //   2 reads, same element -> SILENT WRONG ANSWER: the second read of a
+        //                            plainly-live target yields `None`
+        //                            (interp 4, JIT and AOT both 1)
+        //   2 reads, two owners   -> SIGSEGV under JIT and AOT, while
+        //                            `--interp` printed the right answer
+        //
+        // This fixture is the two-owner shape — the one that crashed — because
+        // it also covers the other two: it reads through both nodes of a weak
+        // cycle, so a missing acquire shows up as a UAF long before the
+        // scope-exit accounting is reached. The reads happen in a HELPER whose
+        // frame then dies, per B-2026-08-08-4's note that LSan under-reports
+        // when the last handles survive in an unoverwritten dead frame.
+        assert_clean_asan_run(
+            r#"
+shared struct N { v: i64, mut ns: Vec[weak N] }
+fn build(seed: i64) -> i64 {
+    let a = N { v: seed, ns: Vec.new() };
+    let b = N { v: seed + 1i64, ns: Vec.new() };
+    a.ns.push(b);
+    b.ns.push(a);
+    let mut acc: i64 = 0i64;
+    match a.ns[0] { Some(x) => { acc = acc + x.v; } None => { acc = acc - 1i64; } }
+    match b.ns[0] { Some(y) => { acc = acc + y.v; } None => { acc = acc - 1i64; } }
+    match a.ns[0] { Some(z) => { acc = acc + z.v; } None => { acc = acc - 1i64; } }
+    return acc;
+}
+fn churn(d: i64) -> i64 { if d <= 0i64 { 0i64 } else { d + churn(d - 1i64) } }
+fn main() {
+    println(build(1i64));
+    println(churn(64i64));
+}
+"#,
+            &["5", "2080"],
+            "weak_vec_field_element_read_balanced",
+        );
+    }
+
+    #[test]
     fn asan_weak_read_into_option_binding_then_weak_store_no_leak() {
         // B-2026-07-21-21: `let after: Option[N] = nodes[i].link;` (a WEAK-field
         // read) binds an `Option[shared]` that owns NO +1 — the weak read is a

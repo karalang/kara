@@ -1151,15 +1151,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // `match v[i]` and the named-intermediate spelling. The identical
         // failure B-2026-07-21-21 measured for the field form, reached through
         // the container instead.
+        //
+        // B-2026-08-08-28 widened the receiver: the arm below used to match only
+        // a BARE IDENTIFIER (`v[i]`), so a Vec held as a struct FIELD
+        // (`a.ns[0]`, `self.ns[0]`) fell straight through — `e` is an `Index`,
+        // not a `FieldAccess`, so the field half further down never sees it
+        // either. The container-mediated graph is the shape every real weak
+        // program has, and it took the dec without the inc exactly as described
+        // above: silent wrong answers (a second read of a live target yields
+        // `None`), `Invalid read of size 8`, and a SIGSEGV once two owners are
+        // read. `index_receiver_elem_type_expr` resolves both spellings.
         if let ExprKind::Index { object, .. } = &e.kind {
-            if let ExprKind::Identifier(name) = &object.kind {
-                if self
-                    .var_elem_type_exprs
-                    .get(name.as_str())
-                    .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
-                {
-                    return true;
-                }
+            if self
+                .index_receiver_elem_type_expr(object)
+                .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+            {
+                return true;
             }
         }
         let ExprKind::FieldAccess { object, field } = &e.kind else {
@@ -1172,6 +1179,41 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&type_name)
             .and_then(|ns| ns.iter().position(|n| n == field))
             .is_some_and(|idx| self.struct_field_is_weak(&type_name, idx))
+    }
+
+    /// Cheap (no-codegen) resolution of the ELEMENT `TypeExpr` behind an index
+    /// receiver, for both spellings a Vec place can take: a bare variable
+    /// (`v[i]`, straight out of `var_elem_type_exprs`) and a struct FIELD
+    /// (`a.ns[i]` / `self.ns[i]`, resolved through the owning struct's recorded
+    /// field type-exprs and then unwrapped from `Vec[..]`). The field arm
+    /// mirrors `map_receiver_value_type_expr`'s, which does the same walk for a
+    /// Map value type. `None` when the receiver is not a recognised place or the
+    /// field is not a Vec. Used by `expr_is_weak_field_read` (B-2026-08-08-28) so
+    /// a weak element read is recognised through a field, not only through a
+    /// local.
+    pub(super) fn index_receiver_elem_type_expr(&self, object: &Expr) -> Option<TypeExpr> {
+        match &object.kind {
+            ExprKind::Identifier(name) => self.var_elem_type_exprs.get(name.as_str()).cloned(),
+            ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } => {
+                let obj_name = match &inner.kind {
+                    ExprKind::Identifier(o) => o.as_str(),
+                    ExprKind::SelfValue => "self",
+                    _ => return None,
+                };
+                let sname = self.var_type_names.get(obj_name)?.clone();
+                let idx = self
+                    .struct_field_names
+                    .get(&sname)?
+                    .iter()
+                    .position(|n| n == field)?;
+                let fte = self.struct_field_type_exprs.get(&sname)?.get(idx)?;
+                super::helpers::vec_inner_type_expr(fte)
+            }
+            _ => None,
+        }
     }
 
     /// Cheap (no-codegen) resolution of a shared-struct receiver's
