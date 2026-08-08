@@ -29539,6 +29539,120 @@ fn seeded_generic_call_checks_its_argument_against_the_concrete_slot() {
     .is_empty());
 }
 
+/// B-2026-08-08-8 — expected-return seeding also reaches a BARE IDENTIFIER
+/// callee, i.e. an ordinary generic free function.
+///
+/// `let h: Holder[u32] = wrap([30, 10, 20])` reported `expected 'Holder<u32>',
+/// found 'Holder<i64>'` while the qualified spelling of the same signature
+/// adopted `u32` — so whether a caller could pass a context-adopting literal
+/// depended on where the function happened to be declared. The path-only gate
+/// existed to stop the expectation leaking into a nested call inside an
+/// argument, but the `expectation_is_concrete` condition added afterwards is
+/// what actually blocks that: the leak case is an UNANNOTATED `let`, whose
+/// expectation is an unsolved metavar and is no longer published at all.
+#[test]
+fn expected_return_seeding_reaches_a_bare_identifier_callee() {
+    typecheck_ok(
+        "struct Holder[T] { items: Vec[T] } \
+         fn wrap[T](v: Vec[T]) -> Holder[T] { return Holder { items: v }; } \
+         fn main() { let h: Holder[u32] = wrap([30, 10, 20]); println(h.items.len()); }",
+    );
+    // The leak shape the path-only gate was guarding against: an unannotated
+    // `let` publishes no expectation, so the inner calls still fix `T`.
+    typecheck_ok(
+        "struct Bag[T] { items: Vec[T] } \
+         fn mk[T](x: T) -> T { return x; } \
+         fn main() { let b = Bag { items: [mk(1), mk(2)] }; println(b.items.len()); }",
+    );
+    // Seeding is not blanket acceptance — a genuinely wrong expectation still
+    // rejects rather than binding `T` to it and forcing the argument through.
+    assert!(!typecheck_errors(
+        "fn id[T](x: T) -> T { return x; } \
+         fn main() { let s: String = id(5); println(s); }"
+    )
+    .is_empty());
+}
+
+/// B-2026-08-08-8 — pass 2 resolves the ARGUMENT's type before judging it, not
+/// just the slot's.
+///
+/// `arg_ty` is the snapshot pass 1 took at inference time, and pass 1's own
+/// `unify_types` may bind its metavars afterwards. Comparing that stale
+/// snapshot against a freshly-resolved slot reported `expected 'Vec<u32>',
+/// found 'Vec<?T1>'` for `Column.from_vec(Vec.new())` — where `?T1` was, by
+/// then, bound to `u32` in that very substitution map. Reaches any argument
+/// carrying an unsolved element, not only the seeded case.
+#[test]
+fn pass_two_resolves_the_argument_type_it_checks() {
+    typecheck_ok(
+        "fn main() { let c: Column[u32] = Column.from_vec(Vec.new()); println(c.len()); }",
+    );
+    // A sibling argument, rather than the expectation, fixes the element.
+    typecheck_ok(
+        "fn pair[T](a: Vec[T], b: Vec[T]) -> i64 { return a.len() + b.len(); } \
+         fn main() { let sv: Vec[String] = [\"a\"]; \
+                     let n: i64 = pair(Vec.new(), sv); println(n); }",
+    );
+    // Resolving must not mask a real mismatch: a name/shape clash binds
+    // nothing, so the argument resolves to itself and still rejects.
+    assert!(!typecheck_errors(
+        "fn pair[T](a: Vec[T], b: Vec[T]) -> i64 { return a.len() + b.len(); } \
+         fn main() { let sv: Vec[String] = [\"a\"]; let iv: Vec[i64] = [1, 2]; \
+                     let n: i64 = pair(iv, sv); println(n); }"
+    )
+    .is_empty());
+}
+
+/// B-2026-08-08-9 — a slot fixed by the EXPECTATION still owes the
+/// narrowing check.
+///
+/// `check_assignable` is permissive between integer types, which is right when
+/// the argument itself fixed the slot, but seeding fixes it from the outside —
+/// so a wide variable flowed into a narrow slot unchallenged. `fn id[T](x: T)
+/// -> T` called as `let x: u8 = id(big)` with `big: i64 = 5000000000`
+/// typechecked and PRINTED 5000000000, a value no `u8` can hold. The same
+/// coercion without the generic is rejected by B-2026-07-09-7, so this was a
+/// hole in an existing rule. Pre-existing on the path-callee spelling
+/// (`Boxy.wrap(big)`); widening the callee gate above would have extended it to
+/// every generic free function.
+#[test]
+fn seeded_slot_rejects_a_narrowing_non_constant_argument() {
+    let narrowing_free_fn = typecheck_errors(
+        "fn id[T](x: T) -> T { return x; } \
+         fn main() { let big: i64 = 5000000000; let x: u8 = id(big); println(x); }",
+    );
+    assert!(narrowing_free_fn
+        .iter()
+        .any(|e| e.message.contains("would narrow or change sign")));
+    // The path-callee spelling — accepted, and miscompiled, before this row.
+    let narrowing_path_call = typecheck_errors(
+        "struct Boxy[T] { v: T } \
+         impl[T] Boxy[T] { fn wrap(x: T) -> T { return x; } } \
+         fn main() { let big: i64 = 5000000000; let x: u8 = Boxy.wrap(big); println(x); }",
+    );
+    assert!(narrowing_path_call
+        .iter()
+        .any(|e| e.message.contains("would narrow or change sign")));
+    // Deliberately narrower than the general rule, so two existing behaviours
+    // survive. SAME-WIDTH reinterpretation stays permissive (`i64` -> `u64` is
+    // the same eight bytes) — see
+    // `generic_numeric_arg_same_layout_and_literals_still_accepted`.
+    typecheck_ok(
+        "fn find[T: Eq](items: Vec[T], target: T) -> Option[u64] { \
+             for i in 0..items.len() { if items[i] == target { return Some(i); } } \
+             None \
+         }",
+    );
+    // And a COMPILE-TIME CONSTANT whose value fits stays permissive, even
+    // though arithmetic over literals is not itself a literal (B-2026-08-05-25).
+    typecheck_ok("fn main() { let a: Option[i32] = Some(0 - 1); println(a.is_some()); }");
+    typecheck_ok(
+        "struct Boxy[T] { v: T } \
+         impl[T] Boxy[T] { fn new(x: T) -> Boxy[T] { return Boxy { v: x }; } } \
+         fn main() { let b: Boxy[i32] = Boxy.new(5); println(b.v); }",
+    );
+}
+
 /// B-2026-08-08-7 — a collection literal adopts its contextual element type only
 /// from a NUMERIC source, and never across the float→integer truncation.
 ///

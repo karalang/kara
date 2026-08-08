@@ -23,10 +23,10 @@ use super::inference::{
     substitute_type_params, unify_types, InstantiatedSignature,
 };
 use super::types::{
-    contains_type_param, impl_args_match, impl_table_key, int_coercion_is_widening, is_integer,
-    lub_block_type, type_display, type_is_fully_concrete, type_to_concrete_or_param_name,
-    type_to_mono_mangle_token, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type,
-    UIntSize,
+    contains_type_param, impl_args_match, impl_table_key, int_coercion_is_widening,
+    int_signed_width, is_integer, lub_block_type, type_display, type_is_fully_concrete,
+    type_to_concrete_or_param_name, type_to_mono_mangle_token, ConstArg, DimArg, IntSize,
+    ScrutineeMode, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -1067,12 +1067,25 @@ impl<'a> super::TypeChecker<'a> {
         // is unaffected, because seeding binds the RETURN type and the payload
         // is then an ordinary scalar assignment where numeric coercion stays
         // permissive; verified against both spellings.
+        //
+        // B-2026-08-08-8 — plus a BARE IDENTIFIER callee, i.e. an ordinary
+        // generic free function. `let h: Holder[u32] = wrap([30, 10, 20])`
+        // reported `expected Holder<u32>, found Holder<i64>` while the
+        // qualified `Holder.wrap(..)` spelling of the same body adopted `u32`,
+        // so which of two identical signatures a caller could use depended on
+        // where it was declared. The nested-call leak the path-only gate was
+        // guarding against is now blocked by the `expectation_is_concrete`
+        // condition below, which post-dates that restriction: the `Bag { items:
+        // [..] }` case leaked precisely because an UNANNOTATED `let` publishes
+        // an unsolved metavar as its expectation, and such an expectation no
+        // longer gets published at all. Verified by re-running that shape.
         let seedable_call = match &expr.kind {
-            ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Path { .. } => true,
-                ExprKind::Identifier(n) => matches!(n.as_str(), "Some" | "Ok" | "Err"),
-                _ => false,
-            },
+            ExprKind::Call { callee, .. } => {
+                matches!(
+                    &callee.kind,
+                    ExprKind::Path { .. } | ExprKind::Identifier(_)
+                )
+            }
             _ => false,
         };
         if seedable_call && *expected != Type::Error && expectation_is_concrete(expected) {
@@ -1756,7 +1769,49 @@ impl<'a> super::TypeChecker<'a> {
                     // `check_assignable` was the thing catching. Pass 1's
                     // `check_expr` narrows the argument's type; it does not
                     // replace the verdict.
+                    //
+                    // B-2026-08-08-8 — resolve the ARGUMENT's type through the
+                    // substitutions too, not just the slot's. `arg_ty` is the
+                    // snapshot pass 1 took at inference time; pass 1's own
+                    // `unify_types` may have bound its metavars afterwards, and
+                    // comparing a stale snapshot against a freshly-resolved slot
+                    // reported `expected 'Vec<u32>', found 'Vec<?T1>'` for
+                    // `let c: Column[u32] = Column.from_vec(Vec.new())` — where
+                    // `?T1` was, by then, bound to `u32` in that very map.
+                    // Resolving cannot mask a real mismatch: a metavar in
+                    // `arg_ty` is only ever bound by unifying against this
+                    // signature, so resolving reproduces what unify accepted and
+                    // leaves everything unify rejected (a shape or name clash
+                    // binds nothing) exactly as it was.
+                    let arg_ty = &self.resolve_assoc_projections(&resolve_type_vars(
+                        arg_ty,
+                        &self.env.substitutions,
+                        &id_to_name,
+                        &self.env.const_substitutions,
+                        &const_id_to_name,
+                    ));
                     self.check_assignable(&resolved, arg_ty, arg.value.span.clone());
+                    // B-2026-08-08-9 — a slot the EXPECTATION bound still owes
+                    // the narrowing check. `check_assignable` is permissive
+                    // between integer types, which is right when the slot was
+                    // fixed by this very argument (there is nothing to narrow
+                    // TO), but seeding fixes the slot from the OUTSIDE, so a
+                    // wide variable then flows into a narrow slot unchallenged:
+                    // `fn id[T](x: T) -> T` called as `let x: u8 = id(big)`
+                    // with `big: i64 = 5000000000` typechecked and PRINTED
+                    // 5000000000 — a value no `u8` can hold. The same spelling
+                    // without the generic (`takeu8(big)`, or the plain
+                    // `let x: u8 = big`) is rejected by B-2026-07-09-7, so the
+                    // generic call was a hole in an existing rule rather than a
+                    // separate policy. Literals are exempt inside the helper
+                    // (they are value-checked, which is what keeps the
+                    // `Box.new(5)` case seeding exists for working), so this
+                    // only ever fires on a non-literal integer.
+                    if seeded_from_expectation
+                        && self.seeded_arg_narrows(&arg.value, &resolved, arg_ty)
+                    {
+                        self.check_int_widening_coercion(&arg.value, &resolved, arg_ty);
+                    }
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, arg_ty);
                     }
@@ -3243,6 +3298,51 @@ impl<'a> super::TypeChecker<'a> {
             expr.span.clone(),
             TypeErrorKind::TypeMismatch,
         );
+    }
+
+    /// B-2026-08-08-9 — does this argument lose bytes flowing into a slot that
+    /// expected-return SEEDING fixed from the outside?
+    ///
+    /// Deliberately much narrower than `check_int_widening_coercion`'s own rule,
+    /// because a seeded slot is not an ordinary assignment target and two
+    /// existing behaviours have to survive:
+    ///
+    ///  - SAME-WIDTH reinterpretation stays permissive. `return Some(i)` with
+    ///    `i: i64` into an `Option[u64]` is a tested, deliberate shape
+    ///    (`generic_numeric_arg_same_layout_and_literals_still_accepted`:
+    ///    "same eight bytes, only the interpretation differs"). It disagrees
+    ///    with the plain `return i` into a `-> u64` fn, which IS rejected —
+    ///    but that disagreement predates this row and settling it is a language
+    ///    decision, not a bug fix. Only a STRICT width reduction is caught.
+    ///
+    ///  - A COMPILE-TIME-CONSTANT argument stays permissive when its value
+    ///    fits. `let a: Option[i32] = Some(0 - 1)` is arithmetic over literals,
+    ///    so the bare-literal exemption inside `check_int_widening_coercion`
+    ///    misses it, but the value is known and provably in range — the whole
+    ///    point of B-2026-08-05-25. Const-evaluated against the TARGET, whose
+    ///    range check is what "fits" means; a non-constant argument (the actual
+    ///    bug: a variable of unknown value) fails the eval and is caught.
+    fn seeded_arg_narrows(&mut self, expr: &Expr, expected: &Type, actual: &Type) -> bool {
+        let peel = |t: &Type| -> Type {
+            match t {
+                Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                other => other.clone(),
+            }
+        };
+        let target = peel(expected);
+        let source = peel(actual);
+        if int_coercion_is_widening(&source, &target) {
+            return false;
+        }
+        let (Some((source_width, _)), Some((target_width, _))) =
+            (int_signed_width(&source), int_signed_width(&target))
+        else {
+            return false;
+        };
+        if target_width >= source_width {
+            return false;
+        }
+        self.eval_const_expr(expr, &target).is_err()
     }
 
     fn infer_expr_inner(&mut self, expr: &Expr) -> Type {

@@ -86920,6 +86920,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_seeded_generic_free_fn_adopts_and_runs() {
+        // B-2026-08-08-8 — the newly-accepted shapes must LOWER, not merely
+        // typecheck. Expected-return seeding now reaches a bare-identifier
+        // callee, so `wrap([30, 10, 20])` adopts `u32` from the annotation
+        // instead of minting `Vec[i64]`; and pass 2 resolves the argument's own
+        // type, so `Vec.new()` reaches a slot a sibling argument fixed. Both
+        // previously failed typecheck outright, which is exactly the situation
+        // where a fix can typecheck a program codegen cannot emit
+        // (B-2026-08-08-5 / -7 both did on their first cut).
+        let out = run_program(
+            r#"
+struct Holder[T] { items: Vec[T] }
+fn wrap[T](v: Vec[T]) -> Holder[T] { Holder { items: v } }
+fn pair[T](a: Vec[T], b: Vec[T]) -> i64 { a.len() + b.len() }
+fn main() {
+    let h: Holder[u32] = wrap([30, 10, 20]);
+    println(h.items.len());
+    println(h.items[1]);
+    let sv: Vec[String] = ["a"];
+    println(pair(Vec.new(), sv));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n10\n1");
+        }
+    }
+
+    #[test]
     fn test_e2e_tuple_elem_move_out_single_body_fire() {
         // B-2026-08-03-3 (bodies half) — `let x = t.N` moves ONE tuple element
         // out. Cap-zeroing already neutralized the source's MEMORY drop, but its
