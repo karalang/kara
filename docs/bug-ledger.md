@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 151 | 1 |
 | double-free | 113 | 0 |
 | codegen-gap | 94 | 0 |
-| run-vs-build | 90 | 1 |
+| run-vs-build | 90 | 0 |
 | missing-feature | 85 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 740 | 0 |
 | typecheck | 133 | 2 |
-| interp | 129 | 1 |
+| interp | 129 | 0 |
 | ownership | 44 | 1 |
 | autopar | 33 | 0 |
 | other | 32 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1026 surfaced · 3 open · 1013 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1026 surfaced · 2 open · 1014 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
-| B-2026-08-08-14 | 2026-08-08 | interp | medium | the interpreter has no weak CONTAINER element, so a `Vec[weak T]` read-back reports `non-exhaustive match ... the typechecker should have rejected this` where `karac build` and `karac run` are both correct | probe: `let mut w: Vec[weak N] = Vec.new(); w.push(a); match w[0] { Some(x) => .. }` under `karac run --interp` |
 | B-2026-08-08-11 | 2026-08-08 | typecheck | low | a type error about a `frozen` parameter names its type `ref T` -- the surface keyword and the diagnostic disagree, because `frozen T` lowers to `Ref(T)` at parse time and the typechecker only ever sees the borrow | src/parser.rs (`frozen T` lowers to `TypeKind::Ref(T)` at parse time) |
 
-### Fixed (1013)
+### Fixed (1014)
 
-<details><summary>1013 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1014 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1169,6 +1168,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-2 | typecheck+ownership | high | this row's PREMISE WAS WRONG -- kata #133 was never blocked on `Map[K, frozen V]` (its `visited` map holds the CLONES, which are mutated and can neve… | d174d04c |
 | B-2026-08-08-3 | codegen | medium | a `par` branch whose body is a BLOCK EXPRESSION containing a `Map` fails codegen with `Undefined variable '<outer destructured name>'`, while `karac… | da9ae409. Two holes in the par-branch return-slot type inference (`src/codegen/stmts.rs`): `infer_block_tail_llvm_type` now honours an inner `let`'s type ANNOTATION (it consulted only the RHS, while its own caller checks the annotation first), and `infer_expr_llvm_type`'s `MethodCall` arm types a builtin container/string `len()` from `method_callee_types` — the typechecker's own span-keyed record of the receiver — restricted to methods with one possible return type across every receiver. Neither the `Map` nor the slot-ownership transfer this row named is involved; Vec/String/Set reproduce identically, and the reported name is the BRANCH binding, not the outer destructured one. 18 variants build and agree with the interpreter; valgrind clean at both opt levels. Fixtures `par_branch_block_body_ending_in_container_len` and `par_branch_block_body_binding_distinct_from_destructured_name`, both stash-proven red. |
 | B-2026-08-08-13 | codegen | high | a `Vec[weak N]` push SILENTLY CORRUPTED the target's first field — `w.push(a)` changed `a.v` from 41 to 42, because the weak-target scan never saw th… | f869989f |
+| B-2026-08-08-14 | interp | medium | the interpreter has no weak CONTAINER element, so a `Vec[weak T]` read-back reports `non-exhaustive match .. | f0c47394 |
 | B-2026-08-08-5 | typecheck+codegen | high | the `weak` downgrade store coercion reaches a direct FIELD store but not a container-ELEMENT store, so `Vec[weak N]` cannot be built -- which makes d… | 1bb5328a |
 | B-2026-08-08-6 | codegen | medium | a caller-retains struct PARAM whose callee moves a promoted `Option`/`Result` field out has two owners | 9b4abaf0 |
 | B-2026-08-08-7 | other | medium | six ASAN fixtures were passing VACUOUSLY — their programs fail typecheck and `karac build` would refuse them, but the harness only ever asserted the… | 7c7de323 |
