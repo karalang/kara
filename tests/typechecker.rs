@@ -36121,3 +36121,118 @@ fn a_vec_of_weak_accepts_a_bare_handle_and_refuses_the_option_forms() {
         );
     }
 }
+
+/// B-2026-08-08-24 — an OWNED closure-parameter annotation over a BORROWED
+/// payload is a type error, not a silent reinterpretation in codegen.
+///
+/// `Vec.first()/.last()/.get()` mint `Option[ref T]`. The mapper's explicit
+/// annotation used to win over the combinator's seed *without ever being
+/// compared to it*, so the typechecker recorded `Fn(ref T) -> R` for a closure
+/// whose surface annotation said `T`. Codegen resolved that disagreement by
+/// reading the borrow as the owned value, which measured as: an empty `String`,
+/// a `Vec[i64].len()` of 0, and — for a scalar payload — a raw stack address
+/// printed as the program's answer.
+///
+/// Every payload class is covered here because the failure mode differs by
+/// class (empty / zero / leaked address) while the defect is one rule.
+#[test]
+fn owned_closure_param_annotation_over_borrowed_payload_is_rejected() {
+    for (label, decl, body, want_ref) in [
+        (
+            "String payload",
+            "let out: Vec[String] = vec![f\"hi\"];",
+            "out.first().map(|x: String| x.to_uppercase())",
+            "ref String",
+        ),
+        (
+            "scalar payload (leaked a stack address pre-fix)",
+            "let out: Vec[i64] = vec![7];",
+            "out.first().map(|x: i64| x + 1)",
+            "ref i64",
+        ),
+        (
+            "heap-aggregate payload",
+            "let out: Vec[Vec[i64]] = vec![vec![1, 2]];",
+            "out.first().map(|x: Vec[i64]| x.len())",
+            "ref Vec<i64>",
+        ),
+        (
+            "`.get(i)` mints the same borrow as `.first()`",
+            "let out: Vec[String] = vec![f\"hi\"];",
+            "out.get(0).map(|x: String| x.to_uppercase())",
+            "ref String",
+        ),
+        (
+            "`.last()` likewise",
+            "let out: Vec[String] = vec![f\"hi\"];",
+            "out.last().map(|x: String| x.to_uppercase())",
+            "ref String",
+        ),
+    ] {
+        let src = format!("fn main() {{\n    {decl}\n    let _r = {body};\n}}\n");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(want_ref)
+                && e.message
+                    .contains("annotated as owned but receives a borrowed value")),
+            "{label}: must be rejected naming `{want_ref}`; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+        // Machine-applicable, since `karac fix` is the primary fix path here:
+        // the fix-it replaces the annotation itself with the borrow spelling.
+        let fixed = errors
+            .iter()
+            .find(|e| e.message.contains("annotated as owned"))
+            .and_then(|e| e.fix_it.clone())
+            .unwrap_or_else(|| panic!("{label}: diagnostic carried no fix-it"));
+        assert_eq!(
+            fixed.replacement, want_ref,
+            "{label}: the fix-it must rewrite the annotation to the borrow spelling"
+        );
+    }
+}
+
+/// The other half of B-2026-08-08-24: the spellings that are CORRECT must stay
+/// accepted. A rule that rejects the miscompiling shape by rejecting the whole
+/// family would be a worse bug than the one it replaces.
+#[test]
+fn borrowed_payload_accepts_the_correct_closure_param_spellings() {
+    for (label, src) in [
+        (
+            "no annotation — the seed supplies `ref T`",
+            "fn main() {\n    let out: Vec[String] = vec![f\"hi\"];\n\
+             \n    let _r = out.first().map(|x| x.to_uppercase());\n}\n",
+        ),
+        (
+            "explicit `ref T` matches the payload",
+            "fn main() {\n    let out: Vec[String] = vec![f\"hi\"];\n\
+             \n    let _r = out.first().map(|x: ref String| x.to_uppercase());\n}\n",
+        ),
+        (
+            "an OWNED payload still takes an owned annotation",
+            "fn main() {\n    let s: Option[String] = Some(f\"hi\");\n\
+             \n    let _r = s.map(|x: String| x.to_uppercase());\n}\n",
+        ),
+        (
+            "a closure with no combinator seed is untouched",
+            "fn main() {\n    let f = |x: i64| x + 1;\n    let _r = f(1);\n}\n",
+        ),
+    ] {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{label}: parse errors");
+        let resolved = resolve(&parsed.program);
+        let result = typecheck(&parsed.program, &resolved);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("annotated as owned")),
+            "{label}: must NOT trip the borrowed-payload rule; got {:?}",
+            result
+                .errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+}

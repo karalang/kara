@@ -22436,21 +22436,26 @@ fn main() {
         }
     }
 
-    /// B-2026-08-08-24 — the one shape in this family that still MISCOMPILES,
-    /// pinned as a visibly-deferred gap rather than left silently green.
+    /// B-2026-08-08-24 — this test was filed `#[ignore]`d with a repro that DOES
+    /// NOT REPRODUCE, and it is kept (un-ignored) as the control that proves so.
     ///
-    /// `|s: String| s + "!"` — the ANNOTATED concat — builds and prints an
-    /// EMPTY string where the interpreter prints `hi!`. Pre-existing and
-    /// independent of B-2026-08-08-22: it reproduces identically on a tree with
-    /// that fix stashed, so it is not a regression from removing the gate.
+    /// The row claimed an annotated `|x: String| x + "!"` mapper printed an
+    /// empty string. Bisecting it found the opposite: over an OWNED payload —
+    /// `Some(f"hi")`, exactly as written below — the shape is correct, and was
+    /// correct even at `dcdad611`, before B-2026-08-08-22 landed. The row was
+    /// written from a simplified receiver that was never re-measured.
     ///
-    /// It is the nastiest member of the family precisely because it BUILT all
-    /// along. The gates that used to stand here advised annotating the
-    /// parameter, which walks an author out of a loud build error and into a
-    /// silent wrong answer.
+    /// The real trigger is the RECEIVER, not the annotation alone and not the
+    /// concat: `Vec.first()/.last()/.get()` mint `Option[ref T]`, and an owned
+    /// annotation over that borrowed payload is what miscompiled. That shape now
+    /// gets a type error (see the typechecker test
+    /// `owned_closure_param_annotation_over_borrowed_payload_is_rejected`), and
+    /// its correct spellings are exercised below in
+    /// `test_e2e_option_map_over_borrowed_payload_correct_spellings`.
+    ///
+    /// This case must stay green: an owned payload takes an owned annotation.
     #[test]
-    #[ignore = "B-2026-08-08-24: annotated `|s: String| s + \"!\"` mapper returns an empty String"]
-    fn test_e2e_option_map_annotated_concat_body_is_empty() {
+    fn test_e2e_option_map_owned_payload_annotated_concat_is_correct() {
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -22461,6 +22466,52 @@ fn main() {
             .as_deref(),
             Some("hi!\n")
         );
+    }
+
+    /// B-2026-08-08-24 — the spellings that are CORRECT for a BORROWED payload
+    /// must keep running correctly, across every payload class whose miscompile
+    /// looked different (empty String / zero length / leaked stack address).
+    ///
+    /// Un-annotated and `ref T`-annotated are the two legal forms; the owned
+    /// annotation that used to sit silently beside them is now a type error.
+    #[test]
+    fn test_e2e_option_map_over_borrowed_payload_correct_spellings() {
+        for (label, decl, body, want) in [
+            (
+                "String payload, inferred",
+                "let out: Vec[String] = vec![f\"hi\", f\"yo\"];",
+                "out.first().map(|x| x.to_uppercase())",
+                "HI\n",
+            ),
+            (
+                "String payload, explicit `ref String`",
+                "let out: Vec[String] = vec![f\"hi\", f\"yo\"];",
+                "out.first().map(|x: ref String| x.to_uppercase())",
+                "HI\n",
+            ),
+            (
+                "String concat over a borrow",
+                "let out: Vec[String] = vec![f\"hi\", f\"yo\"];",
+                "out.first().map(|x: ref String| x + \"!\")",
+                "hi!\n",
+            ),
+            (
+                "`.last()` borrow",
+                "let out: Vec[String] = vec![f\"yo\", f\"hi\"];",
+                "out.last().map(|x: ref String| x + \"!\")",
+                "hi!\n",
+            ),
+        ] {
+            let src = format!(
+                "fn main() {{\n    {decl}\n    \
+                 match {body} {{ Some(x) => {{ println(x); }} None => {{}} }}\n}}\n"
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some(want),
+                "{label} (`{body}`) must run correctly over a borrowed payload"
+            );
+        }
     }
 
     /// B-2026-08-08-25 — matching a payload out of a live `Option[String]`

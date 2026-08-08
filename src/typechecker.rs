@@ -4035,6 +4035,80 @@ impl<'a> TypeChecker<'a> {
         false
     }
 
+    /// B-2026-08-08-24 — an explicit closure-parameter annotation still WINS
+    /// over the combinator's seed, but it no longer wins SILENTLY when the seed
+    /// says the payload is BORROWED and the annotation claims it owned.
+    ///
+    /// ```text
+    /// let out: Vec[String] = vec![f"hi", f"yo"];
+    /// out.first().map(|x: String| x.to_uppercase())   // <- rejected here
+    /// ```
+    ///
+    /// `Vec.first()/.last()/.get()` mint `Option[ref T]`, so the mapper is
+    /// handed a borrow. The annotation used to be taken at face value and the
+    /// seed dropped on the floor (the `.or_else` at the call site), leaving the
+    /// typechecker recording `Fn(ref String) -> String` for the same closure
+    /// whose surface annotation said `String` — two phases disagreeing about
+    /// one parameter, which codegen resolved by reading the borrow AS the owned
+    /// value. Measured results of that: an empty `String`, a `Vec[i64].len()`
+    /// of 0, and — for a scalar payload — a raw stack address printed as the
+    /// program's answer (it varies run to run under ASLR).
+    ///
+    /// Rejecting is the answer the rest of the language already gives: the
+    /// equivalent binding `let s: Option[String] = out.first();` is a type
+    /// error today, for both heap AND scalar payloads. Kāra has no implicit
+    /// deep copy and moving out of the borrowed container is unsound, so there
+    /// is no coercion to reach for — `ref T` (or no annotation at all) is the
+    /// only correct spelling, and both already compile and run correctly.
+    ///
+    /// Deliberately narrow, because the cost of a false positive here is
+    /// rejecting a valid program:
+    ///   * fires ONLY when the seed is `ref`/`mut ref` and the annotation is
+    ///     not — an owned seed can never trip it;
+    ///   * skips generic annotations (`TypeParam`/`TypeVar`), which may still
+    ///     legitimately bind to a borrow;
+    ///   * hand-rolled rather than delegated to `check_assignable`, whose
+    ///     `scalar_reads_as_value` peel peels `ref i64` to `i64` and would wave
+    ///     through the scalar case — the very shape that leaks an address.
+    fn check_closure_param_annotation_against_seed(
+        &mut self,
+        annotated: &Type,
+        seed: &Type,
+        ty_expr: &TypeExpr,
+    ) {
+        if !matches!(seed, Type::Ref(_) | Type::MutRef(_)) {
+            return;
+        }
+        if matches!(
+            annotated,
+            Type::Ref(_) | Type::MutRef(_) | Type::TypeParam(_) | Type::TypeVar(_)
+        ) {
+            return;
+        }
+        let want = type_display(seed);
+        let got = type_display(annotated);
+        self.errors.push(TypeError {
+            message: format!(
+                "expected '{want}', found '{got}'; this closure parameter is \
+                 annotated as owned but receives a borrowed value; help: write \
+                 `{want}` (or drop the annotation — it is inferred)"
+            ),
+            span: ty_expr.span.clone(),
+            kind: TypeErrorKind::TypeMismatch,
+            lint_name: None,
+            // Machine-applicable: the annotation's own span is exactly the text
+            // to replace, so `karac fix` can rewrite `|x: String|` to
+            // `|x: ref String|` unattended.
+            fix_it: Some(FixIt {
+                span: ty_expr.span.clone(),
+                replacement: want.clone(),
+            }),
+            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+            expected: Some(want),
+            got: Some(got),
+        });
+    }
+
     /// Render `ty` for a diagnostic at `span`, preferring the surface spelling
     /// the author wrote. Today that means one thing: a `frozen` parameter read
     /// prints `frozen T` rather than the `ref T` it lowers to

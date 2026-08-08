@@ -4191,11 +4191,19 @@ impl<'a> super::TypeChecker<'a> {
                     .iter()
                     .enumerate()
                     .map(|(i, p)| {
-                        let ty = p
-                            .ty
-                            .as_ref()
-                            .map(|t| self.lower_type_expr(t, &[]))
-                            .or_else(|| param_seeds.as_ref().and_then(|s| s.get(i).cloned()))
+                        let annotated = p.ty.as_ref().map(|t| self.lower_type_expr(t, &[]));
+                        let seeded = param_seeds.as_ref().and_then(|s| s.get(i).cloned());
+                        // B-2026-08-08-24 — the annotation still wins, but the
+                        // seed is no longer discarded UNREAD when both exist:
+                        // an owned annotation over a borrowed payload is a type
+                        // error, not a silent reinterpretation in codegen.
+                        if let (Some(ann), Some(seed), Some(ty_expr)) =
+                            (&annotated, &seeded, p.ty.as_ref())
+                        {
+                            self.check_closure_param_annotation_against_seed(ann, seed, ty_expr);
+                        }
+                        let ty = annotated
+                            .or(seeded)
                             .unwrap_or_else(|| self.env.fresh_type_var());
                         if !self.is_irrefutable_pattern(&p.pattern, &ty) {
                             self.type_error(
