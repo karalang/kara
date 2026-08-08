@@ -95,6 +95,16 @@ jobs:
       - name: Bug-ledger integrity
         run: ./scripts/bug-lint.sh
 
+      # Pure-python and milliseconds — it parses this file and greps tests/,
+      # it does not build. Answers "which `#[cfg(feature = "llvm")]` tests does
+      # no CI job run?", which was previously answerable only by redoing a
+      # manual sweep. Both prior dark-target rows (B-2026-07-31-44, 554 tests;
+      # B-2026-08-08-26, 35 more) were found by someone noticing a local
+      # failure CI did not have — luck that only pays out when a dark test is
+      # already RED. This one reports them while they are still green.
+      - name: Dark llvm test targets
+        run: python3 scripts/dark-llvm-tests.py
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -382,7 +392,17 @@ jobs:
         # here whole rather than filtered, because a name filter is exactly
         # the mechanism that hid it. Measured 577/577 green in 41–45 s warm on
         # a Linux container, in line with the ~55 s the -44 sweep added.
-        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli
+        #
+        # B-2026-08-08-27 closed the loop: instead of a third manual sweep,
+        # `scripts/dark-llvm-tests.py` derives the dark set mechanically and
+        # now runs in the `lint` job. Its first run found a THIRD pocket that
+        # both hand audits missed — example_packages, safety_design,
+        # safety_design_loop, scaffold: 24 llvm-gated tests, all green, ~26 s.
+        # Green is exactly why they stayed invisible; -44 and -26 were both
+        # found by a dark test being RED, which is luck that only pays out
+        # after a regression has already landed. The four are appended below,
+        # unfiltered, and the guard fails the build if a fifth ever appears.
+        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli --test example_packages --test safety_design --test safety_design_loop --test scaffold
 
       # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
       # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and
