@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
 | crash | 40 | 0 |
-| other | 22 | 0 |
+| other | 24 | 1 |
 | use-after-free | 15 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
 | autopar | 38 | 0 |
-| other | 33 | 0 |
+| other | 35 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1037 surfaced · 3 open · 1024 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1039 surfaced · 4 open · 1025 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
 | B-2026-08-08-24 | 2026-08-08 | codegen | medium | an ANNOTATED concat mapper `|s: String| s + "!"` builds and returns an EMPTY String -- silent, pre-existing, and the exact workaround two successive codegen gates advised | probe: `s.map(|x: String| x + "!")` on `Option[String]` — `karac build` prints an empty string, `--interp` prints `hi!`; the UN-annotated spelling is correct after B-2026-08-08-22 |
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | calling `.map` TWICE on the same `Option[String]` binding corrupts the SECOND result under `karac build` — garbage bytes or an abort in the UTF-8 validator, where `--interp` prints both correctly | tests/codegen.rs::test_e2e_option_map_twice_on_one_binding (#[ignore]d, asserts the CORRECT output) |
+| B-2026-08-08-27 | 2026-08-08 | other | low | the dark-llvm-target audit has never been RE-RUN as a check -- B-2026-07-31-44 swept 19 targets by hand and B-2026-08-08-26 found the 20th the same way, so the next gap will also be found by accident unless the audit becomes a script | Spun out of B-2026-08-08-26 rather than folded into it: -26 is a coverage-gap row with a landed fix, this is a standing question about whether the remaining dark surface is worth the CI minutes. Needs a measurement, not a debugging session. |
 
-### Fixed (1024)
+### Fixed (1025)
 
-<details><summary>1024 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1025 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1186,6 +1187,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-20 | codegen | high | `Vec[String].first()` / `.last()` CONSUMED AS A VALUE double-frees under EVERY codegen backend -- `println(v.first().unwrap())` on a two-element `Vec… | PENDING |
 | B-2026-08-08-21 | codegen | low | `Option/Result.map` with an UN-ANNOTATED closure returning a String/Vec is refused by `karac build` -- a loud, actionable bail ("annotate the closure… | 8521c30e |
 | B-2026-08-08-22 | codegen | low | a closure whose body IS a String value (bare literal or `+` concat) is declared with a POINTER return, so the `{ptr,len,cap}` it yields fails LLVM ve… | 51ceecab. `infer_closure_return_type` types a `StringLit` body and a `+` chain whose either side is a String as the `{ptr,len,cap}` String struct rather than a bare pointer, so the `ret` matches the declared signature. The `closure_body_is_bare_string_value` gate in the `map` heap-payload path is deleted along with its now-dead helper: it existed only to reject these bodies with advice (annotate the parameter) that measurement showed does not help — `|s: String| "fixed"` failed identically. Pinned by tests/codegen.rs::test_e2e_option_map_string_value_bodies_compile_and_run (9 shapes, each compared against the `--interp` oracle), STASH-PROVEN red pre-fix. Residual, filed separately as B-2026-08-08-24 and pinned by an `#[ignore]`d test: the annotated concat `|s: String| s + "!"` now BUILDS but returns an empty String — a pre-existing silent miscompile this row did not introduce and does not fix. |
+| B-2026-08-08-26 | other | medium | `tests/cli.rs` is the dark target B-2026-07-31-44 missed, and it was RED the whole time -- 35 of its 43 `#[cfg(feature = "llvm")]` tests run in NO CI… | PENDING |
 
 </details>
 

@@ -370,7 +370,19 @@ jobs:
         # (1 test, ~181 s — needs its own runtime-budget decision),
         # parallax_bench + relay_bench (bench reproduction is opt-in by
         # design), wasm_codegen (documented Tier 3, separate `wasm` job).
-        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus
+        #
+        # B-2026-08-08-26 caught the residual -44 missed: `cli` was never in
+        # any full-target run. It LOOKS covered — `cargo test --all` runs it,
+        # and the two producer-mode arm64 steps below invoke `--test cli` —
+        # but the first compiles the 43 `#[cfg(feature = "llvm")]` tests to
+        # nothing and the second filters to five names, leaving 35 dark. One
+        # of them (`test_build_text_pad_lever_moves_main_without_changing_behaviour`)
+        # was outright RED on Linux the whole time: the placement lever's
+        # filler landed after `main` on ELF, so it measured nothing. Added
+        # here whole rather than filtered, because a name filter is exactly
+        # the mechanism that hid it. Measured 577/577 green in 41–45 s warm on
+        # a Linux container, in line with the ~55 s the -44 sweep added.
+        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli
 
       # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
       # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and

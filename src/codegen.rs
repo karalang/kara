@@ -11068,6 +11068,29 @@ impl<'ctx> Codegen<'ctx> {
         };
         let fn_ty = self.context.void_type().fn_type(&[], false);
         let pad = self.module.add_function("__karac_text_pad", fn_ty, None);
+        // B-2026-08-08-26 — being FIRST IN MODULE ORDER is not enough on ELF.
+        // The pad is added before any user function (see the `compile_program`
+        // call site), which is what makes it precede `main` on Mach-O, where the
+        // row's measurements were taken. On Linux it did not: `main` sat at
+        // 0x1280 and the pad at 0x1300, so `KARAC_TEXT_PAD=16` and `=80`
+        // produced byte-identical `main` addresses and the lever measured
+        // NOTHING while still looking like it worked (the filler is present, the
+        // right size, and pinned into `@llvm.used`).
+        //
+        // The cause is GNU ld's built-in linker script, which places
+        // `*(.text.startup)` AHEAD of `*(.text .text.*)` — and LLVM emits `main`
+        // into `.text.startup`. Module order never got a say: the pad's
+        // `.text.<name>` section was in a later output-section group no matter
+        // when it was added. Putting the pad in `.text.startup` too puts both in
+        // one group, where input order does decide, so the pad lands first and
+        // `main` shifts by exactly the requested bytes (measured: 0x12a0 →
+        // 0x12e0 for 16 → 80).
+        //
+        // Linux-only: Mach-O has no `.text.startup` and already orders this
+        // correctly, so naming an ELF section there would be wrong.
+        if cfg!(target_os = "linux") {
+            pad.as_global_value().set_section(Some(".text.startup"));
+        }
         let entry = self.context.append_basic_block(pad, "entry");
         let saved = self.builder.get_insert_block();
         self.builder.position_at_end(entry);
