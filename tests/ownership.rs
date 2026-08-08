@@ -11304,3 +11304,110 @@ fn a_frozen_handle_can_be_stored_in_a_local_vec_worklist() {
         );
     }
 }
+
+/// B-2026-08-08-1 — the `par` capture gate must resolve a name to its BINDING,
+/// not conflate every binding that happens to share a spelling.
+///
+/// The gate collected tracked bindings into one flat name-keyed map for the
+/// whole function, so two branches each declaring their own `let n = <shared>`
+/// read as ONE binding reachable from both and were refused. Renaming one
+/// identifier was the entire fix, which is what made it a false positive rather
+/// than a conservative refusal — and the diagnostic meanwhile prescribed a
+/// structural `shared struct` → `par struct` migration, with a machine-
+/// applicable `fix_diff`, for a program that has no sharing at all.
+///
+/// The REJECT rows are the load-bearing half. Suppressing a use that is really
+/// a capture is a data race on a non-atomic refcount, so every row below is a
+/// shape where the shadow must NOT apply, and each was chosen against a
+/// specific way the region could come out too wide:
+///
+/// * a use of the outer binding EARLIER in the same block than the shadowing
+///   `let` — the region starts at the end of the `let` statement, never at the
+///   block's start;
+/// * a use of the outer binding AFTER a nested shadowing block has closed —
+///   this is the row that checks `Block.span` actually ends where the block
+///   ends, which the whole interval scheme rests on;
+/// * `for n in n.kids`, where the ITERABLE names the outer binding and only
+///   the body is shadowed.
+#[test]
+fn the_par_capture_gate_resolves_a_name_to_its_binding_not_its_spelling() {
+    let prelude = "shared struct Node { val: i64, mut kids: Vec[Node] }\n\
+                   fn build() -> Node { return Node { val: 3, kids: Vec.new() }; }\n";
+    // A MATERIAL use: projecting the `mut` container, not an immutable scalar
+    // field (which the B-2026-08-01-33 suppression would drop before the
+    // conflict is ever considered, making every row below pass vacuously).
+    let branch_a = "let a = { let mut ca: i64 = 0; for ka in n.kids { ca = ca + ka.val; } ca };";
+    let program = |branch_b: &str| {
+        format!(
+            "{prelude}fn main() {{\n\
+                 let n = build();\n\
+                 let (a, b) = par {{\n\
+                     {branch_a}\n\
+                     let b = {{ {branch_b} }};\n\
+                     (a, b)\n\
+                 }};\n\
+                 println(a + b);\n\
+             }}\n"
+        )
+    };
+    let walk_local = "let mut cb: i64 = 0; for kb in n.kids { cb = cb + kb.val; } cb";
+
+    let accept: &[(&str, String)] = &[
+        (
+            "each branch binds its own `n` — the reported shape",
+            program(&format!("let n = build(); {walk_local}")),
+        ),
+        (
+            "the shadowing `let` is in a NESTED block",
+            program(
+                "{ let n = build(); let mut c: i64 = 0; for q in n.kids { c = c + q.val; } c }",
+            ),
+        ),
+        (
+            "a match arm binds the name",
+            program(
+                "let o = Some(build()); let mut cb: i64 = 0; \
+                 match o { Some(n) => { for q in n.kids { cb = cb + q.val; } } None => {} } cb",
+            ),
+        ),
+    ];
+    for (label, src) in accept {
+        eprintln!("[gate accept] {label}");
+        ownership_ok(src);
+    }
+
+    let reject: &[(&str, String)] = &[
+        (
+            "no shadowing at all — the genuine two-branch capture",
+            program(walk_local),
+        ),
+        (
+            "a use of the OUTER binding earlier in the same block",
+            program(&format!("{walk_local} + {{ let n = build(); n.val }}")),
+        ),
+        (
+            "a use of the OUTER binding after a nested shadow has closed",
+            program(&format!(
+                "let x = {{ let n = build(); let mut c: i64 = 0; \
+                 for q in n.kids {{ c = c + q.val; }} c }}; {walk_local} + x"
+            )),
+        ),
+        (
+            "`for n in n.kids` — the ITERABLE names the outer binding",
+            program("let mut cb: i64 = 0; for n in n.kids { cb = cb + n.val; } cb"),
+        ),
+    ];
+    for (label, src) in reject {
+        eprintln!("[gate reject] {label}");
+        let errors = ownership_errors(src);
+        assert!(
+            errors.iter().any(|e| e
+                .message
+                .contains("cannot be accessed from multiple concurrent")),
+            "`{label}` is a REAL cross-branch capture and must stay reported — \
+             suppressing it would leave two branches racing a non-atomic \
+             refcount; got {:?}",
+            errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+        );
+    }
+}

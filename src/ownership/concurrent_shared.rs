@@ -203,8 +203,14 @@ struct BranchUse {
 /// material, and the reported span moves to that reference (the diagnostic
 /// should point at the use that actually races, not at a benign projection
 /// earlier in the same branch).
-fn record_use(out: &mut HashMap<String, BranchUse>, name: String, span: Span, material: bool) {
-    match out.get_mut(&name) {
+fn record_use(out: &mut BranchUses<'_>, name: String, span: Span, material: bool) {
+    // B-2026-08-08-1 — a use that resolves to a binding introduced INSIDE this
+    // par body is not a capture of the outer binding of the same name, so it
+    // must not count toward the cross-branch conflict.
+    if out.is_shadowed(&name, &span) {
+        return;
+    }
+    match out.uses.get_mut(&name) {
         Some(existing) => {
             if material && !existing.material {
                 existing.material = true;
@@ -212,8 +218,306 @@ fn record_use(out: &mut HashMap<String, BranchUse>, name: String, span: Span, ma
             }
         }
         None => {
-            out.insert(name, BranchUse { span, material });
+            out.uses.insert(name, BranchUse { span, material });
         }
+    }
+}
+
+/// A source range over which `name` refers to a binding introduced inside the
+/// `par` body rather than to the outer binding of the same name.
+///
+/// Byte offsets, half-open: `[from, to)`. Recorded per introduction site, so a
+/// name shadowed in two sibling blocks produces two regions and neither covers
+/// the gap between them.
+#[derive(Debug)]
+struct ShadowRegion {
+    name: String,
+    from: usize,
+    to: usize,
+}
+
+/// One branch's uses, plus the shadow regions that decide which references are
+/// captures at all.
+///
+/// The regions are carried on the SINK rather than threaded as a parameter
+/// because the sink is already passed through every arm of the ~400-line use
+/// collector, so the filter reaches every recording site without touching a
+/// single call site — and, more to the point, without depending on that
+/// collector being exhaustive. It is not: it ends in a `_ => {}`, so an
+/// expression form it does not model contributes no uses. A filter that hooked
+/// the walk instead of the sink would inherit that hole.
+struct BranchUses<'s> {
+    uses: HashMap<String, BranchUse>,
+    shadows: &'s [ShadowRegion],
+}
+
+impl BranchUses<'_> {
+    fn new(shadows: &[ShadowRegion]) -> BranchUses<'_> {
+        BranchUses {
+            uses: HashMap::new(),
+            shadows,
+        }
+    }
+
+    fn is_shadowed(&self, name: &str, span: &Span) -> bool {
+        self.shadows
+            .iter()
+            .any(|r| r.name == name && span.offset >= r.from && span.offset < r.to)
+    }
+}
+
+/// Collect every region of the `par` body over which a name is rebound.
+///
+/// FAIL-CLOSED BY CONSTRUCTION, and the direction matters more here than
+/// completeness: a region this walk MISSES leaves the use looking like a
+/// capture, which is the over-reporting behaviour that predates this fix and is
+/// safe. A region that is too WIDE hides a real cross-branch capture, which is
+/// a data race on a non-atomic refcount. So every region below is bounded by
+/// the span of the construct that introduces the binding, and no arm widens a
+/// region to be safe from a missing one.
+fn collect_shadow_regions_block(block: &Block, out: &mut Vec<ShadowRegion>) {
+    let block_end = block.span.offset + block.span.length;
+    for stmt in &block.stmts {
+        // A `let` shadows from the end of its own statement to the end of the
+        // block it sits in — never before it, which is what keeps a use of the
+        // OUTER binding earlier in the same block reportable.
+        let from = stmt.span.offset + stmt.span.length;
+        match &stmt.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                for name in pattern_names(pattern) {
+                    out.push(ShadowRegion {
+                        name,
+                        from,
+                        to: block_end,
+                    });
+                }
+            }
+            StmtKind::LetUninit { name, .. } => out.push(ShadowRegion {
+                name: name.clone(),
+                from,
+                to: block_end,
+            }),
+            _ => {}
+        }
+        collect_shadow_regions_stmt(stmt, out);
+    }
+    if let Some(e) = &block.final_expr {
+        collect_shadow_regions_expr(e, out);
+    }
+}
+
+fn collect_shadow_regions_stmt(stmt: &Stmt, out: &mut Vec<ShadowRegion>) {
+    match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
+        StmtKind::Let { value, .. } => collect_shadow_regions_expr(value, out),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            collect_shadow_regions_expr(value, out);
+            collect_shadow_regions_block(else_block, out);
+        }
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            collect_shadow_regions_block(body, out)
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            collect_shadow_regions_expr(target, out);
+            collect_shadow_regions_expr(value, out);
+        }
+        StmtKind::Expr(e) => collect_shadow_regions_expr(e, out),
+    }
+}
+
+/// The binding-introducing EXPRESSION forms. Each scopes its names to a block
+/// or arm body, so the region is that body's own span — narrower than the
+/// enclosing block, and never reaching the scrutinee / iterable, where a use of
+/// the outer binding of the same name is a genuine capture (`for n in n.kids`).
+fn collect_shadow_regions_expr(expr: &Expr, out: &mut Vec<ShadowRegion>) {
+    let scoped = |pattern: &Pattern, body: &Block, out: &mut Vec<ShadowRegion>| {
+        for name in pattern_names(pattern) {
+            out.push(ShadowRegion {
+                name,
+                from: body.span.offset,
+                to: body.span.offset + body.span.length,
+            });
+        }
+    };
+    match &expr.kind {
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            scoped(pattern, body, out);
+            collect_shadow_regions_expr(iterable, out);
+            collect_shadow_regions_block(body, out);
+        }
+        ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } => {
+            scoped(pattern, then_block, out);
+            collect_shadow_regions_expr(value, out);
+            collect_shadow_regions_block(then_block, out);
+            if let Some(e) = else_branch {
+                collect_shadow_regions_expr(e, out);
+            }
+        }
+        ExprKind::WhileLet {
+            pattern,
+            value,
+            body,
+            ..
+        } => {
+            scoped(pattern, body, out);
+            collect_shadow_regions_expr(value, out);
+            collect_shadow_regions_block(body, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_shadow_regions_expr(scrutinee, out);
+            for arm in arms {
+                for name in pattern_names(&arm.pattern) {
+                    out.push(ShadowRegion {
+                        name,
+                        from: arm.body.span.offset,
+                        to: arm.body.span.offset + arm.body.span.length,
+                    });
+                }
+                if let Some(g) = &arm.guard {
+                    collect_shadow_regions_expr(g, out);
+                }
+                collect_shadow_regions_expr(&arm.body, out);
+            }
+        }
+        // Every other form: recurse into whatever blocks and sub-expressions it
+        // carries, introducing nothing itself. The `_` arm below is the
+        // fail-closed default discussed above — a form it swallows simply
+        // contributes no shadows.
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Par(b)
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::LabeledBlock { body: b, .. } => collect_shadow_regions_block(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_shadow_regions_expr(condition, out);
+            collect_shadow_regions_block(then_block, out);
+            if let Some(e) = else_branch {
+                collect_shadow_regions_expr(e, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_shadow_regions_expr(condition, out);
+            collect_shadow_regions_block(body, out);
+        }
+        ExprKind::Closure { body, .. } => collect_shadow_regions_expr(body, out),
+        ExprKind::Lock { mutex, body, .. } => {
+            collect_shadow_regions_expr(mutex, out);
+            collect_shadow_regions_block(body, out);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_shadow_regions_expr(callee, out);
+            for a in args {
+                collect_shadow_regions_expr(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_shadow_regions_expr(object, out);
+            for a in args {
+                collect_shadow_regions_expr(&a.value, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            collect_shadow_regions_expr(left, out);
+            collect_shadow_regions_expr(right, out);
+        }
+        ExprKind::Unary { operand: e, .. }
+        | ExprKind::Question(e)
+        | ExprKind::Cast { expr: e, .. }
+        | ExprKind::FieldAccess { object: e, .. }
+        | ExprKind::TupleIndex { object: e, .. } => collect_shadow_regions_expr(e, out),
+        ExprKind::Index { object, index } => {
+            collect_shadow_regions_expr(object, out);
+            collect_shadow_regions_expr(index, out);
+        }
+        ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+            for e in items {
+                collect_shadow_regions_expr(e, out);
+            }
+        }
+        ExprKind::Return(inner) => {
+            if let Some(e) = inner.as_deref() {
+                collect_shadow_regions_expr(e, out);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(e) = value.as_deref() {
+                collect_shadow_regions_expr(e, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every name a pattern binds. Under-reporting is safe (no shadow → the use
+/// stays reportable), so the forms that bind nothing simply return nothing.
+fn pattern_names(p: &Pattern) -> Vec<String> {
+    let mut out = Vec::new();
+    pattern_names_into(p, &mut out);
+    out
+}
+
+fn pattern_names_into(p: &Pattern, out: &mut Vec<String>) {
+    match &p.kind {
+        PatternKind::Binding(n) => out.push(n.clone()),
+        PatternKind::AtBinding { name, pattern, .. } => {
+            out.push(name.clone());
+            pattern_names_into(pattern, out);
+        }
+        PatternKind::Struct { fields, .. } => {
+            for f in fields {
+                match &f.pattern {
+                    Some(sub) => pattern_names_into(sub, out),
+                    // `Point { x, y }` — the field name IS the binding.
+                    None => out.push(f.name.clone()),
+                }
+            }
+        }
+        PatternKind::TupleVariant { patterns, .. }
+        | PatternKind::Tuple(patterns)
+        | PatternKind::Or(patterns) => {
+            for sub in patterns {
+                pattern_names_into(sub, out);
+            }
+        }
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            for sub in prefix.iter().chain(suffix) {
+                pattern_names_into(sub, out);
+            }
+            if let Some(RestPattern::Bound(n)) = rest {
+                out.push(n.clone());
+            }
+        }
+        PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
     }
 }
 
@@ -1544,11 +1848,18 @@ fn detect_par_block_conflicts(
     // any branch materialize this binding?), which the original single-pass
     // detector could not see: it fired on reaching the second branch, before
     // later branches had been walked.
-    let per_branch: Vec<HashMap<String, BranchUse>> = par_body
+    // B-2026-08-08-1 — the regions over which a name refers to a binding made
+    // INSIDE this par body. Computed once over the whole body rather than per
+    // branch: the regions carry their own source bounds, so a `let` in branch A
+    // produces a region that cannot reach branch B, and one pass is enough.
+    let mut shadows: Vec<ShadowRegion> = Vec::new();
+    collect_shadow_regions_block(par_body, &mut shadows);
+
+    let per_branch: Vec<BranchUses<'_>> = par_body
         .stmts
         .iter()
         .map(|stmt| {
-            let mut uses: HashMap<String, BranchUse> = HashMap::new();
+            let mut uses = BranchUses::new(&shadows);
             collect_identifier_uses_in_stmt(
                 stmt,
                 tracked,
@@ -1574,14 +1885,15 @@ fn detect_par_block_conflicts(
     let materialized_anywhere: HashSet<&str> = per_branch
         .iter()
         .flat_map(|uses| {
-            uses.iter()
+            uses.uses
+                .iter()
                 .filter(|(_, u)| u.material)
                 .map(|(n, _)| n.as_str())
         })
         .collect();
 
     for (branch_idx, uses) in per_branch.iter().enumerate() {
-        for (name, use_entry) in uses {
+        for (name, use_entry) in &uses.uses {
             let (name, use_span) = (name.clone(), use_entry.span.clone());
             if reported.contains(&name) {
                 continue;
@@ -3982,7 +4294,7 @@ fn collect_identifier_uses_in_stmt(
     tracked: &HashMap<String, TrackedBinding>,
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
-    out: &mut HashMap<String, BranchUse>,
+    out: &mut BranchUses<'_>,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
@@ -4090,7 +4402,7 @@ fn collect_identifier_uses_in_expr(
     tracked: &HashMap<String, TrackedBinding>,
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
-    out: &mut HashMap<String, BranchUse>,
+    out: &mut BranchUses<'_>,
 ) {
     match &expr.kind {
         ExprKind::Identifier(name) => {
