@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 220 | 0 |
 | leak | 151 | 1 |
 | double-free | 114 | 1 |
-| codegen-gap | 97 | 1 |
+| codegen-gap | 98 | 1 |
 | run-vs-build | 90 | 0 |
 | missing-feature | 85 | 0 |
 | perf | 59 | 0 |
@@ -103,19 +103,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
 | crash | 40 | 0 |
-| other | 22 | 1 |
+| other | 22 | 0 |
 | use-after-free | 15 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 747 | 2 |
+| codegen | 748 | 2 |
 | typecheck | 133 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 1 |
-| autopar | 37 | 0 |
-| other | 33 | 1 |
+| autopar | 38 | 0 |
+| other | 33 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1034 surfaced · 4 open · 1020 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1035 surfaced · 3 open · 1022 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-4 | 2026-08-08 | ownership+typecheck | high | a CONTAINER-mediated strong cycle in a `shared struct` (`mut ns: Vec[N]`, `mut next: Option[N]`) is accepted and leaks the whole graph, though design.md specifies compile-time REJECTION -- `check_cycles` follows direct field types only, and the `weak` escape hatch it points at cannot be stored into a container either | runtime refcounting — no cycle collector; src/codegen/runtime.rs rc drop walk |
-| B-2026-08-08-16 | 2026-08-08 | other | medium | the ASAN memory suite compiles every fixture with AUTO-PAR DISABLED, so ~1000 leak/UAF fixtures cover sequential codegen only -- the hole that hid B-2026-08-08-15 | tests/memory_sanitizer.rs `run_under_asan_opts` passes `None` for `ConcurrencyAnalysis`, so every fixture compiles with auto-par disabled |
 | B-2026-08-08-20 | 2026-08-08 | codegen | high | `Vec[String].first()` / `.last()` CONSUMED AS A VALUE double-frees under EVERY codegen backend -- `println(v.first().unwrap())` on a two-element `Vec[String]` is `free(): double free detected in tcache 2` under JIT, AOT -O2 and AOT -O0 alike, while `karac check` says "All checks passed" and `--interp` prints the right answer. `.get(0).unwrap()` and `v[0]` on the SAME Vec are clean, and `Vec[i64].first().unwrap()` is clean -- so it is first/last-specific AND heap-element-specific. Two quieter symptoms in the same family: `.first().map(..)` prints an EMPTY string, and `.first().map(|s| s.len() as i64).unwrap_or(0)` SILENTLY prints 0 instead of 7 | Found by a fresh dogfood probe, not by a kata. `.get(i)` on the SAME Vec is clean, which is the lead: the borrow-accessor family does not share one consuming path. Zero existing test coverage — `grep -c 'first().unwrap()' tests/*.rs` with String is 0, so this is an uncovered gap rather than a regression from a test that rotted. | NARROWED 2026-08-08: inline-consume-position only (the `let` form is clean); four mechanisms ruled out — the accessor lowering (identical arms), `scrutinee_is_borrow_call` (uniform), `expr_yields_fresh_owned_temp` (free-fn only), and the whole `FreeVecBuffer` channel (backtrace-probed `track_vec_var`: identical sites AND counts for both programs). Next: backtrace-probe the remaining release channels and diff first-vs-get. |
 | B-2026-08-08-22 | 2026-08-08 | codegen | low | a closure whose body IS a String value (bare literal or `+` concat) is declared with a POINTER return, so the `{ptr,len,cap}` it yields fails LLVM verification — the annotation the old gate suggested does not help | probe: `opt.map(|s| "fixed")` and `opt.map(|s| s + "!")` — `ret { ptr, i64, i64 } … ptr` at LLVM verification |
 
-### Fixed (1020)
+### Fixed (1022)
 
-<details><summary>1020 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1022 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1179,6 +1178,8 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-10 | codegen | medium | a generic struct with a `Vec[T]` FIELD returned by value from a generic function fails codegen — `ret { { ptr, i64, i64 } } %field` against a `ptr` r… | f773c317. `llvm_type_for_type_expr` (`src/codegen/types_lowering.rs`) now lowers a user-declared struct through its own (mono) struct type when its name collides with a prelude type, ahead of the hard-coded `name == "Column"` / `"DataFrame"` / `"Tensor"` / `"Interner"` handle arms that keyed on the NAME alone and returned a bare `ptr`. Guarded on `user_shadowed_prelude_types`, the declaration pass's existing record, which excludes `stdlib_origin` items. NOT the generic-struct-return gap this row describes: a non-generic `struct Column { data: Vec[i64] }` fails identically pre-fix, and renaming the struct is a one-token fix. The complement of `reject_shadowed_prelude_types` (B-2026-08-02-13), which still refuses built-in machinery over a user value — all 17 of its tests pass unchanged, as do the 159 built-in Column/DataFrame/Tensor/Interner/Arrow codegen tests. Fixture `user_struct_shadowing_a_prelude_type_name_keeps_its_own_layout`, stash-proven red. |
 | B-2026-08-08-11 | typecheck | low | a type error about a `frozen` parameter names its type `ref T` -- the surface keyword and the diagnostic disagree, because `frozen T` lowers to `Ref(… | 4f32b1e1 |
 | B-2026-08-08-15 | autopar+codegen | high | an RC-bearing `shared struct` published as an auto-par return slot is never adopted by the joining scope -- it LEAKS when the branch suppresses its r… | 62619a88 |
+| B-2026-08-08-16 | other | medium | the ASAN memory suite compiles every fixture with AUTO-PAR DISABLED, so ~1000 leak/UAF fixtures cover sequential codegen only -- the hole that hid B-… | 74bf4856 |
+| B-2026-08-08-23 | autopar+codegen | medium | an auto-par branch containing a `while let` never captured the names its scrutinee reads — `refs_in_expr` had no `WhileLet` arm, so `karac build` ref… | 74bf4856 |
 | B-2026-08-08-17 | autopar+codegen | high | a closure's write through a captured `String` is SILENTLY LOST when the analyzer parallelizes the enclosing function -- `karac build` and `karac run`… | 10659bf4 |
 | B-2026-08-08-18 | autopar+codegen | medium | a `Column` arithmetic chain passed to a two-arg fn emits a malformed call under auto-par -- LLVM module verification rejects `call i64 @fst(i64 %m8,… | 31208e3a |
 | B-2026-08-08-19 | autopar+codegen | medium | a user method on a `shared struct` loses its dispatcher under auto-par -- `codegen: no handler for method 'total' on variable 'b' (method dispatch fe… | ce1b8703 |
