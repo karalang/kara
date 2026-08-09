@@ -1555,7 +1555,7 @@ pub(super) fn expr_children_all<F: Fn(&Expr) -> bool + Copy>(e: &Expr, pred: F) 
 }
 
 /// `pred` holds for every statement value and the final expr of `block`.
-fn block_all<F: Fn(&Expr) -> bool + Copy>(block: &Block, pred: F) -> bool {
+pub(super) fn block_all<F: Fn(&Expr) -> bool + Copy>(block: &Block, pred: F) -> bool {
     block.stmts.iter().all(|s| stmt_all(s, pred))
         && block.final_expr.as_ref().map(|e| pred(e)).unwrap_or(true)
 }

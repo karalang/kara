@@ -672,6 +672,15 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         body: &Block,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // B-2026-08-08-25 leg 1 — index this body's identifier mentions before
+        // any statement is emitted, so a match compiled deep inside it can ask
+        // whether its scrutinee is read AFTER the match. Recorded here rather
+        // than in `compile_function` because this is the single entry every
+        // body funnels through, including the auto-par and coroutine
+        // short-circuits below. A closure body compiles through `compile_block`
+        // and inherits the enclosing function's index, which is what its
+        // captured locals actually need.
+        self.record_fn_body_ident_mentions(body);
         // Slice 6 (Parallax-lite workload): `KARAC_AUTO_PAR=0` flips
         // `auto_par_disabled` on, short-circuiting all parallel-group
         // dispatch back to plain sequential `compile_block`. This is

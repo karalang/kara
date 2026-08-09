@@ -23207,40 +23207,52 @@ fn main() {
         );
     }
 
-    /// B-2026-08-08-25 — what leg 1 did NOT close, pinned as a visibly deferred
-    /// gap rather than left silently green. Each case here is measured, not
-    /// assumed: all three still print garbage or an empty payload under `karac
-    /// build` while `--interp` is correct.
+    /// B-2026-08-08-25 leg 1, THE CONSUMING HALF — a match arm that MOVES a
+    /// heap payload out of a live `Option` local no longer leaves that local
+    /// dangling. This was the row's last memory-unsafety: valgrind reported 7
+    /// `Invalid read`/`Invalid free` errors on case 1, which printed garbage
+    /// where `--interp` printed the string twice.
     ///
-    /// 1. A CONSUMING mapper. `|s| s` hands the payload out of the arm, so the
-    ///    escape walk correctly declines to call it a borrow and the source is
-    ///    still left dangling (valgrind: `Invalid read of size 2`, unchanged by
-    ///    leg 1). This is the case that genuinely needs the row's other design —
-    ///    a deep clone for the arm — and the obvious helper does NOT work as-is:
-    ///    `deep_copy_enum_heap_payload_in_place` keys on `field_drop_kinds`,
-    ///    which is exactly what the type-erased `Option` layout does not carry.
+    /// The borrow-only half was already free — a read-only match is classified
+    /// as a borrow and the payload simply stays with the source. A consuming
+    /// arm cannot use that: the payload really does leave, so two live owners
+    /// need two buffers. `clone_escaping_live_local_option` is the bare-local
+    /// sibling of the existing `<refparam>.field` clone leg, reusing its whole
+    /// contract — tag-guarded type-directed clone, a `FreeInlineOptionPayload`
+    /// on the clone slot, and the consuming arm zeroing the clone's tag so the
+    /// buffer the binding now owns is not freed twice.
     ///
-    /// 2. `Result.map`. B-2026-08-09-6 was PREDICTED to unblock this leg by
-    ///    giving the `Err` binding a recorded type; measured before and after,
-    ///    it did not — this shape prints `HI` then an EMPTY line on both sides
-    ///    of that fix, valgrind-clean either way. So the missing `E` was never
-    ///    this leg's blocker, and the leg belongs with case 3 (clean-but-wrong)
-    ///    rather than with case 1 (use-after-free). What remains: the classifier
-    ///    requires every payload-consuming arm to be the direct-heap shape, and
-    ///    "no recorded type" still cannot be read as "scalar" — a DESTRUCTURED
-    ///    tuple payload (`Some((a, b))`) is untyped here too, and that is the
-    ///    shape whose owners must not be dropped.
+    /// TWO EARLIER READINGS OF THIS LEG WERE WRONG, both recorded on the row:
     ///
-    /// 3. The USER-ENUM leg. `enum E { A(String) }` bound out of a live local
-    ///    goes through `suppress_destructured_enum_payload_cleanup` rather than
-    ///    the Option/Result inline channel. Note it is no longer the same defect
-    ///    as 1: valgrind reports ZERO errors on it now — the second read yields
-    ///    an empty payload rather than a dangling one, so it is wrong output,
-    ///    not a use-after-free.
+    /// - "A bespoke inline-payload clone must get element DEPTH right or a
+    ///   `Vec[String]` payload becomes a double-free." Nothing bespoke was
+    ///   needed — `emit_clone_fn_for_type_expr` is type-directed, so depth
+    ///   follows the `TypeExpr`. Case 3 is that `Vec[String]` payload and it is
+    ///   valgrind-clean. The `deep_copy_enum_heap_payload_in_place` trap the row
+    ///   warned about is real but belongs to the user-ENUM legs, which key on
+    ///   `field_drop_kinds` the erased `Option` layout does not carry.
+    ///
+    /// - "The fix is a LIFETIME question, not a clone question" — suppress the
+    ///   RESULT's free while the source is live, since an IR diff showed the
+    ///   alias already balanced. That holds only for a result that dies in the
+    ///   same scope; a returned, pushed, or stored one would dangle instead, so
+    ///   it trades this use-after-free for a rarer one. Two live owners need two
+    ///   buffers.
+    ///
+    /// Case 4 is the load-bearing control: with the source DEAD there is only
+    /// one owner, so the clone must NOT fire and the zero-cost transfer stays.
+    /// That gate (`scrutinee_read_after_match`) is what keeps this off the
+    /// ~1000 memory fixtures that exercise the arm path.
+    ///
+    /// The read-only half is deliberately NOT re-pinned here — it already has
+    /// two tests above, and its shape needs an ownership-gate grandfather entry
+    /// that these cases do not. Which is its own oddity, noted on the row: the
+    /// ownership checker calls the READ-ONLY `match o { … }` twice a
+    /// `UseAfterMove`, and says nothing at all about `o.map(|s| s)` followed by
+    /// a read — the shape that genuinely moves the payload out.
     #[test]
-    #[ignore = "B-2026-08-08-25 (consuming mapper, Result.map, user-enum channel): payload still moves out from under a live source"]
-    fn test_e2e_consuming_map_over_live_optres_still_open() {
-        // 1. Consuming mapper — the payload really does escape the arm.
+    fn test_e2e_consuming_match_over_a_live_option_local_keeps_the_source() {
+        // 1. THE BUG: a consuming mapper, then a plain read of the source.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -23252,7 +23264,104 @@ fn main() {
             .as_deref(),
             Some("hi\nhi\n")
         );
-        // 2. `Result.map` — no heap witness for the `Err` payload binding.
+        // 2. Chained consuming mappers over the same live source.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o.map(|s| s).map(|s| s) { Some(v) => { println(v); } None => {} }\n\
+                     match o { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // 3. The element-DEPTH case the row flagged as the double-free trap:
+        // a shallow clone here would alias both element buffers.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[Vec[String]] = Some([f\"aa\", f\"bb\"]);\n\
+                     match o.map(|s| s) { Some(v) => { println(v[0]); } None => {} }\n\
+                     match o { Some(v) => { println(v[1]); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("aa\nbb\n")
+        );
+        // 4. CONTROL — source DEAD after the consuming match. One owner, so no
+        // clone: this is the shape the liveness gate must keep on the old path.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o.map(|s| s) { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\n")
+        );
+        // 5. `None` at runtime — the clone allocates nothing and the absent arm
+        // leaves the clone's cleanup armed against an empty payload.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = None;\n\
+                     match o.map(|s| s) { Some(v) => { println(v); } None => { println(\"-\"); } }\n\
+                     match o { Some(v) => { println(v); } None => { println(\"-\"); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("-\n-\n")
+        );
+        // 6. CONTROL — the `let`-bound spelling, correct before this fix
+        // (the result's free lands after the re-read) and still correct.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     let a: Option[String] = o.map(|s| s);\n\
+                     match a { Some(v) => { println(v); } None => {} }\n\
+                     match o { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+    }
+
+    /// B-2026-08-08-25 — what leg 1 did NOT close, pinned as a visibly deferred
+    /// gap rather than left silently green. Both cases here are measured, not
+    /// assumed: each still prints an EMPTY payload for its second read under
+    /// `karac build` while `--interp` is correct.
+    ///
+    /// The consuming-mapper case that used to lead this test is FIXED and moved
+    /// to `test_e2e_consuming_match_over_a_live_option_local_keeps_the_source`.
+    /// Both survivors are valgrind-clean wrong output, not use-after-frees, so
+    /// nothing pinned here is a memory-safety gap any more — the row's `high`
+    /// severity rested entirely on the case that just closed.
+    ///
+    /// 1. `Result.map`. B-2026-08-09-6 was PREDICTED to unblock this leg by
+    ///    giving the `Err` binding a recorded type; measured before and after,
+    ///    it did not — this shape prints `HI` then an EMPTY line on both sides
+    ///    of that fix, valgrind-clean either way. So the missing `E` was never
+    ///    this leg's blocker, and the leg belongs with case 3 (clean-but-wrong)
+    ///    rather than with case 1 (use-after-free). What remains: the classifier
+    ///    requires every payload-consuming arm to be the direct-heap shape, and
+    ///    "no recorded type" still cannot be read as "scalar" — a DESTRUCTURED
+    ///    tuple payload (`Some((a, b))`) is untyped here too, and that is the
+    ///    shape whose owners must not be dropped.
+    ///
+    /// 2. The USER-ENUM leg. `enum E { A(String) }` bound out of a live local
+    ///    goes through `suppress_destructured_enum_payload_cleanup` rather than
+    ///    the Option/Result inline channel, so the Option-scoped clone that
+    ///    closed the consuming half does not reach it. Same shape, different
+    ///    membership test — valgrind reports ZERO errors, so this is wrong
+    ///    output rather than a use-after-free.
+    #[test]
+    #[ignore = "B-2026-08-08-25 (Result.map, user-enum channel): payload still moves out from under a live source"]
+    fn test_e2e_consuming_map_over_live_optres_still_open() {
+        // 1. `Result.map` — no heap witness for the `Err` payload binding.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -23264,7 +23373,7 @@ fn main() {
             .as_deref(),
             Some("HI\nhi\n")
         );
-        // 3. General user-enum channel — now wrong output rather than a UAF.
+        // 2. General user-enum channel — wrong output rather than a UAF.
         assert_eq!(
             run_program(
                 "enum E { A(String), B }\n\

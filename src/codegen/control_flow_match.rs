@@ -147,6 +147,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // slot's tag below; None/wildcard arms leave the cleanup armed.
         let (scrut, refchain_option_clone) =
             self.clone_escaping_borrowed_ref_chain_option(scrutinee, scrut, ref_chain_escapes);
+        // B-2026-08-08-25 leg 1: the LIVE-LOCAL sibling — `match o { Some(s) =>
+        // <consume s> … }` where `o` is a plain local read again after the
+        // match. Same clone-slot contract, so it feeds the same per-arm tag
+        // zero below; the two gates are disjoint (a place chain vs a bare
+        // identifier), so at most one can fire.
+        let (scrut, livelocal_option_clone) =
+            self.clone_escaping_live_local_option(scrutinee, scrut, arms);
+        let refchain_option_clone = refchain_option_clone.or(livelocal_option_clone);
         // B-2026-07-21-10: the TUPLE-leaf sibling — `match <refparam>.pair {
         // (s, x) => <consume s> … }`. Consuming arms zero the consumed
         // elements' caps in the clone slot below.
@@ -230,8 +238,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // keeps it, so the arm binding must not register a free and the
         // suppressors below must not disarm the source.
         let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
-        self.pattern_binding_source_retains_inline_payload =
+        let readonly_inline_optres =
             self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms);
+        // B-2026-08-08-25 leg 1 — the clone leg keeps the source's payload too,
+        // so the suppressors must skip it for the same reason. It is held
+        // SEPARATE from `readonly_inline_optres` because only the read-only
+        // classifier may also raise `pattern_binding_is_borrow` below: a cloned
+        // arm binding genuinely OWNS the clone and has to register its free,
+        // whereas a borrowing one registers nothing. Folding the two together
+        // would drop the clone's owner and leak it.
+        self.pattern_binding_source_retains_inline_payload =
+            readonly_inline_optres || livelocal_option_clone.is_some();
         // Publish the classification for the rest of the CHAIN. The flag above
         // is scoped to this match, but the combinator that consumes its result
         // (`<src>.map(f).unwrap_or(d)`) runs after the match is compiled and
@@ -251,7 +268,7 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_borrowed_binding(scrutinee)
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms)
-            || self.pattern_binding_source_retains_inline_payload;
+            || readonly_inline_optres;
         // B-2026-07-15-21 Part B — scrutinee is an RC-elidable borrowed param:
         // skip the Some-binding acquire + its scope-exit RcDec (payload is a
         // proven-non-escaping alias of the caller-kept-alive param), which also
@@ -1938,6 +1955,238 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap(),
             Some(slot),
         )
+    }
+
+    /// B-2026-08-08-25 leg 1 — the LIVE-LOCAL sibling of
+    /// [`Self::clone_escaping_borrowed_ref_chain_option`]: `match o { Some(s)
+    /// => <CONSUME s> … }` where `o` is a plain local that owns an inline
+    /// `Option[String]` / `Option[Vec[U]]` payload and is READ AGAIN after the
+    /// match.
+    ///
+    /// The consuming arm moves the payload out of the source, and
+    /// `suppress_inline_option_payload_cleanup` disarms the source so the
+    /// buffer is freed once — by the arm. That is correct while the source is
+    /// dead, and it is the whole defect while the source is live: the arm's
+    /// free lands before the later read, and the still-in-scope `o` is left
+    /// pointing at freed memory (`Invalid read of size N`, 7 valgrind errors
+    /// on the row's reproduction).
+    ///
+    /// The BORROWING half of this shape is already free —
+    /// `scrutinee_is_readonly_inline_optres_local` proves the arms only read
+    /// the payload and leaves it with the source at zero cost. That classifier
+    /// correctly declines a consuming arm, because a genuine move needs a
+    /// second buffer rather than a second reader. This is that second buffer.
+    ///
+    /// WHY A CLONE RATHER THAN A LIFETIME FIX. The row's last pass concluded
+    /// from an IR diff that the alias is already balanced and only the free's
+    /// TIMING is wrong, so suppressing the RESULT's free while the source is
+    /// live would be cheaper. That works for a result that dies in the same
+    /// scope and silently dangles for one that does not — a returned value, a
+    /// pushed element, a field store — so it trades this use-after-free for a
+    /// rarer one. Two live owners need two buffers; the clone is
+    /// unconditionally sound, which is the direction to be wrong in on a path
+    /// where the alternative failure is a double-free.
+    ///
+    /// The row also warned that a bespoke inline-payload clone must get
+    /// element DEPTH right or a `Vec[String]` payload becomes a double-free.
+    /// Nothing bespoke is needed: `emit_clone_fn_for_type_expr` is the
+    /// dispatcher's own tag-guarded, type-directed clone (the same one the
+    /// ref-chain sibling above uses), so depth follows the `TypeExpr`. The
+    /// `deep_copy_enum_heap_payload_in_place` trap the row recorded applies to
+    /// the user-ENUM clone legs, which key on `field_drop_kinds` the erased
+    /// Option layout does not carry — this leg never touches that path.
+    ///
+    /// Ownership after the clone, and why no leak: the clone slot registers
+    /// its own `FreeInlineOptionPayload`, and a CONSUMING `Some` arm zeroes
+    /// the clone's tag (`zero_refchain_option_clone_on_consume`, shared with
+    /// the ref-chain leg) so that cleanup skips the buffer the binding now
+    /// owns. A `None` or wildcard arm leaves the tag alone and the cleanup
+    /// frees the clone. The source is untouched and keeps its own payload —
+    /// the caller sets `pattern_binding_source_retains_inline_payload` so the
+    /// suppressors do not disarm it. Two allocations, two frees, which is what
+    /// `--interp` does.
+    ///
+    /// Gated to a source that is actually READ LATER
+    /// (`scrutinee_read_after_match`). Every consuming match over a live local
+    /// would otherwise pay a `malloc` + `memcpy` it does not need — the source
+    /// is dead in the common case, and today's transfer is both correct and
+    /// free there. That keeps this off the ~1000 memory fixtures that exercise
+    /// the arm path and confines it to programs that are broken today.
+    pub(super) fn clone_escaping_live_local_option(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        arms: &[MatchArm],
+    ) -> (BasicValueEnum<'ctx>, Option<PointerValue<'ctx>>) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return (val, None);
+        };
+        // A passthrough binding owns nothing — its source does. Resolve to the
+        // owner exactly as the suppressors and classifiers forward
+        // (B-2026-08-06-27), so the clone lands on the value that is really at
+        // risk.
+        let owner: String = self
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .cloned()
+            .unwrap_or_else(|| name.clone());
+        if !self.inline_option_payload_vars.contains(owner.as_str()) {
+            return (val, None);
+        }
+        // ESCAPING arms only. A read-only match is already the zero-cost borrow
+        // path above, and cloning there would leak the clone (nothing consumes
+        // it, and the binding registers no owner).
+        if self.no_arm_payload_escapes(arms) {
+            return (val, None);
+        }
+        // Same direct-`{ptr,len,cap}` shape gate the read-only classifier uses:
+        // `inline_option_payload_vars` also carries TUPLE payloads, whose
+        // bindings own themselves and must keep their own channel.
+        if !arms
+            .iter()
+            .any(|a| self.pattern_binds_direct_inline_heap_payload(&a.pattern))
+        {
+            return (val, None);
+        }
+        if !arms.iter().all(|a| {
+            !Self::pattern_consumes_variant_payload(&a.pattern)
+                || self.pattern_binds_direct_inline_heap_payload(&a.pattern)
+        }) {
+            return (val, None);
+        }
+        if !self.scrutinee_read_after_match(name, &owner, scrutinee, arms) {
+            return (val, None);
+        }
+        // The `Option[P]` instantiation, needed for the type-directed clone.
+        // `enum_inst_var_types` is the name-keyed use-site table (span keys
+        // collide across f-string interpolations); `optres_var_payload_tes`
+        // covers a rebound binding that re-registered its payload walk.
+        let Some(opt_te) = self
+            .enum_inst_var_types
+            .get(owner.as_str())
+            .or_else(|| self.optres_var_payload_tes.get(owner.as_str()))
+            .cloned()
+        else {
+            return (val, None);
+        };
+        // Inline String/Vec payloads only — a shared payload is rc-managed and
+        // a boxed one belongs to another cleanup family, exactly as the
+        // ref-chain sibling gates.
+        let Some(payload_elem_ty) = self.option_inline_payload_elem(&opt_te) else {
+            return (val, None);
+        };
+        if self
+            .option_inner_shared_type_for_type_expr(&opt_te)
+            .is_some()
+        {
+            return (val, None);
+        }
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return (val, None);
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let clone_fn = self.emit_clone_fn_for_type_expr(&opt_te);
+        let src = self.create_entry_alloca(fn_val, "livelocal.opt.src", ll);
+        self.builder.build_store(src, val).unwrap();
+        let slot = self.create_entry_alloca(fn_val, "livelocal.opt.clone", ll);
+        self.builder
+            .build_call(clone_fn, &[src.into(), slot.into()], "")
+            .unwrap();
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(
+                crate::codegen::state::CleanupAction::FreeInlineOptionPayload {
+                    option_slot: slot,
+                    option_ty,
+                    some_tag,
+                    payload_elem_ty: Some(payload_elem_ty),
+                },
+            );
+        }
+        (
+            self.builder
+                .build_load(ll, slot, "livelocal.opt.cloned")
+                .unwrap(),
+            Some(slot),
+        )
+    }
+
+    /// Is `name` (or the `owner` it aliases) mentioned at or past the END of
+    /// this match — i.e. does the scrutinee local outlive the arm that moves
+    /// its payload out? B-2026-08-08-25 leg 1's liveness gate.
+    ///
+    /// Mentions BEFORE the match are deliberately not counted. A read that
+    /// already happened cannot observe a buffer the arm frees afterwards, so
+    /// counting it would clone for `println(o.is_some()); match o { … }` — a
+    /// dead source, correct and free on today's transfer path.
+    ///
+    /// The scrutinee's own mention sits inside `[scrutinee.start, match_end)`
+    /// and so never triggers the gate by itself, which is the entire point:
+    /// `match o { … }` alone keeps the transfer, a second `match o { … }` gets
+    /// the clone.
+    fn scrutinee_read_after_match(
+        &self,
+        name: &str,
+        owner: &str,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> bool {
+        // The arm bodies end after the patterns and any guard, so the last
+        // body's end bounds the whole match. The scrutinee's own extent is
+        // folded in for a degenerate/synthesized arm span (the `map` synthesis
+        // reuses the call's spans), keeping the bound from landing before the
+        // scrutinee and reading its own mention as a later use.
+        let match_end = arms
+            .iter()
+            .map(|a| a.body.span.offset + a.body.span.length)
+            .chain(std::iter::once(
+                scrutinee.span.offset + scrutinee.span.length,
+            ))
+            .max()
+            .unwrap_or(0);
+        // Either spelling can carry the later read: the source may be reached
+        // through the passthrough alias as well as its own name.
+        [name, owner]
+            .iter()
+            .filter_map(|n| self.fn_body_ident_mention_offsets.get(*n))
+            .flatten()
+            .any(|&off| off >= match_end)
+    }
+
+    /// Index every expression-level identifier mention in the function body
+    /// about to be compiled, by source offset. Feeds
+    /// [`Self::scrutinee_read_after_match`] (B-2026-08-08-25 leg 1); see the
+    /// field's doc on `fn_body_ident_mention_offsets` for why offsets rather
+    /// than counts, and why the walk's exhaustiveness matters.
+    pub(super) fn record_fn_body_ident_mentions(&mut self, body: &crate::ast::Block) {
+        type Acc = std::collections::HashMap<String, Vec<usize>>;
+        fn walk(e: &Expr, acc: &std::cell::RefCell<Acc>) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(n) => {
+                    acc.borrow_mut()
+                        .entry(n.clone())
+                        .or_default()
+                        .push(e.span.offset);
+                }
+                ExprKind::Path { segments, .. } => {
+                    if let Some(s) = segments.first() {
+                        acc.borrow_mut()
+                            .entry(s.clone())
+                            .or_default()
+                            .push(e.span.offset);
+                    }
+                }
+                _ => {}
+            }
+            // Always true — the walk visits rather than tests, so every child
+            // is reached instead of short-circuiting on the first hit.
+            crate::codegen::bce_length_pin::expr_children_all(e, |c| walk(c, acc))
+        }
+        let acc: std::cell::RefCell<Acc> = std::cell::RefCell::new(Acc::new());
+        crate::codegen::bce_length_pin::block_all(body, |e| walk(e, &acc));
+        self.fn_body_ident_mention_offsets = acc.into_inner();
     }
 
     /// B-2026-07-21-14 — the RESULT-leaf sibling of

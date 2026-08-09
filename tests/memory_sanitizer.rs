@@ -44449,6 +44449,64 @@ fn main() {
         );
     }
 
+    /// B-2026-08-08-25 leg 1, THE CONSUMING HALF — a CONSUMING arm over a live
+    /// `Option` local now gives the arm its own buffer, so both the arm and the
+    /// still-live source free exactly one each.
+    ///
+    /// Every failure direction here is a memory bug, which is why this is
+    /// pinned under ASAN rather than only as an output test. Skip the clone and
+    /// the arm frees the source's buffer, so the later read is a use-after-free
+    /// and the source's scope-exit free is a double free — the pre-fix program
+    /// was 7 valgrind errors and printed garbage. Clone but let the source stay
+    /// disarmed and the original leaks every iteration. Clone but let the
+    /// consuming arm leave the clone's tag intact and the clone is freed twice.
+    ///
+    /// Case 2 is the element-DEPTH case the row named as the double-free trap:
+    /// a shallow copy of the `Vec[String]` payload would alias both element
+    /// buffers, so each would be freed by the arm's clone AND by the source.
+    ///
+    /// Case 3 is the load-bearing control in the other direction — with the
+    /// source DEAD the clone must NOT fire, and if it fired without the source
+    /// being disarmed the original would leak once per iteration. LSan is the
+    /// gate that would catch a liveness check that quietly said "always live".
+    ///
+    /// Every payload is read BYTE-WISE (`println` of the string itself, never
+    /// `.len()`), because a buffer whose bytes are never read is a provably
+    /// dead allocation LLVM deletes outright — the fixture would then assert
+    /// nothing at all. The loop's `i` keeps each f-string opaque to the
+    /// optimizer for the same reason.
+    #[test]
+    fn asan_consuming_match_over_a_live_option_local_frees_each_buffer_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. The consuming mapper, with the source re-read afterwards.
+        let o: Option[String] = Some(f"hi{i}");
+        match o.map(|s| s) { Some(v) => { println(v); } None => { println("-"); } }
+        match o { Some(v) => { println(v); } None => { println("-"); } }
+        // 2. Element depth: a shallow clone would alias both element buffers.
+        let w: Option[Vec[String]] = Some([f"aa{i}", f"bb{i}"]);
+        match w.map(|s| s) { Some(v) => { println(v[0]); } None => { println("-"); } }
+        match w { Some(v) => { println(v[1]); } None => { println("-"); } }
+        // 3. CONTROL — source DEAD, so no clone may be made. A clone here
+        // without disarming the source would leak the original every pass.
+        let d: Option[String] = Some(f"dead{i}");
+        match d.map(|s| s) { Some(v) => { println(v); } None => { println("-"); } }
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "hi0", "hi0", "aa0", "bb0", "dead0", "hi1", "hi1", "aa1", "bb1", "dead1", "hi2",
+                "hi2", "aa2", "bb2", "dead2", "hi3", "hi3", "aa3", "bb3", "dead3", "end",
+            ],
+            "consuming_match_live_option_local",
+        );
+    }
+
     /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
     ///
     /// `suppress_inline_option_result_binding_move` disarms a source binding

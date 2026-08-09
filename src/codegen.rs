@@ -3304,6 +3304,28 @@ pub(super) struct Codegen<'ctx> {
     /// the move disarms the source — the same role `tuple_var_elem_tes`
     /// plays for tuples. Cleared per function alongside it.
     pub(crate) optres_var_payload_tes: HashMap<String, TypeExpr>,
+    /// Source OFFSETS of every expression-level mention of each identifier in
+    /// the function body currently being compiled, recorded once at
+    /// `compile_function_body` entry (B-2026-08-08-25 leg 1).
+    ///
+    /// The one consumer is `scrutinee_read_after_match`, which asks the
+    /// liveness question the consuming-arm clone is gated on: is this
+    /// scrutinee local READ AFTER the match that moves its payload out? A
+    /// mention offset at or past the last arm body's end answers yes.
+    ///
+    /// Offsets rather than a bare count because the scrutinee's OWN mention is
+    /// inside the match and must not count as a later read — the distinction
+    /// between `match o { … }` (source dead, keep today's zero-cost transfer)
+    /// and `match o { … } … match o { … }` (source live, needs the clone).
+    ///
+    /// Built from `bce_length_pin::block_all`, whose walk is exhaustive over
+    /// `ExprKind` with no wildcard arm, so a new AST node breaks this at
+    /// compile time instead of silently reading as "not mentioned" — which
+    /// would take the fast path on a live source and dangle it again.
+    /// Over-approximating is safe here (a needless clone costs one `malloc`);
+    /// under-approximating reintroduces the use-after-free, so the walk's
+    /// fail-closed discipline is load-bearing rather than incidental.
+    pub(crate) fn_body_ident_mention_offsets: HashMap<String, Vec<usize>>,
     /// `Map[K, V]` instantiation per let-bound variable whose VALUE-bodies
     /// walk registered (`__karac_dropelems_map_*`) — the rebind fallback in
     /// the shared static chain, exactly like `optres_var_payload_tes`.
@@ -7996,6 +8018,7 @@ impl<'ctx> Codegen<'ctx> {
             suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
             pattern_binding_source_retains_inline_payload: false,
+            fn_body_ident_mention_offsets: HashMap::new(),
             pattern_binding_scrutinee_is_elidable_param: false,
             deep_copy_rc_inc_bare_shared: false,
             copy_support_for_loop_shared_mode: false,
