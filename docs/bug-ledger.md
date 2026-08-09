@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 86 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
-| diagnostics | 44 | 0 |
+| diagnostics | 45 | 1 |
 | soundness | 41 | 0 |
 | crash | 41 | 0 |
 | other | 24 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 769 | 1 |
 | typecheck | 137 | 0 |
-| interp | 131 | 0 |
+| interp | 132 | 1 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
 | other | 35 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1060 surfaced · 1 open · 1049 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1061 surfaced · 2 open · 1049 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-09-17 | 2026-08-09 | codegen | high | a `File` handle stored in a `Vec[File]` deadlocks on its next method call under AOT, while the interpreter runs the same program correctly -- a struct FIELD holding a `File` round-trips fine, so the defect is Vec-element-specific | src/codegen/file.rs (a `File` value is a `*KaracFile`); the Vec element path does not round-trip it |
+| B-2026-08-09-19 | 2026-08-09 | interp | low | SIBLING OF B-2026-08-09-18, NOT CLOSED BY bb46a68d: a faulted operand still ICEs the interpreter in THREE more positions, all with the same shape (`unreachable!` whose message proposes two causes and both are wrong -- the typechecker is right and no codepath produced a bad variant; the operand faulted, set pending_cf, and yielded the `Unit` poison, which is then asserted against). bb46a68d guarded the METHOD-CALL RECEIVER only. Still ICEing: (1) `if v[3] > 0i64 and true {}` -> eval_ops.rs:140 `short-circuit `And` LHS ... was Value::Unit not Bool`; (2) same with `or` -> same site, ``Or` LHS`; (3) `if true and v[3] > 0i64 {}` -> interpreter.rs:1966 `condition was Value::Unit not Bool` (the RHS fault escapes the short-circuit evaluator and poisons the enclosing `if` condition instead). So the guard is missing on the short-circuit operator's LHS, its RHS, and the if-condition consumer. NOTE the earlier row's fix note asserted `Binary, Unary and Match all short-circuit on pending_cf` -- that holds for the NON-short-circuit Binary path; `eval_short_circuit` is a separate evaluator with its own operand assertions and was never given the guard. RUN-VS-BUILD: interpreter-only in all three; `karac run` (JIT) and `karac build` report `vec index out of bounds` cleanly at the right span. FIX DIRECTION: same one-line-per-site treatment as bb46a68d -- check pending_cf after evaluating each operand in `eval_short_circuit` and before the enclosing condition test -- or, better, hoist the check to the single place a `Value` is consumed as a Bool, since this is now the third distinct site found for one root cause. | src/interpreter/eval_ops.rs:140 (eval_short_circuit); src/interpreter.rs:1966 (condition) |
 
 ### Fixed (1049)
 
