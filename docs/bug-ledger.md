@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 222 | 0 |
-| leak | 153 | 1 |
+| leak | 154 | 2 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 1 |
-| missing-feature | 86 | 1 |
+| missing-feature | 86 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
 | diagnostics | 43 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 756 | 4 |
-| typecheck | 136 | 1 |
+| codegen | 757 | 4 |
+| typecheck | 136 | 0 |
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1045 surfaced · 4 open · 1031 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1046 surfaced · 4 open · 1032 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -132,12 +132,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1045 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
 | B-2026-08-09-1 | 2026-08-09 | codegen | medium | a `Map[K, V]` field of a SHARED struct has no general per-value drop-fn channel, so a V that needs a RECURSIVE drop leaks -- the non-shared struct field and the plain local binding, which both route through `map_val_drop_fn_for_type_expr`, are clean | probe: `shared struct Owner { mut m: Map[i64, Vec[Vec[String]]] }` vs the non-shared-struct and local-binding twins |
-| B-2026-08-09-2 | 2026-08-09 | typecheck+codegen | low | `Map[K, weak V]` is now store-only: the read is NOT an upgrade, so `m.get(k)` yields `Option[weak V]` and the `Some` binding rejects every field access -- the same store-only state `Vec[weak T]` was in between B-2026-08-08-5 and -4 gap B | probe: `match m.get(1i64) { Option.Some(x) => println(x.v), ... }` on a `Map[i64, weak N]` |
 | B-2026-08-09-3 | 2026-08-09 | codegen | medium | a `shared struct` binding's Drop body fires at LEXICAL SCOPE EXIT under codegen but at LIVE-RANGE END under `--interp` -- design.md mandates live-range end, and codegen's own VALUE-struct path already does it, so the RC tier is the lone outlier and the two backends print in different orders | probe: `impl Drop` on a `shared struct` whose last use is mid-scope, vs the identical program with a plain `struct` |
+| B-2026-08-09-4 | 2026-08-09 | codegen | medium | `asan_option_map_heap_payload_no_leak` leaks 200 bytes in 40 allocations at KARAC_OPT_LEVEL=0 while passing at the default level, so the `Option.map` heap-payload path has an -O0-only leak no CI job would catch | tests/memory_sanitizer.rs::asan_option_map_heap_payload_no_leak under KARAC_OPT_LEVEL=0 |
 
-### Fixed (1031)
+### Fixed (1032)
 
-<details><summary>1031 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1032 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1194,6 +1194,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-28 | codegen | high | a weak ELEMENT read through a struct FIELD (`a.ns[0]` on `mut ns: Vec[weak N]`) skips the balancing acquire and over-releases -- SIGSEGV under JIT an… | 02f8a0c |
 | B-2026-08-08-29 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is… | dc31715 |
 | B-2026-08-08-30 | codegen | high | mapping a BORROWED SCALAR payload — `Vec[i64].first().map(\|x\| x + 1)` — was TWO defects, and the reported panic was the lucky one: the closure's `ref… | e524f62 (both legs: the closure return-type inference over a borrow param, and the leaked param borrow mark) |
+| B-2026-08-09-2 | typecheck+codegen | medium | `Map[K, weak V]` is now store-only: the read is NOT an upgrade, so `m.get(k)` yields `Option[weak V]` and the `Some` binding rejects every field acce… | 68bebfd3 |
 
 </details>
 
