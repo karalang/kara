@@ -160,6 +160,13 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // production compiles and runs.
     "asan_map_over_live_option_string_leaves_source_owning_its_buffer",
     "test_e2e_consuming_map_over_live_optres_still_open",
+    // B-2026-08-09-8 — the same two rows' shape with a bare rebind (`let p =
+    // o;`) in front, which is what made the caller-retains classifier miss it.
+    // Same reasoning again: `karac check` exits 0 on these (the matrix above
+    // was measured with `karac check` returning ok for every one), so
+    // production compiles and runs them; the reuse IS the point.
+    "test_e2e_rebound_option_local_is_read_repeatedly",
+    "asan_rebound_option_local_transfers_payload_ownership",
     //
     // ── Designed concurrent-access diagnostics, tolerated-build pins ─
     // `karac check` rejects a shared/plain struct binding reachable

@@ -7014,6 +7014,34 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_else(|| name.to_string())
     }
 
+    /// B-2026-08-09-8 — is `value` a bare identifier naming a binding that owns
+    /// an inline `Option`/`Result` payload, i.e. is this `let p = o;` a
+    /// whole-value MOVE of one? Returns the OWNING binding's name.
+    ///
+    /// The let-site's registration gate could not see this shape.
+    /// `rhs_is_fresh_inline_enum` answers false for an identifier naming an
+    /// existing binding — correctly, since it is not fresh — and neither
+    /// passthrough detector matches a bare identifier either, so the
+    /// destination got NO cleanup while the source kept its. That alone is
+    /// balanced, but it is invisible to `scrutinee_is_inline_optres_local`,
+    /// which is the membership test the caller-retains classifiers consult: a
+    /// later `match p` therefore took the OWNED path and its arm binding freed
+    /// the buffer at arm exit, while the source's untouched scope-exit action
+    /// freed it again.
+    ///
+    /// Resolves through an existing passthrough alias, exactly as the
+    /// suppressors do, so a rebind of a passthrough binding reports the real
+    /// owner rather than the alias.
+    pub(super) fn inline_optres_rebind_move_source(&self, value: &Expr) -> Option<String> {
+        let ExprKind::Identifier(n) = &value.kind else {
+            return None;
+        };
+        let owner = self.moved_arg_owner_name(n);
+        (self.inline_option_payload_vars.contains(owner.as_str())
+            || self.inline_result_payload_vars.contains(owner.as_str()))
+        .then_some(owner)
+    }
+
     pub(super) fn suppress_boxed_enum_payload_cleanup_for_moved_arg(&self, arg: &Expr) {
         let ExprKind::Identifier(name) = &arg.kind else {
             return;

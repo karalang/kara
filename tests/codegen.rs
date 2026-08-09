@@ -22902,6 +22902,116 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-8 — the shape above, with one `let p = o;` in front of it.
+    ///
+    /// A bare rebind is a whole-value MOVE, and the let-site's registration gate
+    /// could not see it: `rhs_is_fresh_inline_enum` rejects an identifier naming
+    /// an existing binding (correctly — not fresh), and neither passthrough
+    /// detector matches a bare identifier, so `p` got no cleanup and `o` kept
+    /// its. That much is balanced on its own; what broke is that `p` was then
+    /// invisible to `scrutinee_is_inline_optres_local`, the membership test the
+    /// caller-retains classifier consults. Every `match p` therefore took the
+    /// OWNED path and its arm binding freed the buffer at arm exit, while `o`'s
+    /// untouched scope-exit action freed it again.
+    ///
+    /// ONE match already aborted, which the row filing this got wrong — its
+    /// narrowing recorded a single read as clean. Measured on the filing commit
+    /// and on its parent: one match is `1 errors from 1 contexts` and a
+    /// `free(): double free detected in tcache 2` abort, two is 3 errors and
+    /// adds an `Invalid read of size 2` (the second match reading the freed
+    /// buffer — a use-after-free, not only a double free), three is 5. So the
+    /// count is `2n-1`, and the very first read is already wrong.
+    ///
+    /// The control is the neighbouring test above: the identical double read
+    /// WITHOUT the rebind is clean, because there the scrutinee is the
+    /// registered binding and the classifier fires.
+    #[test]
+    fn test_e2e_rebound_option_local_is_read_repeatedly() {
+        // One read — the shape the row recorded as clean.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     let p: Option[String] = o;\n\
+                     match p { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\n")
+        );
+        // Two and three reads.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     let p: Option[String] = o;\n\
+                     match p { Some(v) => { println(v); } None => {} }\n\
+                     match p { Some(v) => { println(v); } None => {} }\n\
+                     match p { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\nhi\n")
+        );
+        // A CHAINED rebind: the transfer has to keep moving, not stop at `p`.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     let p: Option[String] = o;\n\
+                     match p { Some(v) => { println(v); } None => {} }\n\
+                     let q: Option[String] = p;\n\
+                     match q { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // `Result`, the sibling registry, and a `Vec` payload (an ELEMENT read,
+        // which actually touches the buffer — `.len()` would pass unfixed).
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Result[String, i64] = Ok(f\"hi\");\n\
+                     let p: Result[String, i64] = o;\n\
+                     match p { Ok(v) => { println(v); } Err(_) => {} }\n\
+                     match p { Ok(v) => { println(v); } Err(_) => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new(); v.push(111); v.push(222);\n\
+                     let o: Option[Vec[i64]] = Some(v);\n\
+                     let p: Option[Vec[i64]] = o;\n\
+                     match p { Some(x) => { println(x[0]); } None => {} }\n\
+                     match p { Some(x) => { println(x[1]); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("111\n222\n")
+        );
+        // The shape that chose TRANSFER over alias: reassigning the SOURCE after
+        // the move must not strand the payload. Under an alias fix this is a
+        // 2-byte leak; the destination has to be the owner for it to be clean.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut o: Option[String] = Some(f\"hi\");\n\
+                     let p: Option[String] = o;\n\
+                     match p { Some(v) => { println(v); } None => {} }\n\
+                     o = None;\n\
+                     match o { Some(v) => { println(v); } None => { println(\"none\"); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nnone\n")
+        );
+    }
+
     /// B-2026-08-08-25 leg 1 — `.map` over a live `Option[String]` no longer
     /// dangles the source.
     ///

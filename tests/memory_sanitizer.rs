@@ -44367,6 +44367,70 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-8 — the same read, one `let p = o;` in front of it.
+    ///
+    /// A bare rebind is a whole-value MOVE that the let-site's registration gate
+    /// could not see, so the destination got no cleanup and the source kept its.
+    /// The destination was then invisible to `scrutinee_is_inline_optres_local`
+    /// — the membership test the caller-retains classifier consults — so every
+    /// `match p` took the OWNED path, freed at arm exit, and the source's
+    /// untouched scope-exit action freed the same buffer again.
+    ///
+    /// Both directions are in one fixture on purpose. The double free / UAF is
+    /// what the row reports; the loop plus the payload read-back catch the
+    /// opposite mistake, because the fix DISARMS the source, and disarming
+    /// without registering the destination would turn this into a per-iteration
+    /// leak that LSan reports rather than an abort.
+    ///
+    /// The last block is the shape that chose transfer over alias: reassigning
+    /// the SOURCE after the move. Recording the destination as a passthrough
+    /// alias fixes every other case here but leaks 2 bytes on that one
+    /// (measured, both variants built), because the surviving action would read
+    /// the source's slot after it had been overwritten.
+    #[test]
+    fn asan_rebound_option_local_transfers_payload_ownership() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    while i < 8 {
+        let o: Option[String] = Some(f"hi{i}");
+        let p: Option[String] = o;
+        match p { Some(v) => { println(v); } None => { println("-"); } }
+        match p { Some(v) => { println(v); } None => { println("-"); } }
+        // Chained rebind: the transfer has to keep moving, not stop at `p`.
+        let q: Option[String] = p;
+        match q { Some(v) => { println(v); } None => { println("-"); } }
+        // Vec payload, element read (touches the buffer).
+        let vo: Option[Vec[i64]] = Some(vec![i, i + 1i64]);
+        let vp: Option[Vec[i64]] = vo;
+        match vp { Some(x) => { println(x[1].to_string()); } None => { println("-"); } }
+        // Result sibling registry.
+        let ro: Result[String, i64] = Ok(f"ok{i}");
+        let rp: Result[String, i64] = ro;
+        match rp { Ok(v) => { println(v); } Err(_) => { println("-"); } }
+        // Source reassigned after the move — clean only if the DESTINATION owns.
+        let mut mo: Option[String] = Some(f"mv{i}");
+        let mp: Option[String] = mo;
+        match mp { Some(v) => { println(v); } None => { println("-"); } }
+        mo = None;
+        match mo { Some(v) => { println(v); } None => { println("-"); } }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "hi0", "hi0", "hi0", "1", "ok0", "mv0", "-", "hi1", "hi1", "hi1", "2", "ok1",
+                "mv1", "-", "hi2", "hi2", "hi2", "3", "ok2", "mv2", "-", "hi3", "hi3", "hi3", "4",
+                "ok3", "mv3", "-", "hi4", "hi4", "hi4", "5", "ok4", "mv4", "-", "hi5", "hi5",
+                "hi5", "6", "ok5", "mv5", "-", "hi6", "hi6", "hi6", "7", "ok6", "mv6", "-", "hi7",
+                "hi7", "hi7", "8", "ok7", "mv7", "-", "end",
+            ],
+            "rebound_option_local_transfers_payload_ownership",
+        );
+    }
+
     /// B-2026-08-09-5 — mapping a borrowed String payload with `|s| s` now
     /// returns the whole `{ptr,len,cap}` aggregate instead of one word, which
     /// means the mapper hands back an OWNED deep copy while the surface type of

@@ -6224,6 +6224,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // admitting here on its own, because the alias detector no
                         // longer claims it.
                         || self.map_lowers_via_match_synthesis(value)
+                        // B-2026-08-09-8 — a bare REBIND of a binding that owns
+                        // an inline Option/Result payload (`let p = o;`). It is
+                        // not FRESH, which is why `rhs_is_fresh_inline_enum`
+                        // rejects it and why it never reached this block, but it
+                        // is a MOVE — so the destination takes the registration
+                        // and the source is disarmed below.
+                        || self.inline_optres_rebind_move_source(value).is_some()
                     {
                         let opt_te = self
                             .enum_inst_type_exprs
@@ -6262,6 +6269,61 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.track_inline_option_map_payload_var(
                                         var_name, slot.ptr, &te,
                                     );
+                                    // B-2026-08-09-8 — `let p = o;` is a whole-
+                                    // value MOVE, so having registered the
+                                    // destination above, disarm the SOURCE.
+                                    //
+                                    // TRANSFER rather than alias, and the
+                                    // difference was MEASURED, not reasoned.
+                                    // Recording `p` as a `passthrough_owner_alias`
+                                    // of `o` is a smaller change and fixes every
+                                    // shape this row reports — but it leaves `o`
+                                    // the owner, so a later `o = None;` swaps the
+                                    // slot the one surviving action reads and the
+                                    // payload leaks instead: built both ways,
+                                    // `let p = o; match p {…} o = None;` is
+                                    // 2 bytes definitely lost / 1 valgrind error
+                                    // under the alias variant and clean under
+                                    // this one. Transferring also matches the
+                                    // language (the rebind IS a move, and the
+                                    // ownership checker already calls a later
+                                    // read of `o` UseAfterMove) and mirrors
+                                    // `transfer_map_handle_on_rebind`, the
+                                    // Map/Set handle sibling (B-2026-07-31-27).
+                                    //
+                                    // Gated on the destination having ACTUALLY
+                                    // taken a registration, not merely on the
+                                    // shape: each tracker self-skips for a
+                                    // payload it does not own, and disarming a
+                                    // source whose destination registered
+                                    // nothing would turn this double free into a
+                                    // leak. A self-shadowing `let o = o;` is
+                                    // excluded for the same reason — source and
+                                    // destination are one slot, so the disarm
+                                    // would cancel the registration.
+                                    if self
+                                        .inline_optres_rebind_move_source(value)
+                                        .is_some_and(|src| src != *var_name)
+                                    {
+                                        if self
+                                            .inline_option_payload_vars
+                                            .contains(var_name.as_str())
+                                        {
+                                            self
+                                            .suppress_inline_option_payload_cleanup_for_moved_arg(
+                                                value,
+                                            );
+                                        }
+                                        if self
+                                            .inline_result_payload_vars
+                                            .contains(var_name.as_str())
+                                        {
+                                            self
+                                            .suppress_inline_result_payload_cleanup_for_moved_arg(
+                                                value,
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
