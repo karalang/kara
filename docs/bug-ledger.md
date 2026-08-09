@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 228 | 0 |
-| leak | 155 | 0 |
+| leak | 156 | 1 |
 | double-free | 118 | 0 |
 | codegen-gap | 98 | 0 |
-| run-vs-build | 92 | 1 |
+| run-vs-build | 92 | 0 |
 | missing-feature | 86 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 769 | 1 |
+| codegen | 770 | 1 |
 | typecheck | 137 | 0 |
 | interp | 132 | 1 |
 | ownership | 44 | 0 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1061 surfaced · 2 open · 1049 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1062 surfaced · 2 open · 1050 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-09-17 | 2026-08-09 | codegen | high | a `File` handle stored in a `Vec[File]` deadlocks on its next method call under AOT, while the interpreter runs the same program correctly -- a struct FIELD holding a `File` round-trips fine, so the defect is Vec-element-specific | src/codegen/file.rs (a `File` value is a `*KaracFile`); the Vec element path does not round-trip it |
 | B-2026-08-09-19 | 2026-08-09 | interp | low | SIBLING OF B-2026-08-09-18, NOT CLOSED BY bb46a68d: a faulted operand still ICEs the interpreter in THREE more positions, all with the same shape (`unreachable!` whose message proposes two causes and both are wrong -- the typechecker is right and no codepath produced a bad variant; the operand faulted, set pending_cf, and yielded the `Unit` poison, which is then asserted against). bb46a68d guarded the METHOD-CALL RECEIVER only. Still ICEing: (1) `if v[3] > 0i64 and true {}` -> eval_ops.rs:140 `short-circuit `And` LHS ... was Value::Unit not Bool`; (2) same with `or` -> same site, ``Or` LHS`; (3) `if true and v[3] > 0i64 {}` -> interpreter.rs:1966 `condition was Value::Unit not Bool` (the RHS fault escapes the short-circuit evaluator and poisons the enclosing `if` condition instead). So the guard is missing on the short-circuit operator's LHS, its RHS, and the if-condition consumer. NOTE the earlier row's fix note asserted `Binary, Unary and Match all short-circuit on pending_cf` -- that holds for the NON-short-circuit Binary path; `eval_short_circuit` is a separate evaluator with its own operand assertions and was never given the guard. RUN-VS-BUILD: interpreter-only in all three; `karac run` (JIT) and `karac build` report `vec index out of bounds` cleanly at the right span. FIX DIRECTION: same one-line-per-site treatment as bb46a68d -- check pending_cf after evaluating each operand in `eval_short_circuit` and before the enclosing condition test -- or, better, hoist the check to the single place a `Value` is consumed as a Bool, since this is now the third distinct site found for one root cause. | src/interpreter/eval_ops.rs:140 (eval_short_circuit); src/interpreter.rs:1966 (condition) |
+| B-2026-08-09-20 | 2026-08-09 | codegen | medium | a `File` moved into a `Vec` or a struct is never closed -- the container has no element/field drop for the handle, so the fd leaks until process exit (253 of 400 opens succeed under `ulimit -n 256`) | src/codegen/synth_drop.rs (`vec_element_drain_fn`) and the struct drop glue -- neither emits `karac_runtime_file_close` for a `File` element/field |
 
-### Fixed (1049)
+### Fixed (1050)
 
-<details><summary>1049 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1050 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1217,6 +1217,7 @@ still_open` (alias case, and its `Drop` body now READS the payload string) plus
 the method spelling restored to `test_e2e_returned_enum_arg_payload_method_-
 spelling_fires_once`, and asan `asan_let_aliased_enum_param_payload_frees_once`,
 stash-proven red with an explicit heap-use-after-free. |
+| B-2026-08-09-17 | codegen | high | a `File` MOVED out of its binding (into a `Vec`, a struct, or a return) is still closed by the origin binding at scope exit, so the new owner holds f… | fdc874b |
 | B-2026-08-09-18 | interp | low | Interpreter ICEs (`internal error: entered unreachable code`) on a METHOD CALL whose RECEIVER faulted, instead of reporting the receiver's runtime er… | FIXED by bb46a68d -- `eval_method_call` short-circuits on `pending_cf` immediately after evaluating the receiver, so a faulted receiver propagates its own runtime error instead of being dispatched on as a `Unit` poison. Placed at the single receiver-eval site rather than in the arm that reported it: the receiver assertions are per-method (`len`, `chars`, ... each have their own; `is_empty` has none), so one check covers every method on every builtin receiver. Pinned by `test_faulted_method_receiver_reports_the_fault_not_an_ice` plus a healthy-receiver over-fire control. |
 
 </details>
