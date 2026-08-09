@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 228 | 0 |
 | leak | 155 | 0 |
-| double-free | 118 | 1 |
+| double-free | 118 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 0 |
 | missing-feature | 86 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 768 | 1 |
+| codegen | 768 | 0 |
 | typecheck | 137 | 0 |
 | interp | 130 | 0 |
 | ownership | 44 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1058 surfaced · 1 open · 1047 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1058 surfaced · 0 open · 1048 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-09-16 | 2026-08-09 | codegen | high | the METHOD twin of B-2026-08-09-12: a match arm returning an enum-param payload through a `let` alias (`let k = r; return k;`) double-frees the payload's String when the callee is an impl method, while the free-function spelling is clean | probe: `struct Res { id: i64, name: String } impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } } enum Box2 { Full(Res), Empty } struct Taker { tag: i64 } impl Taker { fn take(ref self, b: Box2) -> Res { match b { Box2.Full(r) => { let k: Res = r; return k; } Box2.Empty => { return Res { id: 0, name: f"z" }; } } } } fn main() { let t: Taker = Taker { tag: 1 }; let b: Box2 = Box2.Full(Res { id: 7, name: f"e7" }); let r: Res = t.take(b); println(f"got {r.id}") }` -- aborts `free(): double free detected in tcache 2`; valgrind 2 errors from 2 contexts (1 invalid read of size 2, 1 invalid free). `karac check` passes. `--interp` prints `got 7 / drop 7 e7` correctly. |
+_None — the ledger is fully drained._
 
-### Fixed (1047)
+### Fixed (1048)
 
-<details><summary>1047 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1048 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1207,6 +1205,15 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-09-13 | codegen | medium | a `Vec[heap-element]` enum payload leaks EVERY element -- `__karac_drop_E` frees the outer buffer only, the documented `EnumDropKind::VecOrString` v1… | FIXED by d52a1312 -- `emit_enum_drop_switch`'s `VecOrString` arm drains a `Vec[heap-element]` payload's elements (inside the `cap > 0` guard, so a consuming arm that already owns them is untouched), and `deep_copy_enum_heap_payload_in_place` becomes element-deep for every caller so copy-depth still equals drop-depth. Both drains route through one new `vec_element_drain_fn`, shared with the struct-field arm that had drifted ahead of it. Pinned by `asan_readonly_match_over_enum_vec_payload_frees_each_element_once`. |
 | B-2026-08-09-14 | codegen | high | a CONSUMING `while let` arm over a plain enum local whose source is DEAD after the loop double-frees -- the `match` and `if let` spellings of the sam… | a2e1f42 |
 | B-2026-08-09-15 | codegen | medium | codegen runs a `Drop` body TWICE when a match arm RETURNS a Drop-carrying payload out of an owned enum param -- once in the callee, once at the calle… | bd5c2c2 |
+| B-2026-08-09-16 | codegen | high | a `let` that aliases a match-arm payload bound off an owned enum PARAM (`let k = r; return k;`) double-frees the payload's String -- the let-move sup… | FIXED by 1b9901f. `let k: Res = r;` where the source's type has a user `impl
+Drop` now retracts the source's MEMORY action as well as its body:
+`suppress_struct_cleanup_for_tail_identifier` beside the existing
+`suppress_user_drop_for_var`, in the let-stmt move-suppression's `has_user_drop`
+arm (stmts.rs). Pins: e2e `test_e2e_returned_enum_param_payload_drop_fires_once_-
+still_open` (alias case, and its `Drop` body now READS the payload string) plus
+the method spelling restored to `test_e2e_returned_enum_arg_payload_method_-
+spelling_fires_once`, and asan `asan_let_aliased_enum_param_payload_frees_once`,
+stash-proven red with an explicit heap-use-after-free. |
 
 </details>
 
