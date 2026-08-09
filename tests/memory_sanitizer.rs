@@ -913,6 +913,55 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_struct_field_map_recursive_value_no_leak() {
+        // B-2026-08-09-1 — the SHARED struct-drop arm had no per-value drop-fn
+        // channel at all, while its non-shared twin has routed every recursive
+        // value type through `map_val_drop_fn_for_type_expr` since
+        // B-2026-07-27-2. `map_drop_flags` frees exactly ONE level of
+        // `{ptr,len,cap}` per side, so a value owning heap below that level was
+        // released short:
+        //
+        //   shared struct field -> definitely lost: 96 bytes in 1 block
+        //   non-shared struct   -> All heap blocks were freed
+        //   plain local binding -> All heap blocks were freed
+        //
+        // Three spellings of the same container, one of them leaking — which is
+        // what made it look like noise rather than a defect in whatever program
+        // hit it. All three spellings are in this fixture so a regression that
+        // un-wires the channel cannot hide behind the two that were always
+        // clean.
+        assert_clean_asan_run(
+            r#"
+shared struct SharedOwner { mut m: Map[i64, Vec[Vec[String]]] }
+struct PlainOwner { mut m: Map[i64, Vec[Vec[String]]] }
+fn nested(tag: String) -> Vec[Vec[String]] {
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(tag);
+    inner.push("a second reasonably long string in the inner vec");
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(inner);
+    return outer;
+}
+fn main() {
+    let so = SharedOwner { m: Map.new() };
+    so.m.insert(1i64, nested("shared owner field value string"));
+    println(so.m.len());
+
+    let mut po = PlainOwner { m: Map.new() };
+    po.m.insert(2i64, nested("plain owner field value string"));
+    println(po.m.len());
+
+    let mut local: Map[i64, Vec[Vec[String]]] = Map.new();
+    local.insert(3i64, nested("plain local binding value string"));
+    println(local.len());
+}
+"#,
+            &["1", "1", "1"],
+            "shared_struct_field_map_recursive_value",
+        );
+    }
+
+    #[test]
     fn asan_map_of_weak_value_cycle_freed_no_leak() {
         // B-2026-08-08-29 — `Map[K, weak V]`. `Vec` got the whole weak-element
         // contract (store downgrade, no strong count, scope-exit weak drain);

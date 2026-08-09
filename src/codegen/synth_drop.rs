@@ -4586,23 +4586,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     // peer already does (`emit_struct_drop_synthesis`'s MapOrSet
                     // arm); the shared arm simply lacked the walk. `current_fn` is
                     // `drop_fn` here, so the walk's blocks attach to this body.
-                    // B-2026-08-08-29 — a `weak V` value half. The shared arm
-                    // has no general val-drop-fn channel (unlike its non-shared
-                    // twin above, which routes every recursive value type
-                    // through `map_val_drop_fn_for_type_expr`), so a
-                    // `shared struct N { kids: Map[i64, weak N] }` released the
-                    // bucket storage without ever weak-dropping what the
-                    // inserts downgraded — the control block outlived the
-                    // program and the Map-mediated cycle still leaked, which is
-                    // the whole shape this row is about. Narrowly the weak
-                    // case: widening this arm to the full channel is a separate
-                    // question with its own measurements.
-                    let mut field_weak_val_drop_fn = None;
+                    // B-2026-08-09-1 — the per-VALUE drop-fn channel, which
+                    // this arm lacked entirely while its non-shared twin above
+                    // has had it since B-2026-07-27-2. `map_drop_flags` frees
+                    // exactly ONE level of `{ptr,len,cap}` per side, so a value
+                    // that owns heap below that level was released short:
+                    //
+                    //   shared struct Owner { m: Map[i64, Vec[Vec[String]]] }
+                    //     shared struct field -> definitely lost: 96 bytes
+                    //     non-shared struct   -> All heap blocks were freed
+                    //     plain local binding -> All heap blocks were freed
+                    //
+                    // Three spellings of the same container, one leaking. The
+                    // selector already synthesizes the right recursive drop for
+                    // that TypeExpr — this arm simply never asked it.
+                    //
+                    // It returns None for a SHARED V (checked explicitly there),
+                    // so the rc-dec walk below stays the exclusive owner of that
+                    // case and no double-dec is possible; and Some for a
+                    // `weak V` (B-2026-08-08-29), which is how the weak drain
+                    // this replaces keeps working.
+                    //
+                    // KEY SIDE DELIBERATELY NOT ADDED. Its twin does have one,
+                    // but the shape it would serve is unreachable here: a struct
+                    // key must derive `Hash`/`Eq`/`PartialEq`, which its fields
+                    // must satisfy too, and `Vec[String]` does not — so the
+                    // deepest key the language admits is a struct of `String`
+                    // fields, measured clean on both spellings. An unmeasurable
+                    // walk is not worth the double-free surface.
+                    let mut field_val_drop_fn = None;
                     if let Some(field_te) = &field_te {
                         if let Some((k_te, v_te)) = super::helpers::map_kv_type_exprs(field_te) {
-                            if matches!(v_te.kind, TypeKind::Weak(_)) {
-                                field_weak_val_drop_fn = Some(self.emit_weak_slot_drop_fn());
-                            }
+                            field_val_drop_fn = self.map_val_drop_fn_for_type_expr(&v_te);
                             if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&v_te) {
                                 self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, true);
                             }
@@ -4621,10 +4636,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         .as_ref()
                         .map(|fte| self.map_drop_flags(fte))
                         .unwrap_or((0, 0));
-                    if let Some(val_fn) = field_weak_val_drop_fn {
-                        // The weak-slot drop owns the whole value side; the KEY
-                        // side stays on the flag contract, same split as the
-                        // non-shared twin's `field_val_drop_fn` branch.
+                    if let Some(val_fn) = field_val_drop_fn {
+                        // The drop fn owns the whole value side (the
+                        // B-2026-08-01-18 all-or-nothing contract, which is why
+                        // `dv` is not passed at all here); the KEY side stays on
+                        // the flag contract, same split as the non-shared twin.
                         self.builder
                             .build_call(
                                 self.karac_map_free_with_val_drop_fn_fn,
