@@ -44780,10 +44780,11 @@ fn main() {
     /// source would leak the original every pass — the LSan-only signature the
     /// sibling fixtures document.
     ///
-    /// The `while let` case deliberately uses a LIVE source. Its dead-source
-    /// twin double-frees on a cause that predates this leg (B-2026-08-09-14,
-    /// pinned `#[ignore]`d in tests/codegen.rs), so putting it here would
-    /// assert someone else's open bug rather than this leg's memory safety.
+    /// The `while let` case deliberately uses a LIVE source, to keep this
+    /// fixture on THIS leg's wiring. Its dead-source twin exercises the
+    /// transfer path instead, and double-freed on a cause that predates this
+    /// leg (B-2026-08-09-14, since fixed); it has its own fixture below rather
+    /// than being folded in here.
     ///
     /// Every payload is read BYTE-WISE for the reason the siblings document:
     /// a buffer whose bytes are never read is a dead allocation LLVM deletes,
@@ -44819,6 +44820,69 @@ fn main() {
                 "end",
             ],
             "live_local_block_spellings_user_enum",
+        );
+    }
+
+    /// B-2026-08-09-14 — the DEAD-source twin of the `while let` case above,
+    /// which runs on the transfer path rather than the clone leg.
+    ///
+    /// A consuming arm moved the payload into the binding without zeroing the
+    /// SOURCE's cap, so the source's `__karac_drop_<E>` re-freed a buffer the
+    /// binding had already freed. ASAN reports it as a double free; the
+    /// opposite mistake — suppressing on a path that does not own the payload
+    /// — is an LSan-only leak, which is why the read-only and miss-edge
+    /// controls below are here rather than only in the output-level pin.
+    ///
+    /// Case 3 is the one a single-iteration test cannot reach: the source is
+    /// re-populated with a fresh payload each pass, so the fixture asserts the
+    /// suppression re-arms per iteration instead of permanently disarming the
+    /// slot. Case 4 never matches at all, so the miss edge must free the
+    /// source whole — the shape that breaks if the cap-zeroing is hoisted out
+    /// of the matched path.
+    ///
+    /// Payloads are read BYTE-WISE for the reason the sibling fixtures
+    /// document: an unread buffer is a dead allocation LLVM deletes.
+    #[test]
+    fn asan_consuming_while_let_over_dead_enum_local_frees_each_buffer_once() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. The row's own shape — consuming arm, source dead, reassigned.
+        let mut a: E = E.A(f"re{i}");
+        while let E.A(v) = a { let k: String = v; println(k); a = E.B; }
+        // 2. Same, terminating via `break` with no reassignment at all.
+        let mut b: E = E.A(f"br{i}");
+        let mut n: i64 = 0i64;
+        while let E.A(v) = b { let k: String = v; println(k); n = n + 1i64; if n > 0i64 { break } }
+        // 3. MULTI-ITERATION — a fresh payload each pass, so the suppression
+        //    must re-arm rather than disarm the slot once.
+        let mut c: E = E.A(f"m{i}-1");
+        let mut j: i64 = 0i64;
+        while let E.A(v) = c {
+            let k: String = v; println(k); j = j + 1i64;
+            if j < 3i64 { c = E.A(f"m{i}-{j + 1i64}"); } else { c = E.B; }
+        }
+        // 4. CONTROL — never matches, so the miss edge frees the source whole.
+        let d: E = E.A(f"miss{i}");
+        while let E.B = d { println("unreachable"); }
+        // 5. CONTROL — read-only arm over a dead source: the source still owns
+        //    the payload, and suppressing here would leak it.
+        let mut e: E = E.A(f"ro{i}");
+        while let E.A(v) = e { println(v); e = E.B; }
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "re0", "br0", "m0-1", "m0-2", "m0-3", "ro0", "re1", "br1", "m1-1", "m1-2", "m1-3",
+                "ro1", "re2", "br2", "m2-1", "m2-2", "m2-3", "ro2", "re3", "br3", "m3-1", "m3-2",
+                "m3-3", "ro3", "end",
+            ],
+            "consuming_while_let_dead_enum_local",
         );
     }
 

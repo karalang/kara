@@ -562,9 +562,34 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.pattern_binding_is_borrow {
             self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[body])?;
         }
+        let optres_bindings_owned = !self.pattern_binding_is_borrow;
         self.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
+        } else if optres_bindings_owned {
+            // B-2026-08-09-14 — the WHILE-LET leg of B-2026-07-23-13, which
+            // gave this arm to `if let` and left the loop form on the raw
+            // transfer path: a consuming arm over an OWNED enum local moved
+            // the payload into the binding but never zeroed the SOURCE's cap,
+            // so `e`'s `__karac_drop_<E>` re-freed the buffer the binding had
+            // already freed. `match` and `if let` were both correct; only this
+            // site was missing.
+            //
+            // It surfaced only for a source DEAD after the loop because
+            // B-2026-08-09-11's live-local clone leg (in the header above)
+            // hands a LIVE source's arm its own buffer, so the source's free
+            // is not a double one. Dead sources decline that clone by design —
+            // the liveness gate is what keeps the common shape off a copy it
+            // does not need — and land back here.
+            //
+            // Emitted in `body_bb`, so it runs per MATCHED iteration and the
+            // miss edge stays unsuppressed (the drop frees `e` whole there),
+            // matching the if-let contract. Re-zeroing an already-zero cap is
+            // a no-op, and an iteration that reassigns the source re-arms it:
+            // the assignment's drop of the old value reads the zeroed cap and
+            // skips the payload the binding now owns, then the next
+            // iteration's store re-populates and this store re-fires.
+            self.suppress_destructured_enum_payload_cleanup(value, pattern);
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee source-cap
         // suppression (see `compile_if_let`). No-op for temp / non-inline.

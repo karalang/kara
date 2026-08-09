@@ -23735,25 +23735,28 @@ fn main() {
         );
     }
 
-    /// B-2026-08-09-14 — found while fixing B-2026-08-09-11 and measured
-    /// PRE-EXISTING on the baseline before it (both shapes below double-free
-    /// with every change stashed), so it is filed rather than fixed here.
+    /// B-2026-08-09-14 — a CONSUMING `while let` arm over a plain enum local
+    /// whose source is DEAD after the loop double-freed: the arm moved the
+    /// payload into the binding but never zeroed the SOURCE's cap, so `e`'s
+    /// `__karac_drop_<E>` re-freed the buffer the binding had already freed.
     ///
-    /// A CONSUMING `while let` arm over a plain enum local whose source is
-    /// DEAD after the loop double-frees. The `match` and `if let` spellings of
-    /// the same shape are clean, and the read-only `while let` is clean, which
-    /// is what makes this while-let-specific rather than another face of the
-    /// live-local family. It is independent of whether the body reassigns the
-    /// scrutinee: the `break` spelling below double-frees too.
+    /// The missing WHILE-LET leg of B-2026-07-23-13, which gave the
+    /// owned-enum-local suppression to `if let` and left the loop form on the
+    /// raw transfer path. `match` and `if let` were both already correct,
+    /// which is what made this look while-let-specific rather than a plain
+    /// missing mirror.
     ///
-    /// B-2026-08-09-11's clone MASKS this whenever the source is LIVE after
-    /// the loop (case 3 of the test above is exactly that program, and it
-    /// passes) — the clone hands the arm its own buffer, so the source's is
-    /// never double-freed. Dead sources decline the clone by design and land
-    /// back on the raw transfer path, where this bug lives.
+    /// It surfaced only for a DEAD source because B-2026-08-09-11's live-local
+    /// clone hands a LIVE source's arm its own buffer, so the source's free is
+    /// not a double one (case 3 of the test above is exactly that program).
+    /// Dead sources decline that clone by design and land back on the transfer
+    /// path, where this lived.
+    ///
+    /// Case 2 is the `break` spelling, which pins that the defect never
+    /// depended on the reassignment — the reasoning that first ruled out the
+    /// assignment's drop of the old value as the cause.
     #[test]
-    #[ignore = "B-2026-08-09-14: consuming `while let` over a DEAD enum local double-frees"]
-    fn test_e2e_consuming_while_let_over_dead_enum_local_still_open() {
+    fn test_e2e_consuming_while_let_over_dead_enum_local() {
         assert_eq!(
             run_program(
                 "enum E { A(String), B }\n\
@@ -23779,6 +23782,31 @@ fn main() {
             )
             .as_deref(),
             Some("hi\ndone\n")
+        );
+        // MULTI-ITERATION, each iteration re-populating the source with a
+        // FRESH payload. The suppression stores a zero cap in the matched
+        // path, which runs every iteration, so this is the case that pins the
+        // re-arm: iteration n's assignment drops the old value against the
+        // zeroed cap (skipping the payload the binding owns), stores a new
+        // payload, and iteration n+1's store re-fires against that. A
+        // suppression hoisted out of the loop, or one that permanently
+        // disarmed the slot, would free a later iteration's payload twice or
+        // leak it — a single-iteration test cannot tell those apart.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let mut e: E = E.A(f\"a1\");\n\
+                     let mut n: i64 = 0;\n\
+                     while let E.A(v) = e {\n\
+                         let k: String = v; println(k); n = n + 1;\n\
+                         if n < 3 { e = E.A(f\"a{n + 1}\"); } else { e = E.B; }\n\
+                     }\n\
+                     println(f\"done\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a1\na2\na3\ndone\n")
         );
     }
 
