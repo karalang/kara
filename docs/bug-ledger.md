@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 228 | 1 |
 | leak | 155 | 0 |
-| double-free | 117 | 1 |
+| double-free | 117 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 0 |
 | missing-feature | 86 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 767 | 2 |
+| codegen | 767 | 1 |
 | typecheck | 137 | 0 |
 | interp | 130 | 0 |
 | ownership | 44 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1057 surfaced · 2 open · 1045 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1057 surfaced · 1 open · 1046 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-09-14 | 2026-08-09 | codegen | high | a CONSUMING `while let` arm over a plain enum local whose source is DEAD after the loop double-frees -- the `match` and `if let` spellings of the same shape are clean, and so is the read-only `while let` | `#[ignore]`d pin `test_e2e_consuming_while_let_over_dead_enum_local_still_open` in tests/codegen.rs |
 | B-2026-08-09-15 | 2026-08-09 | codegen | medium | codegen runs a `Drop` body TWICE when a match arm RETURNS a Drop-carrying payload out of an owned enum param -- once in the callee, once at the caller's binding; `--interp` runs it once | `#[ignore]`d pin `test_e2e_returned_enum_param_payload_drop_fires_once_still_open` in tests/codegen.rs (added with B-2026-08-09-10's fix 128b746, which makes both backends double-fire and so blinds the parity oracle to this row) |
 
-### Fixed (1045)
+### Fixed (1046)
 
-<details><summary>1045 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1046 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1206,6 +1205,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-09-11 | codegen | medium | the `if let` spelling of a CONSUMING arm over a live user-enum local still empties the source -- the match site got a live-local clone leg, the if-le… | 43cc3cb |
 | B-2026-08-09-12 | codegen | high | the `<refparam>.field` ref-chain ENUM clone leg shares the outer-only payload duplicator, so a `Vec[String]` payload behind a `ref` param aliases its… | FIXED by 9a15e07c. `clone_escaping_borrowed_ref_chain_enum` now uses `deep_copy_enum_heap_payload_with_elements_in_place` (added by B-2026-08-09-9), so the clone's `Vec[String]` element buffers are its own and a consuming arm no longer frees strings the caller still holds. Gating the leg off the shape was never available -- that reintroduces B-2026-07-21-5/-6 -- so the element-deep copy was the only route. Pins: e2e `test_e2e_ref_chain_enum_vec_payload_clone_is_element_deep` and asan `asan_ref_chain_enum_vec_payload_clone_is_element_deep`, both stash-proven red, the ASAN one with an explicit heap-use-after-free. |
 | B-2026-08-09-13 | codegen | medium | a `Vec[heap-element]` enum payload leaks EVERY element -- `__karac_drop_E` frees the outer buffer only, the documented `EnumDropKind::VecOrString` v1… | FIXED by d52a1312 -- `emit_enum_drop_switch`'s `VecOrString` arm drains a `Vec[heap-element]` payload's elements (inside the `cap > 0` guard, so a consuming arm that already owns them is untouched), and `deep_copy_enum_heap_payload_in_place` becomes element-deep for every caller so copy-depth still equals drop-depth. Both drains route through one new `vec_element_drain_fn`, shared with the struct-field arm that had drifted ahead of it. Pinned by `asan_readonly_match_over_enum_vec_payload_frees_each_element_once`. |
+| B-2026-08-09-14 | codegen | high | a CONSUMING `while let` arm over a plain enum local whose source is DEAD after the loop double-frees -- the `match` and `if let` spellings of the sam… | a2e1f42 |
 
 </details>
 
