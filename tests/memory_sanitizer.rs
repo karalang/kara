@@ -44488,4 +44488,50 @@ fn main() {
             "chained_map_unwrap_or_live_option",
         );
     }
+
+    /// B-2026-08-09-6 — `Result[i64, String].map(f)` DOUBLE-FREED the `Err`
+    /// payload. `map` picked its lowering from `T` alone, so a scalar `T` took
+    /// the hand-rolled path whose absent branch is a shallow copy of the
+    /// receiver's words: the result and the receiver both ended up owning the
+    /// same `{ptr,len,cap}`, and both freed it (`free(): double free detected in
+    /// tcache 2`).
+    ///
+    /// This is the half the original report did NOT name — it recorded only the
+    /// `Result[String, String]` shape below, where the same root cause is a
+    /// silent 4-byte leak. Worth keeping both: they are one defect that presents
+    /// as an abort or as nothing at all depending on which side of the `Result`
+    /// happens to hold heap, and only the abort is self-announcing.
+    ///
+    /// DISCRIMINATING LEVEL IS `-O0`, measured both ways. On the broken tree
+    /// this fixture PASSES at the default level — the standalone program aborts
+    /// with `free(): double free detected in tcache 2` at `KARAC_OPT_LEVEL=0`
+    /// but prints its answer cleanly at `-O2`, and making the payload
+    /// non-constant (`f"boom{i}"`) does not change that. So the CI `-O0` leg is
+    /// what actually pins this one; at the default level it is a guard against
+    /// future drift, not a witness. Verified red at `-O0` on the pre-fix tree
+    /// rather than assumed.
+    #[test]
+    fn asan_result_map_scalar_payload_frees_its_heap_err_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let r: Result[i64, String] = Err(f"boom");
+        // Scalar `T` + heap `E`: the receiver's Err buffer must reach the result
+        // exactly once, not be aliased into it and freed twice.
+        match r.map(|x| x + 1i64) {
+            Ok(v) => { total = total + v; }
+            Err(e) => { total = total + e.len(); }
+        }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            &["160"],
+            "result_map_scalar_payload_heap_err",
+        );
+    }
 }

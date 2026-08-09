@@ -22974,6 +22974,110 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-6, THE SCALAR-`T` HALF — the sibling of
+    /// `test_e2e_result_map_preserves_a_heap_err_payload` above, and the harder
+    /// failure. `619a438a` fixed the heap-`T` shape by recording `E` for `map`,
+    /// and correctly noted that the entry is INERT for a scalar `T`: that shape
+    /// never reaches `compile_map_via_match_synthesis`, because the lowering
+    /// branches on `is_trivially_copyable_te(&inner_te)` — on `T` alone.
+    ///
+    /// So `Result[i64, String]` took the hand-rolled path, whose absent branch
+    /// is a shallow copy of the receiver's words. The result then ALIASED the
+    /// receiver's `Err` buffer and both freed it: `free(): double free detected
+    /// in tcache 2`, a hard abort on an ordinary program.
+    ///
+    /// Fixed by making the lowering choice consider BOTH halves — `map` passes
+    /// `E` through, so a heap `E` is just as much a payload as a heap `T`, and
+    /// the synthesis already owns the ownership machinery the hand-rolled path
+    /// lacks. That routes the alias out of existence rather than teaching a
+    /// fourth consumer to cope with it.
+    ///
+    /// Case 2 is the newly-routed PRESENT branch (scalar `T` + heap `E` reaches
+    /// the synthesis for the first time) and case 4 is the scalar-`E` control
+    /// that must NOT change lowering.
+    #[test]
+    fn test_e2e_result_map_passes_a_heap_err_payload_through() {
+        // 1. Scalar `T`, heap `E` — was a double-free abort.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, String] = Err(f\"boom\");\n\
+                     match r.map(|x| x + 1i64) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("boom\n")
+        );
+        // 2. Same shape, PRESENT branch — newly routed through match synthesis.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, String] = Ok(41i64);\n\
+                     match r.map(|x| x + 1i64) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("42\n")
+        );
+        // 3. A heap `E` that is a Vec, not a String.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, Vec[i64]] = Err(vec![1i64, 2i64]);\n\
+                     match r.map(|x| x + 1i64) { Ok(v) => { println(v); } Err(e) => { println(e.len()); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2\n")
+        );
+        // 4. Scalar `E` control — must keep the hand-rolled lowering.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, i64] = Err(7i64);\n\
+                     match r.map(|x| x.to_uppercase()) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("7\n")
+        );
+        // 5. A mapper that CHANGES `T` while `E` rides through untouched.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, String] = Err(f\"boom\");\n\
+                     match r.map(|x| f\"n={x}\") { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("boom\n")
+        );
+        // 6. Chained into `unwrap_or` — the span-key collision guard still holds
+        //    now that BOTH combinators register an `E` for the same receiver.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, String] = Err(f\"boom\");\n\
+                     println(r.map(|x| x + 1i64).unwrap_or(9i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("9\n")
+        );
+        // 7. A fn-reference mapper rather than a closure literal.
+        assert_eq!(
+            run_program(
+                "fn bump(x: i64) -> i64 { x + 1i64 }\n\
+                 fn main() {\n\
+                     let r: Result[i64, String] = Err(f\"boom\");\n\
+                     match r.map(bump) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("boom\n")
+        );
+    }
+
     /// B-2026-08-08-25 — what leg 1 did NOT close, pinned as a visibly deferred
     /// gap rather than left silently green. Each case here is measured, not
     /// assumed: all three still print garbage or an empty payload under `karac
@@ -22987,14 +23091,16 @@ fn main() {
     ///    `deep_copy_enum_heap_payload_in_place` keys on `field_drop_kinds`,
     ///    which is exactly what the type-erased `Option` layout does not carry.
     ///
-    /// 2. `Result.map`. Blocked one gate earlier than the escape walk: the
-    ///    classifier requires every payload-consuming arm to be the direct-heap
-    ///    shape, and the `Err` binding of a `Result[String, i64]` has NO entry in
-    ///    `pattern_binding_types` OR `pattern_binding_inner_types` — measured in
-    ///    both the synthesized and hand-written forms. So there is no positive
-    ///    witness that the error payload owns no heap, and "absent" cannot be
-    ///    read as "scalar": a DESTRUCTURED tuple payload (`Some((a, b))`) is
-    ///    absent too, and that is the shape whose owners must not be dropped.
+    /// 2. `Result.map`. B-2026-08-09-6 was PREDICTED to unblock this leg by
+    ///    giving the `Err` binding a recorded type; measured before and after,
+    ///    it did not — this shape prints `HI` then an EMPTY line on both sides
+    ///    of that fix, valgrind-clean either way. So the missing `E` was never
+    ///    this leg's blocker, and the leg belongs with case 3 (clean-but-wrong)
+    ///    rather than with case 1 (use-after-free). What remains: the classifier
+    ///    requires every payload-consuming arm to be the direct-heap shape, and
+    ///    "no recorded type" still cannot be read as "scalar" — a DESTRUCTURED
+    ///    tuple payload (`Some((a, b))`) is untyped here too, and that is the
+    ///    shape whose owners must not be dropped.
     ///
     /// 3. The USER-ENUM leg. `enum E { A(String) }` bound out of a live local
     ///    goes through `suppress_destructured_enum_payload_cleanup` rather than

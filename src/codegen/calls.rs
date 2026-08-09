@@ -1785,7 +1785,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload aliases the receiver's buffer and the mapper may consume it),
         // so it defers loudly to the interpreter. B-2026-07-12-11.
         if method == "map" && args.len() == 1 {
-            if !super::vec_method::is_trivially_copyable_te(&inner_te) {
+            // The lowering choice has to consider BOTH halves of a `Result`.
+            // `inner_te` alone picks the hand-rolled path for `Result[i64,
+            // String]` — scalar `T` — but that path's ABSENT branch is a shallow
+            // copy of the receiver's words, so a heap `E` ends up aliased by the
+            // result and freed twice (`free(): double free detected in tcache 2`,
+            // B-2026-08-09-6). `E` is just as much a payload as `T` here because
+            // `map` PASSES IT THROUGH. The `unwrap_or_else`/`map_or_else`/
+            // `or_else` sibling below already gates on both; it just refuses,
+            // where `map` can route to the match synthesis that handles it.
+            let map_err_te = self.method_unwrap_err_types.get(&key).cloned();
+            let heap_err = map_err_te
+                .as_ref()
+                .is_some_and(|te| !super::vec_method::is_trivially_copyable_te(te));
+            if !super::vec_method::is_trivially_copyable_te(&inner_te) || heap_err {
                 // Heap payload (String / Vec / heap struct): the hand-rolled
                 // trivially-copyable path below only shallow-copies the payload
                 // (unsound for a mapper that MOVES or RETURNS heap). Delegate to
@@ -1815,13 +1828,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // found — a gate at the call site described the symptom's
                 // neighbourhood rather than its cause, and its advice
                 // ("append `.to_string()`") worked while pointing away from it.
-                let err_te = self.method_unwrap_err_types.get(&key).cloned();
                 return self
                     .compile_map_via_match_synthesis(
                         object,
                         &args[0].value,
                         &inner_te,
-                        err_te.as_ref(),
+                        map_err_te.as_ref(),
                         call_span,
                     )
                     .map(Some);
