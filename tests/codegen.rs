@@ -23922,9 +23922,15 @@ fn main() {
     /// regression pin — the parity oracle still cannot see this class.
     #[test]
     fn test_e2e_returned_enum_param_payload_drop_fires_once_still_open() {
+        // The `Drop` body READS `name` on purpose. Printing the id alone leaves
+        // the payload buffer unobserved, so LLVM deletes the allocation together
+        // with its frees and a program that double-frees underneath still passes
+        // an output pin — which is exactly how B-2026-08-09-16 hid behind the
+        // alias case below. Reading the string keeps the memory live, so this pin
+        // and the ASAN fixture describe the same program.
         let hdr = "struct Res { id: i64, name: String }\n\
                    impl Drop for Res {\n\
-                   \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                   \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
                    }\n\
                    enum Box2 { Full(Res), Empty }\n";
         assert_eq!(
@@ -23943,7 +23949,7 @@ fn main() {
                  }}"
             ))
             .as_deref(),
-            Some("got 7\ndrop 7\n")
+            Some("got 7\ndrop 7 e7\n")
         );
         // The same escape routed through a `let`. The alias has to be followed:
         // the arm returns `k`, not the binding the pattern introduced, and a
@@ -23965,7 +23971,7 @@ fn main() {
                  }}"
             ))
             .as_deref(),
-            Some("got 7\ndrop 7\n")
+            Some("got 7\ndrop 7 e7\n")
         );
     }
 
@@ -24087,12 +24093,32 @@ fn main() {
             .as_deref(),
             Some("got 7\ndrop 7 e7\n")
         );
-        // NOT covered here: the `let k: Res = r; return k;` spelling of the same
-        // method. It aborts with `free(): double free detected in tcache 2`
-        // BEFORE and AFTER this fix — the method twin of what B-2026-08-09-12
-        // closed for free functions, filed as its own row. The free-function
-        // spelling of that alias IS exercised, in the escape test above.
-        //
+        // The `let`-alias spelling of the same method. It used to abort with
+        // `free(): double free detected in tcache 2` and was carved out of this
+        // test as B-2026-08-09-16; that row is now fixed (the `let` move retracts
+        // the source's memory action, not only its body), so the shape belongs
+        // back here where the retraction's index arithmetic is under test.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 impl Taker {{\n\
+                 \x20   fn take(ref self, b: Box2) -> Res {{\n\
+                 \x20       match b {{\n\
+                 \x20           Box2.Full(r) => {{ let k: Res = r; return k; }}\n\
+                 \x20           Box2.Empty => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20       }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let t: Taker = Taker {{ tag: 1 }};\n\
+                 \x20   let b: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = t.take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
         // Method never matches the param — its own walk is the only fire.
         assert_eq!(
             run_program(&format!(

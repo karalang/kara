@@ -6602,6 +6602,39 @@ impl<'ctx> super::Codegen<'ctx> {
                                 );
                             } else if has_user_drop {
                                 self.suppress_user_drop_for_var(source_name);
+                                // B-2026-08-09-16 — retract the source's MEMORY
+                                // action too, not just its body.
+                                //
+                                // The single retraction above is enough only when
+                                // the source's memory rides its `karac_drop_<T>`
+                                // wrapper, which is body + fields + memory in one
+                                // `UserDrop` action. A match-arm payload binding
+                                // taken off an OWNED ENUM PARAM is the shape where
+                                // it does not: the owned-param gate in
+                                // `pattern_binding` withholds that wrapper (the
+                                // caller runs the body — B-2026-08-09-15) while the
+                                // binding still gets a plain `StructDrop` for its
+                                // heap. `suppress_user_drop_for_var` removes only
+                                // `UserDrop` entries, so the free survived the move
+                                // and `let k: Res = r; return k;` freed the payload
+                                // in the callee and again at the caller's binding —
+                                // `free(): double free detected in tcache 2`, 3
+                                // valgrind errors from 2 contexts at
+                                // `KARAC_OPT_LEVEL=0`. The direct `return r;`
+                                // spelling escaped it only because the tail-return
+                                // path cap-zeroes the RETURNED slot, which happens
+                                // to be the source there and is `k` here.
+                                //
+                                // RETRACTION, not the cap-zeroing the sibling
+                                // branches use. Both stop the free; only this one
+                                // leaves the source's bytes intact, and Kāra does
+                                // not reject a read after a move (`take(x);
+                                // println(x.f)` compiles and runs today), so
+                                // zeroing would trade the double free for a silent
+                                // empty string. No-op when the wrapper carried the
+                                // memory, since then there is no `StructDrop` to
+                                // find.
+                                self.suppress_struct_cleanup_for_tail_identifier(source_name);
                             } else {
                                 // StructDrop move-suppression: `let g = f;`
                                 // where `f` is a tracked non-shared struct

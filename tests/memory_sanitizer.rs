@@ -44886,6 +44886,128 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-16 — a `let` that moves an arm payload taken off an OWNED
+    /// ENUM PARAM must retract the source's memory action, not only its body.
+    ///
+    /// `let k: Res = r;` suppressed the source's `UserDrop` and stopped there,
+    /// which is enough only when the source's memory rides that action's
+    /// `karac_drop_<T>` wrapper. Under the owned-param gate the wrapper is
+    /// withheld (the caller runs the body) and the binding carries a plain
+    /// `StructDrop` instead, so the free survived the move: the callee freed the
+    /// payload and the caller's result binding freed it again.
+    ///
+    /// Cases 1 and 2 are the defect, free-function and method. Case 3 is the
+    /// direct `return r;` spelling, which was already clean because the
+    /// tail-return path cap-zeroes the returned slot — it is here so a fix that
+    /// over-retracts turns it into a leak LSan reports rather than a silent
+    /// change. Case 4 keeps the payload inside the callee, where the binding is
+    /// the sole owner and the free must still happen.
+    ///
+    /// Case 4's `Drop` body prints TWICE, and that is not this row. The callee's
+    /// param is entry-copied, so caller and callee hold genuinely distinct
+    /// buffers; the payload never escapes, so the caller keeps its own walk and
+    /// each buffer runs one body. Two frees, two bodies — memory-consistent, the
+    /// same reading `call_dispatch`'s own-wrapper note records, and identical on
+    /// `--interp`. Pinned as observed rather than as preferred, so a later change
+    /// to that shape shows up here instead of passing silently.
+    ///
+    /// Every payload is read BYTE-WISE, and it is what makes the bug visible at
+    /// all: with a `Drop` body that never touches `name`, the optimizer deletes
+    /// the allocation together with both of its frees and the double free
+    /// disappears from an ordinary `-O2` run.
+    #[test]
+    fn asan_let_aliased_enum_param_payload_frees_once() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+enum Box2 { Full(Res), Empty }
+struct Taker { tag: i64 }
+fn take_alias(b: Box2) -> Res {
+    match b {
+        Box2.Full(r) => { let k: Res = r; return k; }
+        Box2.Empty => { return Res { id: 0, name: f"z" }; }
+    }
+}
+fn take_direct(b: Box2) -> Res {
+    match b {
+        Box2.Full(r) => { return r; }
+        Box2.Empty => { return Res { id: 0, name: f"z" }; }
+    }
+}
+fn take_keep(b: Box2) -> i64 {
+    match b {
+        Box2.Full(r) => { let k: Res = r; return k.id; }
+        Box2.Empty => { return 0i64; }
+    }
+}
+impl Taker {
+    fn take(ref self, b: Box2) -> Res {
+        match b {
+            Box2.Full(r) => { let k: Res = r; return k; }
+            Box2.Empty => { return Res { id: 0, name: f"z" }; }
+        }
+    }
+}
+fn main() {
+    let t: Taker = Taker { tag: 1i64 };
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        // 1. The row's shape — free function, payload aliased by a `let`.
+        let a: Box2 = Box2.Full(Res { id: i, name: f"al{i}" });
+        let ra: Res = take_alias(a);
+        println(ra.name);
+        // 2. Same through an impl method, which reaches a different arg loop.
+        let b: Box2 = Box2.Full(Res { id: i, name: f"me{i}" });
+        let rb: Res = t.take(b);
+        println(rb.name);
+        // 3. CONTROL — direct `return r;`, already clean; must not become a leak.
+        let c: Box2 = Box2.Full(Res { id: i, name: f"di{i}" });
+        let rc: Res = take_direct(c);
+        println(rc.name);
+        // 4. CONTROL — the alias never leaves the callee, so it owns the free.
+        let d: Box2 = Box2.Full(Res { id: i, name: f"kp{i}" });
+        let v: i64 = take_keep(d);
+        println(f"kp {v}");
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "al0",
+                "drop 0 al0",
+                "me0",
+                "drop 0 me0",
+                "di0",
+                "drop 0 di0",
+                "drop 0 kp0",
+                "drop 0 kp0",
+                "kp 0",
+                "al1",
+                "drop 1 al1",
+                "me1",
+                "drop 1 me1",
+                "di1",
+                "drop 1 di1",
+                "drop 1 kp1",
+                "drop 1 kp1",
+                "kp 1",
+                "al2",
+                "drop 2 al2",
+                "me2",
+                "drop 2 me2",
+                "di2",
+                "drop 2 di2",
+                "drop 2 kp2",
+                "drop 2 kp2",
+                "kp 2",
+                "end",
+            ],
+            "let_aliased_enum_param_payload",
+        );
+    }
+
     /// B-2026-08-09-12 under ASAN — the `<refparam>.field` ref-chain enum clone
     /// must be ELEMENT-deep, so a consuming arm never frees a string the caller
     /// still owns.
