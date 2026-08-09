@@ -44758,7 +44758,6 @@ fn main() {
         );
     }
 
-
     /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
     ///
     /// `suppress_inline_option_result_binding_move` disarms a source binding
