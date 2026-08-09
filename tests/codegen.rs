@@ -3413,6 +3413,47 @@ fn main() {
         }
     }
 
+    /// B-2026-08-09-5 — the HEAP half of the borrowed-payload mapper. An
+    /// indirect call site lowered the closure's return from the SURFACE `Fn(..)`
+    /// type while the emitted body used its own; when the two disagreed, the
+    /// call read the wrong number of words and nothing caught it, because an
+    /// indirect call's callee type is not verified.
+    ///
+    /// `|s| s` over a borrowed String is recorded `-> ref String`, so the call
+    /// site read one `ptr` word while the body deep-copied and returned the
+    /// 3-word `{ptr,len,cap}` aggregate. `len` and `cap` were dropped and the
+    /// program printed the EMPTY STRING against the interpreter's `ab`. Before
+    /// B-2026-08-08-30's fix this shape failed LLVM verification instead, so the
+    /// regression window is exactly that commit — fixing the definition's return
+    /// type without the call site's turned a loud build error into a silent
+    /// wrong answer.
+    ///
+    /// The scalar controls are the reason this went unseen: `|x| x` has the
+    /// identical signature disagreement and is correct only by luck, since an
+    /// `i64` read back through a `ptr` return keeps its bits.
+    #[test]
+    fn test_e2e_map_over_borrowed_heap_payload_returns_the_whole_value() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[String] = vec![f"ab", f"cd"];
+    match v.first().map(|s| s) { Some(w) => println(w), None => println("-") }
+    match v.last().map(|s| s) { Some(w) => println(w), None => println("-") }
+    // Controls: these already agreed at both ends and must keep their answers.
+    match v.first().map(|s| s.to_uppercase()) { Some(w) => println(w), None => println("-") }
+    match v.first().map(|s| s.len()) { Some(w) => println(w), None => println("-") }
+    let n: Vec[i64] = vec![1, 2];
+    match n.first().map(|x| x) { Some(w) => println(w), None => println("-") }
+    let empty: Vec[String] = Vec.new();
+    match empty.first().map(|s| s) { Some(w) => println(w), None => println("-") }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim_end(), "ab\ncd\nAB\n2\n1\n-");
+        }
+    }
+
     /// B-2026-08-08-30, defect 2 in isolation: the closure's param borrow mark must
     /// not outlive the closure.
     ///

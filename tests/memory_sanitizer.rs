@@ -44136,4 +44136,44 @@ fn main() {
             "match_out_of_live_option_string",
         );
     }
+
+    /// B-2026-08-09-5 — mapping a borrowed String payload with `|s| s` now
+    /// returns the whole `{ptr,len,cap}` aggregate instead of one word, which
+    /// means the mapper hands back an OWNED deep copy while the surface type of
+    /// the result is still `Option[ref String]`. That is exactly the shape where
+    /// an ownership mistake hides: nothing frees the copy (a leak), or both the
+    /// copy and the source Vec element free the same buffer (a double free).
+    ///
+    /// Loop-stressed with f-string payloads so LSan sees a per-iteration leak if
+    /// the copy goes unowned, and the source Vec is read again after the match
+    /// so a double free or a freed-buffer read surfaces as well.
+    ///
+    /// Also clean at `KARAC_OPT_LEVEL=0`, which is worth stating because the
+    /// neighbouring `asan_option_map_heap_payload_no_leak` is NOT (B-2026-08-09-4,
+    /// 200 bytes in 40 allocations, open). That leak sits on the same map-via-
+    /// match synthesis and is unchanged by this fix — measured identical before
+    /// and after — so the two are independent despite the shared lowering.
+    #[test]
+    fn asan_map_over_borrowed_string_payload_owns_its_copy_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    while i < 8 {
+        let v: Vec[String] = vec![f"hi{i}", f"yo{i}"];
+        match v.first().map(|s| s) { Some(w) => { println(w); } None => { println("-"); } }
+        // The source element must still own its own buffer afterwards.
+        println(v[0]);
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "hi0", "hi0", "hi1", "hi1", "hi2", "hi2", "hi3", "hi3", "hi4", "hi4", "hi5", "hi5",
+                "hi6", "hi6", "hi7", "hi7", "end",
+            ],
+            "map_over_borrowed_string_payload",
+        );
+    }
 }

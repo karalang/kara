@@ -3882,7 +3882,43 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         // Evaluate the callee to its fat pointer { fn_ptr, env_ptr }.
+        //
+        // When the callee is a closure LITERAL, compiling it here EMITS the
+        // function, and `compile_closure` publishes the signature it actually
+        // used in `pending_closure_fn_type`. Prefer that over the surface
+        // `Fn(..)` lowering above, which is only a prediction of it.
+        //
+        // The two disagree whenever the closure's declared return is a BORROW
+        // that its body materializes by value. `Vec[String].first().map(|s| s)`
+        // is recorded `Fn(ref String) -> ref String`, so this call site lowered
+        // the return as one `ptr` word, while the emitted body deep-copies into
+        // the owned `{ptr,len,cap}` aggregate and returns all three. Reading a
+        // 3-word return through a 1-word signature dropped `len` and `cap`, and
+        // the program printed the empty string against the interpreter's `ab`.
+        // Nothing catches it: an indirect call's callee type is not verified.
+        //
+        // Its scalar sibling (`|x| x`, recorded `-> ref i64`) has the identical
+        // disagreement and is correct only by luck — an `i64` read back through
+        // a `ptr` return keeps its bits, so the payload word survives.
+        // B-2026-08-09-5.
+        //
+        // Gated on the callee BEING a closure literal, not merely on the slot
+        // being populated afterwards. Every other callee shape this function
+        // serves (struct field, Vec/tuple index, call result) emits no closure
+        // of its own, so the slot could only be filled by an unrelated literal
+        // compiled while evaluating the callee — `pick(|x| x + 1)(5)` would hand
+        // this call the ARGUMENT closure's signature. The slot is saved and
+        // restored either way so an enclosing `let` still sees its own.
+        let is_closure_literal = matches!(callee.kind, ExprKind::Closure { .. });
+        let saved_pending = self.pending_closure_fn_type.take();
         let fat_val = self.compile_expr(callee)?;
+        let emitted = self.pending_closure_fn_type.take();
+        self.pending_closure_fn_type = saved_pending;
+        let fn_type = if is_closure_literal {
+            emitted.unwrap_or(fn_type)
+        } else {
+            fn_type
+        };
         let fat_sv = fat_val.into_struct_value();
         let fn_ptr = self
             .builder
