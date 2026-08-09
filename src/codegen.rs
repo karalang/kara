@@ -1179,6 +1179,22 @@ pub(super) struct Codegen<'ctx> {
     /// keyed here always has a taker.
     pub(crate) boxed_passthrough_owner_alias: std::collections::HashMap<String, String>,
     pub(crate) inline_option_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-08-08-25 leg 1 — sources whose inline `Option`/`Result` payload a
+    /// read-only match LEFT WITH THEM (`scrutinee_is_readonly_inline_optres_local`
+    /// classified the match as a borrow, so no arm binding took ownership).
+    ///
+    /// Exists to keep the one-owner invariant across a CHAIN.
+    /// `suppress_inline_option_result_binding_move` disarms a source binding
+    /// when a consuming combinator took its payload — and for
+    /// `<src>.map(f).unwrap_or(d)` it resolves through the map to `<src>`
+    /// (B-2026-08-07-3), on the premise that the map's arm already owns the
+    /// buffer. Once the arm is classified as a borrow that premise is false:
+    /// the arm frees nothing, so disarming the source too leaves NOBODY, and
+    /// the payload leaks once per evaluation (measured on
+    /// `opt.map(|xs| xs.len()).unwrap_or(0)` — 32 bytes an iteration, invisible
+    /// at the default opt level because a `.len()`-only Vec is a dead
+    /// allocation LLVM deletes outright).
+    pub(crate) inline_optres_retained_sources: std::collections::HashSet<String>,
     /// `Result[T, E]` sibling of `inline_option_payload_vars` — names of
     /// `Result` bindings that registered a `FreeInlineResultPayload` (the Ok
     /// and/or Err half is an inline heap `String`/`Vec`). A `match`/`if let`
@@ -7822,6 +7838,7 @@ impl<'ctx> Codegen<'ctx> {
             passthrough_owner_alias: std::collections::HashMap::new(),
             boxed_passthrough_owner_alias: std::collections::HashMap::new(),
             inline_option_payload_vars: std::collections::HashSet::new(),
+            inline_optres_retained_sources: std::collections::HashSet::new(),
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),
             inline_option_agg_payload_vars: std::collections::HashSet::new(),

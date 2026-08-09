@@ -44354,4 +44354,86 @@ fn main() {
             "map_over_borrowed_string_payload",
         );
     }
+
+    /// B-2026-08-08-25 leg 1 — `.map` over a live `Option[String]` now leaves
+    /// the source owning its buffer, so the arm must NOT free it. This is the
+    /// leg that turns the borrow classification on for a whole family of
+    /// matches, and both failure directions are memory bugs rather than wrong
+    /// output: if the arm still frees, the source's own scope-exit free is a
+    /// double free and its later read is a use-after-free (valgrind called the
+    /// pre-fix program `Invalid read of size 2`); if the classification instead
+    /// disarms BOTH, nothing frees and LSan sees a per-iteration leak.
+    ///
+    /// Loop-stressed with f-string payloads so a per-iteration leak is
+    /// unmistakable, and the source is re-read after every `.map` so a stale
+    /// pointer surfaces rather than passing silently. The hand-written `None =>
+    /// None` arm is in the loop too — it reaches the same classifier through the
+    /// unit-variant path, with no combinator involved.
+    #[test]
+    fn asan_map_over_live_option_string_leaves_source_owning_its_buffer() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    while i < 8 {
+        let o: Option[String] = Some(f"hi{i}");
+        match o.map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => { println("-"); } }
+        // The source must still own its buffer after the mapper ran.
+        match o { Some(v) => { println(v); } None => { println("-"); } }
+        // Same classifier, reached without a combinator: the `None` arm body
+        // mentions `None`, which used to read as an escaping binding.
+        let n: Option[i64] = match o { Some(v) => { Some(v.len()) } None => { None } };
+        println(n.unwrap_or(0i64));
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "HI0", "hi0", "3", "HI1", "hi1", "3", "HI2", "hi2", "3", "HI3", "hi3", "3", "HI4",
+                "hi4", "3", "HI5", "hi5", "3", "HI6", "hi6", "3", "HI7", "hi7", "3", "end",
+            ],
+            "map_over_live_option_string",
+        );
+    }
+
+    /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
+    ///
+    /// `suppress_inline_option_result_binding_move` disarms a source binding
+    /// when a consuming combinator has taken its payload, and for
+    /// `<src>.map(f).unwrap_or(d)` it resolves back through the map to `<src>`
+    /// (B-2026-08-07-3) on the premise that the map's ARM already owns the
+    /// buffer. Leg 1 makes that premise conditional: once the arm is classified
+    /// as a borrow it frees nothing, so disarming the source as well leaves the
+    /// payload with NOBODY.
+    ///
+    /// Caught by `asan_option_map_heap_payload_no_leak` rather than by
+    /// reasoning, and it is worth recording WHY a direct valgrind run on
+    /// `karac build` output said the program was clean: the payload here is a
+    /// `Vec[i64]` read only through `.len()`, which at the default opt level is
+    /// a provably dead allocation LLVM deletes outright. The leak is real at
+    /// every level — only its observability moves. Pinned at both.
+    #[test]
+    fn asan_chained_map_unwrap_or_over_live_option_frees_payload_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(1i64); v.push(2i64); v.push(3i64);
+        let opt: Option[Vec[i64]] = Some(v);
+        // The shape that leaked: the mapper only reads, so the arm borrows —
+        // and `unwrap_or` must then NOT disarm `opt`, which still owns it.
+        total = total + opt.map(|xs| xs.len()).unwrap_or(0i64);
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            &["120"],
+            "chained_map_unwrap_or_live_option",
+        );
+    }
 }

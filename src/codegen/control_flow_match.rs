@@ -232,6 +232,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
         self.pattern_binding_source_retains_inline_payload =
             self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms);
+        // Publish the classification for the rest of the CHAIN. The flag above
+        // is scoped to this match, but the combinator that consumes its result
+        // (`<src>.map(f).unwrap_or(d)`) runs after the match is compiled and
+        // resolves its disarm target back through the map to `<src>` — it needs
+        // to know the arm left the payload where it was. B-2026-08-08-25 leg 1.
+        if self.pattern_binding_source_retains_inline_payload {
+            if let ExprKind::Identifier(n) = &scrutinee.kind {
+                let owner = self
+                    .passthrough_owner_alias
+                    .get(n.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| n.clone());
+                self.inline_optres_retained_sources.insert(owner);
+            }
+        }
         self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
             || self.scrutinee_is_borrowed_binding(scrutinee)
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
@@ -3234,12 +3249,40 @@ impl<'ctx> super::Codegen<'ctx> {
             .any(|n| self.borrow_binding_escapes_block(block, n))
     }
 
+    /// A whole-pattern `Binding(n)` that resolves to a unit VARIANT is a tag
+    /// test, not a binding — the parser has no separate node for `None` /
+    /// `Color.Red` in pattern position and hands both back as `Binding`.
+    /// `compile_pattern_condition` disambiguates them with exactly this lookup
+    /// pair before deciding to emit a tag compare instead of a bind.
+    ///
+    /// B-2026-08-08-25 leg 1: without this, the escape guard collected `None`
+    /// as a payload binding, and any arm body that MENTIONS `None` — `None =>
+    /// None`, the single most ordinary shape there is — read as "that binding
+    /// escapes", vetoing the read-only classification for the whole match. It
+    /// is what kept `.map` on the transfer path (its synthesis emits precisely
+    /// `None => None`), and it equally broke the hand-written
+    /// `match o { Some(v) => Some(v.len()), None => None }`.
+    fn pattern_is_unit_variant_test(&self, p: &Pattern) -> bool {
+        let PatternKind::Binding(name) = &p.kind else {
+            return false;
+        };
+        let variant_name = name.rsplit('.').next().unwrap_or(name);
+        self.variant_pattern_enum_and_tag(p).is_some()
+            || self.enum_tag_for_variant(variant_name).is_some()
+    }
+
     /// No arm moves any of its pattern's leaf bindings out of the arm body or
     /// guard (the escape guard shared by the read-only borrow classifications).
     fn no_arm_payload_escapes(&self, arms: &[MatchArm]) -> bool {
         for arm in arms {
             let mut names: Vec<String> = Vec::new();
             collect_pattern_bindings(&arm.pattern, &mut names);
+            // Not a binding at all — nothing to escape. Clearing rather than
+            // skipping the arm keeps the guard's shape: the arm's body is still
+            // walked for every OTHER arm's bindings by the outer loop.
+            if self.pattern_is_unit_variant_test(&arm.pattern) {
+                names.clear();
+            }
             for name in &names {
                 if self.borrow_binding_escapes(&arm.body, name) {
                     return false;
@@ -3690,10 +3733,52 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::Identifier(f)
                         if matches!(f.as_str(), "println" | "print" | "eprintln" | "eprint")
                 );
+                // B-2026-08-08-25 leg 1 — a closure LITERAL callee is
+                // TRANSPARENT to this walk. Everywhere else "passed to a call"
+                // has to mean "moved", because the callee's body is not in hand;
+                // for a literal it is, so the question "does this argument
+                // escape" is answerable exactly rather than conservatively:
+                // it escapes iff the closure's body escapes the matching param.
+                //
+                // This is what makes `.map` reach the caller-retains classifier.
+                // `compile_map_via_match_synthesis` lowers `o.map(f)` to
+                // `match o { Some(x) => Some(f(x)) … }` — a bare payload binding
+                // handed to a call — so `no_arm_payload_escapes` said "escapes"
+                // for every mapper alike and the whole family stayed on the
+                // transfer path, leaving `o` dangling for any later read.
+                //
+                // The distinction it now draws is the real one: `|s|
+                // s.to_uppercase()` and `|s| s + "!"` only READ their parameter
+                // (the `MethodCall` / `Binary` arms treat a bare operand as a
+                // borrow), so they no longer count as escapes, while `|s| s`
+                // hands the payload straight out and still does.
+                //
+                // Only a BARE `name` argument gets this treatment. Anything
+                // nested deeper (`f(g(x))`, `f(x.clone())`) keeps the full walk,
+                // and an arity or param-shape mismatch answers "escapes" — the
+                // safe direction, since a wrong answer here keeps today's
+                // transfer rather than inventing a double free.
+                let closure_arg_escapes = |s: &Self, i: usize| -> bool {
+                    let ExprKind::Closure { params, body, .. } = &callee.kind else {
+                        return true;
+                    };
+                    if params.len() != args.len() {
+                        return true;
+                    }
+                    match params.get(i).map(|p| &p.pattern.kind) {
+                        Some(PatternKind::Binding(p)) => s.borrow_binding_escapes(body, p),
+                        _ => true,
+                    }
+                };
+                let callee_is_closure_literal = matches!(&callee.kind, ExprKind::Closure { .. });
+                // The callee walk still runs for a literal: it is how a closure
+                // that CAPTURES `name` (rather than receiving it) is caught.
                 self.borrow_binding_escapes(callee, name)
-                    || args.iter().any(|a| {
+                    || args.iter().enumerate().any(|(i, a)| {
                         if is_print {
                             borrow_pos(self, &a.value)
+                        } else if callee_is_closure_literal && bare(&a.value) {
+                            closure_arg_escapes(self, i)
                         } else {
                             self.borrow_binding_escapes(&a.value, name)
                         }
@@ -7383,6 +7468,13 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         };
         let name = &name;
+        // B-2026-08-08-25 leg 1: a source a read-only match left OWNING its
+        // payload has no other owner to hand off to, so disarming it here
+        // leaks. The premise of this disarm — "the map's arm already took the
+        // buffer" — only holds while the arm is on the transfer path.
+        if self.inline_optres_retained_sources.contains(name.as_str()) {
+            return;
+        }
         let in_option = self.inline_option_payload_vars.contains(name.as_str());
         let in_result = self.inline_result_payload_vars.contains(name.as_str());
         // `boxed_enum_payload_vars` covers the heap-BOXED wide payload

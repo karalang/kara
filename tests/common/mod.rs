@@ -155,6 +155,11 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     "test_e2e_match_out_of_option_string_leaves_source_usable",
     "test_e2e_map_twice_over_live_option_string",
     "asan_match_out_of_live_option_string_no_use_after_free",
+    // Same row, leg 1 (`.map` and the hand-written `None => None` shape) —
+    // identical reasoning: reused after a UseAfterMove *warning*, which
+    // production compiles and runs.
+    "asan_map_over_live_option_string_leaves_source_owning_its_buffer",
+    "test_e2e_consuming_map_over_live_optres_still_open",
     //
     // ── Designed concurrent-access diagnostics, tolerated-build pins ─
     // `karac check` rejects a shared/plain struct binding reachable

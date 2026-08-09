@@ -22862,27 +22862,26 @@ fn main() {
         );
     }
 
-    /// B-2026-08-08-25, CONSUMING half — still open, pinned as a visibly
-    /// deferred gap rather than left silently green.
+    /// B-2026-08-08-25 leg 1 — `.map` over a live `Option[String]` no longer
+    /// dangles the source.
     ///
-    /// `o.map(f)` lowers to `match o { Some(x) => Some(f(x)) … }`, and the
-    /// synthesized arm passes the payload INTO the mapper — a genuine move, so
-    /// the borrow-path fix above correctly declines to classify it as a borrow
-    /// and the source is still left dangling. Closing it needs one of: an escape
-    /// walk that can see through a closure-literal callee (the mapper only
-    /// borrows its parameter in the common case), or a deep clone of the
-    /// payload for the arm. The obvious clone helper does NOT work as-is —
-    /// `deep_copy_enum_heap_payload_in_place` keys on `field_drop_kinds`, which
-    /// is exactly what the type-erased `Option` layout does not carry.
+    /// The blocker was never the mapper. `no_arm_payload_escapes` collected the
+    /// arm pattern `None` as a payload BINDING — the parser has no separate node
+    /// for a unit variant in pattern position and hands `None` back as
+    /// `Binding("None")`, exactly as it does for `Color.Red` — so any arm body
+    /// that MENTIONED `None` read as "that binding escapes" and vetoed the
+    /// read-only classification for the whole match.
     ///
-    /// The USER-ENUM leg is deferred with it. The fix is scoped to the
-    /// `Option`/`Result` inline-payload channel; a `enum E { A(String) }` bound
-    /// out of a live local goes through the general
-    /// `suppress_destructured_enum_payload_cleanup` instead and still corrupts
-    /// its second read, so the same caller-retains classifier has to be taught
-    /// that channel's membership test.
+    /// `compile_map_via_match_synthesis` emits precisely `None => None`, which
+    /// is why the entire `.map` family was stuck on the transfer path. The same
+    /// veto hit the hand-written `match o { Some(v) => Some(v.len()), None =>
+    /// None }`, which no row had attributed to this defect at all — the
+    /// combinator was never required to reproduce it.
+    ///
+    /// Escaping mappers are the counter-test: `|s| s` hands the payload straight
+    /// out, so it must NOT be classified as a borrow. It stays on the transfer
+    /// path and is pinned as still-open below.
     #[test]
-    #[ignore = "B-2026-08-08-25 (consuming + user-enum halves): payload still moves out from under a live source"]
     fn test_e2e_map_twice_over_live_option_string() {
         assert_eq!(
             run_program(
@@ -22895,7 +22894,102 @@ fn main() {
             .as_deref(),
             Some("HI\nhi\n")
         );
-        // Same defect, general user-enum channel.
+        // One `.map`, then a plain read of the source.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o.map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => {} }\n\
+                     match o { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\nhi\n")
+        );
+        // No combinator: the hand-written shape the `None`-as-binding veto broke.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     let a: Option[i64] = match o { Some(v) => { Some(v.len()) } None => { None } };\n\
+                     match o { Some(v) => { println(v); } None => {} }\n\
+                     println(a.unwrap_or(0i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\n2\n")
+        );
+        // Vec payload through the same route.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new(); v.push(7);\n\
+                     let o: Option[Vec[i64]] = Some(v);\n\
+                     match o.map(|x| x.len()) { Some(n) => { println(n); } None => {} }\n\
+                     match o { Some(x) => { println(x[0]); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1\n7\n")
+        );
+    }
+
+    /// B-2026-08-08-25 — what leg 1 did NOT close, pinned as a visibly deferred
+    /// gap rather than left silently green. Each case here is measured, not
+    /// assumed: all three still print garbage or an empty payload under `karac
+    /// build` while `--interp` is correct.
+    ///
+    /// 1. A CONSUMING mapper. `|s| s` hands the payload out of the arm, so the
+    ///    escape walk correctly declines to call it a borrow and the source is
+    ///    still left dangling (valgrind: `Invalid read of size 2`, unchanged by
+    ///    leg 1). This is the case that genuinely needs the row's other design —
+    ///    a deep clone for the arm — and the obvious helper does NOT work as-is:
+    ///    `deep_copy_enum_heap_payload_in_place` keys on `field_drop_kinds`,
+    ///    which is exactly what the type-erased `Option` layout does not carry.
+    ///
+    /// 2. `Result.map`. Blocked one gate earlier than the escape walk: the
+    ///    classifier requires every payload-consuming arm to be the direct-heap
+    ///    shape, and the `Err` binding of a `Result[String, i64]` has NO entry in
+    ///    `pattern_binding_types` OR `pattern_binding_inner_types` — measured in
+    ///    both the synthesized and hand-written forms. So there is no positive
+    ///    witness that the error payload owns no heap, and "absent" cannot be
+    ///    read as "scalar": a DESTRUCTURED tuple payload (`Some((a, b))`) is
+    ///    absent too, and that is the shape whose owners must not be dropped.
+    ///
+    /// 3. The USER-ENUM leg. `enum E { A(String) }` bound out of a live local
+    ///    goes through `suppress_destructured_enum_payload_cleanup` rather than
+    ///    the Option/Result inline channel. Note it is no longer the same defect
+    ///    as 1: valgrind reports ZERO errors on it now — the second read yields
+    ///    an empty payload rather than a dangling one, so it is wrong output,
+    ///    not a use-after-free.
+    #[test]
+    #[ignore = "B-2026-08-08-25 (consuming mapper, Result.map, user-enum channel): payload still moves out from under a live source"]
+    fn test_e2e_consuming_map_over_live_optres_still_open() {
+        // 1. Consuming mapper — the payload really does escape the arm.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o.map(|s| s) { Some(v) => { println(v); } None => {} }\n\
+                     match o { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // 2. `Result.map` — no heap witness for the `Err` payload binding.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, i64] = Ok(f\"hi\");\n\
+                     match r.map(|x| x.to_uppercase()) { Ok(v) => { println(v); } Err(e) => {} }\n\
+                     match r { Ok(v) => { println(v); } Err(e) => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\nhi\n")
+        );
+        // 3. General user-enum channel — now wrong output rather than a UAF.
         assert_eq!(
             run_program(
                 "enum E { A(String), B }\n\
