@@ -1193,7 +1193,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-28 | codegen | high | a weak ELEMENT read through a struct FIELD (`a.ns[0]` on `mut ns: Vec[weak N]`) skips the balancing acquire and over-releases -- SIGSEGV under JIT an… | 02f8a0c |
 | B-2026-08-08-29 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is… | dc31715 |
 | B-2026-08-08-30 | codegen | high | mapping a BORROWED SCALAR payload — `Vec[i64].first().map(\|x\| x + 1)` — was TWO defects, and the reported panic was the lucky one: the closure's `ref… | e524f62 (both legs: the closure return-type inference over a borrow param, and the leaked param borrow mark) |
-| B-2026-08-09-1 | codegen | medium | a `Map[K, V]` field of a SHARED struct has no general per-value drop-fn channel, so a V that needs a RECURSIVE drop leaks -- the non-shared struct fi… | PENDING |
+| B-2026-08-09-1 | codegen | medium | a `Map[K, V]` field of a SHARED struct has no general per-value drop-fn channel, so a V that needs a RECURSIVE drop leaks -- the non-shared struct fi… | ec446e0 |
 | B-2026-08-09-2 | typecheck+codegen | medium | `Map[K, weak V]` is now store-only: the read is NOT an upgrade, so `m.get(k)` yields `Option[weak V]` and the `Some` binding rejects every field acce… | 68bebfd3 |
 | B-2026-08-09-5 | codegen | high | an indirect closure call lowered the return type from the SURFACE `Fn(..)` type while the emitted body used its own, so a borrowed-String mapper's 3-… | 37d0992a |
 
