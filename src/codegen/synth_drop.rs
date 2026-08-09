@@ -186,7 +186,40 @@ impl<'ctx> super::Codegen<'ctx> {
                             // +3 for cap. Match the insert-side at
                             // `try_compile_enum_variant`.
                             let data_idx = (*start_word + 1) as u32;
+                            let len_idx = (*start_word + 2) as u32;
                             let cap_idx = (*start_word + 3) as u32;
+
+                            // B-2026-08-09-13 — the ENUM-payload peer of the
+                            // struct-field `#35` element drain below. A
+                            // `Vec[String]` payload's ELEMENT buffers were owned
+                            // by nobody unless an arm consumed them: this arm
+                            // freed the `{ptr,len,cap}` buffer and stopped, so a
+                            // read-only match over an owned local (the borrow
+                            // path B-2026-08-08-25 leg 3 installed, where the
+                            // binding registers no drop of its own and this
+                            // function is the payload's sole owner) leaked every
+                            // element. Resolve the per-element drop with the SAME
+                            // rule the struct arm uses, so the two stay one
+                            // policy — `vec_elem_agg_drop_for_type_expr` for a
+                            // named user struct / enum / shared / Option element,
+                            // falling back to `emit_drop_fn_for_type_expr` for
+                            // the direct `String` / `Map` / `Set` / nested-`Vec`
+                            // shapes that helper deliberately declines.
+                            //
+                            // Resolve BEFORE opening the cap-guard blocks: the
+                            // sub-emitter may synthesize a fn and move the
+                            // builder's insert block (same discipline the struct
+                            // arm documents).
+                            let vec_elem_drop = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .cloned()
+                                .and_then(|fte| crate::codegen::helpers::vec_inner_type_expr(&fte))
+                                .and_then(|elem_te| {
+                                    let f = self.vec_element_drain_fn(&elem_te)?;
+                                    Some((f, elem_te))
+                                });
 
                             let cap_ptr = self
                                 .builder
@@ -225,6 +258,84 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .builder
                                 .build_int_to_ptr(data_word, ptr_ty, "drop.data.p")
                                 .unwrap();
+                            // B-2026-08-09-13 — drain each live element's heap
+                            // BEFORE the buffer free, inside the `cap > 0` guard.
+                            // Being under the guard is what keeps the consuming
+                            // path sound: when an arm really takes the payload,
+                            // `suppress_destructured_enum_payload_cleanup` zeroes
+                            // the cap word, so neither the drain nor the free
+                            // runs here and the arm's own cleanup is still the
+                            // only owner. `len == 0` runs zero iterations.
+                            if let Some((elem_drop, elem_te)) = &vec_elem_drop {
+                                let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                                let len_ptr = self
+                                    .builder
+                                    .build_struct_gep(
+                                        layout.llvm_type,
+                                        p_arg,
+                                        len_idx,
+                                        "drop.len.p",
+                                    )
+                                    .unwrap();
+                                let len_word = self
+                                    .builder
+                                    .build_load(i64_t, len_ptr, "drop.len")
+                                    .unwrap()
+                                    .into_int_value();
+                                let cond_bb =
+                                    self.context.append_basic_block(drop_fn, "drop.elem.cond");
+                                let body_bb =
+                                    self.context.append_basic_block(drop_fn, "drop.elem.body");
+                                let after_bb =
+                                    self.context.append_basic_block(drop_fn, "drop.elem.after");
+                                let counter =
+                                    self.create_entry_alloca(drop_fn, "drop.elem.i", i64_t.into());
+                                self.builder
+                                    .build_store(counter, i64_t.const_zero())
+                                    .unwrap();
+                                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                                self.builder.position_at_end(cond_bb);
+                                let cur = self
+                                    .builder
+                                    .build_load(i64_t, counter, "drop.elem.i.cur")
+                                    .unwrap()
+                                    .into_int_value();
+                                let lt = self
+                                    .builder
+                                    .build_int_compare(
+                                        IntPredicate::ULT,
+                                        cur,
+                                        len_word,
+                                        "drop.elem.i.lt",
+                                    )
+                                    .unwrap();
+                                self.builder
+                                    .build_conditional_branch(lt, body_bb, after_bb)
+                                    .unwrap();
+
+                                self.builder.position_at_end(body_bb);
+                                let elem_ptr = unsafe {
+                                    self.builder
+                                        .build_gep(elem_ty, data_ptr, &[cur], "drop.elem.p")
+                                        .unwrap()
+                                };
+                                self.builder
+                                    .build_call(*elem_drop, &[elem_ptr.into()], "")
+                                    .unwrap();
+                                let next = self
+                                    .builder
+                                    .build_int_add(
+                                        cur,
+                                        i64_t.const_int(1, false),
+                                        "drop.elem.i.next",
+                                    )
+                                    .unwrap();
+                                self.builder.build_store(counter, next).unwrap();
+                                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                                self.builder.position_at_end(after_bb);
+                            }
                             // Recycling-aware release; hint sized by the
                             // payload field type (phase-10 line 282) so a
                             // mid-size `Vec[T]` enum payload is parked.
@@ -1136,6 +1247,36 @@ impl<'ctx> super::Codegen<'ctx> {
             ),
             _ => false,
         }
+    }
+
+    /// The per-element drop for a `Vec[elem]` container whose buffer the caller
+    /// is about to free — `None` when the element owns no heap that buffer free
+    /// misses, in which case the caller emits no drain loop at all.
+    ///
+    /// ONE policy, deliberately shared by the struct-field drain
+    /// (`FieldDrop::VecOrString`) and the enum-payload drain
+    /// (`EnumDropKind::VecOrString`, B-2026-08-09-13). The two arms drifted
+    /// apart once already — the struct side gained the `#35` element walk while
+    /// the enum side kept freeing the outer buffer alone, so an enum payload's
+    /// elements leaked for as long as nothing consumed them. Resolving through
+    /// one function is what keeps the copy-side symmetry argument in
+    /// `elem_te_needs_direct_recursive_drain`'s doc true of BOTH sides at once,
+    /// rather than of whichever was edited last.
+    ///
+    /// Callers must invoke this BEFORE opening their `cap > 0` guard blocks:
+    /// the sub-emitters may synthesize a fn and move the builder's insert
+    /// block.
+    pub(super) fn vec_element_drain_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        self.vec_elem_agg_drop_for_type_expr(elem_te).or_else(|| {
+            if Self::elem_te_needs_direct_recursive_drain(elem_te) {
+                Some(self.emit_drop_fn_for_type_expr(elem_te))
+            } else {
+                None
+            }
+        })
     }
 
     pub(super) fn emit_struct_drop_synthesis(
@@ -2059,7 +2200,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // drain, which handles exactly these element shapes). Fall
                     // back to the unifying `emit_drop_fn_for_type_expr`, which
                     // frees a String's char buffer, a Map/Set's buckets, and a
-                    // nested Vec's inner buffer per element. Bare scalars stay
+                    // nested Vec's inner buffer per element. Both halves of that
+                    // choice live in `vec_element_drain_fn`, which the enum
+                    // payload's drain shares — see its doc. Bare scalars stay
                     // `None` (no drain loop). A bare `String` FIELD (not
                     // `Vec[String]`) has no Vec element type — `vec_inner_type_expr`
                     // returns `None` there — so its single char buffer is still
@@ -2116,14 +2259,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             None => elem_te,
                         })
                         .and_then(|elem_te| {
-                            let f = self.vec_elem_agg_drop_for_type_expr(&elem_te).or_else(|| {
-                                if Self::elem_te_needs_direct_recursive_drain(&elem_te) {
-                                    Some(self.emit_drop_fn_for_type_expr(&elem_te))
-                                } else {
-                                    None
-                                }
-                            });
-                            f.map(|f| (f, elem_te))
+                            let f = self.vec_element_drain_fn(&elem_te)?;
+                            Some((f, elem_te))
                         });
                     // GEP the Vec struct field within the parent struct.
                     let field_ptr = self

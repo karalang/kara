@@ -2039,7 +2039,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the consuming arm then frees buffers the live source still owns.
         // Sound here specifically because this clone exists only when the arm's
         // payload ESCAPES into a consumer, so the copied elements have an owner.
-        self.deep_copy_enum_heap_payload_with_elements_in_place(&enum_name, clone, &layout);
+        self.deep_copy_enum_heap_payload_in_place(&enum_name, clone, &layout);
         (
             self.builder
                 .build_load(ll, clone, "livelocal.enum.cloned")
@@ -2056,7 +2056,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// memory bug at all:
     ///
     /// - INDEPENDENCE. Handled for `VecOrString` by
-    ///   `deep_copy_enum_heap_payload_with_elements_in_place`, but only as deep
+    ///   `deep_copy_enum_heap_payload_in_place`, but only as deep
     ///   as `emit_vecstr_defensive_copy` walks — `String` and `Vec` inners. A
     ///   `Vec` of user STRUCTS would come back with the elements aliased, so
     ///   the inner is restricted to what is actually duplicated.
@@ -2200,7 +2200,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // duplicate (a `Vec` of user structs, a `NestedStruct`) are unaffected
         // — they alias exactly as before, which is this leg's status quo rather
         // than something this change extends.
-        self.deep_copy_enum_heap_payload_with_elements_in_place(&enum_name, slot, &layout);
+        self.deep_copy_enum_heap_payload_in_place(&enum_name, slot, &layout);
         (
             self.builder
                 .build_load(ll, slot, "refchain.enum.cloned")

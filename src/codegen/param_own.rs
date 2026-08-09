@@ -1842,61 +1842,37 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(exit_bb);
     }
 
-    /// Deep-copy (outer buffers only) the live variant's Vec/String payload of
+    /// Deep-copy the live variant's Vec/String payload of
     /// the enum value at `base_ptr`. Emits a tag switch mirroring
     /// `emit_enum_drop_switch`; only variants with a VecOrString payload get a
     /// case. The enum's payload words are stored as raw i64s (data = ptrtoint,
     /// then len, then cap), so the copy reconstructs a `{ptr,len,cap}` value,
     /// runs `emit_vecstr_defensive_copy`, and writes the copied words back.
     ///
-    /// Outer-only is the right default for most callers, and deliberately so:
-    /// the copy is dropped by `emit_enum_drop_switch`, whose `VecOrString` arm
-    /// frees only the outer buffer, so element copies would have NO owner. That
-    /// is not theoretical — making this element-deep for everyone leaked 1990
-    /// bytes across 300 allocations in
-    /// `asan_match_bound_struct_variant_vec_field_reborrow_no_double_free` and
-    /// broke two enum-reassign sequencing tests. See the `_with_elements`
-    /// sibling for the one caller that can carry the extra depth.
+    /// ELEMENT-deep since B-2026-08-09-13, and it must stay that way: this is
+    /// the copy half of the copy-depth == drop-depth invariant in this module's
+    /// doc, and `emit_enum_drop_switch`'s `VecOrString` arm now drains a
+    /// `Vec[heap-element]` payload's elements before freeing its buffer. An
+    /// outer-only copy against an element-deep drop is a double-free — the two
+    /// copies would share element buffers and both drops would free them.
+    ///
+    /// It was outer-only through B-2026-08-09-9, when the drop was outer-only
+    /// too: element copies then had NO owner, so deepening this side alone
+    /// leaked 1990 bytes across 300 allocations in
+    /// `asan_match_bound_struct_variant_vec_field_reborrow_no_double_free`. The
+    /// interim `_with_elements` variant existed for the two match-clone callers
+    /// that hand their elements to a consumer; with the drop deepened the
+    /// distinction is gone and every caller takes the same depth.
+    ///
+    /// Depth is bounded by what `emit_vecstr_defensive_copy` can duplicate
+    /// (String / Vec / Map / Set / heap-owning aggregate elements) — the same
+    /// set `elem_te_needs_direct_recursive_drain` plus
+    /// `vec_elem_agg_drop_for_type_expr` drain on the other side.
     pub(super) fn deep_copy_enum_heap_payload_in_place(
         &mut self,
         enum_name: &str,
         base_ptr: PointerValue<'ctx>,
         layout: &EnumLayout<'ctx>,
-    ) {
-        self.deep_copy_enum_heap_payload_in_place_inner(enum_name, base_ptr, layout, false);
-    }
-
-    /// B-2026-08-09-9 — ELEMENT-deep variant, for a copy whose elements will
-    /// have an owner.
-    ///
-    /// The outer-only default leaves a `Vec[String]` payload's element buffers
-    /// SHARED between the two copies, so whichever side consumes them first
-    /// frees buffers the other still owns — measured on `enum E {
-    /// A(Vec[String]) }` as two invalid reads plus two invalid frees.
-    /// `emit_vecstr_defensive_copy` already walks String/Vec/Map/Set inners;
-    /// this simply hands it the inner type the default denies it.
-    ///
-    /// Only sound where the copy's elements are taken over by something that
-    /// drains them, which is why it is not the default: the live-local match
-    /// clone qualifies because it is produced ONLY when an arm's payload
-    /// escapes into a consumer, and that consumer's own binding registers the
-    /// element drain. A copy that is merely dropped by the enum's own
-    /// `EnumDrop` does not qualify.
-    pub(super) fn deep_copy_enum_heap_payload_with_elements_in_place(
-        &mut self,
-        enum_name: &str,
-        base_ptr: PointerValue<'ctx>,
-        layout: &EnumLayout<'ctx>,
-    ) {
-        self.deep_copy_enum_heap_payload_in_place_inner(enum_name, base_ptr, layout, true);
-    }
-
-    fn deep_copy_enum_heap_payload_in_place_inner(
-        &mut self,
-        enum_name: &str,
-        base_ptr: PointerValue<'ctx>,
-        layout: &EnumLayout<'ctx>,
-        deep_elements: bool,
     ) {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2074,19 +2050,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         })
                         .unwrap_or_else(|| self.context.i8_type().into());
 
-                    // B-2026-08-09-9 — element depth is the CALLER's choice; see
-                    // the two wrappers above for why it cannot be unconditional.
-                    // A `String` payload has no inner (its "elements" are bytes,
-                    // already covered by the buffer copy), so it stays `None`.
-                    let elem_te = if deep_elements {
-                        variant_tes
-                            .get(name)
-                            .and_then(|tes| tes.get(fi))
-                            .filter(|te| !self.is_string_type_expr(te))
-                            .and_then(super::helpers::vec_inner_type_expr)
-                    } else {
-                        None
-                    };
+                    // B-2026-08-09-9/-13 — element depth, unconditional since the
+                    // drop side drains too (see this fn's doc). A `String`
+                    // payload has no inner (its "elements" are bytes, already
+                    // covered by the buffer copy), so it stays `None`.
+                    let elem_te = variant_tes
+                        .get(name)
+                        .and_then(|tes| tes.get(fi))
+                        .filter(|te| !self.is_string_type_expr(te))
+                        .and_then(super::helpers::vec_inner_type_expr);
                     let copied = self
                         .emit_vecstr_defensive_copy(sv.into(), elem_ty, elem_te.as_ref())
                         .into_struct_value();

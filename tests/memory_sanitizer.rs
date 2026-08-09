@@ -44699,6 +44699,70 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-13 — the NON-consuming half of the fixture above: when
+    /// nothing takes a `Vec[String]` enum payload's elements, the enum's own
+    /// drop has to.
+    ///
+    /// `emit_enum_drop_switch`'s `VecOrString` arm freed the `{ptr,len,cap}`
+    /// buffer and stopped, so every element buffer was owned by nobody. It went
+    /// unnoticed because the shapes that DO consume the payload (case 3's `for`
+    /// loop) are clean — their arm binding drains the elements — and because at
+    /// the default `-O2` the optimizer deletes an f-string allocation whose
+    /// bytes are never read, which is why every case below prints the string
+    /// ITSELF rather than its `.len()`.
+    ///
+    /// Case 1 is the borrow path B-2026-08-08-25 leg 3 installed: the arm reads
+    /// `v[0]` and never escapes it, so the binding registers no drop of its own
+    /// and this drop fn is the payload's sole owner. Case 2 is the `ref`-param
+    /// spelling of the same ownership, which leaked on its own terms before leg
+    /// 3 existed.
+    ///
+    /// Case 3 is the DOUBLE-FREE control, and the reason the element drain sits
+    /// INSIDE the `cap > 0` guard: a consuming arm's
+    /// `suppress_destructured_enum_payload_cleanup` zeroes the source's cap, so
+    /// neither the drain nor the buffer free runs here and the arm stays the
+    /// only owner. A drain hoisted above that guard frees each element twice.
+    ///
+    /// Case 4 is the scalar-element control — a `Vec[i64]` payload owns no
+    /// element heap, so it must stay exactly as clean as before.
+    #[test]
+    fn asan_readonly_match_over_enum_vec_payload_frees_each_element_once() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(Vec[String]), B }
+enum N { A(Vec[i64]), B }
+fn peek(e: ref E) {
+    match e { E.A(v) => { println(v[0]); } E.B => { println("-"); } }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. The bug: read-only arm, nothing consumes the elements.
+        let e: E = E.A([f"aa{i}", f"bb{i}"]);
+        match e { E.A(v) => { println(v[0]); println(v[1]); } E.B => { println("-"); } }
+        // 2. The `ref`-param spelling of the same ownership.
+        let r: E = E.A([f"rr{i}"]);
+        peek(r);
+        // 3. CONTROL — the arm CONSUMES the elements, so the source's cap is
+        //    zeroed and this drop must stay a no-op (else: double free).
+        let c: E = E.A([f"cc{i}"]);
+        match c { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        // 4. CONTROL — scalar elements own no heap under the buffer.
+        let n: N = N.A([i, i]);
+        match n { N.A(v) => { println(v[0]); } N.B => { println("-"); } }
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "aa0", "bb0", "rr0", "cc0", "0", "aa1", "bb1", "rr1", "cc1", "1", "aa2", "bb2",
+                "rr2", "cc2", "2", "aa3", "bb3", "rr3", "cc3", "3", "end",
+            ],
+            "readonly_match_enum_vec_payload_elements",
+        );
+    }
+
     /// B-2026-08-09-11 — the BLOCK-spelling sibling of the fixture above.
     ///
     /// The live-local clone leg now fires at `if let` and `while let` as well
