@@ -1331,6 +1331,33 @@ impl<'a> super::Interpreter<'a> {
 
         let obj = self.eval_expr_inner(object);
 
+        // B-2026-08-09-18 — a faulted RECEIVER (index OOB, unwrap of `None`,
+        // div-by-zero, …) sets `pending_cf` and yields a `Unit` poison value;
+        // propagate it instead of dispatching a method on the poison. Without
+        // this guard the receiver-variant assertions further down turn a clean
+        // runtime error into an ICE: `v[3].len()` on an empty `Vec[Vec[i64]]`
+        // reached `try_eval_seq_method`'s `len` arm with `Value::Unit` and
+        // panicked with `internal error: entered unreachable code`, blaming
+        // either the typechecker or a wrong-variant codepath when in fact both
+        // were right and the receiver had simply already failed.
+        //
+        // The guard belongs HERE, at the single receiver-eval site, not in the
+        // arms: the assertions are per-method (`len`, `chars`, … each have
+        // their own), the ones that instead fall through to a tolerant default
+        // reported the fault correctly all along, and which arm you land in is
+        // not what makes the program wrong. One check covers every method on
+        // every builtin receiver, and keeps the arms' assertions meaning what
+        // they say — that a NON-faulted receiver of the wrong variant is a real
+        // compiler bug.
+        //
+        // Same treatment Binary and Unary operands get in the lowered-operator
+        // path (B-2026-07-15-7) and `match` scrutinees get before `eval_match`
+        // (B-2026-06-19-13's bonus bug); the method-call receiver was the
+        // remaining unguarded position.
+        if self.pending_cf.is_some() {
+            return obj;
+        }
+
         // A `mut ref V` returned by `Map.entry(k).or_insert(d)` is a place-ref
         // into the live Map slot. Method calls (`.push(x)`, …) dispatch on the
         // underlying value, so resolve the ref here. For an Arc-backed element

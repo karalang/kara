@@ -110,6 +110,100 @@ fn test_extern_call_rejects_with_guidance_not_internal_error() {
 }
 
 #[test]
+fn test_faulted_method_receiver_reports_the_fault_not_an_ice() {
+    // B-2026-08-09-18: a method call whose RECEIVER faulted used to ICE with
+    // `internal error: entered unreachable code: len() receiver at L:C was
+    // Value::Unit; either an interpreter codepath produced the wrong receiver
+    // variant or the typechecker accepted .len() on a type without one`. Both
+    // of the assertion's hypotheses were wrong — the typechecker was right and
+    // no codepath produced a wrong variant. The fault set `pending_cf` and
+    // yielded the `Unit` poison, and the receiver was dispatched on without
+    // anyone checking first.
+    //
+    // Reaching these assertions at all proves the no-ICE half: the old failure
+    // was a Rust `unreachable!`, which aborts the test before `errors` can be
+    // inspected.
+    //
+    // Two different FAULTS in the receiver position (index OOB and unwrap of
+    // `None`) and two different dispatch ARMS (`len`, `chars`) — each arm
+    // carries its own receiver assertion, so covering one proves nothing about
+    // the next. `is_empty` is here as the converse control: its arm falls
+    // through to a tolerant default rather than asserting, so it reported the
+    // fault correctly even before the fix and must still do so after.
+    for (label, src, want) in [
+        (
+            "index OOB, `len` arm — the row's repro",
+            "fn main() {\n\
+                 let mut v: Vec[Vec[i64]] = Vec.new();\n\
+                 let n = v[3].len();\n\
+                 println(f\"{n}\");\n\
+             }",
+            "index 3 out of bounds",
+        ),
+        (
+            "unwrap of None, `len` arm — a different fault, same position",
+            "fn main() {\n\
+                 let o: Option[String] = Option.None;\n\
+                 let n = o.unwrap().len();\n\
+                 println(f\"{n}\");\n\
+             }",
+            "unwrap() on None",
+        ),
+        (
+            "index OOB, `chars` arm — a second assertion site",
+            "fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 for c in v[2].chars() { println(f\"{c}\"); }\n\
+             }",
+            "index 2 out of bounds",
+        ),
+        (
+            "index OOB, `is_empty` arm — tolerant-arm control",
+            "fn main() {\n\
+                 let mut v: Vec[Vec[i64]] = Vec.new();\n\
+                 let b = v[1].is_empty();\n\
+                 println(f\"{b}\");\n\
+             }",
+            "index 1 out of bounds",
+        ),
+    ] {
+        let errors = runtime_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(want)),
+            "{label}: expected the receiver's own fault ({want:?}), got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("internal") || e.message.contains("compiler bug")),
+            "{label}: a faulted receiver is a program error, not a compiler bug, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_method_call_on_a_healthy_receiver_still_dispatches() {
+    // The converse of the guard above, and the thing it could plausibly break:
+    // the short-circuit keys on `pending_cf`, so a method call reached with NO
+    // pending fault must dispatch exactly as before — including one whose
+    // receiver is itself a fallible expression that happened to succeed.
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+                 let mut v: Vec[Vec[i64]] = Vec.new();\n\
+                 v.push([1i64, 2i64, 3i64]);\n\
+                 let o: Option[i64] = Option.Some(7i64);\n\
+                 println(f\"{v[0].len()} {o.unwrap()}\");\n\
+             }"
+        )
+        .trim(),
+        "3 7"
+    );
+}
+
+#[test]
 fn test_binding_shadowing_an_extern_name_still_runs() {
     // The refusal above is gated on the name not being bound, exactly like the
     // sibling MMIO-intrinsic arm. A local closure that shadows an imported name
