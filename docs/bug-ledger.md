@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 227 | 3 |
-| leak | 154 | 0 |
+| miscompile | 227 | 2 |
+| leak | 155 | 1 |
 | double-free | 116 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 0 |
@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 41 | 0 |
 | crash | 41 | 0 |
 | other | 24 | 0 |
-| use-after-free | 16 | 0 |
+| use-after-free | 17 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 763 | 2 |
+| codegen | 765 | 3 |
 | typecheck | 137 | 0 |
 | interp | 130 | 1 |
 | ownership | 44 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1053 surfaced · 3 open · 1040 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1055 surfaced · 4 open · 1041 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-09-9 | 2026-08-09 | codegen | medium | a user enum with a `Vec[String]` payload consumed by a match arm over a LIVE local still empties the source -- the enum deep-copy is OUTER-buffer only, so the live-local clone leg is gated off this shape rather than handed shared element buffers | `#[ignore]`d pin `test_e2e_consuming_match_over_live_enum_vec_of_strings_still_open` in tests/codegen.rs |
 | B-2026-08-09-10 | 2026-08-09 | interp | medium | `--interp` SKIPS the Drop body of a struct payload bound out of an owned enum PARAM, where both compiled backends run it -- the param-shaped sibling of the owned-`self` residual, and the divergence points the opposite way to the usual one | probe: an owned enum PARAM whose match arm binds a `Drop`-carrying struct payload -- `karac build` prints the Drop body, `--interp` prints nothing |
 | B-2026-08-09-11 | 2026-08-09 | codegen | medium | the `if let` spelling of a CONSUMING arm over a live user-enum local still empties the source -- the match site got a live-local clone leg, the if-let/while-let sites did not | probe: `enum E { A(String), B } let e: E = E.A(f"hi"); if let E.A(v) = e { let k: String = v; println(k); } if let E.A(v) = e { println(v); }` -- prints `hi` then an EMPTY line; `--interp` prints `hi` twice |
+| B-2026-08-09-12 | 2026-08-09 | codegen | high | the `<refparam>.field` ref-chain ENUM clone leg shares the outer-only payload duplicator, so a `Vec[String]` payload behind a `ref` param aliases its element buffers and double-frees them -- the sibling of B-2026-08-09-9, still open because its clone has no element drain | probe: `enum E { A(Vec[String]), B } struct S { e: E } fn take(s: ref S) { match s.e { E.A(x) => { for t in x { println(t); } } E.B => {} } } fn main() { let s: S = S { e: E.A([f"aa", f"bb"]) }; take(s); take(s); }` -- valgrind: 2 invalid reads + 2 invalid frees |
+| B-2026-08-09-13 | 2026-08-09 | codegen | medium | indexing a heap-element `Vec` bound out of an enum payload on the BORROW path leaks one buffer per `v[i]` read -- pre-existing on `ref`-param scrutinees, and now reachable from an owned local via B-2026-08-08-25 leg 3's classifier | probe: `enum E { A(Vec[String]), B } fn f(e: ref E) { match e { E.A(v) => { println(v[0]); println(v[1]); } E.B => {} } }` -- valgrind --leak-check=full: 2 definitely-lost blocks, one per index read |
 
-### Fixed (1040)
+### Fixed (1041)
 
-<details><summary>1040 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1041 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1202,6 +1203,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-09-6 | typecheck+codegen | high | `Result[T, E].map(f)` never learns `E`, so a HEAP `Err` payload is mishandled on the pass-through branch: `Result[i64, String]` DOUBLE-FREES and abor… | cfd574e3 |
 | B-2026-08-09-7 | codegen | medium | chaining any two Result-returning combinators without an intervening `let` fails in codegen -- `r.map(f).map(g)` panics (`ExtractOutOfRange`) under a… | bf5737a0 |
 | B-2026-08-09-8 | codegen | high | a bare REBIND of an inline-Option-payload local (`let p = o`) followed by TWO reads of `p` double-frees the payload -- the caller-retains classifier… | 0137be0 |
+| B-2026-08-09-9 | codegen | medium | a user enum with a `Vec[String]` payload consumed by a match arm over a LIVE local still empties the source -- the enum deep-copy is OUTER-buffer onl… | FIXED by 7d9ecce1. `deep_copy_enum_heap_payload_with_elements_in_place` -- the element-deep sibling of the enum payload duplicator -- plus `enum_payload_clone_is_faithful`, the widened successor of the gate that shipped with legs 2/3. The outer-only copy's stated premise ("mirrors the enum drop's outer-only free") was half true and the missing half WAS the bug: the drop's `VecOrString` arm frees only the outer buffer, but it is not the whole owner -- ELEMENTS ride the separate per-binding container-elem-bodies channel, so the copy was one level shallower than the thing it had to be independent of. Depth is opt-in per call site, not the default: unconditional depth leaked 1990 bytes / 300 allocations in `asan_match_bound_struct_variant_vec_field_reborrow_no_double_free`, because most callers' copies are dropped by the outer-only `EnumDrop` and the deep elements would have no owner. |
 
 </details>
 
