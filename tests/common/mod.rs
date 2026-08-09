@@ -173,6 +173,10 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // those legs closed; the test it named is gone, replaced by the two below.)
     "test_e2e_live_local_match_keeps_the_source_for_result_and_user_enums",
     "asan_live_local_match_over_result_and_user_enum_frees_each_buffer_once",
+    // B-2026-08-09-9 — the `Vec[heap-element]` payload split out of leg 3.
+    // Same twice-matched live local, same inverted diagnostic.
+    "test_e2e_consuming_match_over_live_enum_vec_payload_keeps_the_source",
+    "asan_consuming_match_over_live_enum_vec_payload_frees_each_buffer_once",
     // B-2026-08-09-8 — the same two rows' shape with a bare rebind (`let p =
     // o;`) in front, which is what made the caller-retains classifier miss it.
     // Same reasoning again: `karac check` exits 0 on these (the matrix above

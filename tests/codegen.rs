@@ -23674,30 +23674,39 @@ fn main() {
         );
     }
 
-    /// B-2026-08-08-25 — what legs 2 and 3 did NOT close, pinned as a visibly
-    /// deferred gap rather than left silently green. Measured, not assumed:
-    /// `karac build` prints ONE pair where `--interp` prints two, valgrind-clean.
+    /// B-2026-08-09-9 — a user enum with a `Vec[String]` payload, consumed by a
+    /// match arm over a LIVE local. Split out of leg 3 as an `#[ignore]`d gap
+    /// and now closed; this is that test, un-ignored.
     ///
-    /// A user enum with a `Vec[String]` payload, consumed by an arm, over a live
-    /// source. The read-only spelling of this is FIXED (case 4 above); only the
-    /// consuming one is open, and only because the duplicator is depth-limited:
-    /// `deep_copy_enum_heap_payload_in_place`'s `VecOrString` arm takes an
-    /// OUTER-buffer copy, mirroring the enum drop's outer-only free, so the
-    /// element `String`s come back SHARED between the two copies.
+    /// The clone leg was gated OFF this shape because its duplicator
+    /// (`deep_copy_enum_heap_payload_in_place`) copies the outer buffer only,
+    /// leaving the element `String`s shared — measured then as two invalid
+    /// reads plus two invalid frees, i.e. correct output but memory-unsafe.
     ///
-    /// That is not a hypothetical. Running the leg WITHOUT the depth gate was
-    /// measured at two invalid reads plus two invalid frees on exactly this
-    /// program — correct output, memory-unsafe. So the gate deliberately keeps
-    /// this shape on the wrong-output path it already had; trading clean-but-
-    /// wrong for a use-after-free would be a severity increase, not a fix.
+    /// The premise behind that outer-only copy was that it mirrored "the enum
+    /// drop's outer-only payload free". Half true, and the missing half is the
+    /// bug: `emit_enum_drop_switch`'s `VecOrString` arm does free only the outer
+    /// buffer, but it is not the whole owner — the ELEMENTS are drained by the
+    /// separate per-binding container-elem-bodies channel. So the copy was a
+    /// level shallower than the thing it had to be independent of.
     ///
-    /// Closing it means giving the enum channel an element-deep copy (and the
-    /// matching element-deep free), which is a change to the enum drop model
-    /// rather than to this classifier — the reason it is filed rather than
-    /// forced here.
+    /// Element depth had to become the CALLER's choice rather than the default:
+    /// making it unconditional leaked 1990 bytes across 300 allocations in
+    /// `asan_match_bound_struct_variant_vec_field_reborrow_no_double_free`,
+    /// because most callers produce a copy that is dropped by the enum's own
+    /// `EnumDrop` — outer-only — so the deep elements had no owner. The
+    /// live-local clone qualifies precisely because it is produced ONLY when an
+    /// arm's payload escapes into a consumer, and that consumer drains them.
+    ///
+    /// Case 3 is the reason the gate survives in widened form rather than being
+    /// deleted: a `NestedStruct` payload can carry a user `impl Drop`, and
+    /// duplicating it runs that body TWICE — not a memory bug at all, but a
+    /// visible one (`e2e_own_drop_enum_reassign_sequencing` grew a second
+    /// `drop 5 l5`). Independence and observability are separate hazards.
     #[test]
-    #[ignore = "B-2026-08-08-25: enum Vec[heap-element] payload — the enum deep-copy is outer-buffer only"]
-    fn test_e2e_consuming_match_over_live_enum_vec_of_strings_still_open() {
+    fn test_e2e_consuming_match_over_live_enum_vec_payload_keeps_the_source() {
+        // 1. THE BUG: `Vec[String]` payload, arm consumes it via `for`, source
+        // read again afterwards. Element buffers must be independent.
         assert_eq!(
             run_program(
                 "enum E { A(Vec[String]), B }\n\
@@ -23709,6 +23718,41 @@ fn main() {
             )
             .as_deref(),
             Some("aa\nbb\naa\nbb\n")
+        );
+        // 2. The scalar-element sibling, which the pre-widening gate already
+        // allowed — kept so a regression cannot quietly narrow back to it.
+        assert_eq!(
+            run_program(
+                "enum E { A(Vec[i64]), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A([11, 22]);\n\
+                     match e { E.A(v) => { for s in v { println(s); } } E.B => {} }\n\
+                     match e { E.A(v) => { for s in v { println(s); } } E.B => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("11\n22\n11\n22\n")
+        );
+        // 3. CONTROL — a payload struct with a user `Drop`. The clone must NOT
+        // fire: duplicating it would run the body twice, which is observable
+        // even though it is memory-safe. One `drop`, not two — and it lands at
+        // the arm's NLL end rather than at scope exit, which is the existing
+        // sequencing this control must not perturb either.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64 }\n\
+                 impl Drop for R {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                 }\n\
+                 enum E { A(R), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(R { id: 7 });\n\
+                     match e { E.A(v) => { println(f\"got {v.id}\"); } E.B => {} }\n\
+                     println(f\"end\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("got 7\ndrop 7\nend\n")
         );
     }
 

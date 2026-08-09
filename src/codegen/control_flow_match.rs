@@ -1961,7 +1961,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return (val, false);
         }
-        if !self.enum_payload_deep_copy_is_exact(&enum_name, &layout) {
+        if !self.enum_payload_clone_is_faithful(&enum_name, &layout) {
             return (val, false);
         }
         if !self.scrutinee_read_after_match(name, name, scrutinee, arms) {
@@ -1971,7 +1971,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let ll = val.get_type();
         let clone = self.create_entry_alloca(fn_val, "livelocal.enum.clone", ll);
         self.builder.build_store(clone, val).unwrap();
-        self.deep_copy_enum_heap_payload_in_place(&enum_name, clone, &layout);
+        // ELEMENT-deep (B-2026-08-09-9): an outer-only copy leaves a
+        // `Vec[String]` payload's element buffers shared with the source, and
+        // the consuming arm then frees buffers the live source still owns.
+        // Sound here specifically because this clone exists only when the arm's
+        // payload ESCAPES into a consumer, so the copied elements have an owner.
+        self.deep_copy_enum_heap_payload_with_elements_in_place(&enum_name, clone, &layout);
         (
             self.builder
                 .build_load(ll, clone, "livelocal.enum.cloned")
@@ -1980,26 +1985,32 @@ impl<'ctx> super::Codegen<'ctx> {
         )
     }
 
-    /// Is `deep_copy_enum_heap_payload_in_place` an EXACT duplication for every
-    /// heap-bearing field of `enum_name` — i.e. does it produce two buffers that
-    /// can each be freed independently?
+    /// B-2026-08-09-9 — is duplicating `enum_name`'s payload FAITHFUL: two
+    /// independently-freeable copies, and no observable side effect from the
+    /// copy itself?
     ///
-    /// It is not always. Its `VecOrString` arm takes an OUTER-buffer copy
-    /// (`emit_vecstr_defensive_copy(.., elem_te = None)`, mirroring the enum
-    /// drop's outer-only payload free), so a `Vec[String]` payload comes back
-    /// with the element `String`s still SHARED: measured on `enum E {
-    /// A(Vec[String]) }` as two invalid reads plus two invalid frees. That is
-    /// the element-depth trap this bug's ledger row warned about — real, and
-    /// specific to the user-enum channel, which keys on `field_drop_kinds`
-    /// rather than on a type-directed clone.
+    /// Two separate hazards, and the second is easy to miss because it is not a
+    /// memory bug at all:
     ///
-    /// So the clone leg is restricted to the depth-1-exact payloads: a direct
-    /// `String`, or a `Vec`/`VecDeque` of trivially-copyable elements. Every
-    /// other heap kind — `Vec` of heap elements, `NestedStruct`, `MapOrSet` —
-    /// keeps the status quo transfer path. That leaves those shapes with the
-    /// wrong output they already had, which is the right trade against handing
-    /// them a use-after-free instead.
-    fn enum_payload_deep_copy_is_exact(
+    /// - INDEPENDENCE. Handled for `VecOrString` by
+    ///   `deep_copy_enum_heap_payload_with_elements_in_place`, but only as deep
+    ///   as `emit_vecstr_defensive_copy` walks — `String` and `Vec` inners. A
+    ///   `Vec` of user STRUCTS would come back with the elements aliased, so
+    ///   the inner is restricted to what is actually duplicated.
+    ///
+    /// - OBSERVABILITY. A `NestedStruct` payload may carry a user `impl Drop`,
+    ///   and duplicating it makes that body run TWICE — a clone is a
+    ///   compiler-internal artifact the source language never asked for.
+    ///   Measured: `e2e_own_drop_enum_reassign_sequencing` gained a second
+    ///   `drop 5 l5` / `loud drop` pair. So `NestedStruct` is excluded
+    ///   regardless of whether its copy would be memory-safe, and `MapOrSet`
+    ///   with it (unmeasured — status quo rather than a guess).
+    ///
+    /// This is the widened successor of the gate that shipped with legs 2/3:
+    /// that one also excluded `Vec` of heap elements, because the duplicator
+    /// was outer-only then. Now that it can go element-deep, that class is
+    /// admitted and the exclusions are the two above.
+    fn enum_payload_clone_is_faithful(
         &self,
         enum_name: &str,
         layout: &crate::codegen::EnumLayout<'ctx>,
@@ -2021,9 +2032,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(te) = variant_tes.get(variant).and_then(|tes| tes.get(fi)) else {
                     return false;
                 };
-                self.is_string_type_expr(te)
-                    || super::helpers::vec_inner_type_expr(te)
-                        .is_some_and(|elem| super::vec_method::is_trivially_copyable_te(&elem))
+                if self.is_string_type_expr(te) {
+                    return true;
+                }
+                // A `Vec`/`VecDeque` whose elements the defensive copy really
+                // duplicates: a scalar (bit-copy is exact) or a `String`.
+                super::helpers::vec_inner_type_expr(te).is_some_and(|elem| {
+                    super::vec_method::is_trivially_copyable_te(&elem)
+                        || self.is_string_type_expr(&elem)
+                })
             })
         })
     }

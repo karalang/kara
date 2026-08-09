@@ -44640,6 +44640,65 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-9 under ASAN — a `Vec[String]` enum payload consumed by an
+    /// arm over a live local must leave BOTH copies independently freeable.
+    ///
+    /// This is the fixture the output test cannot be: the defect was two
+    /// invalid reads plus two invalid frees on element buffers the two copies
+    /// SHARED, while the program's stdout was already correct. Only a
+    /// sanitizer distinguishes "right answer" from "right answer over freed
+    /// memory".
+    ///
+    /// It guards both directions. Too shallow a copy and the elements alias, so
+    /// the arm's consumption frees buffers the live source still owns
+    /// (use-after-free, then a double free at scope exit). Too deep a copy in
+    /// the wrong place and the duplicated elements have no owner — which is not
+    /// hypothetical either: making element depth unconditional rather than
+    /// opt-in leaked 1990 bytes across 300 allocations in
+    /// `asan_match_bound_struct_variant_vec_field_reborrow_no_double_free`.
+    /// LSan on the Linux CI leg is what catches that half.
+    ///
+    /// Case 3's `Vec[i64]` payload is the scalar-element control: a bit-copy is
+    /// already exact there, so it must stay clean without the element walk.
+    ///
+    /// Every payload is read BYTE-WISE (`println` of the string itself, never
+    /// `.len()`), because a buffer whose bytes are never read is a provably
+    /// dead allocation LLVM deletes outright — the fixture would then assert
+    /// nothing at all.
+    #[test]
+    fn asan_consuming_match_over_live_enum_vec_payload_frees_each_buffer_once() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(Vec[String]), B }
+enum N { A(Vec[i64]), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. The bug: consumed by the arm, source read again afterwards.
+        let e: E = E.A([f"aa{i}", f"bb{i}"]);
+        match e { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        match e { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        // 2. CONTROL — source DEAD after the consuming match, so no clone.
+        let d: E = E.A([f"dd{i}"]);
+        match d { E.A(v) => { for s in v { println(s); } } E.B => { println("-"); } }
+        // 3. CONTROL — scalar elements, exact without the element walk.
+        let n: N = N.A([i, i]);
+        match n { N.A(v) => { for s in v { println(s); } } N.B => { println("-"); } }
+        match n { N.A(v) => { for s in v { println(s); } } N.B => { println("-"); } }
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "aa0", "bb0", "aa0", "bb0", "dd0", "0", "0", "0", "0", "aa1", "bb1", "aa1", "bb1",
+                "dd1", "1", "1", "1", "1", "aa2", "bb2", "aa2", "bb2", "dd2", "2", "2", "2", "2",
+                "aa3", "bb3", "aa3", "bb3", "dd3", "3", "3", "3", "3", "end",
+            ],
+            "consuming_match_live_enum_vec_payload",
+        );
+    }
+
     /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
     ///
     /// `suppress_inline_option_result_binding_move` disarms a source binding
