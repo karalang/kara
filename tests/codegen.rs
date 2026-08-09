@@ -23674,6 +23674,114 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-11 — the CONSUMING half of the block spellings, the
+    /// sibling of cases 10 and 11 above (which pin the READ-ONLY half).
+    ///
+    /// Leg 3 gave the live-local clone (`clone_escaping_live_local_enum`) to
+    /// the `match` site only, so the block sites kept the transfer path and
+    /// emptied the source: each of these printed the payload once and then an
+    /// EMPTY line, while `--interp` printed it twice.
+    ///
+    /// `let…else` is NOT here, and the leg is not wired at that site. A probe
+    /// reproduced the same signature there, but `karac check` rejects it: the
+    /// `let…else` MOVES the scrutinee, so the later read the leg keys on is a
+    /// `UseAfterMove` that never reaches codegen. See the comment at
+    /// `compile_let_else` for why the checker-clean spelling cannot observe
+    /// the bug either.
+    #[test]
+    fn test_e2e_consuming_block_spellings_keep_the_live_source_for_user_enums() {
+        // 1. `if let` — the row's own reproduction.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"hi\");\n\
+                     if let E.A(v) = e { let k: String = v; println(k); }\n\
+                     if let E.A(v) = e { println(v); }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // 2. `while let`, whose clone emits per evaluation in the header.
+        //    The body reassigns the scrutinee so the loop terminates; the
+        //    source is read after it, which is what arms the leg.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let mut e: E = E.A(f\"hi\");\n\
+                     while let E.A(v) = e { let k: String = v; println(k); e = E.B; }\n\
+                     if let E.A(w) = e { println(w); } else { println(f\"empty-ok\"); }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nempty-ok\n")
+        );
+        // 3. DEAD source, `if let` — the liveness gate must still decline, or
+        //    every consuming if-let pays for a clone it does not need. Same
+        //    output before and after the fix; it is here to pin that.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"hi\");\n\
+                     if let E.A(v) = e { let k: String = v; println(k); }\n\
+                     println(f\"done\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\ndone\n")
+        );
+    }
+
+    /// B-2026-08-09-14 — found while fixing B-2026-08-09-11 and measured
+    /// PRE-EXISTING on the baseline before it (both shapes below double-free
+    /// with every change stashed), so it is filed rather than fixed here.
+    ///
+    /// A CONSUMING `while let` arm over a plain enum local whose source is
+    /// DEAD after the loop double-frees. The `match` and `if let` spellings of
+    /// the same shape are clean, and the read-only `while let` is clean, which
+    /// is what makes this while-let-specific rather than another face of the
+    /// live-local family. It is independent of whether the body reassigns the
+    /// scrutinee: the `break` spelling below double-frees too.
+    ///
+    /// B-2026-08-09-11's clone MASKS this whenever the source is LIVE after
+    /// the loop (case 3 of the test above is exactly that program, and it
+    /// passes) — the clone hands the arm its own buffer, so the source's is
+    /// never double-freed. Dead sources decline the clone by design and land
+    /// back on the raw transfer path, where this bug lives.
+    #[test]
+    #[ignore = "B-2026-08-09-14: consuming `while let` over a DEAD enum local double-frees"]
+    fn test_e2e_consuming_while_let_over_dead_enum_local_still_open() {
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let mut e: E = E.A(f\"hi\");\n\
+                     while let E.A(v) = e { let k: String = v; println(k); e = E.B; }\n\
+                     println(f\"done\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\ndone\n")
+        );
+        // Same, without the reassignment — terminates via `break`.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let mut e: E = E.A(f\"hi\");\n\
+                     let mut n: i64 = 0;\n\
+                     while let E.A(v) = e { let k: String = v; println(k); n = n + 1; if n > 0 { break } }\n\
+                     println(f\"done\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\ndone\n")
+        );
+    }
+
     /// B-2026-08-09-9 — a user enum with a `Vec[String]` payload, consumed by a
     /// match arm over a LIVE local. Split out of leg 3 as an `#[ignore]`d gap
     /// and now closed; this is that test, un-ignored.

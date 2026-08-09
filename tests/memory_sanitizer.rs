@@ -44699,6 +44699,66 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-11 — the BLOCK-spelling sibling of the fixture above.
+    ///
+    /// The live-local clone leg now fires at `if let` and `while let` as well
+    /// as at `match`, and each site carries its own drop wiring: the if-let
+    /// clone rides the enclosing frame's freshtemp drop, while the `while let`
+    /// clone is remade per evaluation with a miss-edge free at loop exit.
+    /// Those are two different ways to leak or double-free the same buffer, so
+    /// each gets a case rather than trusting the match-site fixture.
+    ///
+    /// `let…else` is absent because the leg is not wired there — see
+    /// `compile_let_else`: the checker rejects the shape that would need it.
+    ///
+    /// Case 3 is the liveness control in the other direction: with the source
+    /// DEAD the clone must NOT fire, and one that fired without disarming the
+    /// source would leak the original every pass — the LSan-only signature the
+    /// sibling fixtures document.
+    ///
+    /// The `while let` case deliberately uses a LIVE source. Its dead-source
+    /// twin double-frees on a cause that predates this leg (B-2026-08-09-14,
+    /// pinned `#[ignore]`d in tests/codegen.rs), so putting it here would
+    /// assert someone else's open bug rather than this leg's memory safety.
+    ///
+    /// Every payload is read BYTE-WISE for the reason the siblings document:
+    /// a buffer whose bytes are never read is a dead allocation LLVM deletes,
+    /// and the fixture would assert nothing.
+    #[test]
+    fn asan_live_local_block_spellings_over_user_enum_free_each_buffer_once() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. `if let`, consuming, source LIVE — the row's own shape.
+        let a: E = E.A(f"if{i}");
+        if let E.A(v) = a { let k: String = v; println(k); }
+        if let E.A(v) = a { println(v); }
+        // 2. `while let`, consuming, source LIVE — clone per evaluation,
+        //    freed on the miss edge at loop exit.
+        let mut c: E = E.A(f"wl{i}");
+        while let E.A(v) = c { let k: String = v; println(k); c = E.B; }
+        if let E.A(w) = c { println(w); } else { println("wl-empty"); }
+        // 3. CONTROL — `if let` with the source DEAD, so no clone may be made.
+        let d: E = E.A(f"dif{i}");
+        if let E.A(v) = d { let k: String = v; println(k); }
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "if0", "if0", "wl0", "wl-empty", "dif0", "if1", "if1", "wl1", "wl-empty", "dif1",
+                "if2", "if2", "wl2", "wl-empty", "dif2", "if3", "if3", "wl3", "wl-empty", "dif3",
+                "end",
+            ],
+            "live_local_block_spellings_user_enum",
+        );
+    }
+
+
     /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
     ///
     /// `suppress_inline_option_result_binding_move` disarms a source binding

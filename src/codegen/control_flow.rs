@@ -67,6 +67,24 @@ impl<'ctx> super::Codegen<'ctx> {
         ) && self.pattern_bindings_escape_in_block(pattern, then_block);
         let (val, did_clone_ref_enum) =
             self.clone_escaping_borrowed_ref_chain_enum(value, val, ref_chain_escapes);
+        // B-2026-08-09-11: the LIVE-LOCAL sibling — `if let E.A(v) = e {
+        // <consume v> }` where `e` is a plain local read again after the
+        // construct. The `match` spelling got this leg with B-2026-08-08-25
+        // leg 3; this site kept the transfer path and emptied the source.
+        // Same `did_clone` contract, so the clone rides the freshtemp
+        // drop-tracking below. Gates are disjoint from the ref-chain leg's
+        // (Identifier vs FieldAccess/TupleIndex), so at most one fires.
+        let else_end = else_branch.map(|e| e.span.offset + e.span.length);
+        let live_local_escapes = self.pattern_bindings_escape_in_block(pattern, then_block);
+        let (val, did_clone_live_local_enum) = self.clone_escaping_live_local_enum_block(
+            value,
+            val,
+            pattern,
+            live_local_escapes,
+            then_block,
+            else_end,
+        );
+        let did_clone_ref_enum = did_clone_ref_enum || did_clone_live_local_enum;
         let (val, refchain_struct_clone) = self.clone_escaping_borrowed_ref_chain_struct(
             value,
             val,
@@ -451,6 +469,21 @@ impl<'ctx> super::Codegen<'ctx> {
         ) && self.pattern_bindings_escape_in_block(pattern, body);
         let (val, did_clone_ref_enum) =
             self.clone_escaping_borrowed_ref_chain_enum(value, val, ref_chain_escapes);
+        // B-2026-08-09-11: the LIVE-LOCAL sibling, per evaluation — same
+        // contract as the ref-chain leg just above, whose per-iteration
+        // freshtemp drop and miss-edge free the clone already rides. Liveness
+        // bounds on the loop BODY, so a read inside the body does not by
+        // itself arm the clone while a read after the loop does.
+        let live_local_escapes = self.pattern_bindings_escape_in_block(pattern, body);
+        let (val, did_clone_live_local_enum) = self.clone_escaping_live_local_enum_block(
+            value,
+            val,
+            pattern,
+            live_local_escapes,
+            body,
+            None,
+        );
+        let did_clone_ref_enum = did_clone_ref_enum || did_clone_live_local_enum;
         let cond = self.compile_pattern_condition(pattern, val)?;
         self.builder
             .build_conditional_branch(cond.into_int_value(), body_bb, miss_bb)
@@ -876,6 +909,19 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         let (val, did_clone_ref_enum) =
             self.clone_escaping_borrowed_ref_chain_enum(value, val, ref_chain_escapes);
+        // B-2026-08-09-11 — the live-local clone leg is deliberately NOT wired
+        // at this site, unlike at `if let` / `while let`. It was, briefly, on
+        // the strength of a probe that DID reproduce the emptied-source
+        // signature here (`hi` then an empty line where `--interp` printed
+        // `hi` twice). `karac check` then rejected that probe outright: `let
+        // A(v) = e else { … }` MOVES `e`, so the later read of `e` the leg
+        // keys on is a `UseAfterMove` and codegen never sees the program in
+        // production. The only spelling that survives the ownership checker
+        // reassigns `e` first — and then the value read after is FRESH, so an
+        // emptied source can never be observed. The leg would still fire there
+        // (the reassignment is a mention past the construct) and buy a clone
+        // nobody reads. Unreachable-for-the-bug, so it is left out rather than
+        // shipped as dead weight.
         let (val, refchain_struct_clone) = self.clone_escaping_borrowed_ref_chain_struct(
             value,
             val,

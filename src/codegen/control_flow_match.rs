@@ -1925,6 +1925,69 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         arms: &[MatchArm],
     ) -> (BasicValueEnum<'ctx>, bool) {
+        let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+        let live =
+            |cg: &Self, name: &str| cg.scrutinee_read_after_match(name, name, scrutinee, arms);
+        self.clone_escaping_live_local_enum_core(
+            scrutinee,
+            val,
+            &patterns,
+            !self.no_arm_payload_escapes(arms),
+            &live,
+        )
+    }
+
+    /// B-2026-08-09-11 — the BLOCK-form sibling of
+    /// [`Self::clone_escaping_live_local_enum`], for `if let` / `while let`.
+    ///
+    /// The `match` spelling of `let e = E.A(f"hi"); if let E.A(v) = e { let k:
+    /// String = v; … } if let E.A(v) = e { … }` was already correct; the
+    /// if-let spelling printed the payload once and then an EMPTY line,
+    /// because only the match site carried the live-local clone leg. Same
+    /// `did_clone` → `materialize_freshtemp_enum_scrutinee` contract as the
+    /// ref-chain leg that already sits at these sites.
+    ///
+    /// Liveness bounds on the BLOCK rather than on arm bodies, which is the
+    /// whole reason this is a second entry point rather than a shared call:
+    /// without the gate the clone would fire on every consuming `if let`,
+    /// including the common DEAD-source shape that is correct and free on
+    /// today's transfer path.
+    ///
+    /// `escapes` is a parameter rather than computed here because the three
+    /// callers derive it differently: `if let` / `while let` ask whether the
+    /// pattern's bindings escape their block, while a `let…else` binding
+    /// escapes into the ENCLOSING scope by construction and so passes an
+    /// unconditional `true` — the same convention the ref-chain leg at that
+    /// site already uses. `block` is correspondingly the construct's LAST
+    /// block (the then-block, the loop body, or the else-block), whose end
+    /// bounds the construct for the liveness gate.
+    pub(super) fn clone_escaping_live_local_enum_block(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        pattern: &Pattern,
+        escapes: bool,
+        block: &crate::ast::Block,
+        else_end: Option<usize>,
+    ) -> (BasicValueEnum<'ctx>, bool) {
+        let live = |cg: &Self, name: &str| {
+            cg.scrutinee_read_after_block(name, name, scrutinee, block, else_end)
+        };
+        self.clone_escaping_live_local_enum_core(scrutinee, val, &[pattern], escapes, &live)
+    }
+
+    /// Shared core of the two live-local enum clone entry points. `escapes`
+    /// and `live` are the two gates whose computation differs between the
+    /// arm-list and block forms; every other gate is identical, and the emit
+    /// is byte-for-byte the same.
+    fn clone_escaping_live_local_enum_core(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        patterns: &[&Pattern],
+        escapes: bool,
+        live: &dyn Fn(&Self, &str) -> bool,
+    ) -> (BasicValueEnum<'ctx>, bool) {
         // Identifier only, for the same owned-`self` reason
         // `scrutinee_is_readonly_owned_enum_local` documents.
         let ExprKind::Identifier(name) = &scrutinee.kind else {
@@ -1934,8 +1997,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.for_loop_owned_agg_vars.contains(name.as_str()) {
             return (val, false);
         }
-        // ESCAPING arms only — the read-only case is the borrow path above.
-        if self.no_arm_payload_escapes(arms) {
+        // ESCAPING bindings only — the read-only case is the borrow path above.
+        if !escapes {
             return (val, false);
         }
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
@@ -1955,16 +2018,16 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.slot_has_live_enum_drop(slot.ptr) {
             return (val, false);
         }
-        if !arms
+        if !patterns
             .iter()
-            .any(|a| self.enum_pattern_binds_heap_payload(&enum_name, &a.pattern))
+            .any(|p| self.enum_pattern_binds_heap_payload(&enum_name, p))
         {
             return (val, false);
         }
         if !self.enum_payload_clone_is_faithful(&enum_name, &layout) {
             return (val, false);
         }
-        if !self.scrutinee_read_after_match(name, name, scrutinee, arms) {
+        if !live(self, name) {
             return (val, false);
         }
         let fn_val = self.current_fn.unwrap();
@@ -2619,13 +2682,52 @@ impl<'ctx> super::Codegen<'ctx> {
             ))
             .max()
             .unwrap_or(0);
-        // Either spelling can carry the later read: the source may be reached
-        // through the passthrough alias as well as its own name.
+        self.ident_read_at_or_after(name, owner, match_end)
+    }
+
+    /// B-2026-08-09-11 — the BLOCK-form sibling of
+    /// [`Self::scrutinee_read_after_match`], for an `if let` / `while let`
+    /// whose construct ends at a block rather than at a list of arm bodies.
+    ///
+    /// `else_end` folds in an `else` branch's extent so `if let … { } else {
+    /// … <read e> … }` is not read as a use past the construct: a mention
+    /// inside the else arm is part of the construct, not after it. Passing
+    /// `None` (no else, or `while let`) bounds on the block alone.
+    ///
+    /// The `while let` caller bounds on the loop BODY, which is the same
+    /// conservative direction as the match form: a read inside the body is
+    /// within `[scrutinee.start, end)` and so does not by itself arm the
+    /// clone, while a read after the loop does.
+    fn scrutinee_read_after_block(
+        &self,
+        name: &str,
+        owner: &str,
+        scrutinee: &Expr,
+        block: &crate::ast::Block,
+        else_end: Option<usize>,
+    ) -> bool {
+        let end = [
+            block.span.offset + block.span.length,
+            scrutinee.span.offset + scrutinee.span.length,
+        ]
+        .into_iter()
+        .chain(else_end)
+        .max()
+        .unwrap_or(0);
+        self.ident_read_at_or_after(name, owner, end)
+    }
+
+    /// Shared core of the two liveness gates: is `name` (or the `owner` it
+    /// aliases) mentioned at or past `end`?
+    ///
+    /// Either spelling can carry the later read: the source may be reached
+    /// through the passthrough alias as well as its own name.
+    fn ident_read_at_or_after(&self, name: &str, owner: &str, end: usize) -> bool {
         [name, owner]
             .iter()
             .filter_map(|n| self.fn_body_ident_mention_offsets.get(*n))
             .flatten()
-            .any(|&off| off >= match_end)
+            .any(|&off| off >= end)
     }
 
     /// Index every expression-level identifier mention in the function body
