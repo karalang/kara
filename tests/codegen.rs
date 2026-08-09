@@ -23914,30 +23914,199 @@ fn main() {
     /// AGREE — and a parity gate cannot see a defect both sides share. This
     /// test is what keeps it visible; without it, closing -10 would have
     /// silently retired the only signal that -15 exists.
+    ///
+    /// FIXED by extending the caller-side retraction the family already runs on:
+    /// `fn_returns_param_payload` asks the callee whether a `match` arm hands
+    /// back something bound OUT of the arg, which `fn_returns_param` cannot see
+    /// because the param itself reaches no return site. Kept un-ignored as the
+    /// regression pin — the parity oracle still cannot see this class.
     #[test]
-    #[ignore = "B-2026-08-09-15: a returned enum-param payload runs its Drop body twice (both backends)"]
     fn test_e2e_returned_enum_param_payload_drop_fires_once_still_open() {
+        let hdr = "struct Res { id: i64, name: String }\n\
+                   impl Drop for Res {\n\
+                   \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                   }\n\
+                   enum Box2 { Full(Res), Empty }\n";
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Box2) -> Res {{\n\
+                 \x20   match b {{\n\
+                 \x20       Box2.Full(r) => {{ return r; }}\n\
+                 \x20       Box2.Empty => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7\n")
+        );
+        // The same escape routed through a `let`. The alias has to be followed:
+        // the arm returns `k`, not the binding the pattern introduced, and a
+        // predicate that only looks at pattern names answers "does not escape"
+        // for the spelling most code actually writes.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Box2) -> Res {{\n\
+                 \x20   match b {{\n\
+                 \x20       Box2.Full(r) => {{ let k: Res = r; return k; }}\n\
+                 \x20       Box2.Empty => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7\n")
+        );
+    }
+
+    /// B-2026-08-09-15 siblings — the shapes whose payload does NOT escape the
+    /// callee, and must keep firing caller-side exactly once.
+    ///
+    /// These are the guard rail on the retraction. The fix keys on "does the
+    /// callee return something bound out of this arg", and every case here
+    /// answers no: a payload read through a field projection stays behind, and
+    /// an unmatched param is never bound out at all. Widening that predicate —
+    /// or replacing it with an unconditional retraction, which an earlier
+    /// attempt at this row did — silences all three, and a lost `Drop` body
+    /// reads as a passing test unless something pins the output.
+    #[test]
+    fn test_e2e_nonescaping_enum_arg_payload_still_fires_once() {
+        let hdr = "struct Res { id: i64, name: String }\n\
+                   impl Drop for Res {\n\
+                   \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                   }\n\
+                   enum Box2 { Full(Res), Empty }\n";
+        // Payload bound out but NOT returned — the callee is the sole owner.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Box2) -> i64 {{\n\
+                 \x20   match b {{\n\
+                 \x20       Box2.Full(r) => {{ return r.id; }}\n\
+                 \x20       Box2.Empty => {{ return 0; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let v: i64 = take(b);\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("drop 7\nv=7\n")
+        );
+        // Param NEVER matched — nothing binds the payload out, so the param's
+        // own walk is the only fire, at the callee's frame exit.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Box2) -> i64 {{ println(f\"in\"); 1 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let v: i64 = take(b);\n\
+                 \x20   println(f\"end {{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("in\ndrop 7\nend 1\n")
+        );
+        // NO-HEAP payload returned out of a param: the entry copy declines, so
+        // codegen's callee-side registration never engages — yet one body, in
+        // the caller, is still the answer both backends must print.
         assert_eq!(
             run_program(
-                "struct Res { id: i64, name: String }\n\
-                 impl Drop for Res {\n\
+                "struct Res2 { id: i64 }\n\
+                 impl Drop for Res2 {\n\
                  \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
                  }\n\
-                 enum Box2 { Full(Res), Empty }\n\
-                 fn take(b: Box2) -> Res {\n\
+                 enum Box3 { Full(Res2), Empty }\n\
+                 fn take(b: Box3) -> Res2 {\n\
                  \x20   match b {\n\
-                 \x20       Box2.Full(r) => { return r; }\n\
-                 \x20       Box2.Empty => { return Res { id: 0, name: f\"z\" }; }\n\
+                 \x20       Box3.Full(r) => { return r; }\n\
+                 \x20       Box3.Empty => { return Res2 { id: 0 }; }\n\
                  \x20   }\n\
                  }\n\
                  fn main() {\n\
-                 \x20   let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" });\n\
-                 \x20   let r: Res = take(b);\n\
+                 \x20   let b: Box3 = Box3.Full(Res2 { id: 7 });\n\
+                 \x20   let r: Res2 = take(b);\n\
                  \x20   println(f\"got {r.id}\");\n\
                  }"
             )
             .as_deref(),
             Some("got 7\ndrop 7\n")
+        );
+    }
+
+    /// B-2026-08-09-15, METHOD spelling — the same doubling one call shape over.
+    ///
+    /// `t.take(b)` reaches a different arg loop than `take(b)`, so the retraction
+    /// has to be wired there too, and it is worth its own test because of the
+    /// index. The method path counts the receiver as declared slot 0 while the
+    /// AST keeps `self` out of `params` entirely — an off-by-one reads the wrong
+    /// param, or past the end of a one-arg method, and quietly answers "does not
+    /// escape" for every method in the program without failing anything. That is
+    /// exactly what happened on the first wiring, and only instrumentation
+    /// caught it; these expectations are what make it fail out loud instead.
+    #[test]
+    fn test_e2e_returned_enum_arg_payload_method_spelling_fires_once() {
+        let hdr = "struct Res { id: i64, name: String }\n\
+                   impl Drop for Res {\n\
+                   \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+                   }\n\
+                   enum Box2 { Full(Res), Empty }\n\
+                   struct Taker { tag: i64 }\n";
+        // Arm returns the payload out of the method.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 impl Taker {{\n\
+                 \x20   fn take(ref self, b: Box2) -> Res {{\n\
+                 \x20       match b {{\n\
+                 \x20           Box2.Full(r) => {{ return r; }}\n\
+                 \x20           Box2.Empty => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20       }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let t: Taker = Taker {{ tag: 1 }};\n\
+                 \x20   let b: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = t.take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
+        // NOT covered here: the `let k: Res = r; return k;` spelling of the same
+        // method. It aborts with `free(): double free detected in tcache 2`
+        // BEFORE and AFTER this fix — the method twin of what B-2026-08-09-12
+        // closed for free functions, filed as its own row. The free-function
+        // spelling of that alias IS exercised, in the escape test above.
+        //
+        // Method never matches the param — its own walk is the only fire.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 impl Taker {{ fn take(ref self, b: Box2) -> i64 {{ println(f\"in\"); 1 }} }}\n\
+                 fn main() {{\n\
+                 \x20   let t: Taker = Taker {{ tag: 1 }};\n\
+                 \x20   let b: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let v: i64 = t.take(b);\n\
+                 \x20   println(f\"end {{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("in\ndrop 7 e7\nend 1\n")
         );
     }
 

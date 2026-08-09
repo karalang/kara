@@ -1981,7 +1981,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // literal and call args, and the shape here is a bare identifier.
             // Two entry-copied values genuinely exist, so the own-wrapper case
             // keeping two bodies is consistent with its two frees.
-            if !borrow_skip && flows_into_return {
+            //
+            // B-2026-08-09-15 widens the gate one level down the same rule: the
+            // callee may hand back not the param but a PAYLOAD bound out of it
+            // (`match b { Box2.Full(r) => return r }`). `fn_returns_param` cannot
+            // see that — `b` reaches no return site — so the caller kept firing
+            // its walk while the result's binding fired too.
+            if !borrow_skip && (flows_into_return || self.callee_returns_enum_arg_payload(&name, i))
+            {
                 if let ExprKind::Identifier(var_name) = &a.value.kind {
                     let var_name = var_name.clone();
                     self.suppress_container_elem_bodies_for_var(&var_name);
@@ -2177,6 +2184,100 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or(false)
         };
         is_tensor && !flagged(&self.fn_param_ref) && !flagged(&self.fn_param_mut_ref)
+    }
+
+    /// B-2026-08-09-15 — does the callee RETURN something it bound out of
+    /// parameter `i`, so the caller must stop running that arg's payload bodies?
+    ///
+    /// The payload sibling of [`Self::call_arg_flows_into_return`], and it exists
+    /// for the same reason: the caller-retains convention fires an owned arg's
+    /// bodies at the moved-from binding's live-range end, which is right when the
+    /// value dies in the callee and a duplicate when it comes back out.
+    /// `fn_returns_param` answers only for the param ITSELF; here the thing that
+    /// escapes is a payload a `match` arm bound out of it, so `b` never appears at
+    /// a return site and that predicate is blind to it.
+    ///
+    /// `name` is a free function's name or a qualified `Type.method` — the same
+    /// key `fn_param_ref` uses, so the METHOD path asks with its own `i + 1` (the
+    /// receiver holds slot 0). Both are looked up because the method spelling has
+    /// the identical defect: measured, `t.take(b)` printed the callee's copy AND
+    /// the caller's original (`drop 99 MUT`, `drop 7 e7`) where `--interp` printed
+    /// one.
+    ///
+    /// Borrowed params are excluded outright: nothing transfers, so whatever the
+    /// callee does with a borrow leaves the caller's walk its own.
+    pub(super) fn callee_returns_enum_arg_payload(&self, name: &str, i: usize) -> bool {
+        let flagged = |table: &HashMap<String, Vec<bool>>| {
+            table
+                .get(name)
+                .and_then(|v| v.get(i))
+                .copied()
+                .unwrap_or(false)
+        };
+        if flagged(&self.fn_param_ref) || flagged(&self.fn_param_mut_ref) {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        // Free fns by bare name; impl methods by the `Type.method` key the
+        // method path passes.
+        let (recv_ty, bare) = match name.split_once('.') {
+            Some((t, m)) => (Some(t), m),
+            None => (None, name),
+        };
+        let matching_fns = program.items.iter().flat_map(|item| match item {
+            crate::ast::Item::Function(f) if recv_ty.is_none() && f.name == name => vec![f],
+            crate::ast::Item::ImplBlock(b)
+                if recv_ty.is_some_and(|t| {
+                    matches!(&b.target_type.kind,
+                        TypeKind::Path(p) if p.segments.first().is_some_and(|h| h == t))
+                }) =>
+            {
+                b.items
+                    .iter()
+                    .filter_map(|ii| match ii {
+                        crate::ast::ImplItem::Method(f) if f.name == bare => Some(f.as_ref()),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        });
+        matching_fns.into_iter().any(|f| {
+            // `fn_param_ref` counts the receiver as slot 0; the AST does NOT —
+            // `Function::params` excludes it and `self_param` carries it. So the
+            // caller's declared index has to shift back by one for a method, or
+            // `params.get` reads the wrong param (and for a one-arg method reads
+            // past the end, which is how this silently answered `false` for every
+            // method until it was instrumented).
+            let ast_i = if f.self_param.is_some() {
+                match i.checked_sub(1) {
+                    Some(n) => n,
+                    None => return false,
+                }
+            } else {
+                i
+            };
+            let Some(param) = f.params.get(ast_i) else {
+                return false;
+            };
+            // Bare `Path` naming a non-shared user enum — the types whose
+            // payload bodies ride the `__karac_dropelems_enum_<E>` channel this
+            // retraction acts on. `Option`/`Result` have their own.
+            let TypeKind::Path(path) = &param.ty.kind else {
+                return false;
+            };
+            let is_value_enum = path.segments.first().is_some_and(|en| {
+                en != "Option"
+                    && en != "Result"
+                    && self
+                        .enum_layouts
+                        .get(en.as_str())
+                        .is_some_and(|l| !l.is_shared)
+            });
+            is_value_enum && crate::ast::fn_returns_param_payload(f, ast_i)
+        })
     }
 
     /// Does parameter `i` of free function `name` take a by-value `Option[T]`

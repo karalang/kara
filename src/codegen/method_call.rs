@@ -5355,6 +5355,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         // declined the entry copy — move it, don't leave both
                         // sides owning it.
                         self.move_declined_copy_struct_arg(&a.value);
+                        // B-2026-08-09-15 — the method spelling of the free-fn
+                        // arm in `compile_call`: when the method returns a
+                        // payload bound out of this arg, the caller's walk is a
+                        // second body for one value. Measured before this:
+                        // `t.take(b)` printed `drop 7 e7` alongside the returned
+                        // value's own body while `--interp` printed one.
+                        // `pidx` (not `i`) is the DECLARED slot, the same index
+                        // `fn_param_ref` is keyed by, with the receiver at 0.
+                        // The AST does not agree — `Function::params` excludes
+                        // `self` — and the predicate shifts back by one itself
+                        // rather than making every caller know that.
+                        if self.callee_returns_enum_arg_payload(&qualified, pidx) {
+                            if let ExprKind::Identifier(var_name) = &a.value.kind {
+                                let var_name = var_name.clone();
+                                self.suppress_container_elem_bodies_for_var(&var_name);
+                            }
+                        }
                     }
                     if is_ref {
                         // Identifier place — pass its data pointer.

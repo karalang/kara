@@ -1348,3 +1348,196 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     }
     walk_block(&f.body, param_name)
 }
+
+/// B-2026-08-09-15 — the PAYLOAD sibling of [`fn_returns_param`]: does `f`
+/// return a value that a `match` / `if let` bound OUT of parameter `arg_index`?
+///
+/// `fn take(b: Box2) -> Res { match b { Box2.Full(r) => { return r; } … } }` —
+/// `b` itself never reaches a return site, so `fn_returns_param` is false, yet
+/// the value the caller handed over leaves the frame all the same. The caller
+/// drops an owned enum arg's payload BODIES at the moved-from binding's
+/// live-range end (the caller-retains convention this family runs on), which is
+/// correct only when the payload dies inside the callee. When it comes back out,
+/// the caller's consumer of the RESULT owns it and the arg-site fire is a second
+/// body for one value — measured `drop 7, got 7, drop 7` where `--interp`
+/// printed `got 7, drop 7`.
+///
+/// This is the same interprocedural question `fn_returns_param` already asks,
+/// one level down: not "is the param returned" but "is something bound out of it
+/// returned". Inverting the ownership model instead — making the callee own its
+/// by-value params outright — was built and measured first, and it regressed the
+/// shapes where the caller has no binding at all (a fresh `E.V(..)` ctor arg,
+/// whose caller-side temp drop is the only owner) and reordered an own-`Drop`
+/// enum's parent-body-then-payload sequence. Extending the existing rule keeps
+/// both.
+///
+/// CONSERVATIVE-TRUE on a mixed-path callee, exactly like `fn_returns_param` and
+/// like the arm-level `suppress_container_elem_bodies_for_var` it feeds: a
+/// `match` whose OTHER arm returns a fresh value still answers true, so a run
+/// that takes that arm loses the body side effect. That is the established trade
+/// on this channel — a missed body, never a double drop, and never a memory
+/// fault, since nothing here frees.
+pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+    /// Does `e` hand `name` across the frame boundary — bare, or moved into a
+    /// returned aggregate literal? A FIELD projection (`r.id`) deliberately does
+    /// not count: the payload stays behind, only a copy of one field leaves.
+    fn yields(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => n == name,
+            ExprKind::StructLiteral { fields, .. } => fields.iter().any(|f| yields(&f.value, name)),
+            ExprKind::Tuple(elems) => elems.iter().any(|el| yields(el, name)),
+            ExprKind::Call { args, .. } => args.iter().any(|a| yields(&a.value, name)),
+            _ => false,
+        }
+    }
+    /// Every name that aliases one of `names` through a `let` in this block, so
+    /// the `let k = r; return k;` spelling is recognized as the same escape.
+    fn grow_aliases(b: &Block, names: &mut Vec<String>) {
+        for st in &b.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &st.kind {
+                if names.iter().any(|n| yields(value, n)) {
+                    if let PatternKind::Binding(dest) = &pattern.kind {
+                        if !names.iter().any(|n| n == dest) {
+                            names.push(dest.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fn returns_any(e: &Expr, names: &[String]) -> bool {
+        match &e.kind {
+            ExprKind::Return(Some(inner)) => {
+                names.iter().any(|n| yields(inner, n)) || returns_any(inner, names)
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => returns_any_block(b, names),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                returns_any_block(then_block, names)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| returns_any(x, names))
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                returns_any_block(then_block, names)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| returns_any(x, names))
+            }
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .any(|a| names.iter().any(|n| yields(&a.body, n)) || returns_any(&a.body, names)),
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => returns_any_block(body, names),
+            _ => false,
+        }
+    }
+    fn returns_any_block(b: &Block, names: &[String]) -> bool {
+        let mut names = names.to_vec();
+        grow_aliases(b, &mut names);
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => returns_any(e, &names),
+            StmtKind::Let { value, .. } => returns_any(value, &names),
+            _ => false,
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|fe| names.iter().any(|n| yields(fe, n)) || returns_any(fe, &names))
+    }
+    /// Walk for a `match` / `if let` / `while let` whose SCRUTINEE is the param,
+    /// and ask whether the bindings it introduces leave the frame.
+    fn walk(e: &Expr, param: &str) -> bool {
+        let scrutinee_is_param =
+            |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } if scrutinee_is_param(scrutinee) => {
+                arms.iter().any(|a| {
+                    let names: Vec<String> = a.pattern.binding_names();
+                    !names.is_empty()
+                        && (names.iter().any(|n| yields(&a.body, n))
+                            || returns_any(&a.body, &names))
+                })
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                ..
+            } if scrutinee_is_param(value) => {
+                let names: Vec<String> = pattern.binding_names();
+                !names.is_empty() && returns_any_block(then_block, &names)
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } if scrutinee_is_param(value) => {
+                let names: Vec<String> = pattern.binding_names();
+                !names.is_empty() && returns_any_block(body, &names)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                walk(scrutinee, param) || arms.iter().any(|a| walk(&a.body, param))
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => walk_block_for(b, param),
+            ExprKind::Return(Some(inner)) => walk(inner, param),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                walk(condition, param)
+                    || walk_block_for(then_block, param)
+                    || else_branch.as_deref().is_some_and(|x| walk(x, param))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                walk(value, param)
+                    || walk_block_for(then_block, param)
+                    || else_branch.as_deref().is_some_and(|x| walk(x, param))
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block_for(body, param),
+            _ => false,
+        }
+    }
+    fn walk_block_for(b: &Block, param: &str) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => walk(e, param),
+            StmtKind::Let { value, .. } => walk(value, param),
+            _ => false,
+        }) || b.final_expr.as_deref().is_some_and(|fe| walk(fe, param))
+    }
+    walk_block_for(&f.body, param_name)
+}

@@ -2267,8 +2267,16 @@ impl<'a> super::Interpreter<'a> {
                     .items
                     .iter()
                     .any(|item| {
+                        // B-2026-08-09-15 — `fn_returns_param_payload` is the same
+                        // rule one level down: the callee hands back not the param
+                        // but something a `match` arm bound OUT of it, so the param
+                        // reaches no return site and `fn_returns_param` is blind to
+                        // it while the value still leaves the frame. Codegen's twin
+                        // is `callee_returns_enum_arg_payload`.
                         matches!(item, crate::ast::Item::Function(f)
-                            if f.name == fn_name && crate::ast::fn_returns_param(f, i))
+                            if f.name == fn_name
+                                && (crate::ast::fn_returns_param(f, i)
+                                    || crate::ast::fn_returns_param_payload(f, i)))
                     })
                     .then(|| n.clone())
             })
