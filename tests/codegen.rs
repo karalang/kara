@@ -3360,6 +3360,112 @@ fn main() {
         }
     }
 
+    /// B-2026-08-08-30 — mapping a BORROWED SCALAR payload.
+    ///
+    /// `Vec[T].first()` / `.get(i)` are typed `Option[ref T]` (`Map.get` is owned
+    /// `Option[V]`, which is why it never showed this). Two independent defects sat
+    /// on that borrowed payload, and the first one masked the second:
+    ///
+    /// 1. RETURN-TYPE INFERENCE. `infer_closure_return_type`'s param map held the
+    ///    param's SLOT type, which for a borrow is a pointer — but every read in
+    ///    the body goes through `load_variable`, which derefs, so the body's value
+    ///    type is the pointee. The closure was declared `-> ptr` while its body
+    ///    returned `i64`, and LLVM module verification rejected the function. It
+    ///    only bit when the mapper's RESULT type is the payload type: `|x| x > 5`
+    ///    yields `bool` and `|x| x + 1.0` hits the float arm, so both compiled and
+    ///    the family read as working.
+    ///
+    /// 2. A LEAKED BORROW MARK. The closure's `ref` param registration was never
+    ///    restored, so the OUTER function's next binding of that same name was
+    ///    still marked a borrow. The row filed this as a panic — the `Some(x)`
+    ///    arm's `x` deref'ing an `i64` — but the panic is the lucky case. When the
+    ///    later `x` is a Vec the bogus deref SUCCEEDS and reads the wrong word:
+    ///    `println(x.len())` printed 2 under `karac build` against the
+    ///    interpreter's 3. A silent run-vs-build divergence, which is why the
+    ///    registries are restored wholesale rather than only where they panicked.
+    ///
+    /// The `ref`-annotated spelling is covered because B-2026-08-08-24's diagnostic
+    /// tells authors to write exactly that over a borrowed payload.
+    #[test]
+    fn test_e2e_optres_map_borrowed_scalar_payload() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = vec![7, 9];
+    // Defect 1: result type == payload type, the shapes that failed to verify.
+    match v.first().map(|a| a + 1) { Some(b) => println(b), None => println("-") }
+    match v.first().map(|a| a) { Some(b) => println(b), None => println("-") }
+    match v.first().map(|a: ref i64| a + 1) { Some(b) => println(b), None => println("-") }
+    match v.get(1i64).map(|a| a + 1) { Some(b) => println(b), None => println("-") }
+    println(v.first().map_or(0i64, |a| a + 1));
+    println(v.first().map(|a| a + 1).unwrap_or(0i64));
+    // Controls: these compiled before the fix and must keep their answers.
+    match v.first().map(|a| a > 5i64) { Some(b) => println(b), None => println("-") }
+    let f: Vec[f64] = vec![1.5];
+    match f.first().map(|a| a + 1.0) { Some(b) => println(b), None => println("-") }
+    let empty: Vec[i64] = Vec.new();
+    match empty.first().map(|a| a + 1) { Some(b) => println(b), None => println("-") }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim_end(), "8\n7\n8\n10\n8\n8\ntrue\n2.5\n-");
+        }
+    }
+
+    /// B-2026-08-08-30, defect 2 in isolation: the closure's param borrow mark must
+    /// not outlive the closure.
+    ///
+    /// Each case reuses the mapper's parameter name in the ENCLOSING scope
+    /// afterwards. `len_after_map` is the miscompile that made this high-severity —
+    /// it produced a wrong ANSWER rather than a crash, so a build that merely
+    /// compiles proves nothing here and the expected values are the point.
+    ///
+    /// `captured_borrow_still_derefs` is the counter-test for how the fix is
+    /// written: the registries are CLONED and restored, not taken, so a captured
+    /// `ref` param keeps its deref inside the closure body. Taking them would pass
+    /// every case above and silently un-deref this one.
+    #[test]
+    fn test_e2e_closure_param_borrow_mark_does_not_leak() {
+        let out = run_program(
+            r#"
+fn shadowed_by_match(v: ref Vec[i64]) {
+    match v.first().map(|x| x + 1) { Some(x) => println(x), None => println("-") }
+}
+
+fn shadowed_by_let(v: ref Vec[i64]) {
+    let q = v.first().map(|x| x + 1);
+    let x = 5i64;
+    println(x);
+    match q { Some(y) => println(y), None => println("-") }
+}
+
+fn len_after_map(v: ref Vec[i64]) {
+    let q = v.first().map(|x| x + 1);
+    let x: Vec[i64] = vec![1, 2, 3];
+    println(x.len());
+    match q { Some(y) => println(y), None => println("-") }
+}
+
+fn captured_borrow_still_derefs(w: ref Vec[i64]) -> i64 {
+    let f = |i: i64| w[i] + 1i64;
+    return f(0i64);
+}
+
+fn main() {
+    let v: Vec[i64] = vec![7, 9];
+    shadowed_by_match(v);
+    shadowed_by_let(v);
+    len_after_map(v);
+    println(captured_borrow_still_derefs(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim_end(), "8\n5\n8\n3\n8\n8");
+        }
+    }
+
     #[test]
     fn test_e2e_vec_of_weak_read_back_upgrades_and_leaves_the_target_intact() {
         // B-2026-08-08-4 gap B (read-back). B-2026-08-08-5 landed the STORE

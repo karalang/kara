@@ -2818,15 +2818,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
 
         // 4. Infer return type from the body expression.
+        //
+        // This map answers "what does an occurrence of this NAME evaluate to
+        // inside the body", which for a borrow param is NOT its slot type. A
+        // `ref T` / `mut ref T` param's slot holds a POINTER, but every read of
+        // it in the body goes through `load_variable`, which derefs — so the
+        // body's value type is the POINTEE. Handing the raw `ptr` to the
+        // return-type heuristic declared the closure `-> ptr` while the body
+        // returned `T`, and LLVM module verification rejected the function
+        // ("Function return type does not match operand type of return inst").
+        //
+        // B-2026-08-08-30: that is what `Vec[i64].first().map(|x| x + 1)` hit.
+        // The `Binary` arm returns the left operand's type and the `Identifier`
+        // arm returned `ptr`, so the declared return was `ptr` against a body
+        // computing `i64`. It only ever surfaced for a payload whose mapper
+        // RESULT type is the payload type: `|x| x > 5` returns `bool` and `|x|
+        // x + 1.0` hits the float arm, so both were fine, which is why the
+        // family read as working. `Vec[T].first()/get()` are the sources of
+        // borrowed payloads — `Map.get` yields an OWNED `Option[V]` and never
+        // reached this.
+        //
+        // Only the return-type heuristic is corrected here. The param ABI is
+        // `param_llvm_types` above and stays a pointer, which is what the
+        // caller passes and what `load_variable`'s deref expects.
         let closure_param_types: HashMap<String, BasicTypeEnum<'ctx>> = params
             .iter()
+            .enumerate()
             .zip(param_llvm_types.iter())
-            .filter_map(|(cp, ty)| {
-                if let PatternKind::Binding(n) = &cp.pattern.kind {
-                    Some((n.clone(), *ty))
-                } else {
-                    None
-                }
+            .filter_map(|((i, cp), ty)| {
+                let PatternKind::Binding(n) = &cp.pattern.kind else {
+                    return None;
+                };
+                let effective_te = cp
+                    .ty
+                    .as_ref()
+                    .or_else(|| inferred_param_tes.get(i).and_then(Option::as_ref));
+                let value_ty = effective_te
+                    .and_then(|te| self.inner_type_of_ref(te))
+                    .unwrap_or(*ty);
+                Some((n.clone(), value_ty))
             })
             .collect();
         // Return type: the structural heuristic `infer_closure_return_type` is
@@ -2984,6 +3014,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // restored so the outer fn / sibling closures don't inherit these names;
         // inserted at the capture-unpack step below.
         let saved_for_loop_borrow_vars = std::mem::take(&mut self.for_loop_borrow_vars);
+        // The borrow-mode registries for the closure's PARAMS (step 7b below
+        // inserts a `ref T` / `mut ref T` param into both). Taken + restored
+        // for the same reason as `variables` above: a param name is scoped to
+        // this closure's body, and leaving its borrow mark behind makes the
+        // OUTER function's later binding of that same name deref a value that
+        // is not a pointer.
+        //
+        // B-2026-08-08-30. `Vec[i64].first().map(|x| x + 1)` followed by any
+        // later `x` — the row's own `Some(x) =>` arm, or a plain `let x` —
+        // read the stale mark: `load_variable` saw `ref_params["x"]` and
+        // deref'd an `i64`, panicking `into_pointer_value`. The panic was the
+        // LUCKY case. When the later `x` is a Vec, the bogus deref SUCCEEDS
+        // and silently reads the wrong word: `let x: Vec[i64] = vec![1,2,3];
+        // println(x.len())` printed 2 under `karac build` against the
+        // interpreter's 3 — a run-vs-build divergence with no crash, which is
+        // why this is restored wholesale rather than only where it panicked.
+        // CLONED, not `take`n, unlike `variables` above: the body must still
+        // see the ENCLOSING fn's borrow marks, because a captured `ref T`
+        // keeps its name and `load_variable` has to keep deref'ing it inside
+        // the closure. Taking would clear those for the body and silently
+        // un-deref every captured borrow. Cloning changes nothing during the
+        // body compile and drops only the param entries on the way out, which
+        // is the whole defect.
+        let saved_ref_params = self.ref_params.clone();
+        let saved_signature_ref_params = self.signature_ref_params.clone();
 
         // 7. Build the closure body.
         self.current_fn = Some(closure_fn);
@@ -3338,6 +3393,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // env is built below (env-build reads `owned_vecstr_params`, not this
         // set, but keep the restore grouped with the other body-scoped state).
         self.for_loop_borrow_vars = saved_for_loop_borrow_vars;
+        // Drop this closure's param borrow marks (B-2026-08-08-30). Grouped
+        // with the other body-scoped restores above; see the save site for why
+        // leaving them behind miscompiles the outer fn's next same-named
+        // binding rather than merely panicking.
+        self.ref_params = saved_ref_params;
+        self.signature_ref_params = saved_signature_ref_params;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -3904,6 +3965,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 if let Some(&ty) = param_types.get(name) {
                     return ty;
+                }
+                // A CAPTURED borrow (an enclosing `ref T` param, or a
+                // match-arm/`let` borrow shim) reaches the same trap as a
+                // borrow param: its slot holds a pointer, but the body reads it
+                // through `load_variable`, which derefs. Report the POINTEE, so
+                // a tail of `|_| outer` declares `T` rather than `ptr`.
+                // B-2026-08-08-30, capture leg — `param_types` above covers the
+                // closure's OWN params, this covers everything it closes over.
+                if let Some(&inner) = self.ref_params.get(name.as_str()) {
+                    return inner;
                 }
                 if let Some(slot) = self.variables.get(name.as_str()) {
                     return slot.ty;
