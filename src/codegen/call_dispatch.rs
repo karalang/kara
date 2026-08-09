@@ -5446,6 +5446,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 crate::codegen::state::CleanupAction::FreeMapHandle { map_alloca, .. } => {
                     *map_alloca != slot_ptr
                 }
+                // B-2026-08-09-17: `FreeFileHandle` is queue-driven in exactly
+                // the same way and had NO suppression at all, so a `File` moved
+                // out of its origin binding was still closed at that binding's
+                // scope exit — `karac_runtime_file_close` reconstructs the Box
+                // and drops it, leaving whatever now owns the handle (a
+                // `Vec[File]`, a struct field, a returned aggregate) pointing at
+                // freed memory. The next method call on it locks a
+                // `Mutex<std::fs::File>` inside that freed allocation, and a
+                // poisoned-or-garbage lock word does not fault, it BLOCKS: the
+                // program hangs with no diagnostic, while `--interp` runs it
+                // correctly. Retracting the action here is the same reasoning as
+                // the Map arm above — the binding has been moved, so its origin
+                // must never free the handle, whichever frame holds the action.
+                crate::codegen::state::CleanupAction::FreeFileHandle { file_alloca } => {
+                    *file_alloca != slot_ptr
+                }
                 _ => true,
             });
         }

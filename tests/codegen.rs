@@ -71716,6 +71716,101 @@ fn main() with reads(FileSystem) {{
         let _ = std::fs::remove_file(&tmp);
     }
 
+    #[test]
+    fn test_e2e_file_moved_into_a_vec_outlives_its_origin_binding() {
+        // B-2026-08-09-17: a `File` bound by a match arm and MOVED into a
+        // `Vec[File]` was still closed by that binding's `FreeFileHandle` at the
+        // arm's scope exit. `karac_runtime_file_close` reconstructs the Box and
+        // drops it, so the Vec was left holding freed memory, and the next
+        // method call locked a `Mutex<std::fs::File>` inside that freed
+        // allocation. A garbage lock word does not fault, it BLOCKS — the
+        // program hung with no diagnostic, while `--interp` ran it correctly.
+        //
+        // Reads TWICE through the Vec: once inside the arm (where the origin
+        // binding is still live, which always worked) and once after the arm
+        // closes (where the close used to have fired). The second read must
+        // CONTINUE where the first stopped. That is the part worth having — a
+        // handle that had been reopened, or a copy of the struct rather than the
+        // same allocation, would restart at byte 0 and still look healthy, so
+        // the advancing file position is what pins this to the same live
+        // handle rather than merely a non-crashing one.
+        let tmp = std::env::temp_dir().join("karac_e2e_file_moved_into_vec.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"ABCDEFGH").expect("temp write");
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with reads(FileSystem) writes(FileSystem) {{
+    let mut hs: Vec[File] = Vec.new();
+    let mut buf: Array[u8, 4] = [0u8; 4];
+    match File.open("{path}") {{
+        Ok(f) => {{
+            hs.push(f);
+            match hs[0].read(mut buf) {{
+                Ok(_) => println(f"first {{buf[0]}}"),
+                Err(_) => println("first-failed"),
+            }}
+        }}
+        Err(_) => println("open-failed"),
+    }}
+    match hs[0].read(mut buf) {{
+        Ok(_) => println(f"second {{buf[0]}}"),
+        Err(_) => println("second-failed"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        if let Some(out) = out {
+            // 'A' = 65 at offset 0, 'E' = 69 at offset 4.
+            assert_eq!(out.trim(), "first 65\nsecond 69");
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_e2e_file_moved_into_a_struct_survives_a_function_return() {
+        // The same B-2026-08-09-17 defect with no `Vec` and no match arm in the
+        // consuming function: the handle is moved into a struct literal and the
+        // struct is RETURNED. The origin binding's scope-exit close fired as the
+        // helper returned, so the caller received a struct whose `File` field
+        // pointed at freed memory.
+        //
+        // Worth pinning separately from the Vec case because the first diagnosis
+        // of this bug was "Vec-element-specific" — a struct field appeared to
+        // work, but only because that test read the handle while the origin
+        // binding was still in scope. Containers were never the discriminator;
+        // outliving the origin binding is.
+        let tmp = std::env::temp_dir().join("karac_e2e_file_moved_into_struct.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"ABCDEFGH").expect("temp write");
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+struct Holder {{ f: File }}
+fn make(path: String) -> Holder with reads(FileSystem) panics {{
+    match File.open(path) {{
+        Ok(fh) => Holder {{ f: fh }},
+        Err(_) => panic("open-failed"),
+    }}
+}}
+fn main() with reads(FileSystem) writes(FileSystem) panics {{
+    let mut buf: Array[u8, 4] = [0u8; 4];
+    let h = make("{path}");
+    match h.f.read(mut buf) {{
+        Ok(_) => println(f"struct {{buf[0]}}"),
+        Err(_) => println("struct-failed"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "struct 65");
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     // ── Phase 8 File handle slice F6 — broader E2E coverage ─────────
     //
     // F1-F5 wired up the surface and the basic propagation contracts.
