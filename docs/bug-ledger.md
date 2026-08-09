@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 223 | 0 |
 | leak | 154 | 0 |
-| double-free | 115 | 1 |
+| double-free | 115 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 0 |
 | missing-feature | 86 | 0 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 57 | 0 |
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
-| crash | 40 | 0 |
+| crash | 41 | 1 |
 | other | 24 | 0 |
 | use-after-free | 17 | 1 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 759 | 2 |
-| typecheck | 137 | 1 |
+| codegen | 760 | 2 |
+| typecheck | 137 | 0 |
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1048 surfaced · 2 open · 1036 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1049 surfaced · 2 open · 1037 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
-| B-2026-08-09-6 | 2026-08-09 | typecheck+codegen | high | `Result[T, E].map(f)` never learns `E`, so a HEAP `Err` payload is mishandled on the pass-through branch: `Result[i64, String]` DOUBLE-FREES and aborts, `Result[String, String]` prints the empty string and leaks -- `method_unwrap_err_types` is populated for `unwrap_or` and the absent-closure combinators but not for `map` | probe: `let r: Result[i64, String] = Err(f"boom"); r.map(|x| x + 1i64)` -- `karac build` aborts with `free(): double free detected in tcache 2`, `--interp` prints boom |
+| B-2026-08-09-7 | 2026-08-09 | codegen | medium | chaining any two Result-returning combinators without an intervening `let` fails in codegen -- `r.map(f).map(g)` panics (`ExtractOutOfRange`) under a `match` and fails module verification (`PHI node operands are not the same type as the result`) under `unwrap_or`/`is_ok`; the Option sibling works at any depth | probe: `let r: Result[i64, i64] = Ok(20i64); match r.map(|x| x + 1i64).map(|x| x * 2i64) { Ok(v) => ... }` -- `karac build` panics at pattern_binding.rs:1306 `ExtractOutOfRange`; `--interp` prints 42 |
 
-### Fixed (1036)
+### Fixed (1037)
 
-<details><summary>1036 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1037 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1197,6 +1197,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-09-3 | codegen | medium | a `shared struct` binding's Drop body fires at LEXICAL SCOPE EXIT under codegen but at LIVE-RANGE END under `--interp` -- design.md mandates live-ran… | e9e3807 |
 | B-2026-08-09-4 | codegen | medium | `let r = <Option/Result>.map(f)` over a HEAP payload leaks the result's payload once per evaluation — `map_passthrough_armed_source` claimed EVERY `.… | 5698333 |
 | B-2026-08-09-5 | codegen | high | an indirect closure call lowered the return type from the SURFACE `Fn(..)` type while the emitted body used its own, so a borrowed-String mapper's 3-… | 37d0992a |
+| B-2026-08-09-6 | typecheck+codegen | high | `Result[T, E].map(f)` never learns `E`, so a HEAP `Err` payload is mishandled on the pass-through branch: `Result[i64, String]` DOUBLE-FREES and abor… | cfd574e3 |
 
 </details>
 
