@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 155 | 0 |
 | double-free | 118 | 0 |
 | codegen-gap | 98 | 0 |
-| run-vs-build | 91 | 0 |
+| run-vs-build | 92 | 1 |
 | missing-feature | 86 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 768 | 0 |
+| codegen | 769 | 1 |
 | typecheck | 137 | 0 |
 | interp | 130 | 0 |
 | ownership | 44 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1058 surfaced · 0 open · 1048 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1059 surfaced · 1 open · 1048 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-09-17 | 2026-08-09 | codegen | high | a `File` handle stored in a `Vec[File]` deadlocks on its next method call under AOT, while the interpreter runs the same program correctly -- a struct FIELD holding a `File` round-trips fine, so the defect is Vec-element-specific | src/codegen/file.rs (a `File` value is a `*KaracFile`); the Vec element path does not round-trip it |
 
 ### Fixed (1048)
 
