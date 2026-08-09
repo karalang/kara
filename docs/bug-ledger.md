@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 221 | 0 |
+| miscompile | 222 | 0 |
 | leak | 152 | 1 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 57 | 0 |
 | diagnostics | 43 | 0 |
 | soundness | 41 | 0 |
-| crash | 41 | 1 |
+| crash | 40 | 0 |
 | other | 24 | 0 |
 | use-after-free | 17 | 1 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 753 | 3 |
+| codegen | 753 | 2 |
 | typecheck | 135 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
@@ -124,19 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1042 surfaced · 3 open · 1029 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1042 surfaced · 2 open · 1030 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
 | B-2026-08-08-29 | 2026-08-08 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is clean -- the annotation does the opposite of its purpose, silently | probe: `let mut m: Map[i64, weak N] = Map.new(); m.insert(1i64, a);` vs the `Map[i64, N]` twin |
-| B-2026-08-08-30 | 2026-08-08 | codegen | high | mapping a BORROWED SCALAR payload panics in codegen instead of diagnosing — `Vec[i64].first().map(|x| x + 1)` hits `load_variable`'s `expected PointerValue`, and it is the exact spelling B-2026-08-08-24 tells authors to write | probe: `let out: Vec[i64] = vec![7, 9]; out.first().map(|x| x + 1)` — `karac build` panics, `--interp` prints 8 |
 
-### Fixed (1029)
+### Fixed (1030)
 
-<details><summary>1029 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1030 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1191,6 +1190,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-26 | other | medium | `tests/cli.rs` is the dark target B-2026-07-31-44 missed, and it was RED the whole time -- 35 of its 43 `#[cfg(feature = "llvm")]` tests run in NO CI… | f68004a |
 | B-2026-08-08-27 | other | low | the dark-llvm-target audit has never been RE-RUN as a check -- B-2026-07-31-44 swept 19 targets by hand and B-2026-08-08-26 found the 20th the same w… | 5b60bd77 |
 | B-2026-08-08-28 | codegen | high | a weak ELEMENT read through a struct FIELD (`a.ns[0]` on `mut ns: Vec[weak N]`) skips the balancing acquire and over-releases -- SIGSEGV under JIT an… | 02f8a0c |
+| B-2026-08-08-30 | codegen | high | mapping a BORROWED SCALAR payload — `Vec[i64].first().map(\|x\| x + 1)` — was TWO defects, and the reported panic was the lucky one: the closure's `ref… | e524f62 (both legs: the closure return-type inference over a borrow param, and the leaked param borrow mark) |
 
 </details>
 
