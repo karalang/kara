@@ -23782,6 +23782,137 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-10 — the interpreter's moved-out tracking is keyed by NAME
+    /// with no frame scoping, so a callee that moves a payload out of its own
+    /// binding silently disarmed an UNRELATED CALLER binding spelled the same
+    /// way, and that binding's `Drop` never ran.
+    ///
+    /// Case 1 is the row's own reproduction, whose caller local and callee
+    /// param are both `b` — as ordinary code routinely does. Case 2 is the
+    /// SAME program with the names made distinct: it was already correct
+    /// before the fix, and is the measurement that identified the collision
+    /// (renaming either side fixed it with no compiler change). Keeping both
+    /// is the point — if the fix regresses, case 1 goes silent again while
+    /// case 2 stays green, which localises it immediately.
+    ///
+    /// Cases 3 and 4 are the shapes that already worked and must keep working:
+    /// an owned param never matched at all, and a local matched with an early
+    /// `return` in the arm. They rule out "params don't drop" and "an early
+    /// return skips cleanup", both of which the shape superficially suggests.
+    #[test]
+    fn test_e2e_callee_move_does_not_disarm_a_caller_binding_of_the_same_name() {
+        let prog = |caller: &str, param: &str| {
+            format!(
+                "struct Res {{ id: i64, name: String }}\n\
+                 impl Drop for Res {{\n\
+                 \x20   fn drop(mut ref self) {{ println(f\"drop {{self.id}}\") }}\n\
+                 }}\n\
+                 enum Box2 {{ Full(Res), Empty }}\n\
+                 fn into_id({param}: Box2) -> i64 {{\n\
+                 \x20   match {param} {{\n\
+                 \x20       Box2.Full(r) => {{ return r.id; }}\n\
+                 \x20       Box2.Empty => {{ return 0; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let {caller}: Box2 = Box2.Full(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let v: i64 = into_id({caller});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            )
+        };
+        // 1. Names COLLIDE — the row's reproduction. Was silent on `--interp`.
+        assert_eq!(
+            run_program(&prog("b", "b")).as_deref(),
+            Some("drop 7\nv=7\n")
+        );
+        // 2. Names DISTINCT — the control that identified the collision.
+        assert_eq!(
+            run_program(&prog("outer", "bp")).as_deref(),
+            Some("drop 7\nv=7\n")
+        );
+        // 3. Owned param never matched — already fired; must still.
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64, name: String }\n\
+                 impl Drop for Res {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                 }\n\
+                 enum Box2 { Full(Res), Empty }\n\
+                 fn eat(b: Box2) { println(\"in\"); }\n\
+                 fn main() {\n\
+                 \x20   let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" });\n\
+                 \x20   eat(b);\n\
+                 \x20   println(\"end\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("in\ndrop 7\nend\n")
+        );
+        // 4. LOCAL (not a param) with an early return in the arm — rules out
+        //    the early return as the discriminator.
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64, name: String }\n\
+                 impl Drop for Res {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                 }\n\
+                 enum Box2 { Full(Res), Empty }\n\
+                 fn eat() -> i64 {\n\
+                 \x20   let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" });\n\
+                 \x20   match b {\n\
+                 \x20       Box2.Full(r) => { return r.id; }\n\
+                 \x20       Box2.Empty => { return 0; }\n\
+                 \x20   }\n\
+                 }\n\
+                 fn main() { let v: i64 = eat(); println(f\"v={v}\"); }"
+            )
+            .as_deref(),
+            Some("drop 7\nv=7\n")
+        );
+    }
+
+    /// B-2026-08-09-15 — a match arm that RETURNS a Drop-carrying payload out
+    /// of an owned enum param runs the body TWICE: once at the callee's frame
+    /// exit and again at the caller's binding. The payload escapes by `return`,
+    /// so the caller's binding is its sole owner after the call and exactly one
+    /// body is correct — the expectation below.
+    ///
+    /// Pinned rather than left to the run-vs-build parity oracle ON PURPOSE.
+    /// `--interp` used to print the single correct fire here, but only because
+    /// B-2026-08-09-10's cross-frame name-collision leak happened to suppress
+    /// the callee's spurious one. Fixing that (frame-scoping the moved-out
+    /// sets) makes the interpreter double-fire too, so the two backends now
+    /// AGREE — and a parity gate cannot see a defect both sides share. This
+    /// test is what keeps it visible; without it, closing -10 would have
+    /// silently retired the only signal that -15 exists.
+    #[test]
+    #[ignore = "B-2026-08-09-15: a returned enum-param payload runs its Drop body twice (both backends)"]
+    fn test_e2e_returned_enum_param_payload_drop_fires_once_still_open() {
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64, name: String }\n\
+                 impl Drop for Res {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                 }\n\
+                 enum Box2 { Full(Res), Empty }\n\
+                 fn take(b: Box2) -> Res {\n\
+                 \x20   match b {\n\
+                 \x20       Box2.Full(r) => { return r; }\n\
+                 \x20       Box2.Empty => { return Res { id: 0, name: f\"z\" }; }\n\
+                 \x20   }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" });\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {r.id}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("got 7\ndrop 7\n")
+        );
+    }
+
     /// B-2026-08-09-9 — a user enum with a `Vec[String]` payload, consumed by a
     /// match arm over a LIVE local. Split out of leg 3 as an `#[ignore]`d gap
     /// and now closed; this is that test, un-ignored.

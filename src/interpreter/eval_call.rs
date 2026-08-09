@@ -1866,11 +1866,37 @@ impl<'a> super::Interpreter<'a> {
                 // fires inside closures.
                 self.owned_param_names_stack
                     .push(self.owned_param_names_of_fn(&fn_name));
+                // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
+                // NAME with no frame scoping, so a callee that moves a payload
+                // out of its own binding silently disarmed an UNRELATED caller
+                // binding that happened to share the name. Measured: with the
+                // caller's local and the callee's param both spelled `b`, the
+                // caller's `Drop` body never ran; renaming either one to
+                // anything else made both backends agree. That is why the row
+                // read as "owned enum params don't fire" — the shape it was
+                // found in reused the name, as ordinary code routinely does.
+                //
+                // The callee opens with an EMPTY set (nothing in a fresh frame
+                // has been moved out yet) and the caller's is restored on the
+                // way out, so a move recorded inside the body can no longer
+                // escape the frame that made it. Not a stack, because the
+                // entries are consulted by bare name from many places; swapping
+                // the whole map is what makes the isolation total.
+                let saved_moved_out = (
+                    std::mem::take(&mut self.moved_out_user_drop_bindings),
+                    std::mem::take(&mut self.moved_out_enum_payload_bindings),
+                    std::mem::take(&mut self.moved_out_drop_field_bindings),
+                );
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
+                (
+                    self.moved_out_user_drop_bindings,
+                    self.moved_out_enum_payload_bindings,
+                    self.moved_out_drop_field_bindings,
+                ) = saved_moved_out;
                 self.owned_param_names_stack.pop();
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.pop();
