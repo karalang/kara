@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 86 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
-| diagnostics | 43 | 0 |
+| diagnostics | 44 | 1 |
 | soundness | 41 | 0 |
 | crash | 41 | 0 |
 | other | 24 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 769 | 1 |
 | typecheck | 137 | 0 |
-| interp | 130 | 0 |
+| interp | 131 | 1 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
 | other | 35 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1059 surfaced · 1 open · 1048 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1060 surfaced · 2 open · 1048 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-09-17 | 2026-08-09 | codegen | high | a `File` handle stored in a `Vec[File]` deadlocks on its next method call under AOT, while the interpreter runs the same program correctly -- a struct FIELD holding a `File` round-trips fine, so the defect is Vec-element-specific | src/codegen/file.rs (a `File` value is a `*KaracFile`); the Vec element path does not round-trip it |
+| B-2026-08-09-18 | 2026-08-09 | interp | low | Interpreter ICEs (`internal error: entered unreachable code`) on a METHOD CALL whose RECEIVER faulted, instead of reporting the receiver's runtime error. `let n = v[3].len();` on an empty `Vec[Vec[i64]]` panics with `len() receiver at L:C was Value::Unit; either an interpreter codepath produced the wrong receiver variant or the typechecker accepted .len() on a type without one` -- the assertion's own two hypotheses are both wrong: the typechecker is right and no codepath produced a wrong variant. The out-of-bounds index set pending_cf and yielded the Unit POISON value, and the method-call receiver path dispatches on it without first checking pending_cf. The bare index `v[3]` with no method call reports correctly (`runtime error: index 3 out of bounds (len 0)`), so it is purely the receiver position. RUN-VS-BUILD: interp ICEs; `karac run` (JIT) and `karac build` both report cleanly (`panic ...: vec index out of bounds`), so this is an interpreter-only diagnostics divergence, not a miscompile. SAME CLASS AS an already-fixed row: B-2026-06-19-13's 'BONUS BUG' gave `match` SCRUTINEE position exactly this treatment ('the Match arm now short-circuits on pending_cf before eval_match, mirroring the Binary/Unary operand-fault short-circuits'); Binary, Unary and Match all short-circuit on pending_cf and the METHOD-CALL RECEIVER was never given the same guard. FIX DIRECTION: check pending_cf before method dispatch in method_call_seq.rs and propagate the pending fault, mirroring the Binary/Unary/Match arms; then the assertion at :74 becomes genuinely unreachable and its misleading message can stay. REPRO (4 lines): `fn main() { let mut v: Vec[Vec[i64]] = Vec.new(); let n = v[3].len(); println(f"{n}"); }` under `karac run --interp`. | src/interpreter/method_call_seq.rs:74 |
 
 ### Fixed (1048)
 
