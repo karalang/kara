@@ -2063,6 +2063,58 @@ fn main() {
     }
 
     #[test]
+    fn asan_result_map_heap_err_payload_freed_exactly_once() {
+        // B-2026-08-09-6, leak half — the miscompile half is pinned by
+        // `test_e2e_result_map_preserves_a_heap_err_payload` (tests/codegen.rs).
+        // A heap-`T` `.map` synthesizes `Err(e) => Err(e)`, but the typechecker
+        // never recorded `E` for `map`, so codegen had no type with which to
+        // seed the `e` binding and treated the payload as a scalar word: it was
+        // neither carried into the result (empty output) nor freed (4 bytes per
+        // evaluation).
+        //
+        // Both directions matter here, so the fixture reads the payload back
+        // AND loops: a fix that over-corrected into a double free would abort
+        // under ASAN rather than pass quietly. Covers String and Vec `Err`
+        // payloads, an identity and a heap-returning mapper (which never runs
+        // on the `Err` branch but picks the lowering), and the `Ok` branch of
+        // the same type as the control.
+        //
+        // Stated precisely, because it changes what this pin proves: PRE-FIX it
+        // dies on the MISCOMPILE before LSan gets to report (the scalar-word
+        // `Err` gives the `Vec` payload a garbage length, so the run aborts with
+        // `panic: vec index out of bounds`, exit 1). The leak was measured
+        // separately, on the reduced probe under valgrind: 4 bytes definitely
+        // lost per evaluation, at both opt levels. So this fixture gates the
+        // pair; it does not isolate the leak on its own.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let a: Result[String, String] = Err(f"boom");
+        let ra = a.map(|x| x);
+        match ra { Ok(x) => { total = total + x.len(); } Err(e) => { if e == "boom" { total = total + 4i64; } } }
+        let b: Result[String, String] = Err(f"bang");
+        match b.map(|x: String| x.to_uppercase()) { Ok(x) => { total = total + x.len(); } Err(e) => { if e == "bang" { total = total + 4i64; } } }
+        let c: Result[String, Vec[i64]] = Err(vec![7i64, 8i64]);
+        let rc = c.map(|x| x);
+        match rc { Ok(x) => { total = total + x.len(); } Err(e) => { total = total + e[1]; } }
+        let ok: Result[String, String] = Ok(f"fine");
+        let ro = ok.map(|x| x);
+        match ro { Ok(x) => { if x == "fine" { total = total + 4i64; } } Err(_) => {} }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * (4 + 4 + 8 + 4) = 800
+            &["800"],
+            "result_map_heap_err_payload_freed_exactly_once",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_string_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate (gap 1, success-path element leak): a
         // heap-owning `OnceLock[String]` `set(v)` moves `v`'s buffer into the

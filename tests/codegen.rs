@@ -22659,6 +22659,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_result_map_preserves_a_heap_err_payload() {
+        // B-2026-08-09-6 — the HEAP-inner sibling of the test above, and the
+        // opposite failure. A heap `T` routes `.map` to
+        // `compile_map_via_match_synthesis`, which synthesizes
+        // `Err(e) => Err(e)` and seeds `e`'s binding type from
+        // `method_unwrap_err_types`. The typechecker's `map` arm never wrote
+        // that entry — its only producers are `unwrap_or` and the
+        // absent-closure combinators — so `err_te` had been `None` since the
+        // synthesis landed (4b941dc), and a heap `Err` payload was lowered as a
+        // bare scalar word: the program printed the EMPTY STRING where
+        // `--interp` printed the payload, and leaked the buffer.
+        //
+        // Silent wrong output, so an E2E pin rather than only a sanitizer one.
+        // Covers the `let`-bound and inline receivers, an identity and a
+        // heap-RETURNING mapper (the mapper never runs on the Err branch, but
+        // it decides which lowering is picked), a `Vec` Err payload, and the
+        // `Ok` branch of the same type as the control. The scalar-`E` case is
+        // the one shape that always worked, kept here as the discriminator.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: Result[String, String] = Err(f\"boom\");\n\
+                 let ra = a.map(|x| x);\n\
+                 match ra { Ok(x) => { println(x); } Err(e) => { println(e); } }\n\
+                 let b: Result[String, String] = Err(f\"bang\");\n\
+                 match b.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(e); } }\n\
+                 let c: Result[String, String] = Err(f\"crash\");\n\
+                 match c.map(|x: String| x.to_uppercase()) { Ok(x) => { println(x); } Err(e) => { println(e); } }\n\
+                 let d: Result[String, Vec[i64]] = Err(vec![7, 8]);\n\
+                 match d.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(f\"{e[1]}\"); } }\n\
+                 let ok: Result[String, String] = Ok(f\"fine\");\n\
+                 match ok.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(e); } }\n\
+                 let sc: Result[String, i64] = Err(7);\n\
+                 match sc.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(f\"{e}\"); } }\n\
+             }",
+        ) {
+            assert_eq!(out, "boom\nbang\ncrash\n8\nfine\n7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_option_map_string_value_bodies_compile_and_run() {
         // B-2026-08-08-22 — THIS TEST PREVIOUSLY ASSERTED A GATE, and before
         // that it asserted a broader one. Both are gone; the shapes they

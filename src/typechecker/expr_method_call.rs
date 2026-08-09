@@ -2901,6 +2901,27 @@ impl<'a> super::TypeChecker<'a> {
                     SpanKey::for_method_call(span, args_close_span),
                     Self::type_to_type_expr(&t_resolved),
                 );
+                // B-2026-08-09-6 — `Result[T, E].map(f)` also needs `E`. The
+                // heap-`T` lowering is `compile_map_via_match_synthesis`, which
+                // synthesizes `Err(e) => Err(e)` and seeds that binding's type
+                // from `method_unwrap_err_types`. Nothing ever wrote the entry
+                // for `map` — the two producers are `unwrap_or` (B-2026-08-05-9)
+                // and the absent-closure combinators (B-2026-07-14-6) — so the
+                // synthesis has read `None` there since it landed in 4b941dc,
+                // and a heap `Err` payload was lowered as a bare scalar word:
+                // `Result[String, String].map(|x| x)` on the Err branch printed
+                // the EMPTY STRING against `--interp`'s payload, and leaked the
+                // buffer. Recorded for `Result` only; `Option`'s absent branch
+                // carries no payload to type.
+                if enum_name == "Result" {
+                    if let Some(e) = &e_ty {
+                        let e_resolved = resolve_type_var_top(e, &self.env.substitutions);
+                        self.method_unwrap_err_types.insert(
+                            SpanKey::for_method_call(span, args_close_span),
+                            Self::type_to_type_expr(&e_resolved),
+                        );
+                    }
+                }
                 // Record the SOLVED mapper `Fn(T) -> R` at the closure's own
                 // span. The lowering pass folds Function-typed `expr_types`
                 // entries into `Program.fn_value_typed_exprs`, which codegen's
