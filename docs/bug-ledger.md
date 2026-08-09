@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 222 | 0 |
+| miscompile | 223 | 0 |
 | leak | 154 | 2 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 757 | 4 |
+| codegen | 758 | 4 |
 | typecheck | 136 | 0 |
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1046 surfaced · 4 open · 1032 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1047 surfaced · 4 open · 1033 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -135,9 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1046 surfaced
 | B-2026-08-09-3 | 2026-08-09 | codegen | medium | a `shared struct` binding's Drop body fires at LEXICAL SCOPE EXIT under codegen but at LIVE-RANGE END under `--interp` -- design.md mandates live-range end, and codegen's own VALUE-struct path already does it, so the RC tier is the lone outlier and the two backends print in different orders | probe: `impl Drop` on a `shared struct` whose last use is mid-scope, vs the identical program with a plain `struct` |
 | B-2026-08-09-4 | 2026-08-09 | codegen | medium | `asan_option_map_heap_payload_no_leak` leaks 200 bytes in 40 allocations at KARAC_OPT_LEVEL=0 while passing at the default level, so the `Option.map` heap-payload path has an -O0-only leak no CI job would catch | tests/memory_sanitizer.rs::asan_option_map_heap_payload_no_leak under KARAC_OPT_LEVEL=0 |
 
-### Fixed (1032)
+### Fixed (1033)
 
-<details><summary>1032 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1033 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1195,6 +1195,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-29 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is… | dc31715 |
 | B-2026-08-08-30 | codegen | high | mapping a BORROWED SCALAR payload — `Vec[i64].first().map(\|x\| x + 1)` — was TWO defects, and the reported panic was the lucky one: the closure's `ref… | e524f62 (both legs: the closure return-type inference over a borrow param, and the leaked param borrow mark) |
 | B-2026-08-09-2 | typecheck+codegen | medium | `Map[K, weak V]` is now store-only: the read is NOT an upgrade, so `m.get(k)` yields `Option[weak V]` and the `Some` binding rejects every field acce… | 68bebfd3 |
+| B-2026-08-09-5 | codegen | high | an indirect closure call lowered the return type from the SURFACE `Fn(..)` type while the emitted body used its own, so a borrowed-String mapper's 3-… | 37d0992a |
 
 </details>
 
