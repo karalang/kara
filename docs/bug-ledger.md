@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 227 | 2 |
+| miscompile | 228 | 2 |
 | leak | 155 | 1 |
-| double-free | 116 | 0 |
+| double-free | 117 | 1 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 0 |
 | missing-feature | 86 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 765 | 3 |
+| codegen | 767 | 4 |
 | typecheck | 137 | 0 |
 | interp | 130 | 1 |
 | ownership | 44 | 0 |
@@ -124,20 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1055 surfaced · 4 open · 1041 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1057 surfaced · 5 open · 1042 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-09-10 | 2026-08-09 | interp | medium | `--interp` SKIPS the Drop body of a struct payload bound out of an owned enum PARAM, where both compiled backends run it -- the param-shaped sibling of the owned-`self` residual, and the divergence points the opposite way to the usual one | probe: an owned enum PARAM whose match arm binds a `Drop`-carrying struct payload -- `karac build` prints the Drop body, `--interp` prints nothing |
-| B-2026-08-09-11 | 2026-08-09 | codegen | medium | the `if let` spelling of a CONSUMING arm over a live user-enum local still empties the source -- the match site got a live-local clone leg, the if-let/while-let sites did not | probe: `enum E { A(String), B } let e: E = E.A(f"hi"); if let E.A(v) = e { let k: String = v; println(k); } if let E.A(v) = e { println(v); }` -- prints `hi` then an EMPTY line; `--interp` prints `hi` twice |
 | B-2026-08-09-12 | 2026-08-09 | codegen | high | the `<refparam>.field` ref-chain ENUM clone leg shares the outer-only payload duplicator, so a `Vec[String]` payload behind a `ref` param aliases its element buffers and double-frees them -- the sibling of B-2026-08-09-9, still open because its clone has no element drain | probe: `enum E { A(Vec[String]), B } struct S { e: E } fn take(s: ref S) { match s.e { E.A(x) => { for t in x { println(t); } } E.B => {} } } fn main() { let s: S = S { e: E.A([f"aa", f"bb"]) }; take(s); take(s); }` -- valgrind: 2 invalid reads + 2 invalid frees |
 | B-2026-08-09-13 | 2026-08-09 | codegen | medium | indexing a heap-element `Vec` bound out of an enum payload on the BORROW path leaks one buffer per `v[i]` read -- pre-existing on `ref`-param scrutinees, and now reachable from an owned local via B-2026-08-08-25 leg 3's classifier | probe: `enum E { A(Vec[String]), B } fn f(e: ref E) { match e { E.A(v) => { println(v[0]); println(v[1]); } E.B => {} } }` -- valgrind --leak-check=full: 2 definitely-lost blocks, one per index read |
+| B-2026-08-09-14 | 2026-08-09 | codegen | high | a CONSUMING `while let` arm over a plain enum local whose source is DEAD after the loop double-frees -- the `match` and `if let` spellings of the same shape are clean, and so is the read-only `while let` | `#[ignore]`d pin `test_e2e_consuming_while_let_over_dead_enum_local_still_open` in tests/codegen.rs |
+| B-2026-08-09-15 | 2026-08-09 | codegen | medium | codegen runs a `Drop` body TWICE when a match arm RETURNS a Drop-carrying payload out of an owned enum param -- once in the callee, once at the caller's binding; `--interp` runs it once | probe pD: `fn take(b: Box2) -> Res { match b { Box2.Full(r) => { return r; } ... } }` called as `let r: Res = take(b);` |
 
-### Fixed (1041)
+### Fixed (1042)
 
-<details><summary>1041 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1042 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1204,6 +1205,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-09-7 | codegen | medium | chaining any two Result-returning combinators without an intervening `let` fails in codegen -- `r.map(f).map(g)` panics (`ExtractOutOfRange`) under a… | bf5737a0 |
 | B-2026-08-09-8 | codegen | high | a bare REBIND of an inline-Option-payload local (`let p = o`) followed by TWO reads of `p` double-frees the payload -- the caller-retains classifier… | 0137be0 |
 | B-2026-08-09-9 | codegen | medium | a user enum with a `Vec[String]` payload consumed by a match arm over a LIVE local still empties the source -- the enum deep-copy is OUTER-buffer onl… | FIXED by 7d9ecce1. `deep_copy_enum_heap_payload_with_elements_in_place` -- the element-deep sibling of the enum payload duplicator -- plus `enum_payload_clone_is_faithful`, the widened successor of the gate that shipped with legs 2/3. The outer-only copy's stated premise ("mirrors the enum drop's outer-only free") was half true and the missing half WAS the bug: the drop's `VecOrString` arm frees only the outer buffer, but it is not the whole owner -- ELEMENTS ride the separate per-binding container-elem-bodies channel, so the copy was one level shallower than the thing it had to be independent of. Depth is opt-in per call site, not the default: unconditional depth leaked 1990 bytes / 300 allocations in `asan_match_bound_struct_variant_vec_field_reborrow_no_double_free`, because most callers' copies are dropped by the outer-only `EnumDrop` and the deep elements would have no owner. |
+| B-2026-08-09-11 | codegen | medium | the `if let` spelling of a CONSUMING arm over a live user-enum local still empties the source -- the match site got a live-local clone leg, the if-le… | 43cc3cb |
 
 </details>
 
