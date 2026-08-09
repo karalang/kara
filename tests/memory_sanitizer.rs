@@ -44534,4 +44534,49 @@ fn main() {
             "result_map_scalar_payload_heap_err",
         );
     }
+
+    /// B-2026-08-09-7 — a chained `Result` combinator evaluated its receiver
+    /// TWICE. `try_compile_option_result_method` compiled the receiver eagerly,
+    /// and `compile_map_via_match_synthesis` then compiled the same expression
+    /// again as the synthesized match's scrutinee.
+    ///
+    /// The memory consequence is what this fixture is for: the FIRST evaluation
+    /// moves the heap payload out and zeroes the source's words, so the second
+    /// reads a moved-from value — the buffer is reachable through two paths that
+    /// disagree about who owns it. The E2E pin catches the wrong output; this
+    /// one asserts the buffer is allocated and freed exactly once per iteration
+    /// with the chain running 40 times.
+    ///
+    /// The `let`-bound form is the control: it never double-evaluated, because
+    /// an identifier receiver's extra compile is a dead reload rather than a
+    /// re-run of the inner combinator.
+    #[test]
+    fn asan_chained_result_map_evaluates_its_receiver_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        let r: Result[String, String] = Ok(f"hi");
+        // Chained without an intervening `let` — the shape that re-ran the
+        // inner map over a source it had already moved out of.
+        match r.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) {
+            Ok(v) => { total = total + v.len(); }
+            Err(e) => { total = total + e.len(); }
+        }
+        let s: Result[String, String] = Err(f"boom");
+        match s.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) {
+            Ok(v) => { total = total + v.len(); }
+            Err(e) => { total = total + e.len(); }
+        }
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            &["240"],
+            "chained_result_map_receiver_once",
+        );
+    }
 }

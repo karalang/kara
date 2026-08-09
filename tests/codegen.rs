@@ -23078,6 +23078,135 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-7 — chaining two `Result`-returning combinators without an
+    /// intervening `let`. TWO independent defects, and the first one masked the
+    /// second:
+    ///
+    /// 1. `type_name_of_expr` had no answer for a chained combinator —
+    ///    `Option`/`Result` builtins never reach `fn_return_type_names`, whose
+    ///    contract is user fns. So the chain resolved to `None`, every caller
+    ///    asking "is this a Result?" silently got `false`, and the outer `map`
+    ///    built a `Some(..)` for a `Result`: `PHI node operands are not the same
+    ///    type as the result` under `unwrap_or`/`is_ok`, and a raw panic in
+    ///    `bind_pattern_values` (`ExtractOutOfRange`) under a `match`.
+    ///
+    /// 2. Underneath it, a DOUBLE EVALUATION of the receiver.
+    ///    `try_compile_option_result_method` compiled the receiver eagerly, then
+    ///    `compile_map_via_match_synthesis` compiled it again as the synthesized
+    ///    match's scrutinee. For an identifier receiver that is a dead reload —
+    ///    invisible. For a chained one it re-runs the whole inner combinator,
+    ///    and the first run has already moved the payload out and zeroed the
+    ///    source's words, so the second reads zeros: case 5 printed `2`
+    ///    (`f(0)=1`, `g(1)=2`) instead of `42`, and the heap cases came back as
+    ///    the empty string.
+    ///
+    /// Fixing only (1) turns a loud panic into a silent wrong answer, which is
+    /// why both land together. `Option` was immune to (1) by luck — guessing
+    /// "not a Result" is right for it — so cases 7-8 are the controls that must
+    /// stay green, and case 9 pins the `let` workaround that always worked.
+    #[test]
+    fn test_e2e_chained_result_combinators_evaluate_the_receiver_once() {
+        // 1. All-scalar, hand-rolled lowering both times — was an ICE.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, i64] = Ok(20i64);\n\
+                     match r.map(|x| x + 1i64).map(|x| x * 2i64) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("42\n")
+        );
+        // 2. Same chain into a combinator — was the PHI verification failure.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, i64] = Ok(20i64);\n\
+                     println(r.map(|x| x + 1i64).map(|x| x * 2i64).unwrap_or(0i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("42\n")
+        );
+        // 3/4. Heap on both sides — synthesis lowering, both branches.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, String] = Ok(f\"hi\");\n\
+                     match r.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\n")
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, String] = Err(f\"boom\");\n\
+                     match r.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("boom\n")
+        );
+        // 5. The double-evaluation witness: printed `2` before the fix.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, String] = Ok(20i64);\n\
+                     match r.map(|x| x + 1i64).map(|x| x * 2i64) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("42\n")
+        );
+        // 6. Not just `map` — the Result-returning combinator FAMILY.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[i64, i64] = Ok(20i64);\n\
+                     match r.map_err(|e| e + 1i64).map(|x| x * 2i64) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("40\n")
+        );
+        // 7/8. Option controls — immune to defect (1), must stay green.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => { println(\"-\"); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\n")
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[i64] = Some(20i64);\n\
+                     match o.map(|x| x + 1i64).map(|x| x * 2i64).map(|x| x + 0i64) { Some(v) => { println(v); } None => { println(\"-\"); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("42\n")
+        );
+        // 9. The `let` workaround, which always worked — it must keep working,
+        //    since it is the shape that proved the receiver was evaluated twice.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, String] = Ok(f\"hi\");\n\
+                     let m = r.map(|x| x.to_uppercase());\n\
+                     match m.map(|x| x.to_uppercase()) { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\n")
+        );
+    }
+
     /// B-2026-08-08-25 — what leg 1 did NOT close, pinned as a visibly deferred
     /// gap rather than left silently green. Each case here is measured, not
     /// assumed: all three still print garbage or an empty payload under `karac

@@ -3167,6 +3167,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(n) = self.fn_return_type_names.get(&fn_name) {
                     return Some(n.clone());
                 }
+                // B-2026-08-09-7 — the WRAPPER-PRESERVING `Option`/`Result`
+                // combinators. These are compiler builtins, so they never reach
+                // `fn_return_type_names` (its contract is user fns), and the
+                // generic-impl recovery below cannot see them either. The whole
+                // chain therefore resolved to `None`, and every caller that asks
+                // "is this a Result?" silently got `false`:
+                // `r.map(f).map(g)`'s outer `map` built a `Some(..)` for a
+                // `Result` and the merge phi joined mismatched types
+                // (`PHI node operands are not the same type as the result`),
+                // while under a `match` it panicked in `bind_pattern_values`.
+                //
+                // Option was immune only by luck — guessing "not a Result" is
+                // right for it — which is why the bug looked Result-specific.
+                // Binding the intermediate to a `let` also hid it, because an
+                // Identifier resolves through `var_type_names`.
+                //
+                // Listed rather than pattern-matched on a prefix: the UNWRAPPING
+                // siblings (`unwrap_or`, `unwrap_or_else`, `map_or`,
+                // `map_or_else`) return the PAYLOAD, and `Result.ok()` changes
+                // wrapper — none of them preserve `recv_ty`. This lookup sits
+                // after the `fn_return_type_names` probe, so a user type named
+                // `Option`/`Result` with its own `map` still wins.
+                if matches!(recv_ty.as_str(), "Option" | "Result")
+                    && matches!(
+                        method.as_str(),
+                        "map" | "map_err" | "and_then" | "or_else" | "filter"
+                    )
+                {
+                    return Some(recv_ty);
+                }
                 // B-2026-08-06-19 — a GENERIC impl method returning a bare type
                 // PARAM: `impl[T] Box[T] { fn take(self) -> T }`. `w.take().f`
                 // failed `karac build` with "cannot resolve field 'f'" while the

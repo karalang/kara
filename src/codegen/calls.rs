@@ -1728,6 +1728,64 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => inner_te,
         };
 
+        // `map` ROUTED TO THE MATCH SYNTHESIS MUST BE DECIDED BEFORE THE
+        // RECEIVER IS COMPILED. `compile_map_via_match_synthesis` builds
+        // `match <object> { … }` and compiles `object` itself as the scrutinee,
+        // so any receiver compiled here would be evaluated a SECOND time.
+        //
+        // For an identifier receiver the extra evaluation is a dead reload and
+        // was invisible. For a CHAINED one (`r.map(f).map(g)`) it re-runs the
+        // whole inner combinator — and the first run has already MOVED the
+        // payload out and zeroed the source's words, so the second reads zeros:
+        // `f(0)=1`, `g(1)=2` printed `2` instead of `42`, and a heap payload
+        // came back as the empty string. B-2026-08-09-7.
+        //
+        // The lowering choice consults BOTH halves of a `Result`. `inner_te`
+        // alone picks the hand-rolled path for `Result[i64, String]` — scalar
+        // `T` — but that path's ABSENT branch is a shallow copy of the
+        // receiver's words, so a heap `E` ends up aliased by the result and
+        // freed twice (`free(): double free detected in tcache 2`,
+        // B-2026-08-09-6). `E` is just as much a payload as `T` here because
+        // `map` PASSES IT THROUGH. The `unwrap_or_else`/`map_or_else`/`or_else`
+        // sibling further down already gates on both; it just refuses, where
+        // `map` can route to the synthesis that handles it.
+        //
+        // Why the synthesis at all: the hand-rolled path below only
+        // shallow-copies the payload, which is unsound for a mapper that MOVES
+        // or RETURNS heap. `opt.map(f)` is exactly `match opt { Some(x) =>
+        // Some(f(x)), None => None }` (Ok/Err for Result), and the match
+        // codegen owns the correct move-out / drop / receiver-suppression
+        // machinery. The typechecker records the mapper's solved `Fn(T) -> R`,
+        // so codegen types the closure. B-2026-07-12-11 heap half.
+        //
+        // B-2026-08-08-22 DELETED A GATE THAT STOOD HERE. It refused a closure
+        // whose body IS a String value (`|s| "fixed"`, `|s| s + "!"`) because
+        // the closure was declared with a POINTER return while such a body
+        // yields `{ptr,len,cap}`. That mismatch is now fixed at its source —
+        // `infer_closure_return_type`'s `StringLit` arm says String, as its
+        // f-string sibling always did. The gate was also mis-scoped in a way
+        // worth remembering: it named `Option/Result.map` while the same
+        // closure failed identically as a plain local (`let f = |x: i64|
+        // "fixed"; f(1)`) — a gate at the call site describing the symptom's
+        // neighbourhood rather than its cause.
+        if method == "map" && args.len() == 1 {
+            let map_err_te = self.method_unwrap_err_types.get(&key).cloned();
+            let heap_err = map_err_te
+                .as_ref()
+                .is_some_and(|te| !super::vec_method::is_trivially_copyable_te(te));
+            if !super::vec_method::is_trivially_copyable_te(&inner_te) || heap_err {
+                return self
+                    .compile_map_via_match_synthesis(
+                        object,
+                        &args[0].value,
+                        &inner_te,
+                        map_err_te.as_ref(),
+                        call_span,
+                    )
+                    .map(Some);
+            }
+        }
+
         let i64_t = self.context.i64_type();
 
         // Compile the receiver. The Option/Result enum lowering produces a
@@ -1785,59 +1843,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload aliases the receiver's buffer and the mapper may consume it),
         // so it defers loudly to the interpreter. B-2026-07-12-11.
         if method == "map" && args.len() == 1 {
-            // The lowering choice has to consider BOTH halves of a `Result`.
-            // `inner_te` alone picks the hand-rolled path for `Result[i64,
-            // String]` — scalar `T` — but that path's ABSENT branch is a shallow
-            // copy of the receiver's words, so a heap `E` ends up aliased by the
-            // result and freed twice (`free(): double free detected in tcache 2`,
-            // B-2026-08-09-6). `E` is just as much a payload as `T` here because
-            // `map` PASSES IT THROUGH. The `unwrap_or_else`/`map_or_else`/
-            // `or_else` sibling below already gates on both; it just refuses,
-            // where `map` can route to the match synthesis that handles it.
-            let map_err_te = self.method_unwrap_err_types.get(&key).cloned();
-            let heap_err = map_err_te
-                .as_ref()
-                .is_some_and(|te| !super::vec_method::is_trivially_copyable_te(te));
-            if !super::vec_method::is_trivially_copyable_te(&inner_te) || heap_err {
-                // Heap payload (String / Vec / heap struct): the hand-rolled
-                // trivially-copyable path below only shallow-copies the payload
-                // (unsound for a mapper that MOVES or RETURNS heap). Delegate to
-                // the match codegen — `opt.map(f)` is exactly `match opt {
-                // Some(x) => Some(f(x)), None => None }` (Ok/Err for Result) —
-                // which owns the correct heap-payload move-out / drop /
-                // receiver-suppression machinery. The typechecker records the
-                // mapper's solved `Fn(T) -> R`, so codegen types the closure.
-                // Chained `map(f).unwrap_or(d)` now works because the span-
-                // collision fix (Slice 1) keys `method_unwrap_*` on
-                // `args_close_span`. B-2026-07-12-11 heap half.
-                //
-                // B-2026-08-08-22 DELETED THE GATE THAT STOOD HERE. It refused
-                // a closure whose body IS a String value (`|s| "fixed"`,
-                // `|s| s + "!"`) because the closure was declared with a
-                // POINTER return while such a body yields `{ptr,len,cap}`. That
-                // mismatch is now fixed at its source —
-                // `infer_closure_return_type`'s `StringLit` arm says String, as
-                // its f-string sibling always did — so these shapes compile and
-                // match the interpreter, and there is nothing left to refuse.
-                //
-                // The gate was also mis-scoped in a way worth remembering: it
-                // sat on `Option/Result.map` and named that combinator in its
-                // message, but the defect had nothing to do with `map`. The
-                // same closure fails identically as a plain local
-                // (`let f = |x: i64| "fixed"; f(1)`), which is how the fix was
-                // found — a gate at the call site described the symptom's
-                // neighbourhood rather than its cause, and its advice
-                // ("append `.to_string()`") worked while pointing away from it.
-                return self
-                    .compile_map_via_match_synthesis(
-                        object,
-                        &args[0].value,
-                        &inner_te,
-                        map_err_te.as_ref(),
-                        call_span,
-                    )
-                    .map(Some);
-            }
             let is_result = self.type_name_of_expr(object).as_deref() == Some("Result");
             let present_variant = if is_result { "Ok" } else { "Some" };
             let inner_ll = self.llvm_type_for_type_expr(&inner_te);
