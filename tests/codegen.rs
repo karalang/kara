@@ -35811,9 +35811,16 @@ fn main() {
 
     #[test]
     fn test_e2e_shared_struct_user_drop_fires() {
-        // Behavioral: the user Drop body runs when the sole reference
-        // goes out of scope. `start` prints first, then the body fires
-        // at `main` scope exit.
+        // Behavioral: the user Drop body runs when the sole reference dies.
+        //
+        // B-2026-08-09-3 retimed this from `0 7` to `7 0`. `r` is never read,
+        // and a never-used binding dies at its own `let` — design.md § Drop
+        // ordering, the rule the VALUE tier has always followed here (the
+        // same program with a non-shared `struct Res` printed `7 0` before
+        // this bug was fixed, and `test_ir_user_drops_nll_placement_never_
+        // used_bindings` pins it at the IR level). The old `0 7` was the RC
+        // tier's scope-exit drain, i.e. the divergence itself: `--interp`
+        // prints `7 0` on both spellings.
         let out = run_program(
             r#"
 shared struct Res { id: i64 }
@@ -35831,8 +35838,9 @@ fn main() {
         if let Some(out) = out {
             assert_eq!(
                 out.trim(),
-                "0\n7",
-                "expected `0` then the drop body printing `7` at scope exit"
+                "7\n0",
+                "expected the drop body printing `7` at `r`'s own let (never \
+                 used), then `0`"
             );
         }
     }
@@ -36186,6 +36194,80 @@ fn main() {
              }",
         ) {
             assert_eq!(out, "use:mid|c:mid|after|S1|AB|c:B|c:A|tail|end:Zc:Z|");
+        }
+    }
+
+    /// B-2026-08-09-3 — the RC tier's leg of the same rule. A `shared struct`
+    /// binding's Drop body used to run at the closing brace while the
+    /// interpreter (and codegen's own VALUE-struct path, above) ran it at
+    /// live-range end, so the two backends printed in different orders.
+    ///
+    /// Three shapes, one program:
+    ///
+    ///   • `a` / `b` — two shared bindings last-used in the SAME statement.
+    ///     Both bodies fire there, LIFO (`c:B` before `c:A`), ahead of the
+    ///     trailing `tail|` — the filed shape.
+    ///
+    ///   • `p` / `q` — the ALIAS shape, and the reason this fix is a
+    ///     retiming rather than a new lifetime rule. `let q = p;` makes two
+    ///     live handles on one object; exactly ONE body runs, at `q`'s last
+    ///     use, not at `p`'s. Firing `p`'s dec early takes the count 2→1,
+    ///     which cannot run a body — the 0 transition still waits for the
+    ///     last holder. If a future change ever frees at a dec instead of
+    ///     decrementing, this leg turns `P|` into a read of freed memory
+    ///     rather than merely reordering output.
+    ///
+    ///   • `z` — used in the final statement, so it stays at scope exit.
+    ///
+    /// Asserted byte-identical to `--interp` (measured, not derived) at both
+    /// opt levels.
+    #[test]
+    fn test_e2e_shared_user_drop_nll_timing_and_alias() {
+        if let Some(out) = run_program(
+            "shared struct Res { name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { print(f\"c:{self.name}|\"); }\n\
+             }\n\
+             fn main() {\n\
+                 let a = Res { name: \"A\".to_string() };\n\
+                 let b = Res { name: \"B\".to_string() };\n\
+                 print(f\"{a.name}{b.name}|\");\n\
+                 print(\"tail|\");\n\
+                 let p = Res { name: \"P\".to_string() };\n\
+                 let q = p;\n\
+                 print(f\"{p.name}|\");\n\
+                 print(\"mid|\");\n\
+                 print(f\"{q.name}|\");\n\
+                 print(\"after|\");\n\
+                 let z = Res { name: \"Z\".to_string() };\n\
+                 print(f\"end:{z.name}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "AB|c:B|c:A|tail|P|mid|P|c:P|after|end:Zc:Z|");
+        }
+    }
+
+    /// B-2026-08-09-3, the pin leg: a binding a `defer` body names stays live
+    /// to scope exit and must NOT be retimed. `compute_block_last_use` pins
+    /// such a name to the scope-exit sentinel, and the RC tier inherits that
+    /// unchanged by riding the same map — this test is what says so out loud,
+    /// since an RC dec moved ahead of a `defer` that reads the object would be
+    /// a use-after-free rather than a reordering.
+    #[test]
+    fn test_e2e_shared_user_drop_defer_pins_to_scope_exit() {
+        if let Some(out) = run_program(
+            "shared struct Res { name: String }\n\
+             impl Drop for Res {\n\
+                 fn drop(mut ref self) { print(f\"c:{self.name}|\"); }\n\
+             }\n\
+             fn main() {\n\
+                 let p = Res { name: \"P\".to_string() };\n\
+                 defer { print(f\"d:{p.name}|\"); }\n\
+                 print(f\"{p.name}|\");\n\
+                 print(\"end|\");\n\
+             }",
+        ) {
+            assert_eq!(out, "P|end|d:P|c:P|");
         }
     }
 

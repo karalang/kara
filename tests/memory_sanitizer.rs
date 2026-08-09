@@ -21691,6 +21691,23 @@ fn main() {
         // through `__karac_rc_drop_Node`). This must be leak-clean AND
         // free each node exactly once — no double-free from the body
         // running on top of the field walk + heap free.
+        //
+        // B-2026-08-09-3 retimed the expectation from `0 1 2 3` to
+        // `1 2 3 0`. `a` is never read, and a never-used binding dies at
+        // its own `let` (design.md § Drop ordering; the value tier pins
+        // the same rule in `test_ir_user_drops_nll_placement_never_used_
+        // bindings`) — so the chain unwinds at `a`'s declaration, ahead of
+        // `println(0)`, not at the closing brace. The old order was the RC
+        // tier's scope-exit drain, which is precisely the divergence that
+        // bug filed: `--interp` on this program prints `1 2 0`, firing the
+        // chain BEFORE the `0` on both counts.
+        //
+        // The interpreter's missing `3` is a separate, pre-existing gap and
+        // NOT what changed here: it has no Arc-drop hook for a link held in
+        // another shared struct's FIELD rather than by an env binding (see
+        // `invoke_user_drop_if_applicable`'s note, tracked under the L940
+        // drop-reconciliation item). Codegen walks the field chain and is
+        // the more complete backend; this fixture is what guards that.
         assert_clean_asan_run(
             r#"
 shared struct Node { val: i64, mut next: Option[Node] }
@@ -21706,8 +21723,55 @@ fn main() {
     println(0);
 }
 "#,
-            &["0", "1", "2", "3"],
+            &["1", "2", "3", "0"],
             "shared_struct_user_drop_recursive_chain_leak_free",
+        );
+    }
+
+    #[test]
+    fn asan_shared_user_drop_nll_alias_and_escape_no_uaf() {
+        // B-2026-08-09-3 — the safety half of moving a `shared` binding's
+        // refcount dec from scope exit to the binding's last use. The
+        // retiming is only sound because a dec is not a free: it reaches
+        // zero (and frees) exactly when the LAST handle goes.
+        //
+        // This program puts a live read after every retimed dec, so a
+        // dec that freed instead of decrementing is a use-after-free ASAN
+        // catches rather than an output reordering a reader has to notice:
+        //
+        //   • `let q = p;` then `p.name.len()` — `p`'s dec now fires at
+        //     THAT statement, while `q` still holds the object. Under the
+        //     `Res` body's own `self.tag` read too.
+        //   • `keep.push(q)` then `keep[0].name.len()` — `q`'s name dies
+        //     at the push, but the Vec owns the object and reads it after.
+        //
+        // The String field is deliberately >36 bytes: LSan treats a short
+        // string's inline buffer as reachable, which would mask a leak of
+        // the payload if the dec were retimed without its field walk.
+        //
+        // Output is measured on both backends, not derived. `--interp`
+        // prints `53 53 0` — it has no drop hook for a container-held
+        // shared element (the same pre-existing gap the recursive-chain
+        // fixture above documents), so codegen's trailing `1` is the more
+        // complete answer, not a divergence this bug introduced.
+        assert_clean_asan_run(
+            r#"
+shared struct Res { tag: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(self.tag); }
+}
+fn main() {
+    let p = Res { tag: 1, name: "a heap string payload well over thirty-six bytes long".to_string() };
+    let q = p;
+    println(p.name.len());
+    let mut keep: Vec[Res] = Vec.new();
+    keep.push(q);
+    println(keep[0].name.len());
+    println(0);
+}
+"#,
+            &["53", "53", "0", "1"],
+            "shared_user_drop_nll_alias_and_escape_no_uaf",
         );
     }
 

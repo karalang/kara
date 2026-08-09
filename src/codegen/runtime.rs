@@ -5995,6 +5995,33 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Fire the drops due at `stmt_idx` — see the NLL-placement notes above
+    /// `is_container_elem_bodies_fn` for the value tier's rules.
+    ///
+    /// B-2026-08-09-3 — the RC tier rides this same channel, via `RcDec`
+    /// rather than `UserDrop`. A `shared struct` / `shared enum` binding
+    /// never registers a `UserDrop` at all: its cleanup is the refcount
+    /// decrement, whose 0-transition runs `__karac_rc_drop_<T>` (which
+    /// invokes the user body). So the RC tier used to fail the filter below
+    /// twice — once on its explicit `!shared_types` clause, and again on the
+    /// action kind — and a `shared` binding's Drop body ran at the closing
+    /// brace while the interpreter ran it at last use.
+    ///
+    /// A decrement is safe to move to last use for the reason a free is not:
+    /// it is not a drop. The body runs only on the 0 transition, and every
+    /// live alias holds its own +1, so firing THIS name's dec at THIS name's
+    /// last use cannot reach zero while another handle is live — the body
+    /// still lands at the last holder's death. That is exactly the
+    /// interpreter's model: `invoke_user_drop_if_applicable` runs the body
+    /// when `drop_target`'s strong count is 1, then `remove_local`s the
+    /// binding *unconditionally* so a later alias's drain can reach 1.
+    /// Measured on `let q = p;` — one body, at `q`'s last use, on both
+    /// backends — rather than assumed.
+    ///
+    /// Restricted to shared types carrying their OWN `impl Drop`. A dec with
+    /// no user body is unobservable in output and only retimes a free, which
+    /// buys nothing to offset the risk of moving a release earlier in the RC
+    /// machinery's most heavily special-cased path.
     pub(super) fn fire_due_user_drops(
         &mut self,
         last_use: &std::collections::HashMap<String, usize>,
@@ -6011,7 +6038,24 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let due: Vec<(String, PointerValue<'ctx>, FunctionValue<'ctx>)> = {
+        /// One due entry, in the frame's reverse-introduction order. Two
+        /// shapes because the two ownership tiers register different
+        /// cleanup actions for the same source-level construct: an owned
+        /// binding's `impl Drop` is a `UserDrop` wrapper call, a `shared`
+        /// one's is the refcount dec whose 0-transition runs the body.
+        enum DueDrop<'c> {
+            User {
+                name: String,
+                ptr: PointerValue<'c>,
+                drop_fn: FunctionValue<'c>,
+            },
+            Rc {
+                name: String,
+                ptr: PointerValue<'c>,
+                heap_type: StructType<'c>,
+            },
+        }
+        let due: Vec<DueDrop<'ctx>> = {
             let Some(frame) = self.scope_cleanup_actions.last() else {
                 return;
             };
@@ -6019,6 +6063,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 .iter()
                 .rev()
                 .filter_map(|a| match a {
+                    // B-2026-08-09-3 — the RC tier's due entry. Same LIFO
+                    // walk as the user-drop entries so a frame mixing the
+                    // two tiers still fires in reverse-introduction order;
+                    // a two-pass form would have put every value drop ahead
+                    // of every shared one regardless of declaration order.
+                    CleanupAction::RcDec {
+                        name,
+                        ptr,
+                        heap_type,
+                    } if last_use.get(name.as_str()).copied() == Some(stmt_idx)
+                        && self
+                            .struct_name_for_heap_type(*heap_type)
+                            .is_some_and(|n| self.user_drop_wrapper_fns.contains_key(&n)) =>
+                    {
+                        Some(DueDrop::Rc {
+                            name: name.clone(),
+                            ptr: *ptr,
+                            heap_type: *heap_type,
+                        })
+                    }
                     CleanupAction::UserDrop {
                         binding_name,
                         binding_ptr,
@@ -6044,7 +6108,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .get(type_name.as_str())
                                 .is_some_and(|l| !l.is_shared)) =>
                     {
-                        Some((binding_name.clone(), *binding_ptr, *drop_fn))
+                        Some(DueDrop::User {
+                            name: binding_name.clone(),
+                            ptr: *binding_ptr,
+                            drop_fn: *drop_fn,
+                        })
                     }
                     _ => None,
                 })
@@ -6053,10 +6121,53 @@ impl<'ctx> super::Codegen<'ctx> {
         if due.is_empty() {
             return;
         }
-        for (name, ptr, drop_fn) in &due {
-            self.builder
-                .build_call(*drop_fn, &[(*ptr).into()], &format!("nll.drop.{name}"))
-                .unwrap();
+        // Fetched here rather than as an early-return guard on the whole
+        // function: only the RC arm needs a `FunctionValue` (its emitter
+        // appends the null-guard basic blocks). A `None` must never suppress
+        // the user-drop arm, which has always fired without one.
+        let rc_ctx = self.current_fn.map(|fn_val| {
+            (
+                fn_val,
+                self.vec_struct_type(),
+                self.context.ptr_type(AddressSpace::default()),
+                self.context.i64_type(),
+            )
+        });
+        for d in &due {
+            match d {
+                DueDrop::User { name, ptr, drop_fn } => {
+                    self.builder
+                        .build_call(*drop_fn, &[(*ptr).into()], &format!("nll.drop.{name}"))
+                        .unwrap();
+                }
+                // Rebuild the action and hand it to the shared per-action
+                // emitter rather than open-coding the dec here — the
+                // scope-exit arm carries a reassignment reload and a null
+                // guard (a slot whose `let` never ran), and an early fire
+                // needs both for the same reasons.
+                DueDrop::Rc {
+                    name,
+                    ptr,
+                    heap_type,
+                } => {
+                    let Some((fn_val, vec_ty, ptr_ty, i64_t)) = rc_ctx else {
+                        continue;
+                    };
+                    let action = CleanupAction::RcDec {
+                        name: name.clone(),
+                        ptr: *ptr,
+                        heap_type: *heap_type,
+                    };
+                    // Keep the `record_drop_obs` + `emit_cleanup_action`
+                    // pairing the scope-exit funnel has. `RcDec` is a
+                    // name-carrying variant the drop-differential oracle
+                    // knows by place, so retiring the action here without
+                    // recording would present a *retimed* drop to the
+                    // differential as a MISSING one.
+                    self.record_drop_obs(&action, fn_val);
+                    self.emit_cleanup_action(&action, fn_val, vec_ty, ptr_ty, i64_t);
+                }
+            }
         }
         // Retire exactly the actions that just fired, keyed on (binding name,
         // drop fn) rather than the name alone. B-2026-07-30-11 (enum leg) made
@@ -6066,11 +6177,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // the bodies walk passes the filter above (the wrapper's `type_name` is
         // an enum, not a struct), so a name-keyed retain deleted the wrapper
         // without ever calling it and the enum's own body silently vanished.
-        let fired: Vec<(&str, FunctionValue<'ctx>)> =
-            due.iter().map(|(n, _, f)| (n.as_str(), *f)).collect();
+        let fired: Vec<(&str, FunctionValue<'ctx>)> = due
+            .iter()
+            .filter_map(|d| match d {
+                DueDrop::User { name, drop_fn, .. } => Some((name.as_str(), *drop_fn)),
+                DueDrop::Rc { .. } => None,
+            })
+            .collect();
+        // The RC leg's retire key is (name, slot). A name alone would be
+        // enough today, but a binding can legitimately hold more than one
+        // pointer-keyed cleanup, and the whole reason the user-drop key
+        // above grew a second component was a name-only retain silently
+        // deleting an action it never fired.
+        //
+        // Empty when `rc_ctx` was `None`: nothing was emitted, so nothing may
+        // be retired — retiring an action that did not fire is not a retiming,
+        // it is a dropped decrement, i.e. a leak.
+        let fired_rc: Vec<(&str, PointerValue<'ctx>)> = due
+            .iter()
+            .filter_map(|d| match d {
+                DueDrop::Rc { name, ptr, .. } if rc_ctx.is_some() => Some((name.as_str(), *ptr)),
+                _ => None,
+            })
+            .collect();
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.retain(|a| {
-                !matches!(a, CleanupAction::UserDrop { binding_name, drop_fn, .. }
+                !matches!(a, CleanupAction::RcDec { name, ptr, .. }
+                    if fired_rc.iter().any(|(n, p)| *n == name.as_str() && p == ptr))
+                    && !matches!(a, CleanupAction::UserDrop { binding_name, drop_fn, .. }
                     if fired.iter().any(|(n, f)| *n == binding_name.as_str() && f == drop_fn))
             });
         }
