@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 223 | 0 |
+| miscompile | 224 | 1 |
 | leak | 154 | 0 |
-| double-free | 115 | 0 |
+| double-free | 116 | 1 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 0 |
 | missing-feature | 86 | 0 |
@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 41 | 0 |
 | crash | 41 | 0 |
 | other | 24 | 0 |
-| use-after-free | 17 | 1 |
+| use-after-free | 16 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 760 | 1 |
+| codegen | 761 | 2 |
 | typecheck | 137 | 0 |
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1049 surfaced · 1 open · 1038 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1050 surfaced · 2 open · 1038 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
+| B-2026-08-08-25 | 2026-08-08 | codegen | medium | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
+| B-2026-08-09-8 | 2026-08-09 | codegen | high | a bare REBIND of an inline-Option-payload local (`let p = o`) followed by TWO reads of `p` double-frees the payload -- the caller-retains classifier fires for the alias while the source's own cleanup stays armed, so both free it; one read is fine and no rebind is fine | probe: `let o: Option[String] = Some(f"hi"); let p: Option[String] = o; match p { Some(v) => { println(v); } None => {} } match p { Some(v) => { println(v); } None => {} }` -- `karac build` aborts with `free(): double free detected in tcache 2`; `--interp` prints `hi` twice |
 
 ### Fixed (1038)
 
