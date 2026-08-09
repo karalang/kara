@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 223 | 0 |
-| leak | 154 | 1 |
+| leak | 154 | 0 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 91 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 758 | 2 |
+| codegen | 758 | 1 |
 | typecheck | 136 | 0 |
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1047 surfaced · 2 open · 1035 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1047 surfaced · 1 open · 1036 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
-| B-2026-08-09-4 | 2026-08-09 | codegen | medium | `asan_option_map_heap_payload_no_leak` leaks 200 bytes in 40 allocations at KARAC_OPT_LEVEL=0 while passing at the default level, so the `Option.map` heap-payload path has an -O0-only leak no CI job would catch | tests/memory_sanitizer.rs::asan_option_map_heap_payload_no_leak under KARAC_OPT_LEVEL=0 |
 
-### Fixed (1035)
+### Fixed (1036)
 
-<details><summary>1035 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1036 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1195,6 +1194,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-09-1 | codegen | medium | a `Map[K, V]` field of a SHARED struct has no general per-value drop-fn channel, so a V that needs a RECURSIVE drop leaks -- the non-shared struct fi… | ec446e0 |
 | B-2026-08-09-2 | typecheck+codegen | medium | `Map[K, weak V]` is now store-only: the read is NOT an upgrade, so `m.get(k)` yields `Option[weak V]` and the `Some` binding rejects every field acce… | 68bebfd3 |
 | B-2026-08-09-3 | codegen | medium | a `shared struct` binding's Drop body fires at LEXICAL SCOPE EXIT under codegen but at LIVE-RANGE END under `--interp` -- design.md mandates live-ran… | e9e3807 |
+| B-2026-08-09-4 | codegen | medium | `let r = <Option/Result>.map(f)` over a HEAP payload leaks the result's payload once per evaluation — `map_passthrough_armed_source` claimed EVERY `.… | 5698333 |
 | B-2026-08-09-5 | codegen | high | an indirect closure call lowered the return type from the SURFACE `Fn(..)` type while the emitted body used its own, so a borrowed-String mapper's 3-… | 37d0992a |
 
 </details>
