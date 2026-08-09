@@ -163,6 +163,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value)
+            // B-2026-08-08-25 leg 3 (if-let leg) — the USER-ENUM classifier.
+            // Held separate from the retains flag above, which is specific to
+            // the inline Option/Result payload channel and additionally drives
+            // the combinator chain's disarm; a user enum rides
+            // `field_drop_kinds` and only needs the borrow classification.
+            || self.scrutinee_is_readonly_owned_enum_local_block(value, pattern, then_block)
             || self.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (if-let leg): record which of this pattern's
         // binding names sit in a VARIANT payload position so
@@ -501,6 +507,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value)
+            // B-2026-08-08-25 leg 3 (while-let leg) — see the if-let site.
+            || self.scrutinee_is_readonly_owned_enum_local_block(value, pattern, body)
             || self.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (while-let leg): route a Drop-declaring variant
         // payload binding to the UserDrop channel — the match/if-let sites'

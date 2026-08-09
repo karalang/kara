@@ -23636,6 +23636,42 @@ fn main() {
             .as_deref(),
             Some("hi\n")
         );
+        // 10. The `if let` SPELLING of leg 3's read-only half. `control_flow.rs`
+        // calls the same `suppress_destructured_enum_payload_cleanup`, so this
+        // emptied the source exactly as the `match` spelling did — and only the
+        // user-enum channel was affected here, because `Option`/`Result` already
+        // had a block classifier (`scrutinee_is_readonly_inline_optres_local_
+        // block`) and this one did not exist. Fixing the match form alone would
+        // have left a measured hole under a closed row.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"hi\");\n\
+                     if let E.A(v) = e { println(v); }\n\
+                     if let E.A(v) = e { println(v); }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // 11. Same, re-entered from a loop — the `while let` site takes the
+        // identical classifier, and the body frame must not accumulate owners.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"hi\");\n\
+                     let mut i: i64 = 0;\n\
+                     while i < 3 {\n\
+                         if let E.A(v) = e { println(v); }\n\
+                         i = i + 1;\n\
+                     }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\nhi\n")
+        );
     }
 
     /// B-2026-08-08-25 — what legs 2 and 3 did NOT close, pinned as a visibly

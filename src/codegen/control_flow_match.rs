@@ -1493,39 +1493,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// escapes` defaults to "escapes" for any shape it does not recognise, so
     /// an unrecognised body is conservative here too).
     fn scrutinee_is_readonly_owned_enum_local(&self, scrutinee: &Expr, arms: &[MatchArm]) -> bool {
-        // Identifier only — deliberately NOT the owned-`self` receiver. For
-        // `impl E { fn into_id(self) { match self { … } } }` the source's
-        // scope-exit drop is the documented owned-self RESIDUAL: it does not
-        // fire, because the caller disarmed the value's payload-bodies walk at
-        // the call on the premise that the callee's arm takes ownership
-        // (B-2026-08-01-7). The arm is therefore the payload's sole owner, and
-        // classifying it as a borrow drops that owner outright — measured as a
-        // `Drop` body that stopped running (`e2e_owned_self_enum_receiver_
-        // single_fire`). An owned enum PARAM is not affected: its entry-
-        // registered `EnumDrop` really does fire, so the source is a genuine
-        // owner there and the borrow classification keeps one free.
-        let ExprKind::Identifier(scrut_name) = &scrutinee.kind else {
+        let Some(enum_name) = self.owned_enum_local_that_frees_its_own_payload(scrutinee) else {
             return false;
         };
-        let scrut_name = scrut_name.as_str();
-        let Some(slot) = self.variables.get(scrut_name) else {
-            return false;
-        };
-        let Some(enum_name) = self.var_type_names.get(scrut_name).cloned() else {
-            return false;
-        };
-        let Some(layout) = self.enum_layouts.get(enum_name.as_str()) else {
-            return false;
-        };
-        if layout.is_shared {
-            return false;
-        }
-        // The scope-exit drop that will do the one free. Absent means either a
-        // heapless enum (nothing to protect) or a source that has already been
-        // disarmed — neither may be reclassified as a borrow.
-        if !self.slot_has_live_enum_drop(slot.ptr) {
-            return false;
-        }
         // At least one arm must bind a field the suppressor would zero —
         // otherwise this match is not the shape that breaks, and there is no
         // reason to move it off its current path.
@@ -1538,9 +1508,73 @@ impl<'ctx> super::Codegen<'ctx> {
         self.no_arm_payload_escapes(arms)
     }
 
+    /// The block-body sibling of
+    /// [`Self::scrutinee_is_readonly_owned_enum_local`], for the `if let`
+    /// `then_block` / `while let` `body` scopes — the user-enum peer of
+    /// `scrutinee_is_readonly_inline_optres_local_block`.
+    ///
+    /// B-2026-08-08-25 leg 3 reaches this site too: `control_flow.rs` calls the
+    /// very same `suppress_destructured_enum_payload_cleanup`, so `if let
+    /// E.A(v) = e { println(v); }` twice over a live local emptied the source
+    /// exactly as the `match` spelling did — while the `Option`/`Result`
+    /// spellings were already clean here, because only THEY had a block
+    /// classifier. Fixing the match form alone would have left this measured
+    /// hole under a closed row.
+    pub(super) fn scrutinee_is_readonly_owned_enum_local_block(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        let Some(enum_name) = self.owned_enum_local_that_frees_its_own_payload(scrutinee) else {
+            return false;
+        };
+        if !self.enum_pattern_binds_heap_payload(&enum_name, pattern) {
+            return false;
+        }
+        !self.pattern_bindings_escape_in_block(pattern, block)
+    }
+
+    /// Shared gate of the two user-enum caller-retains classifiers: is
+    /// `scrutinee` a bare local holding a non-shared user enum that will
+    /// PROVABLY free its own payload at scope exit? Returns the enum's name.
+    ///
+    /// Identifier only — deliberately NOT the owned-`self` receiver. For
+    /// `impl E { fn into_id(self) { match self { … } } }` the source's
+    /// scope-exit drop is the documented owned-self RESIDUAL: it does not fire,
+    /// because the caller disarmed the value's payload-bodies walk at the call
+    /// on the premise that the callee's arm takes ownership (B-2026-08-01-7).
+    /// The arm is therefore the payload's sole owner, and classifying it as a
+    /// borrow drops that owner outright — measured as a `Drop` body that
+    /// stopped running (`e2e_owned_self_enum_receiver_single_fire`). An owned
+    /// enum PARAM is not affected: its entry-registered `EnumDrop` really does
+    /// fire, so the source is a genuine owner and one free is kept.
+    ///
+    /// The live-`EnumDrop` requirement is the ownership witness, not an
+    /// inference from shape: suppressing the binding's own registration leaks
+    /// unless the source really frees it. `track_enum_var` declines to register
+    /// one for a shared enum and for an enum with no heap-bearing field
+    /// anywhere — precisely the population where a borrow classification would
+    /// have nobody to fall back on.
+    fn owned_enum_local_that_frees_its_own_payload(&self, scrutinee: &Expr) -> Option<String> {
+        let ExprKind::Identifier(scrut_name) = &scrutinee.kind else {
+            return None;
+        };
+        let slot = self.variables.get(scrut_name.as_str())?;
+        let enum_name = self.var_type_names.get(scrut_name.as_str()).cloned()?;
+        let layout = self.enum_layouts.get(enum_name.as_str())?;
+        if layout.is_shared {
+            return None;
+        }
+        if !self.slot_has_live_enum_drop(slot.ptr) {
+            return None;
+        }
+        Some(enum_name)
+    }
+
     /// Does a `CleanupAction::EnumDrop` on `slot_ptr` survive in any live scope
     /// frame? The ownership witness for
-    /// [`Self::scrutinee_is_readonly_owned_enum_local`].
+    /// [`Self::owned_enum_local_that_frees_its_own_payload`].
     fn slot_has_live_enum_drop(&self, slot_ptr: PointerValue<'ctx>) -> bool {
         self.scope_cleanup_actions.iter().flatten().any(|a| {
             matches!(
