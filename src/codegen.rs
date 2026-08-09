@@ -2596,6 +2596,20 @@ pub(super) struct Codegen<'ctx> {
     /// aliases the container's storage and the container's own cleanup
     /// already covers the buffer.
     pub(crate) pattern_binding_is_borrow: bool,
+    /// B-2026-08-08-25 — set alongside `pattern_binding_is_borrow` when the
+    /// scrutinee is a LIVE LOCAL owning an inline `Option`/`Result`
+    /// `{ptr,len,cap}` payload and no arm moves that payload out
+    /// (`scrutinee_is_readonly_inline_optres_local`). The source keeps
+    /// ownership, so the inline-payload suppressors must NOT disarm it.
+    ///
+    /// This is a SEPARATE flag rather than a read of `pattern_binding_is_borrow`
+    /// on purpose. That flag is also raised for borrow-call / borrowed-binding
+    /// scrutinees at the `let…else` site, whose binding escapes into the
+    /// enclosing scope by construction and must keep its unconditional
+    /// suppression — keying the suppressors on the shared flag would silently
+    /// change those paths too. This one is raised only by the classifier that
+    /// proved the source survives.
+    pub(crate) pattern_binding_source_retains_inline_payload: bool,
     /// Set by `compile_match` (B-2026-07-15-21 Part B) when the scrutinee is a
     /// bare identifier naming a param already in `rc_elide_ref_params` — i.e. a
     /// read-only, non-escaping borrowed `shared`/`Option[shared]` param whose
@@ -7964,6 +7978,7 @@ impl<'ctx> Codegen<'ctx> {
             compiling_ref_return_let_rhs: false,
             suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
+            pattern_binding_source_retains_inline_payload: false,
             pattern_binding_scrutinee_is_elidable_param: false,
             deep_copy_rc_inc_bare_shared: false,
             copy_support_for_loop_shared_mode: false,

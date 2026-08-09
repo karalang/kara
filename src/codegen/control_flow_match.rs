@@ -225,10 +225,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // would double-free against the `karac_map_free_with_val_drop_vec`
         // path at function exit.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
+        // B-2026-08-08-25 — a read-only match over a live local that owns an
+        // inline Option/Result payload is a BORROW of that payload: the source
+        // keeps it, so the arm binding must not register a free and the
+        // suppressors below must not disarm the source.
+        let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
+        self.pattern_binding_source_retains_inline_payload =
+            self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms);
         self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
             || self.scrutinee_is_borrowed_binding(scrutinee)
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
-            || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms);
+            || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms)
+            || self.pattern_binding_source_retains_inline_payload;
         // B-2026-07-15-21 Part B — scrutinee is an RC-elidable borrowed param:
         // skip the Some-binding acquire + its scope-exit RcDec (payload is a
         // proven-non-escaping alias of the caller-kept-alive param), which also
@@ -888,6 +896,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         self.pattern_binding_is_borrow = saved_borrow_flag;
+        self.pattern_binding_source_retains_inline_payload = saved_source_retains;
         self.pattern_binding_scrutinee_is_elidable_param = saved_elidable_param_flag;
         self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
         self.pattern_binding_scrutinee_optres_area = saved_optres_area;
@@ -1404,6 +1413,153 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         self.no_arm_payload_escapes(arms)
+    }
+
+    /// B-2026-08-08-25 — the caller-retains classifier for a LIVE LOCAL owning
+    /// an inline `Option`/`Result` `{ptr,len,cap}` payload, when no arm moves
+    /// that payload out.
+    ///
+    /// `match o { Some(v) => println(v) }` over a live `let o: Option[String]`
+    /// used to hand the buffer to the arm binding — which `track_vec_var`s it
+    /// and frees it at arm exit — while zeroing the source's `cap` so the
+    /// source's own free skipped. `o` stays in scope and readable, so every
+    /// later read was a use-after-free: valgrind reports an invalid read of the
+    /// freed block, and a second `match o` printed garbage bytes or aborted in
+    /// the UTF-8 validator.
+    ///
+    /// The aggregate payload has been consumption-gated since B-2026-07-03-31
+    /// (`arm_only_borrows_option_agg_payload`); that gate was deliberately
+    /// narrowed to the tuple, leaving the DIRECT `String`/`Vec` payload with an
+    /// unconditional suppression. This is the missing direct-heap sibling, and
+    /// it takes the same shape as `scrutinee_is_readonly_owned_agg_loop_var`
+    /// above: a read-only match over an owned source is the BORROW path.
+    ///
+    /// Raising `pattern_binding_is_borrow` for it does both halves at once —
+    /// `bind_pattern_values` skips the arm binding's `track_vec_var` (nothing
+    /// frees at arm exit) and the source's `FreeInlineOptionPayload` stays
+    /// armed to free it once at scope exit. Zero runtime cost: no clone, one
+    /// free, and the source stays valid, which is what `--interp` already did.
+    ///
+    /// Conservative in the safe direction. `no_arm_payload_escapes` defaults to
+    /// "escapes" for any shape it does not recognise, so a wrong answer keeps
+    /// today's transfer rather than inventing a double-free; and if an arm does
+    /// move the binding after all, the borrow path's existing
+    /// `clone_escaping_borrow_payload_binding` leg deep-clones it.
+    fn scrutinee_is_readonly_inline_optres_local(
+        &self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> bool {
+        if !self.scrutinee_is_inline_optres_local(scrutinee) {
+            return false;
+        }
+        if !arms
+            .iter()
+            .any(|a| self.pattern_binds_direct_inline_heap_payload(&a.pattern))
+        {
+            return false;
+        }
+        // Every payload-consuming arm must be the direct-heap shape — a mixed
+        // match must keep today's behavior wholesale, since the flag is set once
+        // for the whole `match`.
+        if !arms.iter().all(|a| {
+            !Self::pattern_consumes_variant_payload(&a.pattern)
+                || self.pattern_binds_direct_inline_heap_payload(&a.pattern)
+        }) {
+            return false;
+        }
+        self.no_arm_payload_escapes(arms)
+    }
+
+    /// Shared membership half of the two caller-retains classifiers: is
+    /// `scrutinee` a bare local that owns an inline `Option`/`Result` payload?
+    fn scrutinee_is_inline_optres_local(&self, scrutinee: &Expr) -> bool {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return false;
+        };
+        // A passthrough binding owns nothing — ask about its source, exactly as
+        // the suppressors themselves forward (B-2026-08-06-27).
+        let name: &str = self
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .map_or(name.as_str(), |s| s.as_str());
+        self.inline_option_payload_vars.contains(name)
+            || self.inline_result_payload_vars.contains(name)
+    }
+
+    /// Does `pattern` bind a `Some`/`Ok`/`Err` payload out at all? (Shape only —
+    /// says nothing about what the payload is.)
+    fn pattern_consumes_variant_payload(pattern: &Pattern) -> bool {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return false;
+        };
+        matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        ) && patterns.iter().any(pattern_consumes_field)
+    }
+
+    /// B-2026-08-08-25 — restricts the caller-retains classifiers to the DIRECT
+    /// `{ptr,len,cap}` payload (`Option[String]`, `Option[Vec[i64]]`), bound
+    /// WHOLE.
+    ///
+    /// `inline_{option,result}_payload_vars` is not a payload-shape witness: it
+    /// also carries TUPLE payloads, registered at their let-site by
+    /// B-2026-08-05-3. Those already have their own consumption gate
+    /// (`arm_only_borrows_result_tuple_payload`), and their bindings own
+    /// themselves — a destructuring `Some((v, k))` gives each heap element its
+    /// own `track_vec_var`. Classifying them as borrows dropped those owners and
+    /// broke `e2e_optres_tuple_payload_is_owned_exactly_once` (the program
+    /// produced no output at all), which is what surfaced this gate.
+    ///
+    /// `pattern_binding_types` records the bound payload's type name, so it
+    /// separates the two directly — the same witness `result_tuple_payload_binds`
+    /// uses to recognise its own shape from the other side.
+    fn pattern_binds_direct_inline_heap_payload(&self, pattern: &Pattern) -> bool {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return false;
+        };
+        if !matches!(
+            path.last().map(|s| s.as_str()),
+            Some("Some") | Some("Ok") | Some("Err")
+        ) {
+            return false;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return false;
+        }
+        patterns
+            .iter()
+            .filter(|p| pattern_consumes_field(p))
+            .all(|p| {
+                matches!(&p.kind, PatternKind::Binding(_))
+                    && self
+                        .pattern_binding_types
+                        .get(&(p.span.offset, p.span.length))
+                        .is_some_and(|t| t == "String" || t == "Vec")
+            })
+    }
+
+    /// Block-body sibling of
+    /// [`Self::scrutinee_is_readonly_inline_optres_local`] for the if-let
+    /// `then_block` / while-let `body` scopes.
+    ///
+    /// Deliberately NOT used at the `let…else` site: that binding escapes into
+    /// the enclosing scope by construction, so there is no block whose reads
+    /// bound its lifetime and the unconditional suppression there is correct.
+    pub(super) fn scrutinee_is_readonly_inline_optres_local_block(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        if !self.scrutinee_is_inline_optres_local(scrutinee) {
+            return false;
+        }
+        if !self.pattern_binds_direct_inline_heap_payload(pattern) {
+            return false;
+        }
+        !self.pattern_bindings_escape_in_block(pattern, block)
     }
 
     /// `for p in items { match p { A(x) => <MOVE x> … } }` where `items: Vec[E]`
@@ -6426,6 +6582,15 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
+        // B-2026-08-08-25 — suppression TRANSFERS the payload to the arm
+        // binding. When the classifier proved the arms only borrow it, that
+        // binding registers no owner (the borrow path skips `track_vec_var`),
+        // so there is nobody to transfer to: disarming the source here would
+        // leave the buffer freed at arm exit and the still-live source reading
+        // it afterward.
+        if self.pattern_binding_source_retains_inline_payload {
+            return;
+        }
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
@@ -6833,6 +6998,11 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
+        // B-2026-08-08-25 — Result twin of the caller-retains early-return in
+        // `suppress_inline_option_payload_cleanup`; same reasoning.
+        if self.pattern_binding_source_retains_inline_payload {
+            return;
+        }
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };

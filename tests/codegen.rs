@@ -22522,31 +22522,27 @@ fn main() {
     /// `.map` followed by a plain `match o`. `map` reaches it only because it
     /// lowers to exactly that match.
     ///
-    /// THE ASYMMETRY IS THE LEAD: the same shape with an `Option[Vec[i64]]`
-    /// payload is correct, including with a consuming arm body, and a plain
-    /// `String` binding read twice is correct. So the payload move-out is not a
-    /// deliberate model that String happens to expose — the Vec path already
-    /// does the right thing and the String path is missing it. `Result[String,
-    /// _]` breaks the same way, as does `match Some(h.s)` over a struct field.
+    /// THE VEC/STRING ASYMMETRY THIS ROW WAS FILED WITH IS A PROBE ARTIFACT,
+    /// corrected here. The `Option[Vec[i64]]` control read `x.len()`, which
+    /// loads a length word and never dereferences the payload buffer. Reading an
+    /// ELEMENT instead (`x[0]`) corrupts exactly like the `String` payload does,
+    /// on the same tree. So there was never a Vec path "doing the right thing"
+    /// to copy — the defect is payload-type-agnostic, and it is not
+    /// `Option`-specific either: a user `enum E { A(String) }` matched twice
+    /// corrupts identically.
     ///
     /// `--interp` prints correctly in every one of those, which makes this a
-    /// run-vs-build divergence with the interpreter as the reference.
+    /// run-vs-build divergence with the interpreter as the reference. valgrind
+    /// calls it what it is: `Invalid read of size 2` against a freed block.
+    ///
+    /// The BORROW-ONLY half is fixed (the arms only read the payload, so the
+    /// source keeps it) and is pinned below. The CONSUMING half — where the arm
+    /// really does move the payload out, which is what `.map` lowers to — still
+    /// dangles the source and is pinned separately as
+    /// `test_e2e_map_twice_over_live_option_string`.
     #[test]
-    #[ignore = "B-2026-08-08-25: matching out of a live Option[String] leaves the binding dangling"]
     fn test_e2e_match_out_of_option_string_leaves_source_usable() {
-        // The `map` spelling the row was filed as.
-        assert_eq!(
-            run_program(
-                "fn main() {\n\
-                     let o: Option[String] = Some(f\"hi\");\n\
-                     match o.map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => {} }\n\
-                     match o.map(|x| x.to_lowercase()) { Some(v) => { println(v); } None => {} }\n\
-                 }"
-            )
-            .as_deref(),
-            Some("HI\nhi\n")
-        );
-        // The same defect with no combinator anywhere — this is the real shape.
+        // The real shape: no combinator anywhere, arms only READ the payload.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -22558,19 +22554,79 @@ fn main() {
             .as_deref(),
             Some("HI\nhi\n")
         );
-        // The control that says the move-out is not the intended model: the
-        // identical program with a `Vec` payload is correct today.
+        // `if let` reaches the same binding path.
         assert_eq!(
             run_program(
                 "fn main() {\n\
-                     let mut v: Vec[i64] = Vec.new(); v.push(7);\n\
-                     let o: Option[Vec[i64]] = Some(v);\n\
-                     match o { Some(x) => { println(x.len()); } None => {} }\n\
-                     match o { Some(x) => { println(x.len()); } None => {} }\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     if let Some(v) = o { println(v); }\n\
+                     if let Some(v) = o { println(v); }\n\
                  }"
             )
             .as_deref(),
-            Some("1\n1\n")
+            Some("hi\nhi\n")
+        );
+        // The corrected Vec control: an ELEMENT read, which actually touches the
+        // buffer. `.len()` here would pass even unfixed.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[i64] = Vec.new(); v.push(111); v.push(222);\n\
+                     let o: Option[Vec[i64]] = Some(v);\n\
+                     match o { Some(x) => { println(x[0]); } None => {} }\n\
+                     match o { Some(x) => { println(x[0]); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("111\n111\n")
+        );
+    }
+
+    /// B-2026-08-08-25, CONSUMING half — still open, pinned as a visibly
+    /// deferred gap rather than left silently green.
+    ///
+    /// `o.map(f)` lowers to `match o { Some(x) => Some(f(x)) … }`, and the
+    /// synthesized arm passes the payload INTO the mapper — a genuine move, so
+    /// the borrow-path fix above correctly declines to classify it as a borrow
+    /// and the source is still left dangling. Closing it needs one of: an escape
+    /// walk that can see through a closure-literal callee (the mapper only
+    /// borrows its parameter in the common case), or a deep clone of the
+    /// payload for the arm. The obvious clone helper does NOT work as-is —
+    /// `deep_copy_enum_heap_payload_in_place` keys on `field_drop_kinds`, which
+    /// is exactly what the type-erased `Option` layout does not carry.
+    ///
+    /// The USER-ENUM leg is deferred with it. The fix is scoped to the
+    /// `Option`/`Result` inline-payload channel; a `enum E { A(String) }` bound
+    /// out of a live local goes through the general
+    /// `suppress_destructured_enum_payload_cleanup` instead and still corrupts
+    /// its second read, so the same caller-retains classifier has to be taught
+    /// that channel's membership test.
+    #[test]
+    #[ignore = "B-2026-08-08-25 (consuming + user-enum halves): payload still moves out from under a live source"]
+    fn test_e2e_map_twice_over_live_option_string() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let o: Option[String] = Some(f\"hi\");\n\
+                     match o.map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => {} }\n\
+                     match o.map(|x| x.to_lowercase()) { Some(v) => { println(v); } None => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("HI\nhi\n")
+        );
+        // Same defect, general user-enum channel.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"hi\");\n\
+                     match e { E.A(s) => { println(s); } E.B => {} }\n\
+                     match e { E.A(s) => { println(s); } E.B => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
         );
     }
 

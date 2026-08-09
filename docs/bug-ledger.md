@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 222 | 1 |
+| miscompile | 221 | 0 |
 | leak | 152 | 1 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
@@ -104,7 +104,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 41 | 0 |
 | crash | 41 | 1 |
 | other | 24 | 0 |
-| use-after-free | 16 | 0 |
+| use-after-free | 17 | 1 |
 
 ### By surface
 

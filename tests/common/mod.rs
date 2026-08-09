@@ -146,6 +146,15 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // Deliberately-illegal aliasing program — the test's point is that
     // the runtime path rejects it (`_rejects` suffix).
     "asan_vec_extend_from_slice_self_alias_rejects",
+    // B-2026-08-08-25 — a live `Option[String]` / user-enum binding matched
+    // TWICE, where the arms only READ the payload. `karac check` renders this
+    // as a WARNING and exits 0, so production really does compile and run
+    // these; the gate's "karac check would reject it" premise does not hold
+    // for UseAfterMove. Pre-fix the second read was a use-after-free
+    // (valgrind: invalid read of a freed block); the reuse IS the point.
+    "test_e2e_match_out_of_option_string_leaves_source_usable",
+    "test_e2e_map_twice_over_live_option_string",
+    "asan_match_out_of_live_option_string_no_use_after_free",
     //
     // ── Designed concurrent-access diagnostics, tolerated-build pins ─
     // `karac check` rejects a shared/plain struct binding reachable

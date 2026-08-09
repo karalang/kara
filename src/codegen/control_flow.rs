@@ -154,9 +154,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // NOT here — a read-only `if let Some(x) = m.get(k)` registered an
         // owned track for the aliased payload and double-freed against the
         // map's stored-value drop (exit 133 on plain `Map[i64, String]`).
+        // B-2026-08-08-25 (if-let leg): a then-block that only READS the bound
+        // payload leaves the source owning it — see
+        // `scrutinee_is_readonly_inline_optres_local`.
+        let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
+        self.pattern_binding_source_retains_inline_payload =
+            self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, then_block);
         self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
-            || self.scrutinee_is_borrow_call(value);
+            || self.scrutinee_is_borrow_call(value)
+            || self.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (if-let leg): record which of this pattern's
         // binding names sit in a VARIANT payload position so
         // `bind_pattern_values` routes a Drop-declaring payload struct to
@@ -273,6 +280,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(slot) = refchain_result_clone {
             self.suppress_inline_result_payload_cleanup_at(slot, pattern);
         }
+        // B-2026-08-08-25 — restore after the suppressors above have consulted
+        // it and before the then-block compiles, so a nested match inside the
+        // block classifies its own scrutinee from a clean slate.
+        self.pattern_binding_source_retains_inline_payload = saved_source_retains;
         self.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
         let then_terminated = self
@@ -482,9 +493,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // Slice 3s adds the borrow-CALL half (`m.get` scrutinee) + the
         // escaping-payload clone, mirroring if-let.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
+        // B-2026-08-08-25 (while-let leg): same caller-retains classifier as
+        // the match / if-let sites.
+        let saved_source_retains = self.pattern_binding_source_retains_inline_payload;
+        self.pattern_binding_source_retains_inline_payload =
+            self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, body);
         self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
-            || self.scrutinee_is_borrow_call(value);
+            || self.scrutinee_is_borrow_call(value)
+            || self.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (while-let leg): route a Drop-declaring variant
         // payload binding to the UserDrop channel — the match/if-let sites'
         // mirror. The binding lives in the per-iteration body frame, so the
@@ -538,6 +555,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // variable exists for the expr-based entry point to find). No-ops
         // when the scrutinee is not a fresh-temp boxed one.
         self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+        // B-2026-08-08-25 — restore after the suppressors, before the body
+        // compiles (see the if-let site).
+        self.pattern_binding_source_retains_inline_payload = saved_source_retains;
         self.compile_block(body)?;
         let body_has_terminator = self
             .builder

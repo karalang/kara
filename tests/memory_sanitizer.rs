@@ -43989,4 +43989,42 @@ fn main() {
             "tuple_held_optres_payload_freed",
         );
     }
+
+    /// B-2026-08-08-25 — matching a payload out of a LIVE `Option[String]`
+    /// binding, where the arms only READ it, must not free the buffer at arm
+    /// exit and leave the still-in-scope source pointing at it.
+    ///
+    /// Pre-fix this was a genuine use-after-free, not just wrong output —
+    /// valgrind: `Invalid read of size 2 … 0 bytes inside a block of size 2
+    /// free'd`. The source's `cap` word was zeroed so its own scope-exit free
+    /// skipped, and the arm binding's `track_vec_var` freed the buffer while the
+    /// source stayed readable.
+    ///
+    /// Loop-stressed so a mis-fire in the other direction shows up too: if the
+    /// source were disarmed AND nothing freed, LSan would report the per-
+    /// iteration leak. f-string payloads keep the heap non-foldable.
+    #[test]
+    fn asan_match_out_of_live_option_string_no_use_after_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    while i < 8 {
+        let o: Option[String] = Some(f"hi{i}");
+        match o { Some(v) => { println(v); } None => { println("-"); } }
+        // The read that was a use-after-free: `o` is still in scope and owns
+        // the buffer the arm above only borrowed.
+        match o { Some(v) => { println(v); } None => { println("-"); } }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &[
+                "hi0", "hi0", "hi1", "hi1", "hi2", "hi2", "hi3", "hi3", "hi4", "hi4", "hi5", "hi5",
+                "hi6", "hi6", "hi7", "hi7", "end",
+            ],
+            "match_out_of_live_option_string",
+        );
+    }
 }
