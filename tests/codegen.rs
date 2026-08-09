@@ -23440,38 +23440,54 @@ fn main() {
         );
     }
 
-    /// B-2026-08-08-25 — what leg 1 did NOT close, pinned as a visibly deferred
-    /// gap rather than left silently green. Both cases here are measured, not
-    /// assumed: each still prints an EMPTY payload for its second read under
-    /// `karac build` while `--interp` is correct.
+    /// B-2026-08-08-25 LEGS 2 AND 3 — the `Result` and user-ENUM channels,
+    /// which leg 1's `Option`-scoped work did not reach. This test replaces the
+    /// `#[ignore]`d `test_e2e_consuming_map_over_live_optres_still_open`; its
+    /// two cases are cases 1 and 4 below, unchanged.
     ///
-    /// The consuming-mapper case that used to lead this test is FIXED and moved
-    /// to `test_e2e_consuming_match_over_a_live_option_local_keeps_the_source`.
-    /// Both survivors are valgrind-clean wrong output, not use-after-frees, so
-    /// nothing pinned here is a memory-safety gap any more — the row's `high`
-    /// severity rested entirely on the case that just closed.
+    /// Each channel had the SAME two halves leg 1 had, and each half had its own
+    /// cause:
     ///
-    /// 1. `Result.map`. B-2026-08-09-6 was PREDICTED to unblock this leg by
-    ///    giving the `Err` binding a recorded type; measured before and after,
-    ///    it did not — this shape prints `HI` then an EMPTY line on both sides
-    ///    of that fix, valgrind-clean either way. So the missing `E` was never
-    ///    this leg's blocker, and the leg belongs with case 3 (clean-but-wrong)
-    ///    rather than with case 1 (use-after-free). What remains: the classifier
-    ///    requires every payload-consuming arm to be the direct-heap shape, and
-    ///    "no recorded type" still cannot be read as "scalar" — a DESTRUCTURED
-    ///    tuple payload (`Some((a, b))`) is untyped here too, and that is the
-    ///    shape whose owners must not be dropped.
+    /// - READ-ONLY, `Result` (case 2). The classifier already covered `Result`;
+    ///   what disqualified it was the co-arm. `scrutinee_is_readonly_inline_
+    ///   optres_local` requires EVERY payload-consuming arm to be the direct-heap
+    ///   shape, and `Err(e)` binding an `i64` is not — so the whole match fell
+    ///   back to the transfer path that empties the source. That is the entire
+    ///   reason the defect looked `Result`-specific: `Option`'s only co-arm is
+    ///   `None`, which binds nothing and can never trip the gate. Cases 2a/2b are
+    ///   the discriminator that found it — the same program with `Err(_)` or with
+    ///   a heap `Err` was always correct; only a SCALAR co-arm broke it.
     ///
-    /// 2. The USER-ENUM leg. `enum E { A(String) }` bound out of a live local
-    ///    goes through `suppress_destructured_enum_payload_cleanup` rather than
-    ///    the Option/Result inline channel, so the Option-scoped clone that
-    ///    closed the consuming half does not reach it. Same shape, different
-    ///    membership test — valgrind reports ZERO errors, so this is wrong
-    ///    output rather than a use-after-free.
+    ///   The row anticipated the trap in fixing this: "no recorded type" cannot
+    ///   be read as "scalar", because a destructured tuple payload is untyped in
+    ///   `pattern_binding_types` too and its bindings own themselves. Confirmed —
+    ///   a plain `i64` records NO entry at all there (that table stores narrowed
+    ///   widths and named types; 64-bit is the default and is omitted). So the
+    ///   exemption is keyed on the scrutinee's own instantiation instead, which
+    ///   is a positive witness rather than an absence.
+    ///
+    /// - CONSUMING, `Result` (case 1). The heap-payload `.map` lowers via
+    ///   `compile_map_via_match_synthesis`, whose synthesized match has the
+    ///   RECEIVER as its scrutinee — so this is literally leg 1's bare-local
+    ///   consuming match, gated to `inline_option_payload_vars` and never
+    ///   looking at the `Result` set. `clone_escaping_live_local_result` is the
+    ///   twin, on the ref-chain leg's clone-slot contract.
+    ///
+    /// - READ-ONLY, user enum (cases 4-6). A user enum's payload rides
+    ///   `field_drop_kinds`, not the inline Option/Result channel, so no
+    ///   caller-retains classifier covered it at all;
+    ///   `scrutinee_is_readonly_owned_enum_local` is that missing sibling.
+    ///
+    /// - CONSUMING, user enum (case 7). Same clone shape, but the duplicator is
+    ///   `deep_copy_enum_heap_payload_in_place` rather than a type-directed
+    ///   clone — see case 8 for the depth limit that keeps it honest.
+    ///
+    /// Cases 3 and 9 are the liveness controls, the gate that keeps all of this
+    /// off the common shape: with the source DEAD after the match there is one
+    /// owner, the clone must not fire, and the zero-cost transfer stays.
     #[test]
-    #[ignore = "B-2026-08-08-25 (Result.map, user-enum channel): payload still moves out from under a live source"]
-    fn test_e2e_consuming_map_over_live_optres_still_open() {
-        // 1. `Result.map` — no heap witness for the `Err` payload binding.
+    fn test_e2e_live_local_match_keeps_the_source_for_result_and_user_enums() {
+        // 1. LEG 2, consuming half — `Result.map` over a live source.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -23483,7 +23499,57 @@ fn main() {
             .as_deref(),
             Some("HI\nhi\n")
         );
-        // 2. General user-enum channel — wrong output rather than a UAF.
+        // 2. LEG 2, read-only half — the scalar `Err` co-arm is what broke it.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, i64] = Ok(f\"hi\");\n\
+                     match r { Ok(v) => { println(v); } Err(e) => { println(f\"E\"); } }\n\
+                     match r { Ok(v) => { println(v); } Err(e) => { println(f\"E\"); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // 2a/2b. The discriminators: a co-arm that BINDS NOTHING, and one that
+        // binds HEAP, were both always correct. Kept as pins so a future
+        // narrowing of the exemption cannot silently re-break only the scalar
+        // spelling — the asymmetry is the whole diagnosis.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, i64] = Ok(f\"hi\");\n\
+                     match r { Ok(v) => { println(v); } Err(_) => {} }\n\
+                     match r { Ok(v) => { println(v); } Err(_) => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, String] = Ok(f\"hi\");\n\
+                     match r { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                     match r { Ok(v) => { println(v); } Err(e) => { println(e); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // 3. CONTROL — `Result` source DEAD after the consuming match. One
+        // owner, so the clone must not fire.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let r: Result[String, i64] = Ok(f\"hi\");\n\
+                     match r.map(|s| s) { Ok(v) => { println(v); } Err(_) => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\n")
+        );
+        // 4. LEG 3, read-only half — the user-enum channel.
         assert_eq!(
             run_program(
                 "enum E { A(String), B }\n\
@@ -23495,6 +23561,118 @@ fn main() {
             )
             .as_deref(),
             Some("hi\nhi\n")
+        );
+        // 5. Three reads, and a MULTI-FIELD variant: the suppressor zeroes each
+        // consumed field, so a single-field pin would not catch a per-field
+        // regression.
+        assert_eq!(
+            run_program(
+                "enum E { A(String, String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"x\", f\"y\");\n\
+                     match e { E.A(p, q) => { println(p); println(q); } E.B => {} }\n\
+                     match e { E.A(p, q) => { println(p); println(q); } E.B => {} }\n\
+                     match e { E.A(p, q) => { println(p); println(q); } E.B => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("x\ny\nx\ny\nx\ny\n")
+        );
+        // 6. The ABSENT variant at runtime — nothing is bound, so the source
+        // keeps everything and the arms are pure control flow.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.B;\n\
+                     match e { E.A(s) => { println(s); } E.B => { println(f\"-\"); } }\n\
+                     match e { E.A(s) => { println(s); } E.B => { println(f\"-\"); } }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("-\n-\n")
+        );
+        // 7. LEG 3, consuming half — the arm MOVES the payload into a `let`,
+        // and the source is read afterwards.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"hi\");\n\
+                     match e { E.A(v) => { let k: String = v; println(k); } E.B => {} }\n\
+                     match e { E.A(v) => { println(v); } E.B => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\nhi\n")
+        );
+        // 8. The same consuming shape with a `Vec` payload, whose `for` loop
+        // moves it. `Vec[i64]` is depth-1 and the enum deep-copy is exact for
+        // it. The `Vec[String]` sibling is NOT — that copy is outer-buffer only,
+        // so the element `String`s would stay shared — and it is deliberately
+        // left on the transfer path by `enum_payload_deep_copy_is_exact` rather
+        // than handed a use-after-free. See the still-open pin below.
+        assert_eq!(
+            run_program(
+                "enum E { A(Vec[i64]), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A([11, 22]);\n\
+                     match e { E.A(v) => { for s in v { println(s); } } E.B => {} }\n\
+                     match e { E.A(v) => { for s in v { println(s); } } E.B => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("11\n22\n11\n22\n")
+        );
+        // 9. CONTROL — user-enum source DEAD after a consuming match.
+        assert_eq!(
+            run_program(
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A(f\"hi\");\n\
+                     match e { E.A(v) => { let k: String = v; println(k); } E.B => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("hi\n")
+        );
+    }
+
+    /// B-2026-08-08-25 — what legs 2 and 3 did NOT close, pinned as a visibly
+    /// deferred gap rather than left silently green. Measured, not assumed:
+    /// `karac build` prints ONE pair where `--interp` prints two, valgrind-clean.
+    ///
+    /// A user enum with a `Vec[String]` payload, consumed by an arm, over a live
+    /// source. The read-only spelling of this is FIXED (case 4 above); only the
+    /// consuming one is open, and only because the duplicator is depth-limited:
+    /// `deep_copy_enum_heap_payload_in_place`'s `VecOrString` arm takes an
+    /// OUTER-buffer copy, mirroring the enum drop's outer-only free, so the
+    /// element `String`s come back SHARED between the two copies.
+    ///
+    /// That is not a hypothetical. Running the leg WITHOUT the depth gate was
+    /// measured at two invalid reads plus two invalid frees on exactly this
+    /// program — correct output, memory-unsafe. So the gate deliberately keeps
+    /// this shape on the wrong-output path it already had; trading clean-but-
+    /// wrong for a use-after-free would be a severity increase, not a fix.
+    ///
+    /// Closing it means giving the enum channel an element-deep copy (and the
+    /// matching element-deep free), which is a change to the enum drop model
+    /// rather than to this classifier — the reason it is filed rather than
+    /// forced here.
+    #[test]
+    #[ignore = "B-2026-08-08-25: enum Vec[heap-element] payload — the enum deep-copy is outer-buffer only"]
+    fn test_e2e_consuming_match_over_live_enum_vec_of_strings_still_open() {
+        assert_eq!(
+            run_program(
+                "enum E { A(Vec[String]), B }\n\
+                 fn main() {\n\
+                     let e: E = E.A([f\"aa\", f\"bb\"]);\n\
+                     match e { E.A(v) => { for s in v { println(s); } } E.B => {} }\n\
+                     match e { E.A(v) => { for s in v { println(s); } } E.B => {} }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("aa\nbb\naa\nbb\n")
         );
     }
 

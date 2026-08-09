@@ -3300,7 +3300,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 }
 
-fn is_primitive_type_name(name: &str) -> bool {
+pub(super) fn is_primitive_type_name(name: &str) -> bool {
     matches!(
         name,
         "i8" | "i16"

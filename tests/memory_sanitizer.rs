@@ -44571,6 +44571,75 @@ fn main() {
         );
     }
 
+    /// B-2026-08-08-25 LEGS 2 AND 3 under ASAN — the `Result` and user-ENUM
+    /// channels, whose live-local clones must free exactly one buffer each.
+    ///
+    /// Same three failure directions as leg 1's fixture, which is why these are
+    /// pinned here rather than only as output tests: no clone and the arm frees
+    /// the source's buffer (use-after-free on the later read, double free at
+    /// scope exit); a clone whose source stays disarmed leaks the original once
+    /// per iteration; a clone whose consuming arm leaves the payload area
+    /// intact is freed twice.
+    ///
+    /// Cases 1 and 2 are the two halves of leg 2 (`Result`) — consuming and
+    /// read-only. Case 2 carries the SCALAR `Err` co-arm that was the actual
+    /// defect: it disqualified the caller-retains classifier for the whole
+    /// match, sending the `Ok` arm back to the transfer path.
+    ///
+    /// Cases 3 and 4 are the two halves of leg 3 (user enum), and case 5 is the
+    /// liveness control in the other direction — with the source DEAD the clone
+    /// must NOT fire; if it fired without disarming the source, the original
+    /// would leak every pass, which is exactly what LSan catches and a local
+    /// macOS ASAN run would not.
+    ///
+    /// Every payload is read BYTE-WISE (`println` of the string itself, never
+    /// `.len()`), because a buffer whose bytes are never read is a provably
+    /// dead allocation LLVM deletes outright — the fixture would then assert
+    /// nothing at all. The loop's `i` keeps each f-string opaque to the
+    /// optimizer for the same reason.
+    #[test]
+    fn asan_live_local_match_over_result_and_user_enum_frees_each_buffer_once() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. LEG 2, consuming — `Result.map`, source re-read afterwards.
+        let r: Result[String, i64] = Ok(f"hi{i}");
+        match r.map(|s| s) { Ok(v) => { println(v); } Err(_) => { println("-"); } }
+        match r { Ok(v) => { println(v); } Err(_) => { println("-"); } }
+        // 2. LEG 2, read-only — the SCALAR `Err` co-arm that broke the gate.
+        let q: Result[String, i64] = Ok(f"ro{i}");
+        match q { Ok(v) => { println(v); } Err(e) => { println("-"); } }
+        match q { Ok(v) => { println(v); } Err(e) => { println("-"); } }
+        // 3. LEG 3, read-only — the user-enum channel.
+        let e: E = E.A(f"en{i}");
+        match e { E.A(v) => { println(v); } E.B => { println("-"); } }
+        match e { E.A(v) => { println(v); } E.B => { println("-"); } }
+        // 4. LEG 3, consuming — the arm MOVES the payload out.
+        let m: E = E.A(f"mv{i}");
+        match m { E.A(v) => { let k: String = v; println(k); } E.B => { println("-"); } }
+        match m { E.A(v) => { println(v); } E.B => { println("-"); } }
+        // 5. CONTROL — source DEAD, so no clone may be made. A clone here
+        // without disarming the source would leak the original every pass.
+        let d: E = E.A(f"dead{i}");
+        match d { E.A(v) => { let k: String = v; println(k); } E.B => { println("-"); } }
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "hi0", "hi0", "ro0", "ro0", "en0", "en0", "mv0", "mv0", "dead0", "hi1", "hi1",
+                "ro1", "ro1", "en1", "en1", "mv1", "mv1", "dead1", "hi2", "hi2", "ro2", "ro2",
+                "en2", "en2", "mv2", "mv2", "dead2", "hi3", "hi3", "ro3", "ro3", "en3", "en3",
+                "mv3", "mv3", "dead3", "end",
+            ],
+            "live_local_match_result_and_user_enum",
+        );
+    }
+
     /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
     ///
     /// `suppress_inline_option_result_binding_move` disarms a source binding

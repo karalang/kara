@@ -130,8 +130,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // loop-element clone above (see its doc). Same `did_clone` contract.
         let (scrut, did_clone_ref_chain) =
             self.clone_escaping_borrowed_ref_chain_enum(scrutinee, scrut, ref_chain_escapes);
-        let did_clone_borrowed_index_field =
-            did_clone_borrowed_index_field || did_clone_loop_elem || did_clone_ref_chain;
+        // B-2026-08-08-25 leg 3 (consuming half): the LIVE-LOCAL sibling of the
+        // loop-element clone above — `match e { E.A(v) => <consume v> … }` where
+        // `e` is a plain local read again after the match. Same `did_clone`
+        // contract; the gates are disjoint from the loop-element leg's
+        // (`for_loop_owned_agg_vars` membership) so at most one fires.
+        let (scrut, did_clone_live_local_enum) =
+            self.clone_escaping_live_local_enum(scrutinee, scrut, arms);
+        let did_clone_borrowed_index_field = did_clone_borrowed_index_field
+            || did_clone_loop_elem
+            || did_clone_ref_chain
+            || did_clone_live_local_enum;
         // B-2026-07-21-7: the STRUCT-leaf sibling — an ESCAPING struct-pattern
         // match over `<refparam>.field`. The clone carries its own StructDrop;
         // each arm's suppression below fires against the clone slot.
@@ -165,6 +174,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // slot's payload area below; a no-bind arm leaves the cleanup armed.
         let (scrut, refchain_result_clone) =
             self.clone_escaping_borrowed_ref_chain_result(scrutinee, scrut, ref_chain_escapes);
+        // B-2026-08-08-25 leg 2: the LIVE-LOCAL sibling of the line above, the
+        // exact `Result` twin of the `Option` one at leg 1. Feeds the same
+        // per-arm payload-area zero below, and the two gates are disjoint (a
+        // place chain vs a bare identifier), so at most one can fire.
+        let (scrut, livelocal_result_clone) =
+            self.clone_escaping_live_local_result(scrutinee, scrut, arms);
+        let refchain_result_clone = refchain_result_clone.or(livelocal_result_clone);
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -247,8 +263,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // arm binding genuinely OWNS the clone and has to register its free,
         // whereas a borrowing one registers nothing. Folding the two together
         // would drop the clone's owner and leak it.
-        self.pattern_binding_source_retains_inline_payload =
-            readonly_inline_optres || livelocal_option_clone.is_some();
+        self.pattern_binding_source_retains_inline_payload = readonly_inline_optres
+            || livelocal_option_clone.is_some()
+            || livelocal_result_clone.is_some();
         // Publish the classification for the rest of the CHAIN. The flag above
         // is scoped to this match, but the combinator that consumes its result
         // (`<src>.map(f).unwrap_or(d)`) runs after the match is compiled and
@@ -268,6 +285,7 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_borrowed_binding(scrutinee)
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms)
+            || self.scrutinee_is_readonly_owned_enum_local(scrutinee, arms)
             || readonly_inline_optres;
         // B-2026-07-15-21 Part B — scrutinee is an RC-elidable borrowed param:
         // skip the Some-binding acquire + its scope-exit RcDec (payload is a
@@ -1447,6 +1465,114 @@ impl<'ctx> super::Codegen<'ctx> {
         self.no_arm_payload_escapes(arms)
     }
 
+    /// B-2026-08-08-25 leg 3 — the USER-ENUM sibling of the two classifiers
+    /// above: a read-only match over a bare local owning a heap-bearing
+    /// value enum.
+    ///
+    /// `enum E { A(String), B }` matched twice printed `hi` and then an EMPTY
+    /// line, because the first match's `suppress_destructured_enum_payload_
+    /// cleanup` zeroed the source's payload words to hand the buffer to the arm
+    /// binding — correct when the arm really takes ownership, wrong when it only
+    /// reads. This is the same defect the `Option`/`Result` channel had; that
+    /// channel is keyed on `inline_{option,result}_payload_vars` and so never
+    /// reached a user enum, whose payload rides `field_drop_kinds` instead.
+    ///
+    /// Raising `pattern_binding_is_borrow` fixes both halves at once, exactly as
+    /// it does for the loop-var sibling: the arm-loop suppression block is
+    /// gated on that flag, so the source keeps its payload words, and
+    /// `bind_pattern_values` skips the binding's own drop registration. One
+    /// buffer, one free, at the source's scope exit.
+    ///
+    /// The source must PROVABLY still own the payload, or suppressing the arm's
+    /// registration would leak it — so this requires a live `EnumDrop` on the
+    /// variable's own slot rather than inferring ownership from the shape.
+    /// `track_enum_var` declines to register one for a shared enum and for an
+    /// enum with no heap-bearing field anywhere, which is precisely the
+    /// population where a borrow classification would have nobody to fall back
+    /// on. An ESCAPING arm keeps today's transfer path (`no_arm_payload_
+    /// escapes` defaults to "escapes" for any shape it does not recognise, so
+    /// an unrecognised body is conservative here too).
+    fn scrutinee_is_readonly_owned_enum_local(&self, scrutinee: &Expr, arms: &[MatchArm]) -> bool {
+        // Identifier only — deliberately NOT the owned-`self` receiver. For
+        // `impl E { fn into_id(self) { match self { … } } }` the source's
+        // scope-exit drop is the documented owned-self RESIDUAL: it does not
+        // fire, because the caller disarmed the value's payload-bodies walk at
+        // the call on the premise that the callee's arm takes ownership
+        // (B-2026-08-01-7). The arm is therefore the payload's sole owner, and
+        // classifying it as a borrow drops that owner outright — measured as a
+        // `Drop` body that stopped running (`e2e_owned_self_enum_receiver_
+        // single_fire`). An owned enum PARAM is not affected: its entry-
+        // registered `EnumDrop` really does fire, so the source is a genuine
+        // owner there and the borrow classification keeps one free.
+        let ExprKind::Identifier(scrut_name) = &scrutinee.kind else {
+            return false;
+        };
+        let scrut_name = scrut_name.as_str();
+        let Some(slot) = self.variables.get(scrut_name) else {
+            return false;
+        };
+        let Some(enum_name) = self.var_type_names.get(scrut_name).cloned() else {
+            return false;
+        };
+        let Some(layout) = self.enum_layouts.get(enum_name.as_str()) else {
+            return false;
+        };
+        if layout.is_shared {
+            return false;
+        }
+        // The scope-exit drop that will do the one free. Absent means either a
+        // heapless enum (nothing to protect) or a source that has already been
+        // disarmed — neither may be reclassified as a borrow.
+        if !self.slot_has_live_enum_drop(slot.ptr) {
+            return false;
+        }
+        // At least one arm must bind a field the suppressor would zero —
+        // otherwise this match is not the shape that breaks, and there is no
+        // reason to move it off its current path.
+        if !arms
+            .iter()
+            .any(|a| self.enum_pattern_binds_heap_payload(&enum_name, &a.pattern))
+        {
+            return false;
+        }
+        self.no_arm_payload_escapes(arms)
+    }
+
+    /// Does a `CleanupAction::EnumDrop` on `slot_ptr` survive in any live scope
+    /// frame? The ownership witness for
+    /// [`Self::scrutinee_is_readonly_owned_enum_local`].
+    fn slot_has_live_enum_drop(&self, slot_ptr: PointerValue<'ctx>) -> bool {
+        self.scope_cleanup_actions.iter().flatten().any(|a| {
+            matches!(
+                a,
+                crate::codegen::state::CleanupAction::EnumDrop { enum_alloca, .. }
+                    if *enum_alloca == slot_ptr
+            )
+        })
+    }
+
+    /// Does `pattern` bind at least one HEAP-BEARING payload field of
+    /// `enum_name` — i.e. a field
+    /// [`Self::suppress_destructured_enum_payload_cleanup_at`] would zero in the
+    /// source? Same `(variant, consumed positions)` walk and same
+    /// `is_heap_bearing` filter, so the two agree by construction.
+    fn enum_pattern_binds_heap_payload(&self, enum_name: &str, pattern: &Pattern) -> bool {
+        let Some(layout) = self.enum_layouts.get(enum_name) else {
+            return false;
+        };
+        let Some((variant_name, consumed_positions)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return false;
+        };
+        let Some(drop_kinds) = layout.field_drop_kinds.get(&variant_name) else {
+            return false;
+        };
+        consumed_positions
+            .iter()
+            .any(|&pos| drop_kinds.get(pos).is_some_and(|k| k.is_heap_bearing()))
+    }
+
     /// B-2026-08-08-25 — the caller-retains classifier for a LIVE LOCAL owning
     /// an inline `Option`/`Result` `{ptr,len,cap}` payload, when no arm moves
     /// that payload out.
@@ -1491,12 +1617,16 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return false;
         }
-        // Every payload-consuming arm must be the direct-heap shape — a mixed
-        // match must keep today's behavior wholesale, since the flag is set once
-        // for the whole `match`.
+        // Every payload-consuming arm must be the direct-heap shape or a
+        // payload that owns nothing — a mixed match must keep today's behavior
+        // wholesale, since the flag is set once for the whole `match`.
+        let optres_te = self.scrutinee_optres_type_expr(scrutinee);
         if !arms.iter().all(|a| {
             !Self::pattern_consumes_variant_payload(&a.pattern)
                 || self.pattern_binds_direct_inline_heap_payload(&a.pattern)
+                || optres_te
+                    .as_ref()
+                    .is_some_and(|te| Self::pattern_binds_scalar_variant_payload(te, &a.pattern))
         }) {
             return false;
         }
@@ -1570,6 +1700,82 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(&(p.span.offset, p.span.length))
                         .is_some_and(|t| t == "String" || t == "Vec")
             })
+    }
+
+    /// The resolved `Option[P]` / `Result[O, E]` instantiation of a bare-local
+    /// scrutinee, by the same two-table lookup and alias resolution the
+    /// consuming-arm clone uses (`clone_escaping_live_local_option`).
+    fn scrutinee_optres_type_expr(&self, scrutinee: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return None;
+        };
+        let owner: &str = self
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .map_or(name.as_str(), |s| s.as_str());
+        self.enum_inst_var_types
+            .get(owner)
+            .or_else(|| self.optres_var_payload_tes.get(owner))
+            .cloned()
+    }
+
+    /// B-2026-08-08-25 leg 2 — does `pattern` bind a variant payload that OWNS
+    /// NOTHING, judged from the scrutinee's own instantiation?
+    ///
+    /// The sibling gate above disqualifies a whole `match` when any
+    /// payload-consuming arm is not the direct-heap shape, because the borrow
+    /// flag is set once for the entire match and a TUPLE payload's bindings own
+    /// themselves (each heap element gets its own `track_vec_var`) — classifying
+    /// those as borrows drops their owners.
+    ///
+    /// A SCALAR payload has no owner to drop, so that rationale does not reach
+    /// it, and disqualifying on it cost the whole classifier: `Result[String,
+    /// i64]` matched read-only twice printed `hi` and then an EMPTY line,
+    /// because `Err(e)`'s `i64` binding failed the direct-heap test and sent the
+    /// `Ok` arm back to the transfer path that empties the source. That is the
+    /// entire reason this defect looked `Result`-specific and looked like a
+    /// `.map` defect: `Option`'s only co-arm is `None`, which binds nothing and
+    /// so can never trip the gate, and the read-only spelling fails identically.
+    ///
+    /// Keyed on the scrutinee's `TypeExpr`, NOT on `pattern_binding_types`,
+    /// because that table is a NARROWING record: it stores `u8`/`i32`/`f64` and
+    /// every named type, but a plain 64-bit int is the default width and gets NO
+    /// entry at all. An absent entry therefore cannot witness scalar-ness — it
+    /// also covers a whole-tuple binding (`Some(t)` over `Option[(String,
+    /// i64)]`), which very much does own heap and is exactly what the gate
+    /// protects. Reading the variant's argument off the instantiation is a
+    /// POSITIVE witness instead.
+    ///
+    /// Conservative in the safe direction on every axis: a single plain
+    /// `Binding` only (so a destructuring `Some((v, k))` stays rejected), a
+    /// bare single-segment primitive path only (so `Vec[i64]`, a user type, or
+    /// anything generic keeps disqualifying the match), and no instantiation
+    /// on file means no exemption.
+    fn pattern_binds_scalar_variant_payload(optres_te: &TypeExpr, pattern: &Pattern) -> bool {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return false;
+        };
+        let arg_idx = match path.last().map(|s| s.as_str()) {
+            Some("Some") | Some("Ok") => 0,
+            Some("Err") => 1,
+            _ => return false,
+        };
+        if patterns.len() != 1 || !matches!(&patterns[0].kind, PatternKind::Binding(_)) {
+            return false;
+        }
+        let TypeKind::Path(p) = &optres_te.kind else {
+            return false;
+        };
+        let Some(GenericArg::Type(arg)) = p.generic_args.as_ref().and_then(|a| a.get(arg_idx))
+        else {
+            return false;
+        };
+        let TypeKind::Path(arg_path) = &arg.kind else {
+            return false;
+        };
+        arg_path.generic_args.is_none()
+            && arg_path.segments.len() == 1
+            && crate::codegen::param_own::is_primitive_type_name(&arg_path.segments[0])
     }
 
     /// Block-body sibling of
@@ -1656,6 +1862,136 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap(),
             true,
         )
+    }
+
+    /// B-2026-08-08-25 leg 3, consuming half — the LIVE-LOCAL sibling of
+    /// [`Self::clone_escaping_owned_agg_loop_var_enum`], and the user-enum twin
+    /// of the `Option`/`Result` live-local clones.
+    ///
+    /// `let e: E = E.A([f"aa", f"bb"]); match e { E.A(v) => { for s in v { … } }
+    /// … }` followed by a re-read of `e` printed the payload once and then
+    /// nothing: the `for` MOVES `v`, so the read-only classifier correctly
+    /// declines and the transfer path zeroes the source's payload words —
+    /// leaving the still-in-scope `e` reading an empty `Vec`. Deep-copy the
+    /// enum so the consuming arm extracts from an independent buffer and the
+    /// live source keeps its own.
+    ///
+    /// `deep_copy_enum_heap_payload_in_place` is the right duplicator here (and
+    /// NOT the type-directed `emit_clone_fn_for_type_expr` the `Option` leg
+    /// uses) because a user enum's payload rides `layout.field_drop_kinds`:
+    /// copy-depth then equals drop-depth by construction, which is the property
+    /// that keeps the two buffers independently freeable.
+    ///
+    /// Gated on liveness like its siblings — a source that is dead after the
+    /// match has exactly one owner already and keeps today's zero-cost
+    /// transfer, which is what keeps this off the common consuming shape.
+    pub(super) fn clone_escaping_live_local_enum(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        arms: &[MatchArm],
+    ) -> (BasicValueEnum<'ctx>, bool) {
+        // Identifier only, for the same owned-`self` reason
+        // `scrutinee_is_readonly_owned_enum_local` documents.
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return (val, false);
+        };
+        // The loop-element leg owns its own population.
+        if self.for_loop_owned_agg_vars.contains(name.as_str()) {
+            return (val, false);
+        }
+        // ESCAPING arms only — the read-only case is the borrow path above.
+        if self.no_arm_payload_escapes(arms) {
+            return (val, false);
+        }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return (val, false);
+        };
+        let Some(enum_name) = self.var_type_names.get(name.as_str()).cloned() else {
+            return (val, false);
+        };
+        let Some(layout) = self.enum_layouts.get(&enum_name).cloned() else {
+            return (val, false);
+        };
+        if layout.is_shared {
+            return (val, false);
+        }
+        // Same ownership witness the read-only classifier uses: the source must
+        // provably still free its own copy, or the clone is a leak.
+        if !self.slot_has_live_enum_drop(slot.ptr) {
+            return (val, false);
+        }
+        if !arms
+            .iter()
+            .any(|a| self.enum_pattern_binds_heap_payload(&enum_name, &a.pattern))
+        {
+            return (val, false);
+        }
+        if !self.enum_payload_deep_copy_is_exact(&enum_name, &layout) {
+            return (val, false);
+        }
+        if !self.scrutinee_read_after_match(name, name, scrutinee, arms) {
+            return (val, false);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let clone = self.create_entry_alloca(fn_val, "livelocal.enum.clone", ll);
+        self.builder.build_store(clone, val).unwrap();
+        self.deep_copy_enum_heap_payload_in_place(&enum_name, clone, &layout);
+        (
+            self.builder
+                .build_load(ll, clone, "livelocal.enum.cloned")
+                .unwrap(),
+            true,
+        )
+    }
+
+    /// Is `deep_copy_enum_heap_payload_in_place` an EXACT duplication for every
+    /// heap-bearing field of `enum_name` — i.e. does it produce two buffers that
+    /// can each be freed independently?
+    ///
+    /// It is not always. Its `VecOrString` arm takes an OUTER-buffer copy
+    /// (`emit_vecstr_defensive_copy(.., elem_te = None)`, mirroring the enum
+    /// drop's outer-only payload free), so a `Vec[String]` payload comes back
+    /// with the element `String`s still SHARED: measured on `enum E {
+    /// A(Vec[String]) }` as two invalid reads plus two invalid frees. That is
+    /// the element-depth trap this bug's ledger row warned about — real, and
+    /// specific to the user-enum channel, which keys on `field_drop_kinds`
+    /// rather than on a type-directed clone.
+    ///
+    /// So the clone leg is restricted to the depth-1-exact payloads: a direct
+    /// `String`, or a `Vec`/`VecDeque` of trivially-copyable elements. Every
+    /// other heap kind — `Vec` of heap elements, `NestedStruct`, `MapOrSet` —
+    /// keeps the status quo transfer path. That leaves those shapes with the
+    /// wrong output they already had, which is the right trade against handing
+    /// them a use-after-free instead.
+    fn enum_payload_deep_copy_is_exact(
+        &self,
+        enum_name: &str,
+        layout: &crate::codegen::EnumLayout<'ctx>,
+    ) -> bool {
+        let variant_tes: std::collections::HashMap<String, Vec<TypeExpr>> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+        layout.field_drop_kinds.iter().all(|(variant, kinds)| {
+            let kinds: &Vec<crate::codegen::state::EnumDropKind> = kinds;
+            kinds.iter().enumerate().all(|(fi, kind)| {
+                if !kind.is_heap_bearing() {
+                    return true;
+                }
+                if *kind != crate::codegen::state::EnumDropKind::VecOrString {
+                    return false;
+                }
+                let Some(te) = variant_tes.get(variant).and_then(|tes| tes.get(fi)) else {
+                    return false;
+                };
+                self.is_string_type_expr(te)
+                    || super::helpers::vec_inner_type_expr(te)
+                        .is_some_and(|elem| super::vec_method::is_trivially_copyable_te(&elem))
+            })
+        })
     }
 
     /// B-2026-07-21-5/-6: `match <refparam>.field { Ident(name) => <consume
@@ -2108,6 +2444,92 @@ impl<'ctx> super::Codegen<'ctx> {
         (
             self.builder
                 .build_load(ll, slot, "livelocal.opt.cloned")
+                .unwrap(),
+            Some(slot),
+        )
+    }
+
+    /// B-2026-08-08-25 leg 2 — the `Result` twin of
+    /// [`Self::clone_escaping_live_local_option`], for a consuming arm over a
+    /// LIVE `Result` local.
+    ///
+    /// `let r: Result[String, i64] = Ok(f"hi"); match r.map(|s| s) { … }`
+    /// followed by a re-read of `r` printed `hi` and then an EMPTY line: the
+    /// heap-payload `.map` lowers via `compile_map_via_match_synthesis`, whose
+    /// synthesized `match` has the RECEIVER as its scrutinee, so this is the
+    /// same bare-local consuming match leg 1 fixed — it was simply gated to
+    /// `inline_option_payload_vars` and never looked at the `Result` set. Empty
+    /// rather than garbage (and valgrind-clean) because the transfer path zeros
+    /// the source's payload words rather than freeing behind it: one buffer,
+    /// one free, and a source that reads back as `{0, 0, 0}`.
+    ///
+    /// Registration order and the clone-slot contract are the ref-chain
+    /// sibling's, not leg 1's: `track_inline_result_payload_var` BEFORE the
+    /// value store and the deep copy (its nested-block zero-init targets the
+    /// entry block, and once the copy has split blocks that test would wrongly
+    /// fire and wipe the clone at runtime), and the per-arm
+    /// `suppress_inline_result_payload_cleanup_at` zeroes the consumed half in
+    /// the CLONE so the buffer the binding now owns is not freed twice.
+    ///
+    /// Gated on liveness by the same `scrutinee_read_after_match`, so a source
+    /// that is dead after the match keeps today's zero-cost transfer.
+    pub(super) fn clone_escaping_live_local_result(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        arms: &[MatchArm],
+    ) -> (BasicValueEnum<'ctx>, Option<PointerValue<'ctx>>) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return (val, None);
+        };
+        let owner: String = self
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .cloned()
+            .unwrap_or_else(|| name.clone());
+        if !self.inline_result_payload_vars.contains(owner.as_str()) {
+            return (val, None);
+        }
+        // ESCAPING arms only — a read-only match is the borrow path above, and
+        // cloning there would leak the clone.
+        if self.no_arm_payload_escapes(arms) {
+            return (val, None);
+        }
+        if !arms
+            .iter()
+            .any(|a| self.pattern_binds_direct_inline_heap_payload(&a.pattern))
+        {
+            return (val, None);
+        }
+        if !self.scrutinee_read_after_match(name, &owner, scrutinee, arms) {
+            return (val, None);
+        }
+        let Some(res_te) = self
+            .enum_inst_var_types
+            .get(owner.as_str())
+            .or_else(|| self.optres_var_payload_tes.get(owner.as_str()))
+            .cloned()
+        else {
+            return (val, None);
+        };
+        // Per-half shape gate shared with the ref-chain leg: both halves direct
+        // inline-heap `String`/`Vec` or heap-free scalar, at least one heap.
+        // Anything else belongs to another cleanup family.
+        if !self.result_field_direct_vecstr_halves_ok(&res_te) {
+            return (val, None);
+        }
+        if self.result_inline_payload_elems(&res_te).is_none() {
+            return (val, None);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let ll = val.get_type();
+        let slot = self.create_entry_alloca(fn_val, "livelocal.res.clone", ll);
+        self.track_inline_result_payload_var("__livelocal_res_tmp", slot, &res_te);
+        self.builder.build_store(slot, val).unwrap();
+        self.deep_copy_result_inline_heap_halves_in_place(slot, &res_te);
+        (
+            self.builder
+                .build_load(ll, slot, "livelocal.res.cloned")
                 .unwrap(),
             Some(slot),
         )

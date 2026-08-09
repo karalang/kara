@@ -159,7 +159,20 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // identical reasoning: reused after a UseAfterMove *warning*, which
     // production compiles and runs.
     "asan_map_over_live_option_string_leaves_source_owning_its_buffer",
-    "test_e2e_consuming_map_over_live_optres_still_open",
+    // Same row, legs 2 and 3 (`Result` and the user-enum channel). These
+    // extend the block above rather than introduce a new class: the shapes are
+    // the `Result`/user-enum spellings of the same twice-matched live local,
+    // and the checker's answer on them is the same inverted one — it flags the
+    // READ-ONLY double match, which is safe and is precisely what these legs
+    // fixed, while staying silent on the consuming `.map` that genuinely moves
+    // the payload out. Deleting the offending case was the right call for
+    // leg 1 (it was a duplicate of coverage two other tests already had); here
+    // it is not available, because the read-only `Result` match IS the leg-2
+    // diagnosis — the scalar `Err` co-arm is what disqualified the classifier.
+    // (`test_e2e_consuming_map_over_live_optres_still_open` stood here until
+    // those legs closed; the test it named is gone, replaced by the two below.)
+    "test_e2e_live_local_match_keeps_the_source_for_result_and_user_enums",
+    "asan_live_local_match_over_result_and_user_enum_frees_each_buffer_once",
     // B-2026-08-09-8 — the same two rows' shape with a bare rebind (`let p =
     // o;`) in front, which is what made the caller-retains classifier miss it.
     // Same reasoning again: `karac check` exits 0 on these (the matrix above
