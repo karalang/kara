@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 222 | 0 |
-| leak | 152 | 1 |
+| leak | 153 | 1 |
 | double-free | 114 | 0 |
 | codegen-gap | 98 | 0 |
-| run-vs-build | 90 | 0 |
-| missing-feature | 85 | 0 |
+| run-vs-build | 91 | 1 |
+| missing-feature | 86 | 1 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
 | diagnostics | 43 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 753 | 2 |
-| typecheck | 135 | 1 |
+| codegen | 756 | 4 |
+| typecheck | 136 | 1 |
 | interp | 129 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,18 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1042 surfaced · 2 open · 1030 fixed** (2026-05-20 → 2026-08-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1045 surfaced · 4 open · 1031 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-08-25 | 2026-08-08 | codegen | high | matching a payload out of a live `Option[String]` / `Result[String, _]` binding leaves the BINDING DANGLING, so any later read is garbage or aborts the UTF-8 validator -- `--interp` is correct. Filed as a `.map` defect; `map` is not involved | tests/codegen.rs::test_e2e_match_out_of_option_string_leaves_source_usable (#[ignore]d, asserts the CORRECT output) |
-| B-2026-08-08-29 | 2026-08-08 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is clean -- the annotation does the opposite of its purpose, silently | probe: `let mut m: Map[i64, weak N] = Map.new(); m.insert(1i64, a);` vs the `Map[i64, N]` twin |
+| B-2026-08-09-1 | 2026-08-09 | codegen | medium | a `Map[K, V]` field of a SHARED struct has no general per-value drop-fn channel, so a V that needs a RECURSIVE drop leaks -- the non-shared struct field and the plain local binding, which both route through `map_val_drop_fn_for_type_expr`, are clean | probe: `shared struct Owner { mut m: Map[i64, Vec[Vec[String]]] }` vs the non-shared-struct and local-binding twins |
+| B-2026-08-09-2 | 2026-08-09 | typecheck+codegen | low | `Map[K, weak V]` is now store-only: the read is NOT an upgrade, so `m.get(k)` yields `Option[weak V]` and the `Some` binding rejects every field access -- the same store-only state `Vec[weak T]` was in between B-2026-08-08-5 and -4 gap B | probe: `match m.get(1i64) { Option.Some(x) => println(x.v), ... }` on a `Map[i64, weak N]` |
+| B-2026-08-09-3 | 2026-08-09 | codegen | medium | a `shared struct` binding's Drop body fires at LEXICAL SCOPE EXIT under codegen but at LIVE-RANGE END under `--interp` -- design.md mandates live-range end, and codegen's own VALUE-struct path already does it, so the RC tier is the lone outlier and the two backends print in different orders | probe: `impl Drop` on a `shared struct` whose last use is mid-scope, vs the identical program with a plain `struct` |
 
-### Fixed (1030)
+### Fixed (1031)
 
-<details><summary>1030 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1031 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1190,6 +1192,7 @@ Tests: 7 in tests/resolver.rs — the three repro shapes (bare `spawn;`, `spawn 
 | B-2026-08-08-26 | other | medium | `tests/cli.rs` is the dark target B-2026-07-31-44 missed, and it was RED the whole time -- 35 of its 43 `#[cfg(feature = "llvm")]` tests run in NO CI… | f68004a |
 | B-2026-08-08-27 | other | low | the dark-llvm-target audit has never been RE-RUN as a check -- B-2026-07-31-44 swept 19 targets by hand and B-2026-08-08-26 found the 20th the same w… | 5b60bd77 |
 | B-2026-08-08-28 | codegen | high | a weak ELEMENT read through a struct FIELD (`a.ns[0]` on `mut ns: Vec[weak N]`) skips the balancing acquire and over-releases -- SIGSEGV under JIT an… | 02f8a0c |
+| B-2026-08-08-29 | typecheck+codegen | medium | `Map[K, weak V]` is ACCEPTED and lowers the value as a STRONG ref that nothing releases, so writing `weak` LEAKS where the strong `Map[K, V]` twin is… | PENDING |
 | B-2026-08-08-30 | codegen | high | mapping a BORROWED SCALAR payload — `Vec[i64].first().map(\|x\| x + 1)` — was TWO defects, and the reported panic was the lucky one: the closure's `ref… | e524f62 (both legs: the closure return-type inference over a borrow param, and the leaked param borrow mark) |
 
 </details>

@@ -47,6 +47,50 @@ impl<'a> super::TypeChecker<'a> {
         self.check_map_slot_arg_inner(slot, arg, false);
     }
 
+    /// B-2026-08-08-29 — value-slot check for a `weak V` associative container
+    /// (`Map[K, weak V]` / `SortedMap[K, weak V]`). The `Map`-side twin of the
+    /// `Vec[weak T].push` gate in `expr_method_call.rs`, and deliberately the
+    /// same shape:
+    ///
+    ///  * it RECORDS the store in `weak_elem_store_sites`, keyed by the value
+    ///    argument's span. The interpreter has no static value type to consult,
+    ///    so without the record it stores a STRONG handle and a Map-mediated
+    ///    cycle stays uncollectable there (B-2026-08-08-14 hit the same wall on
+    ///    the `Vec` side);
+    ///  * it accepts only a BARE strong handle. The generic weak-FIELD
+    ///    coercion in `check_expr` also admits `Option[T]` and `None`, and the
+    ///    container store lowers neither — before this gate,
+    ///    `m.insert(k, Option.Some(a))` typechecked and stored the Option
+    ///    aggregate's first word in a slot the scope-exit drain hands to
+    ///    `karac_weak_drop`. Widening this is a codegen change first and a
+    ///    typechecker change second.
+    fn check_weak_container_slot_arg(&mut self, referent: &Type, arg: &CallArg, recv: &str) {
+        self.weak_elem_store_sites
+            .insert(crate::resolver::SpanKey::from_span(&arg.value.span));
+        let actual = self.infer_expr(&arg.value);
+        let ok = matches!(actual, Type::Error | Type::Never)
+            || super::types::types_compatible(&actual, referent);
+        if !ok {
+            self.type_error(
+                format!(
+                    "cannot insert a value of type '{}' into a `{}[_, weak {}]`; \
+                     a container value slot takes a BARE `{}` handle, which is \
+                     downgraded on the way in. The `Option[{}]` / `None` forms a \
+                     `weak` FIELD accepts are not lowered for a container value \
+                     yet — bind the handle first and insert that",
+                    type_display(&actual),
+                    recv,
+                    type_display(referent),
+                    type_display(referent),
+                    type_display(referent),
+                ),
+                arg.value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            self.record_expr_type(&arg.value.span, &Type::Error);
+        }
+    }
+
     /// `allow_borrowed` peels ONE `ref` / `mut ref` level off the argument
     /// before unification. With it `false` this is byte-identical to the
     /// original helper, so every value slot behaves exactly as before.
@@ -195,7 +239,27 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_map_slot_arg(&k, key_arg);
                 }
                 if let Some(val_arg) = args.get(1) {
-                    self.check_map_slot_arg(&v, val_arg);
+                    // B-2026-08-08-29 — a `weak V` VALUE slot takes the
+                    // container gate, not the generic weak-FIELD coercion in
+                    // `check_expr`. Two reasons, both measured:
+                    //
+                    //  * the store site has to be recorded for the interpreter,
+                    //    which has no static value type of its own to consult
+                    //    (the `Vec[weak T]` twin, B-2026-08-08-14);
+                    //  * the field coercion also admits `Option[T]` and `None`,
+                    //    and the container store lowers only a BARE strong
+                    //    handle. `m.insert(k, Option.Some(a))` compiled and put
+                    //    a mangled word in the bucket -- a word the scope-exit
+                    //    weak drain would then hand to `karac_weak_drop`.
+                    //    Exactly the narrowing `Vec[weak T].push` already
+                    //    applies, for exactly the same reason: the typechecker
+                    //    must not admit what codegen does not implement.
+                    let slot = resolve_type_var_top(&v, &self.env.substitutions);
+                    if let Type::Weak(referent) = &slot {
+                        self.check_weak_container_slot_arg(referent, val_arg, "Map");
+                    } else {
+                        self.check_map_slot_arg(&v, val_arg);
+                    }
                 }
                 let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
                 Type::Named {
@@ -634,7 +698,27 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_map_slot_arg(&k, key_arg);
                 }
                 if let Some(val_arg) = args.get(1) {
-                    self.check_map_slot_arg(&v, val_arg);
+                    // B-2026-08-08-29 — a `weak V` VALUE slot takes the
+                    // container gate, not the generic weak-FIELD coercion in
+                    // `check_expr`. Two reasons, both measured:
+                    //
+                    //  * the store site has to be recorded for the interpreter,
+                    //    which has no static value type of its own to consult
+                    //    (the `Vec[weak T]` twin, B-2026-08-08-14);
+                    //  * the field coercion also admits `Option[T]` and `None`,
+                    //    and the container store lowers only a BARE strong
+                    //    handle. `m.insert(k, Option.Some(a))` compiled and put
+                    //    a mangled word in the bucket -- a word the scope-exit
+                    //    weak drain would then hand to `karac_weak_drop`.
+                    //    Exactly the narrowing `Vec[weak T].push` already
+                    //    applies, for exactly the same reason: the typechecker
+                    //    must not admit what codegen does not implement.
+                    let slot = resolve_type_var_top(&v, &self.env.substitutions);
+                    if let Type::Weak(referent) = &slot {
+                        self.check_weak_container_slot_arg(referent, val_arg, "SortedMap");
+                    } else {
+                        self.check_map_slot_arg(&v, val_arg);
+                    }
                 }
                 let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
                 Type::Named {

@@ -12,6 +12,33 @@ use crate::token::Span;
 use super::value::{EnumData, OrdValue, Value};
 
 impl<'a> super::Interpreter<'a> {
+    /// Downgrade a strong handle stored into a `weak` CONTAINER slot
+    /// (`Vec[weak T].push`, `Map[K, weak V].insert`, …).
+    ///
+    /// The interpreter has no static element/value type to consult, so the
+    /// typechecker records each such store span in `weak_elem_store_sites` and
+    /// this is the one place that consumes it. Storing the strong handle — what
+    /// happened before B-2026-08-08-14 for `Vec` and before B-2026-08-08-29 for
+    /// `Map` — makes a container-mediated cycle uncollectable here, the exact
+    /// interpreter twin of the codegen leak.
+    ///
+    /// Anything that is not a `SharedStruct` passes through unchanged: the
+    /// site set is span-keyed, and a non-shared value in a `weak` slot is
+    /// already a typecheck error.
+    pub(super) fn downgrade_weak_container_store(&self, arg: &CallArg, val: Value) -> Value {
+        match &val {
+            Value::SharedStruct(arc)
+                if self
+                    .typecheck_result
+                    .weak_elem_store_sites
+                    .contains(&crate::resolver::SpanKey::from_span(&arg.value.span)) =>
+            {
+                Value::WeakRef(Arc::downgrade(arc))
+            }
+            _ => val,
+        }
+    }
+
     pub(super) fn try_eval_map_method(
         &mut self,
         method: &str,
@@ -156,7 +183,12 @@ impl<'a> super::Interpreter<'a> {
                     // Map.insert(key, value) -> Option[V] (old value)
                     let value = args
                         .get(1)
-                        .map(|a| self.eval_expr_inner(&a.value))
+                        .map(|a| {
+                            let v = self.eval_expr_inner(&a.value);
+                            // B-2026-08-08-29 — a `Map[K, weak V]` insert
+                            // DOWNGRADES, the twin of the `Vec[weak T]` push.
+                            self.downgrade_weak_container_store(a, v)
+                        })
                         .unwrap_or(Value::Unit);
                     let old = if let Some(entry) = m.iter_mut().find(|(k, _)| *k == val) {
                         let prev = entry.1.clone();
@@ -182,7 +214,10 @@ impl<'a> super::Interpreter<'a> {
                     // mirroring Map.insert. `val` is the already-evaluated key.
                     let value = args
                         .get(1)
-                        .map(|a| self.eval_expr_inner(&a.value))
+                        .map(|a| {
+                            let v = self.eval_expr_inner(&a.value);
+                            self.downgrade_weak_container_store(a, v)
+                        })
                         .unwrap_or(Value::Unit);
                     let old = match m.insert(OrdValue(val), value) {
                         Some(prev) => Value::EnumVariant {

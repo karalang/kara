@@ -5120,6 +5120,20 @@ fn test_weak_container_element_upgrades_like_a_weak_field() {
 }
 
 #[test]
+fn test_weak_map_value_insert_downgrades_and_collects_the_cycle() {
+    // B-2026-08-08-29, interpreter leg — the `Map` twin of the `Vec[weak T]`
+    // push above. `Map.insert` stored an ordinary STRONG handle, so a
+    // Map-mediated cycle was uncollectable here just as it leaked under
+    // codegen. `impl Drop` is the observable: the bodies only run if the two
+    // `Arc`s actually reach zero, so a regression that reinstates the strong
+    // store prints nothing between "start" and "end".
+    assert_eq!(
+        run("shared struct N { mut v: i64, mut kids: Map[i64, weak N] }\n             impl Drop for N { fn drop(mut ref self) { println(f\"drop {self.v}\"); } }\n             fn cycle() {\n                 let p = N { v: 1i64, kids: Map.new() };\n                 let c = N { v: 2i64, kids: Map.new() };\n                 c.kids.insert(0i64, p);\n                 p.kids.insert(0i64, c);\n             }\n             fn main() { println(\"start\"); cycle(); println(\"end\"); }\n"),
+        "start\ndrop 2\ndrop 1\nend\n"
+    );
+}
+
+#[test]
 fn test_weak_field_alive_yields_some() {
     // Per design.md § Shared Types — Weak references: a `weak` field
     // read is the upgrade point. While a strong holder of the referent

@@ -2386,7 +2386,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the strong `rc_dec` drop and over-release a count this container
         // never took.
         if matches!(&elem_te.kind, TypeKind::Weak(_)) {
-            return Some(self.emit_vec_elem_weak_drop_fn());
+            return Some(self.emit_weak_slot_drop_fn());
         }
         if let TypeKind::Tuple(elem_tes) = &elem_te.kind {
             if elem_tes.is_empty() {
@@ -3200,26 +3200,31 @@ impl<'ctx> super::Codegen<'ctx> {
         drop_fn
     }
 
-    /// Per-element drop for a `Vec[weak T]` (B-2026-08-08-5).
+    /// Per-slot drop for a `weak T` CONTAINER slot — a `Vec[weak T]` element
+    /// (B-2026-08-08-5) or a `Map[K, weak V]` / `SortedMap[K, weak V]` value
+    /// (B-2026-08-08-29).
     ///
-    /// The `FreeVecBuffer` drain calls it once per live element with a pointer
-    /// to the element SLOT, which for a weak element is the single nullable
-    /// weak pointer `emit_weak_field_init` stored there. The body is one
-    /// `karac_weak_drop` — weak -= 1, freeing the control block iff strong ==
-    /// 0 && weak == 0 — and the runtime entry is null-safe, so an empty slot
-    /// (a stored `None`) needs no guard here.
+    /// The container's scope-exit drain calls it once per live slot with a
+    /// pointer to that slot, which for a weak slot is the single nullable weak
+    /// pointer `emit_weak_field_init` (Vec) / the insert downgrade (Map) stored
+    /// there. The body is one `karac_weak_drop` — weak -= 1, freeing the
+    /// control block iff strong == 0 && weak == 0 — and the runtime entry is
+    /// null-safe, so an empty slot (a stored `None`) needs no guard here.
     ///
-    /// WITHOUT THIS the container never decrements what its pushes
+    /// WITHOUT THIS the container never decrements what its stores
     /// incremented, so every target's control block outlives the program even
     /// after its strong count reaches zero: a leak of exactly the header per
-    /// element, and the reason `Vec[weak T]` could not be part of the cycle
-    /// story until now.
+    /// slot, and the reason `weak` container slots could not be part of the
+    /// cycle story until now.
     ///
-    /// Element-type-agnostic (a weak slot is a bare pointer whatever it points
-    /// at), so one shared fn serves every `Vec[weak T]`; memoized by symbol
-    /// name exactly as the closure-env sibling above is.
-    pub(super) fn emit_vec_elem_weak_drop_fn(&mut self) -> inkwell::values::FunctionValue<'ctx> {
-        let fn_name = "__karac_vec_elem_weak_drop";
+    /// Slot-type-agnostic (a weak slot is a bare pointer whatever it points
+    /// at), so one shared fn serves every weak container slot in the module;
+    /// memoized by symbol name exactly as the closure-env sibling above is.
+    /// It is deliberately NOT named for either container: the Map side reached
+    /// for it second, and a `vec_elem` name on a Map value drop is the kind of
+    /// misnomer that hid B-2026-08-08-20 for a release.
+    pub(super) fn emit_weak_slot_drop_fn(&mut self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "__karac_weak_slot_drop";
         if let Some(f) = self.module.get_function(fn_name) {
             return f;
         }
@@ -3237,7 +3242,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
         let w = self
             .builder
-            .build_load(ptr_ty, elem_ptr, "vecelem.weak")
+            .build_load(ptr_ty, elem_ptr, "weakslot.target")
             .unwrap()
             .into_pointer_value();
         let weak_drop = self.weak_runtime_fn("karac_weak_drop", false);
@@ -3359,6 +3364,17 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         val_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        // B-2026-08-08-29 — a `weak V` value, checked BEFORE the name-keyed
+        // dispatch below. A weak slot holds a borrowed pointer the container
+        // took a WEAK count on, never a strong one, so the release is
+        // `karac_weak_drop`; falling through to the shared / named path would
+        // hand back the referent's strong `rc_dec` and over-release a count
+        // this container never took. The `Vec[weak T]` element selector
+        // (`vec_elem_agg_drop_for_type_expr`) has the identical arm in the
+        // identical position — same rule, both containers.
+        if matches!(&val_te.kind, TypeKind::Weak(_)) {
+            return Some(self.emit_weak_slot_drop_fn());
+        }
         let path = match &val_te.kind {
             TypeKind::Path(p) => p,
             // Tuple values: the agg-drop synthesizer handles all-heap-leaf

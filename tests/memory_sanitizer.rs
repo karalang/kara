@@ -913,6 +913,63 @@ fn main() {
     }
 
     #[test]
+    fn asan_map_of_weak_value_cycle_freed_no_leak() {
+        // B-2026-08-08-29 — `Map[K, weak V]`. `Vec` got the whole weak-element
+        // contract (store downgrade, no strong count, scope-exit weak drain);
+        // `Map` had the typecheck relaxation and NONE of the codegen, so an
+        // insert stored a STRONG pointer into a slot the author declared
+        // `weak`. Three consequences, all measured against the `Map[i64, N]`
+        // strong twin, which was clean throughout:
+        //
+        //   one entry, no cycle   -> definitely lost: 24 bytes (the box)
+        //   Map-mediated cycle    -> 376 bytes (32 direct + 344 indirect)
+        //   overwrite / remove    -> one orphaned weak count each, because the
+        //                            displaced value rides a `Some(old)` the
+        //                            discard never holds
+        //
+        // So writing `weak` LEAKED where omitting it did not — the annotation
+        // doing the opposite of its purpose, silently and with the right answer
+        // printed. This fixture covers all four shapes in one program: a
+        // struct-FIELD `Map[i64, weak N]` closing a two-node cycle (the
+        // shared-struct drop arm, which has no general val-drop channel and
+        // needed its own weak arm), plus a local map that is overwritten and
+        // then drained by `remove`.
+        //
+        // The `impl Drop` bodies are the positive half: they only fire if the
+        // cycle is actually collected, so a regression that reinstates the
+        // strong store fails on OUTPUT here, not only under LSan.
+        assert_clean_asan_run(
+            r#"
+shared struct N { mut v: i64, mut kids: Map[i64, weak N] }
+impl Drop for N {
+    fn drop(mut ref self) { println(f"drop {self.v}"); }
+}
+fn cycle() {
+    let p = N { v: 1i64, kids: Map.new() };
+    let c = N { v: 2i64, kids: Map.new() };
+    c.kids.insert(0i64, p);
+    p.kids.insert(0i64, c);
+}
+fn churn() -> i64 {
+    let mut m: Map[i64, weak N] = Map.new();
+    let a = N { v: 10i64, kids: Map.new() };
+    let b = N { v: 20i64, kids: Map.new() };
+    m.insert(7i64, a);
+    m.insert(7i64, b);
+    let _ = m.remove(7i64);
+    return a.v + b.v + m.len();
+}
+fn main() {
+    cycle();
+    println(churn());
+}
+"#,
+            &["drop 2", "drop 1", "drop 20", "drop 10", "30"],
+            "map_of_weak_value_cycle_freed",
+        );
+    }
+
+    #[test]
     fn asan_weak_read_into_option_binding_then_weak_store_no_leak() {
         // B-2026-07-21-21: `let after: Option[N] = nodes[i].link;` (a WEAK-field
         // read) binds an `Option[shared]` that owns NO +1 — the weak read is a

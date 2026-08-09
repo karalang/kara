@@ -3533,8 +3533,12 @@ fn main() {
             "a `Vec[weak N]` push must downgrade on the way in; without it the \
              container stores a strong pointer into a weak slot"
         );
+        // B-2026-08-08-29 renamed this from `__karac_vec_elem_weak_drop`: the
+        // same fn now serves a `Map[K, weak V]` value slot, and a `vec_elem`
+        // name on a Map value drop is the misnomer class that hid
+        // B-2026-08-08-20.
         assert!(
-            weak_ir.contains("__karac_vec_elem_weak_drop"),
+            weak_ir.contains("__karac_weak_slot_drop"),
             "a `Vec[weak N]` must weak-drop each element at scope exit, or it \
              never releases what its pushes took"
         );
@@ -3553,6 +3557,58 @@ fn main() {
             strong_incs > weak_incs,
             "a weak element takes no strong count, so the weak build must emit \
              FEWER retains than the identical strong-element build; got \
+             weak={weak_incs} strong={strong_incs}"
+        );
+    }
+
+    /// B-2026-08-08-29 — the `Map` twin of the row above, asserted the same
+    /// way: on the IR, against the identical program with the `weak` dropped.
+    ///
+    /// `Map` had the typecheck relaxation and none of the codegen, so an insert
+    /// stored a STRONG pointer into a slot the author declared `weak` — no
+    /// downgrade, the ordinary transfer inc still firing, and no scope-exit
+    /// drain at all. All three are checked here because the leak needs only one
+    /// of them to come back, and the runtime shape (24 bytes against a clean
+    /// strong twin) is the same for each.
+    #[test]
+    fn map_of_weak_value_insert_downgrades_and_takes_no_strong_count() {
+        let program = |val: &str| {
+            format!(
+                "shared struct N {{ mut v: i64 }}\n\
+                 fn build(s: i64) -> i64 {{\n\
+                     let mut m: Map[i64, {val}] = Map.new();\n\
+                     let a = N {{ v: s }};\n\
+                     m.insert(1i64, a);\n\
+                     a.v + m.len()\n\
+                 }}\n\
+                 fn main() {{ println(f\"{{build(1)}}\"); }}\n"
+            )
+        };
+
+        let weak_ir = ir_for(&program("weak N"));
+        assert!(
+            weak_ir.contains("karac_weak_downgrade"),
+            "a `Map[i64, weak N]` insert must downgrade on the way in; without \
+             it the bucket holds a strong pointer in a weak slot"
+        );
+        assert!(
+            weak_ir.contains("__karac_weak_slot_drop"),
+            "a `Map[i64, weak N]` must weak-drop each value at scope exit, or \
+             it never releases what its inserts took"
+        );
+        let weak_incs = weak_ir.matches("= add i64 %rc").count();
+
+        let strong_ir = ir_for(&program("N"));
+        let strong_incs = strong_ir.matches("= add i64 %rc").count();
+        assert!(
+            !strong_ir.contains("karac_weak_downgrade"),
+            "the strong control must NOT downgrade — otherwise the weak rows \
+             above prove nothing about the `weak` spelling"
+        );
+        assert!(
+            strong_incs > weak_incs,
+            "a weak value takes no strong count, so the weak build must emit \
+             FEWER retains than the identical strong-value build; got \
              weak={weak_incs} strong={strong_incs}"
         );
     }

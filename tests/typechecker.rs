@@ -29607,6 +29607,43 @@ fn weak_container_element_read_upgrades_to_option() {
     );
 }
 
+/// B-2026-08-08-29 — a `Map[K, weak V]` / `SortedMap[K, weak V]` value slot
+/// takes the CONTAINER gate, not the generic weak-FIELD coercion.
+///
+/// The field coercion in `check_expr` admits `Option[T]` and `None` as well as
+/// a bare handle, and the container store lowers only the bare form:
+/// `m.insert(k, Option.Some(a))` typechecked and put the Option aggregate's
+/// first word in a bucket the scope-exit drain hands to `karac_weak_drop`. The
+/// `Vec[weak T].push` gate already narrowed this for exactly the same reason;
+/// `Map` was the one container that had the relaxation without the codegen.
+#[test]
+fn weak_map_value_slot_takes_a_bare_handle_only() {
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n         fn main() { let mut m: Map[i64, weak N] = Map.new(); \n                     let a = N { v: 41i64 }; m.insert(1i64, a); println(a.v + m.len()); }",
+    );
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n         fn main() { let mut m: SortedMap[i64, weak N] = SortedMap.new(); \n                     let a = N { v: 41i64 }; let _ = m.insert(1i64, a); println(a.v + m.len()); }",
+    );
+    let errs = typecheck_errors(
+        "shared struct N { mut v: i64 }\n         fn main() { let mut m: Map[i64, weak N] = Map.new(); \n                     let a = N { v: 41i64 }; m.insert(1i64, Option.Some(a)); println(m.len()); }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("takes a BARE `N` handle")),
+        "expected the container-gate diagnostic, got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // A non-referent value is still rejected — the gate is not blanket
+    // acceptance of whatever the author wrote.
+    let errs = typecheck_errors(
+        "shared struct N { mut v: i64 }\n         shared struct M { mut w: i64 }\n         fn main() { let mut m: Map[i64, weak N] = Map.new(); \n                     let a = M { w: 1i64 }; m.insert(1i64, a); println(m.len()); }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "a `M` handle must not fit a `weak N` slot"
+    );
+}
+
 /// B-2026-08-08-8 — expected-return seeding also reaches a BARE IDENTIFIER
 /// callee, i.e. an ordinary generic free function.
 ///

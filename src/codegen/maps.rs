@@ -1715,6 +1715,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Same consume-site pair for the value argument.
                 self.suppress_fstr_acc_if_moved_out(&args[1].value);
                 let val_val = self.maybe_defensive_copy_param_arg(&args[1].value, val_val);
+                // B-2026-08-08-29 — a `weak V` value takes NO STRONG COUNT.
+                // Computed before the suppression block below because the
+                // shared-transfer inc fires there, and leaving it in place is a
+                // leak the store cannot undo: the container releases through
+                // `karac_weak_drop`, so a strong retain here is never balanced
+                // and the target's strong count never reaches zero. That is
+                // exactly what the 24-byte loss against a clean strong twin
+                // was. The `Vec[weak T].push` twin computes the same flag in
+                // the same position, for the same reason.
+                let weak_val = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)));
                 // Move semantics — same shape as `Vec.push`. When the
                 // key OR value argument is a tracked Vec/String binding,
                 // the bucket bit-copies its `{ptr, len, cap}` and the
@@ -1727,7 +1740,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                     self.disarm_container_bodies_for_arg(&args[0].value);
                 }
-                self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                self.suppress_source_vec_cleanup_for_arg_ex(&args[1].value, !weak_val);
                 // Container-bodies twin of the cap-zero above.
                 self.disarm_container_bodies_for_arg(&args[1].value);
                 self.disarm_moved_value_arg_user_drops(&args[1].value);
@@ -1740,6 +1753,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 // for the map VALUE argument).
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
+                // B-2026-08-08-29, store half — perform the DOWNGRADE
+                // (`weak += 1`, same pointer back) before the value reaches
+                // any of the three insert paths below, so all of them store a
+                // weak reference rather than the strong handle the author
+                // declared `weak`. Applied here rather than at each slot store
+                // because the mono path passes V by value in a register and
+                // never materializes a slot.
+                //
+                // Without it the bucket held a STRONG pointer in a slot the
+                // source says is weak: the cycle the annotation exists to break
+                // still leaked, silently, and the strong twin was clean — the
+                // annotation doing the opposite of its purpose.
+                let val_val = if weak_val {
+                    match val_val {
+                        BasicValueEnum::PointerValue(p) => {
+                            let downgrade = self.weak_runtime_fn("karac_weak_downgrade", true);
+                            self.builder
+                                .build_call(downgrade, &[p.into()], "map.val.weak.downgrade")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .unwrap_basic()
+                        }
+                        other => other,
+                    }
+                } else {
+                    val_val
+                };
                 let fn_val = self.current_fn.unwrap();
                 let old_slot = self.create_entry_alloca(fn_val, "map.insert.old", val_ty);
                 // Staged key slot for the B-2026-08-01-29 no-adopt reclaim on
@@ -1879,7 +1919,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // refcount to dec.
                 if self.pending_map_insert_old_dec {
                     self.pending_map_insert_old_dec = false;
-                    if let Some(heap_type) = self.map_val_shared_heap_type_for(var_name) {
+                    if self.map_val_weak_for(var_name) {
+                        // B-2026-08-08-29 — weak V. The DISPLACED occupant's
+                        // weak count is about to be wrapped in a `Some(old)`
+                        // nobody holds, so release it here. Without this the
+                        // overwritten target's control block survived the
+                        // program even though the map no longer referenced it.
+                        if old_val.is_pointer_value() {
+                            let weak_drop = self.weak_runtime_fn("karac_weak_drop", false);
+                            self.builder
+                                .build_call(weak_drop, &[old_val.into_pointer_value().into()], "")
+                                .unwrap();
+                        }
+                    } else if let Some(heap_type) = self.map_val_shared_heap_type_for(var_name) {
                         if old_val.is_pointer_value() {
                             self.emit_refcount_dec(
                                 var_name,
@@ -2242,7 +2294,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // insert (a bare `m.remove(k);` already drops its Option temp).
                 if self.pending_map_insert_old_dec {
                     self.pending_map_insert_old_dec = false;
-                    if let Some(heap_type) = self.map_val_shared_heap_type_for(var_name) {
+                    if self.map_val_weak_for(var_name) {
+                        // B-2026-08-08-29 — weak V, the remove sibling of the
+                        // insert-overwrite reclaim above.
+                        if old_val.is_pointer_value() {
+                            let weak_drop = self.weak_runtime_fn("karac_weak_drop", false);
+                            self.builder
+                                .build_call(weak_drop, &[old_val.into_pointer_value().into()], "")
+                                .unwrap();
+                        }
+                    } else if let Some(heap_type) = self.map_val_shared_heap_type_for(var_name) {
                         if old_val.is_pointer_value() {
                             self.emit_refcount_dec(
                                 var_name,

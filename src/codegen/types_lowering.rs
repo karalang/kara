@@ -2887,6 +2887,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// old value when `m.insert(k, v)` overwrites an existing key and the
     /// `Option[V]` result is discarded (B-2026-07-22-12) — the owned sibling of
     /// the shared-V overwrite dec.
+    /// B-2026-08-08-29 — true when a Map variable's value type V is `weak T`.
+    /// A weak value slot holds a pointer the container took a WEAK count on, so
+    /// a displaced / removed one is released with `karac_weak_drop`, not with
+    /// the shared `rc_dec` (`map_val_shared_heap_type_for`, which returns None
+    /// here because a `weak T` TypeExpr is not a `Path`) and not with the owned
+    /// buffer free (`map_val_owned_heap_str_vec_for`, likewise false). Without
+    /// this third arm, a discarded `m.insert(k, b)` over an existing key and a
+    /// discarded `m.remove(k)` each orphaned one weak count — the target's
+    /// control block then outlived the program even after its strong count
+    /// reached zero.
+    pub(super) fn map_val_weak_for(&self, var_name: &str) -> bool {
+        self.var_elem_type_exprs
+            .get(var_name)
+            .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+    }
+
     pub(super) fn map_val_owned_heap_str_vec_for(&self, var_name: &str) -> bool {
         let Some(v_te) = self.var_elem_type_exprs.get(var_name) else {
             return false;

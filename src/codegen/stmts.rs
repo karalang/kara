@@ -2563,6 +2563,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // double-dec on the bare form.
                 let shared = method == "insert"
                     && self.map_val_shared_heap_type_for(receiver_name).is_some();
+                // B-2026-08-08-29 — weak V, for BOTH discard forms and BOTH
+                // methods. Unlike the owned-heap case below, a bare
+                // `m.insert(k, v);` does NOT get its `Option[weak V]` temp
+                // reclaimed by the general statement-result cleanup (there is
+                // no registered drop for a weak payload word), so restricting
+                // this to the wildcard-let shape would leave the bare form
+                // leaking — measured that way.
+                let weak = self.map_val_weak_for(receiver_name);
                 // Owned-heap `String`/`Vec` V → consumed as a buffer free of the
                 // displaced old value (B-2026-07-22-12, the owned sibling of the
                 // shared-V overwrite leak). ONLY the `let _ = m.insert(…)` form
@@ -2577,7 +2585,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 let owned_heap =
                     is_let_wildcard && self.map_val_owned_heap_str_vec_for(receiver_name);
-                if shared || owned_heap {
+                if shared || owned_heap || weak {
                     self.pending_map_insert_old_dec = true;
                 }
             }
