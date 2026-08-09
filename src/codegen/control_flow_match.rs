@@ -2187,7 +2187,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let ll = val.get_type();
         let slot = self.create_entry_alloca(fn_val, "refchain.enum.clone", ll);
         self.builder.build_store(slot, val).unwrap();
-        self.deep_copy_enum_heap_payload_in_place(&enum_name, slot, &layout);
+        // B-2026-08-09-12 — ELEMENT-deep, for the same reason the live-local
+        // sibling is: the outer-only copy left a `Vec[String]` payload's element
+        // buffers shared with the CALLER's storage, so a consuming arm freed
+        // buffers the caller still owned. Measured on `fn take(s: ref S)` over
+        // `S { e: E }`, `enum E { A(Vec[String]) }`, called twice — one invalid
+        // read and one invalid free.
+        //
+        // Sound at this site on the same terms: the leg fires only when the
+        // arm's bindings ESCAPE (`ref_chain_escapes`), so the copied elements
+        // go to a consumer. Payload classes the defensive copy does not
+        // duplicate (a `Vec` of user structs, a `NestedStruct`) are unaffected
+        // — they alias exactly as before, which is this leg's status quo rather
+        // than something this change extends.
+        self.deep_copy_enum_heap_payload_with_elements_in_place(&enum_name, slot, &layout);
         (
             self.builder
                 .build_load(ll, slot, "refchain.enum.cloned")

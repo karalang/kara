@@ -44758,6 +44758,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-12 under ASAN — the `<refparam>.field` ref-chain enum clone
+    /// must be ELEMENT-deep, so a consuming arm never frees a string the caller
+    /// still owns.
+    ///
+    /// The defect produced correct stdout, so only a sanitizer separates it
+    /// from a working program: with the outer-only copy the clone's `Vec`
+    /// buffer was fresh but its element `String`s were the caller's, and the
+    /// arm's `for` loop freed them out from under `s` — one invalid read and
+    /// one invalid free per call.
+    ///
+    /// The final match in `main` is load-bearing for the LEAK half of the gate,
+    /// not decoration: it drains the SOURCE's elements. Without it the program
+    /// leaks two blocks — not from the clone, but from the pre-existing class
+    /// where an enum's `Vec[heap]` payload elements are freed by nothing unless
+    /// something consumes them (B-2026-08-09-13). Draining them here keeps this
+    /// fixture measuring the clone's depth rather than that separate gap.
+    ///
+    /// Every payload is read BYTE-WISE (`println` of the string itself, never
+    /// `.len()`), because a buffer whose bytes are never read is a provably
+    /// dead allocation LLVM deletes outright.
+    #[test]
+    fn asan_ref_chain_enum_vec_payload_clone_is_element_deep() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(Vec[String]), B }
+struct S { e: E }
+fn take(s: ref S) {
+    match s.e { E.A(x) => { for t in x { println(t); } } E.B => { println("-"); } }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        let s: S = S { e: E.A([f"aa{i}", f"bb{i}"]) };
+        // Twice: the second call reads what the first would have freed.
+        take(s);
+        take(s);
+        // Drain the source's own elements — see the doc above.
+        match s.e { E.A(x) => { for t in x { println(t); } } E.B => { println("-"); } }
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "aa0", "bb0", "aa0", "bb0", "aa0", "bb0", "aa1", "bb1", "aa1", "bb1", "aa1", "bb1",
+                "aa2", "bb2", "aa2", "bb2", "aa2", "bb2", "aa3", "bb3", "aa3", "bb3", "aa3", "bb3",
+                "end",
+            ],
+            "ref_chain_enum_vec_payload_clone",
+        );
+    }
+
     /// B-2026-08-08-25 leg 1, the CHAIN interaction — one owner, not zero.
     ///
     /// `suppress_inline_option_result_binding_move` disarms a source binding

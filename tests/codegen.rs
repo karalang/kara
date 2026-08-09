@@ -23995,6 +23995,63 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-12 — the `<refparam>.field` ref-chain ENUM clone leg, the
+    /// sibling that shares B-2026-08-09-9's payload duplicator.
+    ///
+    /// `clone_escaping_borrowed_ref_chain_enum` (B-2026-07-21-5/-6) exists so a
+    /// consuming arm over a borrowed enum gets an INDEPENDENT payload instead of
+    /// aliasing the caller's storage. With the outer-only copy it was
+    /// independent only one level deep: a `Vec[String]` payload came back with
+    /// the element buffers still shared, so the arm's `for` loop freed strings
+    /// the caller still owned — one invalid read and one invalid free per call,
+    /// under correct-looking stdout.
+    ///
+    /// Gating the leg off this shape was NOT an option, which is what makes the
+    /// element-deep copy the only route: falling back to the un-cloned path
+    /// reintroduces B-2026-07-21-5/-6, the aliasing this leg was written to
+    /// prevent. The live-local sibling could afford a gate; this one cannot.
+    ///
+    /// Case 2 is the read-only counterpart, which must stay a zero-cost alias —
+    /// no clone, no copy, the caller keeps its payload.
+    #[test]
+    fn test_e2e_ref_chain_enum_vec_payload_clone_is_element_deep() {
+        // 1. THE BUG: consumed through a `ref` param, called twice so the second
+        // call reads what the first would have freed.
+        assert_eq!(
+            run_program(
+                "enum E { A(Vec[String]), B }\n\
+                 struct S { e: E }\n\
+                 fn take(s: ref S) {\n\
+                     match s.e { E.A(x) => { for t in x { println(t); } } E.B => {} }\n\
+                 }\n\
+                 fn main() {\n\
+                     let s: S = S { e: E.A([f\"aa\", f\"bb\"]) };\n\
+                     take(s);\n\
+                     take(s);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("aa\nbb\naa\nbb\n")
+        );
+        // 2. CONTROL — read-only through the borrow: no clone at all.
+        assert_eq!(
+            run_program(
+                "enum E { A(Vec[String]), B }\n\
+                 struct S { e: E }\n\
+                 fn peek(s: ref S) {\n\
+                     match s.e { E.A(x) => { println(x[0]); } E.B => {} }\n\
+                 }\n\
+                 fn main() {\n\
+                     let s: S = S { e: E.A([f\"aa\", f\"bb\"]) };\n\
+                     peek(s);\n\
+                     peek(s);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("aa\naa\n")
+        );
+    }
+
     #[test]
     fn test_e2e_generic_method_some_over_field_pop() {
         // B-2026-07-12-6 (typecheck) — `Some(self.items.pop())` inside a generic
