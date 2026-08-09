@@ -1169,6 +1169,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 return true;
             }
         }
+        // B-2026-08-09-2 — `m.get(k)` on a `Map[K, weak V]` is the third
+        // spelling of the same borrow. The upgrade hands back a box pointer
+        // with no +1 (`emit_weak_field_upgrade`), while the `Option[shared V]`
+        // binding it feeds still queues a scope-exit `RcDecOption`, so without
+        // this arm the dec is unbalanced and the referent is over-released —
+        // the identical failure B-2026-07-21-21 measured for the field form and
+        // B-2026-08-08-28 for the field-rooted element form. Reached through a
+        // METHOD CALL rather than an `Index`, which is why neither existing arm
+        // sees it.
+        if let ExprKind::MethodCall { object, method, .. } = &e.kind {
+            if method == "get"
+                && self
+                    .map_receiver_value_type_expr(object)
+                    .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+            {
+                return true;
+            }
+        }
         let ExprKind::FieldAccess { object, field } = &e.kind else {
             return false;
         };

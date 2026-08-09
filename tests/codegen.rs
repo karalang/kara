@@ -3511,6 +3511,83 @@ fn main() {
         }
     }
 
+    /// B-2026-08-09-2 — `Map[K, weak V]` was store-only: B-2026-08-08-29 landed
+    /// the store half and typed `get` as `Option[weak V]`, so the `Some` binding
+    /// was a bare `weak V` and every field access through it was rejected
+    /// ("no field 'v' on type 'this type'").
+    ///
+    /// The row filed that as LOW — "a refusal, not a miscompile". Relaxing the
+    /// typecheck alone turned it into one, which is the whole reason these three
+    /// assertions exist rather than a single accept test: with `get` typed
+    /// `Option[V]` but codegen still handing back the raw stored word, an ALIVE
+    /// referent read correctly by accident (the weak slot holds the box pointer)
+    /// while a DEAD one read the freed box and printed its stale field —
+    /// valgrind `Invalid read of size 8`, no diagnostic. Line 3 is the one that
+    /// discriminates; lines 1-2 pass against the broken compiler.
+    #[test]
+    fn test_e2e_map_of_weak_get_upgrades_and_reads_none_once_the_target_dies() {
+        let out = run_program(
+            r#"
+shared struct N { mut v: i64 }
+
+fn build_map() -> Map[i64, weak N] {
+    let mut m: Map[i64, weak N] = Map.new();
+    let a: N = N { v: 41i64 };
+    m.insert(1i64, a);
+    match m.get(1i64) { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+    return m;
+}
+
+// Overwrite the dead frame so a stale pointer cannot read as live by residue.
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    return n + churn(n - 1);
+}
+
+fn main() {
+    let m: Map[i64, weak N] = build_map();
+    println(churn(60));
+    // The referent died with `build_map`'s frame; the map's weak ref must
+    // upgrade to `None` rather than hand back the freed box.
+    match m.get(1i64) { Some(y) => { println(y.v); } None => { println(0 - 99); } }
+    // A key that was never inserted is the same `None`, and it must not read
+    // the uninitialised value slot the runtime leaves untouched on a miss.
+    match m.get(7i64) { Some(z) => { println(z.v); } None => { println(0 - 7); } }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "41\n1830\n-99\n-7");
+        }
+    }
+
+    /// The `weak` value read through a struct FIELD, over a real 2-node cycle —
+    /// the shape B-2026-08-08-28 caught for `Vec` and design.md's graph example
+    /// writes with a container. Two reads of the same live entry must both give
+    /// `Some`: one read taking the balancing acquire and the next seeing a
+    /// half-released target is exactly how the `Vec` twin failed.
+    #[test]
+    fn test_e2e_map_of_weak_field_rooted_read_survives_two_reads() {
+        let out = run_program(
+            r#"
+shared struct N { mut v: i64, mut ns: Map[i64, weak N] }
+fn build2() -> N {
+    let a: N = N { v: 1i64, ns: Map.new() };
+    let b: N = N { v: 2i64, ns: Map.new() };
+    a.ns.insert(1i64, b);
+    b.ns.insert(1i64, a);
+    match a.ns.get(1i64) { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+    match a.ns.get(1i64) { Some(y) => { println(y.v); } None => { println(0 - 2); } }
+    return a;
+}
+fn main() { println(build2().v); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2\n2\n1");
+        }
+    }
+
     #[test]
     fn vec_of_weak_push_downgrades_and_takes_no_strong_count() {
         let program = |elem: &str| {

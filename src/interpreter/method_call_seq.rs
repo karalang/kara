@@ -15,6 +15,32 @@ use super::helpers::{eval_http_get, value_compare, value_compare_u64};
 use super::value::{try_write_or_panic, EnumData, IteratorSource, OrdValue, Value};
 use crate::interpreter::deep_clone_value;
 
+/// Wrap a value found by `Map`/`SortedMap` `get` as the `Option` the
+/// typechecker promised — upgrading through a `weak` value slot on the way.
+///
+/// B-2026-08-09-2. `Map[K, weak V]` stores `Value::WeakRef` (the downgrade at
+/// `insert`, B-2026-08-08-29), and the typechecker types `get` on such a map as
+/// `Option[V]`, not `Option[weak V]`. So a found `WeakRef` must be upgraded
+/// HERE rather than wrapped: `upgrade_weak_to_option` already returns an
+/// `Option`, which is why it replaces the `Some(..)` wrap instead of nesting
+/// inside it. A dead referent collapses to the same `None` a missing key gives,
+/// which is the typing's own promise.
+///
+/// The `eval_expr_inner` post-step that upgrades a *surfaced* `WeakRef`
+/// (B-2026-08-08-14 — how the `Vec[weak T]` element read works, since indexing
+/// yields the handle bare) cannot reach this one: it is already sealed inside an
+/// `Option.Some` payload by the time the post-step runs.
+fn found_map_value_to_option(v: &Value) -> Value {
+    if let Value::WeakRef(w) = v {
+        return super::value::upgrade_weak_to_option(w);
+    }
+    Value::EnumVariant {
+        enum_name: "Option".to_string(),
+        variant: "Some".to_string(),
+        data: EnumData::Tuple(vec![v.clone()]),
+    }
+}
+
 impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_seq_method(
         &mut self,
@@ -941,11 +967,7 @@ impl<'a> super::Interpreter<'a> {
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
                     return Some(match m.iter().find(|(k, _)| *k == key) {
-                        Some((_, v)) => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![v.clone()]),
-                        },
+                        Some((_, v)) => found_map_value_to_option(v),
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
@@ -959,11 +981,7 @@ impl<'a> super::Interpreter<'a> {
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
                     return Some(match m.get(&OrdValue(key)) {
-                        Some(v) => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![v.clone()]),
-                        },
+                        Some(v) => found_map_value_to_option(v),
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),

@@ -1993,6 +1993,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 let key_slot = self.create_entry_alloca(fn_val, "map.get.key", key_ty);
                 let val_slot = self.create_entry_alloca(fn_val, "map.get.val", val_ty);
                 self.builder.build_store(key_slot, key_val).unwrap();
+                // B-2026-08-09-2 — see the weak-upgrade arm after the lookup:
+                // on a MISS the runtime leaves `val_slot` untouched, and the
+                // upgrade dereferences the slot to read the target's strong
+                // count, so the miss path must present a null rather than
+                // whatever the frame happened to hold. Weak V only, to leave
+                // every other value type's emitted IR byte-identical.
+                if self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+                {
+                    self.builder.build_store(val_slot, val_ty.const_zero()).ok();
+                }
                 let key_val_matches = key_val.get_type() == key_ty;
                 // B-2026-07-26-2: String-key maps get their own mono probe.
                 // They cannot use the scalar family above (its key travels by
@@ -2049,6 +2062,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 // source's own scope-exit free covers those). Mirrors `get_or`;
                 // without it `get` leaked one key buffer per call (LSan).
                 self.free_fresh_owned_str_arg(&args[0].value, key_val);
+
+                // B-2026-08-09-2 — a `weak V` value read is an UPGRADE, and it
+                // produces the whole `Option` itself rather than feeding the
+                // found/not-found phi below. Reusing the field path's two
+                // helpers (`emit_weak_field_upgrade` + `niche_ptr_to_option_value`)
+                // is what makes the RC behaviour identical by construction —
+                // exactly how the `Vec[weak T]` element read is built.
+                //
+                // The two outcomes COLLAPSE, which is why one Option suffices
+                // and why this can bypass the phi: a missing key leaves the
+                // pre-zeroed slot null, and a found-but-dead referent upgrades
+                // to null. Both are `None`, which is precisely what the
+                // typechecker promises for this receiver.
+                //
+                // ZEROING THE SLOT IS LOAD-BEARING, not defensive tidying. On a
+                // miss the runtime leaves `val_slot` untouched, so without the
+                // pre-store the upgrade would load an uninitialised alloca and
+                // dereference it as a box header — a wild read whose result
+                // decides the tag. The store lands after both allocas, so the
+                // entry-block alloca ORDER this arm depends on is unchanged.
+                if self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .is_some_and(|te| matches!(te.kind, TypeKind::Weak(_)))
+                {
+                    let upgraded = self.emit_weak_field_upgrade(val_slot);
+                    return Ok(self.niche_ptr_to_option_value(upgraded, "map_weak_get"));
+                }
 
                 let found_bb = self.context.append_basic_block(fn_val, "map.get.found.bb");
                 let notfound_bb = self

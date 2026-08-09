@@ -29607,6 +29607,53 @@ fn weak_container_element_read_upgrades_to_option() {
     );
 }
 
+/// B-2026-08-09-2 — the READ twin of B-2026-08-08-29's store gate. `get` on a
+/// `Map[K, weak V]` / `SortedMap[K, weak V]` yields `Option[V]`, not
+/// `Option[weak V]`, so a field access through the `Some` binding resolves.
+///
+/// Without it the payload was a bare `weak V` and every such access was
+/// rejected with "no field 'v' on type 'this type'" — a diagnostic that names
+/// no type the reader can act on. That left the container store-only: usable
+/// for cycle-breaking back-edges, which exist not to be traversed, and useless
+/// for a parent-pointer walk.
+///
+/// ONE Option, not `Option[Option[V]]`: a missing key and a dead referent both
+/// yield `None`, and a released referent IS a key whose value is gone.
+#[test]
+fn weak_map_value_read_upgrades_to_option() {
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n\
+         fn main() { let a: N = N { v: 1i64 };\n\
+                     let mut m: Map[i64, weak N] = Map.new(); m.insert(1i64, a);\n\
+                     match m.get(1i64) { Some(x) => { println(x.v); } None => {} } }",
+    );
+    // The annotated spelling is the one that binds an `Option[shared N]` and so
+    // queues a scope-exit `RcDecOption` — it must type identically, and it is
+    // the shape whose missing balancing acquire leaked the referent's box.
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n\
+         fn main() { let a: N = N { v: 1i64 };\n\
+                     let mut m: Map[i64, weak N] = Map.new(); m.insert(1i64, a);\n\
+                     let o: Option[N] = m.get(1i64); println(o.is_some()); }",
+    );
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n\
+         fn main() { let a: N = N { v: 1i64 };\n\
+                     let mut m: SortedMap[i64, weak N] = SortedMap.new();\n\
+                     let _ = m.insert(1i64, a);\n\
+                     match m.get(1i64) { Some(x) => { println(x.v); } None => {} } }",
+    );
+    // A STRONG-valued map is untouched: its `get` still yields `Option[V]` with
+    // V spelled exactly as declared, so the upgrade cannot leak into the
+    // ordinary path.
+    typecheck_ok(
+        "shared struct N { mut v: i64 }\n\
+         fn main() { let a: N = N { v: 1i64 };\n\
+                     let mut m: Map[i64, N] = Map.new(); m.insert(1i64, a);\n\
+                     match m.get(1i64) { Some(x) => { println(x.v); } None => {} } }",
+    );
+}
+
 /// B-2026-08-08-29 — a `Map[K, weak V]` / `SortedMap[K, weak V]` value slot
 /// takes the CONTAINER gate, not the generic weak-FIELD coercion.
 ///

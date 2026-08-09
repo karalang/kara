@@ -16056,6 +16056,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-09-2 — the ANNOTATED read of a `Map[K, weak V]`.
+    ///
+    /// `let o: Option[N] = m.get(k)` is the spelling that binds an
+    /// `Option[shared N]` and so queues a scope-exit `RcDecOption`. The upgrade
+    /// hands out a box pointer with NO strong retain
+    /// (`emit_weak_field_upgrade`), so without the balancing acquire that dec
+    /// has nothing to match and the referent's 24-byte box is lost — measured
+    /// under valgrind against a compiler with only the `expr_is_weak_field_read`
+    /// arm reverted, while the STRONG `Map[i64, N]` twin of the same program is
+    /// clean. The un-annotated `let o = m.get(k)` does NOT reach it (a different
+    /// binding case, no queued dec), which is why this fixture spells the type.
+    #[test]
+    fn asan_map_of_weak_annotated_read_balances_its_acquire_no_leak() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+shared struct N { mut v: i64 }
+
+fn build(seed: i64) -> i64 {
+    let mut m: Map[i64, weak N] = Map.new();
+    let a: N = N { v: seed };
+    m.insert(1i64, a);
+    let o: Option[N] = m.get(1i64);
+    let p: Option[N] = m.get(1i64);
+    let mut hits: i64 = 0;
+    match o { Some(x) => { hits = hits + x.v; } None => {} }
+    match p { Some(y) => { hits = hits + y.v; } None => {} }
+    return hits + a.v;
+}
+
+// Overwrites the dead frame the handles lived in, so LSan cannot mistake
+// stack residue for reachability (B-2026-08-08-4).
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let hits = build(seed);
+    let noise = churn(2000);
+    println(hits + noise - noise);
+}
+"#,
+            // seed == 1: two reads of v==1 plus a.v.
+            &["3"],
+            "map_of_weak_annotated_read_balances_its_acquire",
+            // The referent's box plus the map's own allocation.
+            2,
+        );
+    }
+
     /// B-2026-08-08-15 — an RC-bearing `shared struct` published as an auto-par
     /// RETURN SLOT is released exactly once, by the JOINING SCOPE.
     ///

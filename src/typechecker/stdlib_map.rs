@@ -220,9 +220,28 @@ impl<'a> super::TypeChecker<'a> {
                 // may have pinned it, and even a lone `get(k)` on a fresh
                 // `Map.new()` should surface the resolved value type.
                 let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                // B-2026-08-09-2 — a `weak V` VALUE read is an UPGRADE, the twin
+                // of the `Vec[weak T]` element read (`exprs.rs`, the
+                // `!index_is_lhs` arm) and of the `weak` FIELD read. Without it
+                // the `Some` payload was a bare `weak V`, every field access
+                // through the binding was rejected ("no field 'v' on type 'this
+                // type'"), and the container was store-only: fine for
+                // cycle-breaking back-edges, which exist not to be traversed,
+                // useless for a parent-pointer walk.
+                //
+                // ONE Option, not `Option[Option[V]]`. A missing key and a dead
+                // referent both yield `None`, and collapsing them is the honest
+                // shape rather than a shortcut: a referent that has been
+                // released IS a key whose value is gone, and no caller can act
+                // on the difference — the entry it would ask about no longer
+                // refers to anything.
+                let payload = match &resolved_v {
+                    Type::Weak(referent) => (**referent).clone(),
+                    _ => resolved_v,
+                };
                 Type::Named {
                     name: "Option".to_string(),
-                    args: vec![resolved_v],
+                    args: vec![payload],
                 }
             }
             "get_or" => {
@@ -679,9 +698,28 @@ impl<'a> super::TypeChecker<'a> {
                 // may have pinned it, and even a lone `get(k)` on a fresh
                 // `Map.new()` should surface the resolved value type.
                 let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                // B-2026-08-09-2 — a `weak V` VALUE read is an UPGRADE, the twin
+                // of the `Vec[weak T]` element read (`exprs.rs`, the
+                // `!index_is_lhs` arm) and of the `weak` FIELD read. Without it
+                // the `Some` payload was a bare `weak V`, every field access
+                // through the binding was rejected ("no field 'v' on type 'this
+                // type'"), and the container was store-only: fine for
+                // cycle-breaking back-edges, which exist not to be traversed,
+                // useless for a parent-pointer walk.
+                //
+                // ONE Option, not `Option[Option[V]]`. A missing key and a dead
+                // referent both yield `None`, and collapsing them is the honest
+                // shape rather than a shortcut: a referent that has been
+                // released IS a key whose value is gone, and no caller can act
+                // on the difference — the entry it would ask about no longer
+                // refers to anything.
+                let payload = match &resolved_v {
+                    Type::Weak(referent) => (**referent).clone(),
+                    _ => resolved_v,
+                };
                 Type::Named {
                     name: "Option".to_string(),
-                    args: vec![resolved_v],
+                    args: vec![payload],
                 }
             }
             "get_or" => {
