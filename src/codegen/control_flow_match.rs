@@ -7264,6 +7264,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (calls.rs), which owns the move-out and does not leave this shallow
     /// alias. Only `map` is recognized — the other Err/None-passthrough
     /// combinators are left for measured follow-up, not assumed by symmetry.
+    ///
+    /// B-2026-08-09-4 WROTE THAT GATE. The paragraph above described it from
+    /// the day this detector landed, but the body never tested the inner type —
+    /// every `.map` over an armed binding was claimed as an alias, heap inner
+    /// included, and the synthesis result's freshly-produced payload was left
+    /// with no owner at all. Worth remembering as a review lesson: a doc
+    /// comment stating a narrowing is not evidence the narrowing exists.
     pub(super) fn map_passthrough_armed_source(&self, value: &Expr) -> Option<String> {
         let ExprKind::MethodCall {
             object,
@@ -7277,12 +7284,55 @@ impl<'ctx> super::Codegen<'ctx> {
         if method != "map" || args.len() != 1 {
             return None;
         }
+        if self.map_lowers_via_match_synthesis(value) {
+            return None;
+        }
         let ExprKind::Identifier(n) = &object.kind else {
             return None;
         };
         (self.inline_option_payload_vars.contains(n.as_str())
             || self.inline_result_payload_vars.contains(n.as_str()))
         .then(|| n.clone())
+    }
+
+    /// B-2026-08-09-4 — does `value` lower through
+    /// `compile_map_via_match_synthesis` (calls.rs), the HEAP-inner arm of
+    /// `Option`/`Result` `.map(f)`?
+    ///
+    /// The two `.map` lowerings own their result differently, and which one
+    /// runs decides who frees the payload:
+    ///
+    /// * SCALAR inner — the hand-rolled arm compiles the absent branch as
+    ///   `absent_result = recv_struct`, a SHALLOW copy of the receiver's words.
+    ///   A heap `Err`/`None` payload is therefore ALIASED by the result, which
+    ///   is exactly what `map_passthrough_armed_source` records (B-2026-08-07-3).
+    /// * HEAP inner — the synthesis arm compiles `match o { Some(x) =>
+    ///   Some(f(x)), None => None }` (`Ok`/`Err` for `Result`). The present
+    ///   payload is FRESHLY produced by the mapper, the `Err` payload is MOVED
+    ///   out of the receiver by its arm, and the match machinery suppresses the
+    ///   receiver's own cleanup. The result OWNS both branches; nothing about it
+    ///   aliases the source.
+    ///
+    /// Answers `false` when the receiver's payload type is unknown (no
+    /// `method_unwrap_inner_types` entry), so a shape this family does not
+    /// lower keeps today's behaviour rather than changing owner on a guess.
+    pub(super) fn map_lowers_via_match_synthesis(&self, value: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            method,
+            args,
+            args_close_span,
+            ..
+        } = &value.kind
+        else {
+            return false;
+        };
+        if method != "map" || args.len() != 1 {
+            return false;
+        }
+        let key = crate::token::method_call_key(&value.span, args_close_span);
+        self.method_unwrap_inner_types
+            .get(&key)
+            .is_some_and(|inner_te| !super::vec_method::is_trivially_copyable_te(inner_te))
     }
 
     /// Shared shape test: is `value` a direct call to a named function, passing

@@ -6205,6 +6205,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         // tracked as a fresh owner. Admit the MethodCall shape to
                         // this Call-gated block so the alias branch can claim it.
                         || self.map_passthrough_armed_source(value).is_some()
+                        // B-2026-08-09-4 — the OTHER `.map` lowering, admitted to
+                        // the same block for the opposite reason. A HEAP-inner
+                        // `.map` goes through `compile_map_via_match_synthesis`,
+                        // whose result owns a payload the mapper freshly produced
+                        // (and, on `Err`, one the arm moved out of the receiver).
+                        // That is a fresh owner, so it takes the registration
+                        // branch below rather than the alias branch — and it needs
+                        // admitting here on its own, because the alias detector no
+                        // longer claims it.
+                        || self.map_lowers_via_match_synthesis(value)
                     {
                         let opt_te = self
                             .enum_inst_type_exprs

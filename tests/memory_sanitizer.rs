@@ -1998,6 +1998,71 @@ fn main() {
     }
 
     #[test]
+    fn asan_let_bound_map_result_owns_its_heap_payload() {
+        // B-2026-08-09-4 — a HEAP-inner `.map(f)` lowers through
+        // `compile_map_via_match_synthesis`, whose result OWNS its payload: the
+        // present branch is freshly produced by the mapper, the absent branch is
+        // moved out of the receiver, and the receiver's own cleanup is
+        // suppressed by the synthesized match. `map_passthrough_armed_source`
+        // nonetheless claimed every `.map` over an armed binding as an ALIAS of
+        // the receiver — correct only for the SCALAR-inner hand-rolled lowering,
+        // which really does shallow-copy the receiver's Err/None words
+        // (B-2026-08-07-3) — so the fresh payload was left with no owner and
+        // leaked once per evaluation.
+        //
+        // Every `let`/discard form of the map result is here, because they leak
+        // through two different registrars (the let-site tracker and the
+        // discarded-temp registrar) and a fix to one says nothing about the
+        // other.
+        //
+        // ARM SHAPE IS LOAD-BEARING, and is why this row hid for as long as it
+        // did. A `Some(x) => x.len()` arm reads only the length word, so at the
+        // default `-O2` LLVM proves the copied BUFFER dead and deletes the
+        // malloc outright — the leak becomes unobservable and the default
+        // sanitizer leg reports clean. The arms below compare or index the
+        // payload, which loads its bytes, so they are red at BOTH opt levels;
+        // the tag-only arm and the two discards keep `-O0`-only shapes in the
+        // fixture so `scripts/asan-o0-leg.sh` gates that half too.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 40i64 {
+        // Payload BYTES read — red at both opt levels.
+        let s: Option[String] = Some(f"hello");
+        let same = s.map(|x| x);
+        match same { Some(x) => { if x == "hello" { total = total + 5i64; } } None => {} }
+        let u: Option[String] = Some(f"hello");
+        let up = u.map(|x: String| x.to_uppercase());
+        match up { Some(x) => { if x == "HELLO" { total = total + 5i64; } } None => {} }
+        let v: Option[Vec[i64]] = Some(vec![1i64, 2i64, 3i64]);
+        let vm = v.map(|xs| xs);
+        match vm { Some(xs) => { total = total + xs[0]; } None => {} }
+        let r: Result[String, String] = Ok(f"okv");
+        let rm = r.map(|x| x);
+        match rm { Ok(x) => { if x == "okv" { total = total + 3i64; } } Err(_) => {} }
+        // Tag-only read and the two discard forms — `-O0`-only, because the
+        // optimizer deletes a copy whose bytes are never loaded.
+        let n: Option[String] = Some(f"hello");
+        let unused = n.map(|x| x);
+        match unused { Some(_) => { total = total + 1i64; } None => {} }
+        let d: Option[String] = Some(f"hello");
+        d.map(|x| x);
+        let e: Option[String] = Some(f"hello");
+        let _ = e.map(|x| x);
+        i = i + 1i64;
+    }
+    println(total.to_string());
+}
+"#,
+            // 40 * (5 + 5 + 1 + 3 + 1) = 600
+            &["600"],
+            "let_bound_map_result_owns_its_heap_payload",
+        );
+    }
+
+    #[test]
     fn asan_oncelock_string_set_get_no_leak() {
         // B-2026-07-12-2 heap-`T` ungate (gap 1, success-path element leak): a
         // heap-owning `OnceLock[String]` `set(v)` moves `v`'s buffer into the
