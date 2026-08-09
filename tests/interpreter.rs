@@ -184,6 +184,120 @@ fn test_faulted_method_receiver_reports_the_fault_not_an_ice() {
 }
 
 #[test]
+fn test_faulted_short_circuit_operand_reports_the_fault_not_an_ice() {
+    // B-2026-08-09-19, the sibling B-2026-08-09-18's fix did NOT close. That
+    // row guarded the method-call receiver; a faulted operand still ICEd in
+    // every position that consumes a Bool, with the same shape — an
+    // `unreachable!` whose message blames the typechecker or a wrong-variant
+    // codepath when in fact the operand faulted, set `pending_cf`, and yielded
+    // the `Unit` poison that is then asserted against.
+    //
+    // `eval_short_circuit` needed its own guard rather than inheriting the
+    // operand check B-2026-07-15-7 added: that one lives in the
+    // NON-short-circuit `Binary` evaluator, and `and`/`or` route away from it
+    // precisely so the RHS stays unevaluated.
+    //
+    // Case 4 is the MATCH GUARD, which the row does not list. It consumes its
+    // Bool through the same `is_truthy` helper as the two condition sites, so
+    // hoisting the check there covered it for free — and leaving it would have
+    // been a fourth finding of one root cause.
+    //
+    // Case 5 is the program that actually exposed the row: kata #251's
+    // skip-empty guard with its operands swapped. It is here because the
+    // minimised repro filed for B-2026-08-09-18 was fixed while this shape
+    // still ICEd, which is the whole reason there is a second row.
+    for (label, src, want) in [
+        (
+            "`and` LHS faulted",
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 if v[3] > 0i64 and true { println(\"y\"); }\n\
+             }",
+            "index 3 out of bounds",
+        ),
+        (
+            "`or` LHS faulted — the other operator, same site",
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 if v[3] > 0i64 or true { println(\"y\"); }\n\
+             }",
+            "index 3 out of bounds",
+        ),
+        (
+            "`and` RHS faulted — escapes the short-circuit into the if-condition",
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 if true and v[3] > 0i64 { println(\"y\"); }\n\
+             }",
+            "index 3 out of bounds",
+        ),
+        (
+            "match GUARD faulted — unreported, covered by the same hoist",
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let n: i64 = 1i64;\n\
+                 match n { x if v[3] > 0i64 => { println(\"a\"); } _ => { println(\"b\"); } }\n\
+             }",
+            "index 3 out of bounds",
+        ),
+        (
+            "while condition, kata #251's own shape — the case that exposed the row",
+            "struct It { data: Vec[Vec[i64]], row: i64, col: i64 }\n\
+             fn main() {\n\
+                 let it: It = It { data: Vec.new(), row: 0i64, col: 0i64 };\n\
+                 while it.col >= it.data[it.row].len() and it.row < it.data.len() {\n\
+                     println(\"skip\");\n\
+                 }\n\
+             }",
+            "index 0 out of bounds",
+        ),
+    ] {
+        let errors = runtime_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(want)),
+            "{label}: expected the operand's own fault ({want:?}), got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("internal") || e.message.contains("compiler bug")),
+            "{label}: a faulted operand is a program error, not a compiler bug, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_short_circuit_still_skips_its_rhs_and_evaluates_healthy_operands() {
+    // The converse of the guard above, and the two things it could break.
+    //
+    // First: the guard returns EARLY from `eval_short_circuit` on a faulted
+    // LHS, so it must not disturb the short-circuit itself — a false `and` and
+    // a true `or` still leave the RHS unevaluated. The RHS here would fault if
+    // it ran, so the assertion is that the program completes at all.
+    //
+    // Second: `is_truthy` now answers `false` whenever a fault is pending, so
+    // every condition reached with NO pending fault must still decide normally
+    // — including one whose operands are themselves fallible and succeeded.
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 if false and v[3] > 0i64 { println(\"unreachable-and\"); }\n\
+                 if true or v[3] > 0i64 { println(\"or-short-circuited\"); }\n\
+                 v.push(5i64);\n\
+                 if v[0] > 0i64 and v.len() == 1 { println(\"healthy-and\"); }\n\
+                 let n: i64 = 1i64;\n\
+                 match n { x if v[0] > 0i64 => { println(\"healthy-guard\"); } _ => { println(\"no\"); } }\n\
+             }"
+        )
+        .trim(),
+        "or-short-circuited\nhealthy-and\nhealthy-guard"
+    );
+}
+
+#[test]
 fn test_method_call_on_a_healthy_receiver_still_dispatches() {
     // The converse of the guard above, and the thing it could plausibly break:
     // the short-circuit keys on `pending_cf`, so a method call reached with NO

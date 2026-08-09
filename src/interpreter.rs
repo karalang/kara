@@ -1961,6 +1961,27 @@ impl<'a> Interpreter<'a> {
     // ── Helpers ─────────────────────────────────────────────────
 
     fn is_truthy(&self, val: &Value) -> bool {
+        // B-2026-08-09-19 — the single place a `Value` is consumed as a Bool,
+        // and so the right place to absorb a faulted one. An operand that
+        // faulted set `pending_cf` and yielded the `Unit` poison; asserting
+        // against it turns a clean runtime error into an ICE.
+        //
+        // Hoisted here rather than added at each caller because this covers
+        // all three at once — the `if` condition, the `while` condition, and a
+        // `match` GUARD. The guard position had not been reported (the row
+        // lists the two condition sites), but it consumes a Bool through this
+        // same helper and would ICE identically on `match n { x if v[3] > 0 =>
+        // … }`; fixing the sites named and leaving that one is how this defect
+        // has now been found three times.
+        //
+        // `false` is the safe answer for every caller: `pending_cf` is already
+        // set, so the enclosing block unwinds and reports the operand's real
+        // error at its own span. The branch is not taken, the loop stops, and
+        // the guard fails over to the next arm — none of which is observable,
+        // because the fault propagates before any of it can be.
+        if self.pending_cf.is_some() {
+            return false;
+        }
         match val {
             Value::Bool(b) => *b,
             _ => unreachable!(

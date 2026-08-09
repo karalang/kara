@@ -134,6 +134,28 @@ impl<'a> super::Interpreter<'a> {
         span: &Span,
     ) -> Value {
         let lhs_value = self.eval_expr_inner(left);
+        // B-2026-08-09-19 — a faulted LHS (index OOB, unwrap of `None`,
+        // div-by-zero, …) sets `pending_cf` and yields the `Unit` poison;
+        // propagate it instead of asserting it is a Bool. Without this,
+        // `if v[3] > 0i64 and true {}` on an empty Vec turned a clean
+        // `vec index out of bounds` into an ICE blaming either the
+        // typechecker or a wrong-variant codepath, when both were right and
+        // the operand had simply already failed.
+        //
+        // Returning here also means the RHS is NOT evaluated after a faulted
+        // LHS, which is the same guarantee the short-circuit itself gives: a
+        // panicking index or a side-effecting call on the right must not fire
+        // once the left has already gone wrong.
+        //
+        // `eval_short_circuit` needs its own check rather than inheriting the
+        // one B-2026-07-15-7 gave the operand path: that guard lives in the
+        // NON-short-circuit `Binary` evaluator, and `and`/`or` are routed away
+        // from it precisely so the RHS stays unevaluated — so they never saw
+        // it. The row's note that "Binary, Unary and Match all short-circuit
+        // on pending_cf" was true of that other evaluator only.
+        if self.pending_cf.is_some() {
+            return lhs_value;
+        }
         let lhs_variant = lhs_value.variant_name();
         let lhs = match lhs_value {
             Value::Bool(b) => b,
