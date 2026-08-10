@@ -325,6 +325,148 @@ the end — i.e. porting driftsort proper, a bigger project than this row.
    at least the pivot and is excluded from both sides), which a 2-way
    partition does not.
 
+## The real answer: branch mispredictions (B-2026-08-10-19, FIXED)
+
+Everything above reasons about the gap from *timings*. The measurement that
+should have come first is `cachegrind --branch-sim`, which counts the work
+instead of guessing at it. Cost of ONE 150k shuffled-uniform sort, taken as
+the difference between the benchmark and a clone-only twin so the input
+build and the clone cancel out, with both programs generating input
+identically:
+
+| | karac | driftsort | ratio |
+|---|---|---|---|
+| instructions | 52.79 M | 48.56 M | 1.09x |
+| data references | 18.82 M | 30.59 M | **0.62x** |
+| D1 misses | 1.091 M | 1.193 M | 0.91x |
+| LL misses | 38.4 k | 37.6 k | 1.02x |
+| conditional branches | 8.18 M | 10.30 M | 0.79x |
+| **mispredicts** | **1.061 M** | **0.233 M** | **4.56x** |
+
+karac executes **fewer instructions, fewer memory operations and fewer
+branches** than driftsort, with an indistinguishable cache profile — and
+loses. The 0.83 M excess mispredicts at ~20 cycles each is 5.9 ms, and the
+measured gap was 14.82 − 8.93 = 5.9 ms. The whole gap is one number.
+
+The same counters across patterns make it inescapable:
+
+| pattern | instructions | mispredicts | rate | time |
+|---|---|---|---|---|
+| random | 52.79 M | 1.061 M | **12.96%** | 14.82 ms |
+| few-unique | 50.79 M | 0.221 M | 2.75% | 6.51 ms |
+| sawtooth | 23.90 M | 0.073 M | 1.86% | 3.55 ms |
+
+random and few-unique run **essentially the same instruction count** and
+differ 2.3x in wall clock.
+
+This retires the diagnosis this row was filed with. "It needs driftsort's
+other half, a stable quicksort" was the wrong conclusion drawn from the
+right observation — partitioning *is* better than merging on shuffled data,
+but not because of pass counts or memory traffic. It is better because a
+partition compares against a pivot in a register and can be written
+branchlessly. What was actually needed was branchlessness, which a merge can
+also have.
+
+### What landed: a per-pass adaptive merge kernel
+
+Phase 2 now emits **two merge kernels with identical output** and picks one
+per pass. The branchless one selects the value and advances both cursors by
+`zext` of the `cmp <= 0` predicate, so the CPU never speculates.
+
+Unconditional branchlessness is still the bad trade the table in Result 5
+says it is — on ordered-ish input it replaces speculation that was working
+with a serial `load -> compare -> cursor -> next-load` dependency chain. So
+the kernel choice has to answer exactly one question: *would the hardware
+predictor do well here?* The cheapest honest way to answer it is to simulate
+one. The first `PROBE = 256` outputs of each pass run the branchy kernel
+while feeding each take through a 16-entry, 1-bit-per-entry predictor
+indexed by 4 bits of global take history — six integer ops on one register.
+Above a 40% simulated miss rate the pass commits to the branchless kernel.
+
+Three design points that are load-bearing, all found by measurement:
+
+- **A switch-rate counter is the wrong signal.** It reads 1.0 on perfect
+  alternation — which is exactly what merging two identical runs produces on
+  sawtooth input, where the hardware mispredicts 1.86%. It would route the
+  best-predicted case straight to the branchless kernel.
+- **The history width is not a round number.** A sawtooth merge at pass `k`
+  has period `2^k` (alternation, then AABB, then AAAABBBB). An n-bit history
+  predicts a period-`p` sequence perfectly exactly when `p <= 2^n`. A first
+  version used 2 bits and a 1-in-3 threshold; it read 25% on AAAABBBB, close
+  enough to misroute, and measured **8% and 6% regressions** on few-unique
+  and sawtooth. 4 bits covers periods to 8 and degrades to one miss per
+  period beyond that (6% at period 16).
+- **The probe needs a length gate.** A pass emits about `len` outputs, so on
+  a 64-element sort the 256-output budget covers *all* of phase 2 and the
+  simulation stops being amortised — an estimated ~5% tax on exactly the
+  small-Vec sorts that are the common case. Below `4 * PROBE` the budget is
+  set to zero, which the strict threshold resolves to the branchy kernel, so
+  a short sort executes precisely the code it did before this change.
+
+### Result
+
+Interleaved A/B, both binaries measured in one process so host drift hits
+both equally, karac pure sort with the clone subtracted:
+
+| pattern | baseline | adaptive | change |
+|---|---|---|---|
+| random | 14.22 ms | **11.05 ms** | **1.29x** |
+| sorted | — | — | unchanged (see below) |
+| reverse | — | — | unchanged (see below) |
+| few-unique | 6.13 ms | 5.96 ms | 1.03x |
+| sawtooth | 3.38 ms | 3.04 ms | 1.11x |
+
+Three sweeps put random at 1.28x, 1.32x and 1.29x, and few-unique and
+sawtooth between 0.98x and 1.11x — i.e. at or slightly above parity, with
+the spread being host noise rather than a real gain on those two.
+
+Sorted and reverse-sorted are a single natural run, so phase 2 is skipped
+and the kernel choice never happens. Their timings sit at the harness noise
+floor (the clone dominates, and the subtraction amplifies the noise —
+successive sweeps read 4.30x and 0.84x on the same pair of binaries), so
+they are settled by instruction count instead, which is deterministic:
+**±1 instruction out of 3.2 M and 4.0 M**. The path is untouched.
+
+The routing is confirmed by counters, not inferred from timings. With the
+4-bit predictor, few-unique and sawtooth report mispredict counts **identical
+to baseline** — 0.221 M and 0.073 M, to the digit — meaning every one of
+their passes stayed branchy, while random collapses 1.061 M -> 0.192 M. The
+branchless kernel costs 1.40x the instructions on random (52.79 M -> 74.07 M)
+and wins anyway, which is the same point the diagnosis makes, from the other
+direction.
+
+Verification:
+- Full `--features llvm` suite green, including `codegen` and
+  `memory_sanitizer` (LSan on Linux).
+- Sortedness + stability + permutation over 98 (pattern, size) combinations,
+  AOT against `--interp` as oracle.
+- Element-type coverage, since the branchless kernel `select`s a whole
+  element rather than a key: bare `i64`, a mixed-width `(i64, i32, i64)`
+  tuple and an all-int-field named struct, 4096 shuffled elements each,
+  agreeing across AOT, LLJIT and the interpreter.
+- `valgrind --leak-check=full` at `KARAC_OPT_LEVEL=0` over a program hitting
+  the probe kernel, both merge kernels, the `nr == 1` skip and the descending
+  reversal: 28 allocs / 28 frees, 0 bytes in use at exit, 0 errors. The
+  change adds no allocation — the probe state is six allocas.
+- Two regression tests in `tests/codegen.rs`. The behavioural one has teeth:
+  weakening the branchless tie-break to `cmp < 0` fails it. **All 79
+  pre-existing sort tests still pass with that break in place** — every other
+  sort test in the file is too small or too ordered to leave the branchy
+  path, which is why the second, structural test pins the kernels' presence
+  in the IR. The two kernels produce identical output by construction, so no
+  behavioural test can observe which one ran.
+
+### What is left
+
+random is now ~1.28-1.33x driftsort, down from ~1.66x. The residual has a
+known cause: the branchless merge trades mispredicts for a serial
+`load -> compare -> cursor -> next-load` chain of ~7 cycles per element,
+because the next load address depends on the comparison. A partition loop
+has no such chain — its read pointer advances unconditionally, so loads run
+ahead freely. That, and not pass counts, is driftsort's remaining edge.
+Refiled as B-2026-08-10-20.
+
+
 ## Caveats
 
 - **Single host, x86_64 shared container.** Absolute numbers drift a few
@@ -335,6 +477,15 @@ the end — i.e. porting driftsort proper, a bigger project than this row.
   microarchitecture.
 - Rust's `sort_by` is driftsort as of the toolchain in this container; the
   comparison is against that, not against stable-sort-in-general.
+- **The driftsort baselines in the early sections are not directly comparable
+  to the later ones.** The `7.0 ms` random figure quoted from Result 1
+  onwards came from a Rust program whose input generator differed from the
+  Kāra one (two LCG steps per element, different key ranges and second
+  field). Regenerating it to match karac's input exactly puts driftsort at
+  **8.2–8.9 ms** on random, 3.6–4.1 on few-unique and 6.0–6.5 on sawtooth.
+  Every karac-vs-karac A/B is unaffected — both sides always ran the same
+  input — but the karac-vs-driftsort *ratios* quoted before the cachegrind
+  section are pessimistic by roughly the amount that correction implies.
 - The karac/rustc parity comparison holds the algorithm *and* the comparator
   shape fixed. It does not claim karac's codegen is at parity in general —
   only that it is not the cause of this gap.

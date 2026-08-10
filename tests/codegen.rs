@@ -74103,6 +74103,107 @@ fn main() {
         assert_eq!(out.as_deref().map(str::trim), Some("0"));
     }
 
+    /// B-2026-08-10-19: phase 2 now picks between a branchy and a branchless
+    /// merge kernel per pass, so shuffled input at a size large enough to
+    /// outrun the 256-output probe executes a kernel that NO other test in
+    /// this file reaches — every other sort test is either too small or too
+    /// ordered to leave the branchy path.
+    ///
+    /// Teeth: the branchless kernel selects the value and advances both
+    /// cursors by `zext` of the same `cmp <= 0` predicate. Weaken it to
+    /// `cmp < 0` and it takes the RIGHT run on a tie, inverting equal keys —
+    /// the first block has 64 duplicates per key and `.1` carries the
+    /// original position, so that shows up immediately. Get either cursor
+    /// increment wrong and sortedness and the index-sum both fail.
+    #[test]
+    fn adaptive_merge_kernel_is_stable_on_shuffled_input() {
+        let out = run_program(
+            r#"
+fn check(v: Vec[(i64, i64)], n: i64) -> i64 {
+    let mut bad: i64 = 0i64;
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < v.len() {
+        if i > 0i64 {
+            let p: (i64, i64) = v[i - 1i64];
+            let c: (i64, i64) = v[i];
+            if p.0 > c.0 { bad = bad + 1i64; }
+            if p.0 == c.0 and p.1 > c.1 { bad = bad + 1i64; }
+        }
+        s = s + v[i].1;
+        i = i + 1i64;
+    }
+    // Every original index must survive exactly once.
+    if s != n * (n - 1i64) / 2i64 { bad = bad + 1000i64; }
+    if v.len() != n { bad = bad + 1000i64; }
+    return bad;
+}
+fn build(n: i64, m: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut s: i64 = 12345i64;
+    let mut i: i64 = 0i64;
+    while i < n {
+        s = (s * 1103515245i64 + 12345i64) % 2147483648i64;
+        v.push((s % m, i));
+        i = i + 1i64;
+    }
+    return v;
+}
+fn main() {
+    let mut bad: i64 = 0i64;
+    // Heavy ties over a 64-key alphabet: shuffled enough for the probe to
+    // commit passes to the branchless kernel, with enough duplicates that a
+    // flipped tie-break cannot hide.
+    let mut a: Vec[(i64, i64)] = build(4096i64, 64i64);
+    a.sort_by(|x, y| x.0.cmp(y.0));
+    bad = bad + check(a, 4096i64);
+    // Near-distinct keys: a maximally unpredictable take sequence, so the
+    // branchless kernel is certain to be selected here.
+    let mut b: Vec[(i64, i64)] = build(4096i64, 1000000i64);
+    b.sort_by(|x, y| x.0.cmp(y.0));
+    bad = bad + check(b, 4096i64);
+    println(bad);
+}
+"#,
+        );
+        assert_eq!(out.as_deref().map(str::trim), Some("0"));
+    }
+
+    /// B-2026-08-10-19 sibling, structural. The two merge kernels produce
+    /// IDENTICAL output by construction, so no behavioural test can tell
+    /// which one ran — delete the branchless kernel and every sort test in
+    /// this file still passes, just slower. This pins the shape instead, so
+    /// the 1.3x on shuffled input cannot be silently dropped.
+    #[test]
+    fn adaptive_merge_emits_both_kernels_and_the_probe() {
+        let src = r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5000 {
+        v.push((i * 37 + 11) % 5000);
+        i = i + 1;
+    }
+    v.sort_by(|a, b| a.cmp(b));
+    println(v[0]);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ir = karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect("codegen");
+        for label in ["p2.pr.cmp", "p2.bl.body", "p2.m.cmp", "p2.mode.pick"] {
+            assert!(
+                ir.contains(label),
+                "the mono sort must still emit `{label}` — phase 2 needs the \
+                 probe, both merge kernels and the per-pass dispatch"
+            );
+        }
+    }
+
     /// B-2026-07-30-2: an inline non-capturing comparator must monomorphize
     /// at EVERY length. Before the fix a `len > 64` check sent larger sorts
     /// to `karac_vec_sort_by`, whose comparator is a function pointer — an

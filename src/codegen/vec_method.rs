@@ -8972,6 +8972,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Reversing a descending run is stable precisely because the extension
     /// test is strict: such a run has no two elements that compare equal.
     ///
+    /// Phase 2 ships **two merge kernels with identical output** and picks
+    /// one per pass (B-2026-08-10-19): a branchy one and a branchless one,
+    /// chosen by simulating a small branch predictor over the pass's first
+    /// `PROBE` outputs. Shuffled input mispredicts ~13% and takes the
+    /// branchless kernel; ordered-ish input mispredicts ~2% and keeps the
+    /// branchy one, where speculation is already winning; inputs shorter
+    /// than `4 * PROBE` skip the measurement and stay branchy, so a small
+    /// sort runs exactly the code it ran before. The long comment above
+    /// `p2.mode.chk` has the measurements and the reason a plain
+    /// switch-rate counter is the wrong signal.
+    ///
     /// **Why natural runs.** The previous shape (B-2026-07-30-2) insertion-
     /// sorted fixed 32-element runs and then merged at doubling widths, so
     /// it did `ceil(log2(n/32))` full passes over the array *regardless of
@@ -8986,12 +8997,13 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// That spike also established this is **not** a lowering-quality gap —
     /// hand-writing the identical algorithm and comparator shape in Rust put
-    /// karac 5-8% *ahead* of rustc on shuffled input — and that no contained
-    /// merge-kernel tweak is a win (branchless merge buys 1.28x on random and
-    /// costs up to 2x on few-unique/sawtooth/nearly-sorted). What is left
-    /// after this change is the shuffled-uniform case, which needs
-    /// driftsort's other half: a stable quicksort to build long runs when
-    /// natural runs are short. See `docs/spikes/sort-algorithm-gap.md`.
+    /// karac 5-8% *ahead* of rustc on shuffled input. B-2026-08-10-19 then
+    /// found what the remaining shuffled-input gap actually is, and it is
+    /// not the algorithm either: against driftsort karac executes 1.09x the
+    /// instructions and 0.62x the data references with the same cache-miss
+    /// profile, and loses only on branch mispredicts (4.56x), which is what
+    /// the per-pass kernel choice above addresses. See
+    /// `docs/spikes/sort-algorithm-gap.md`.
     ///
     /// Stability means the two backends still agree element-for-element with
     /// the runtime's `sort_fixed_width` even though they now run different
@@ -9028,6 +9040,13 @@ impl<'ctx> super::Codegen<'ctx> {
         /// Insertion-sort base run length. Matches the runtime's
         /// `sort_fixed_width::RUN` so the two backends do the same work.
         const RUN: u64 = 32;
+        /// Outputs each phase-2 pass spends measuring merge predictability
+        /// before committing that pass to the branchy or the branchless
+        /// merge kernel (B-2026-08-10-19). A pass emits ~`len` outputs, so
+        /// at the `4 * PROBE` length gate the simulation touches at most a
+        /// quarter of a pass and at 150k elements 0.17% of the sort;
+        /// shorter inputs skip it entirely and keep the pre-existing path.
+        const PROBE: u64 = 256;
 
         let i64_t = self.context.i64_type();
         let void_t = self.context.void_type();
@@ -9072,6 +9091,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let one = i64_t.const_int(1, false);
         let two = i64_t.const_int(2, false);
         let run_c = i64_t.const_int(RUN, false);
+        let probe_c = i64_t.const_int(PROBE, false);
+        // Below this length the probe is not worth running — see `p2.pass`.
+        let probe_min_c = i64_t.const_int(PROBE * 4, false);
+        let five = i64_t.const_int(5, false);
+        // 4 bits of take history — see the `p2.mode.chk` comment for why the
+        // width is load-bearing rather than arbitrary.
+        let hist_mask = i64_t.const_int(15, false);
 
         // ── Block plan ─────────────────────────────────────────────────────
         let entry = self.context.append_basic_block(sort_fn, "entry");
@@ -9109,6 +9135,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let p2_i_chk = self.context.append_basic_block(sort_fn, "p2.i.chk");
         let p2_pair_chk = self.context.append_basic_block(sort_fn, "p2.pair.chk");
         let p2_merge_init = self.context.append_basic_block(sort_fn, "p2.merge.init");
+        // Per-pass merge-kernel selection: probe, decide, then dispatch to
+        // either the branchy kernel (`p2.m.*`) or the branchless one
+        // (`p2.bl.*`).
+        let p2_mode_chk = self.context.append_basic_block(sort_fn, "p2.mode.chk");
+        let p2_mode_pick = self.context.append_basic_block(sort_fn, "p2.mode.pick");
+        let p2_pr_chk_a = self.context.append_basic_block(sort_fn, "p2.pr.chk.a");
+        let p2_pr_chk_b = self.context.append_basic_block(sort_fn, "p2.pr.chk.b");
+        let p2_pr_cmp = self.context.append_basic_block(sort_fn, "p2.pr.cmp");
+        let p2_pr_take_a = self.context.append_basic_block(sort_fn, "p2.pr.take.a");
+        let p2_pr_take_b = self.context.append_basic_block(sort_fn, "p2.pr.take.b");
+        let p2_pr_decide = self.context.append_basic_block(sort_fn, "p2.pr.decide");
+        let p2_bl_chk_a = self.context.append_basic_block(sort_fn, "p2.bl.chk.a");
+        let p2_bl_chk_b = self.context.append_basic_block(sort_fn, "p2.bl.chk.b");
+        let p2_bl_body = self.context.append_basic_block(sort_fn, "p2.bl.body");
         let p2_m_chk_a = self.context.append_basic_block(sort_fn, "p2.m.chk.a");
         let p2_m_chk_b = self.context.append_basic_block(sort_fn, "p2.m.chk.b");
         let p2_m_cmp = self.context.append_basic_block(sort_fn, "p2.m.cmp");
@@ -9148,6 +9188,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let dst_a = self.create_entry_alloca(sort_fn, "dst", ptr_ty.into());
         let runs_a = self.create_entry_alloca(sort_fn, "runs", ptr_ty.into());
         let runs2_a = self.create_entry_alloca(sort_fn, "runs2", ptr_ty.into());
+        // Per-pass merge-kernel selection state (B-2026-08-10-19).
+        let blmode_a = self.create_entry_alloca(sort_fn, "blmode", i64_t.into());
+        let prleft_a = self.create_entry_alloca(sort_fn, "prleft", i64_t.into());
+        let prmiss_a = self.create_entry_alloca(sort_fn, "prmiss", i64_t.into());
+        let prtot_a = self.create_entry_alloca(sort_fn, "prtot", i64_t.into());
+        let prhist_a = self.create_entry_alloca(sort_fn, "prhist", i64_t.into());
+        let prtab_a = self.create_entry_alloca(sort_fn, "prtab", i64_t.into());
 
         let len_lt_2 = self
             .builder
@@ -9704,6 +9751,33 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(ii_a, zero).unwrap();
         self.builder.build_store(onr_a, zero).unwrap();
         self.builder.build_store(lo_a, zero).unwrap();
+        // Re-arm the kernel probe for this pass. The decision is per-pass,
+        // not per-merge and not global: run character changes as the passes
+        // proceed (few-unique input looks shuffled at pass 1 and blocky by
+        // pass 8, once each run holds long stretches of one key), and the
+        // per-merge alternative could not amortise the simulation over the
+        // 4687 tiny merges that make up pass 1.
+        //
+        // Short inputs skip the probe entirely: a pass emits about `len`
+        // outputs, so below `4 * PROBE` the simulation stops being amortised
+        // and starts being a tax on the common case of sorting a small Vec.
+        // A zero budget lands straight in `p2.pr.decide` with `prtot == 0`,
+        // which the STRICT threshold there resolves to the branchy kernel —
+        // so a short sort runs exactly the code it ran before this change.
+        self.builder.build_store(blmode_a, zero).unwrap();
+        let want_probe = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGE, len, probe_min_c, "want.probe")
+            .unwrap();
+        let probe_budget = self
+            .builder
+            .build_select(want_probe, probe_c, zero, "probe.budget")
+            .unwrap();
+        self.builder.build_store(prleft_a, probe_budget).unwrap();
+        self.builder.build_store(prmiss_a, zero).unwrap();
+        self.builder.build_store(prtot_a, zero).unwrap();
+        self.builder.build_store(prhist_a, zero).unwrap();
+        self.builder.build_store(prtab_a, zero).unwrap();
         self.builder.build_unconditional_branch(p2_i_chk).unwrap();
 
         self.builder.position_at_end(p2_i_chk);
@@ -9787,7 +9861,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(aa_a, mi_lo).unwrap();
         self.builder.build_store(bb_a, mid_v).unwrap();
         self.builder.build_store(kk_a, mi_lo).unwrap();
-        self.builder.build_unconditional_branch(p2_m_chk_a).unwrap();
+        self.builder
+            .build_unconditional_branch(p2_mode_chk)
+            .unwrap();
 
         // while a < mid && b < hi  (short-circuit via two blocks)
         self.builder.position_at_end(p2_m_chk_a);
@@ -9875,6 +9951,421 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(p2_m_take_b);
         self.emit_merge_take(elem_ty, src_a, dst_a, bb_a, kk_a, ptr_ty, i64_t, one);
         self.builder.build_unconditional_branch(p2_m_chk_a).unwrap();
+
+        // ── Per-pass merge-kernel selection (B-2026-08-10-19) ──────────────
+        //
+        // The branchy kernel above and the branchless one below produce
+        // identical output and differ only in how the take decision reaches
+        // the hardware: one branches on `cmp <= 0`, the other selects the
+        // value and advances both cursors by `zext` of the predicate, so the
+        // CPU never speculates. Which wins depends entirely on whether the
+        // branch predictor can learn the take sequence.
+        //
+        // Usually it can. Merging two runs drawn from a small key alphabet,
+        // or two runs that barely overlap, yields long stretches from one
+        // side; even the perfect alternation that merging two identical runs
+        // produces is a period-2 pattern any modern predictor nails.
+        // Measured over a whole 150k sort, the mispredict rate is 2.75% on
+        // few-unique input and 1.86% on sawtooth, and on those shapes the
+        // branchless kernel is a pure loss — it trades speculation that was
+        // working for a serial load -> compare -> cursor -> next-load
+        // dependency chain, and measured 1.8-2.0x SLOWER.
+        //
+        // On shuffled-uniform input it cannot: the take sequence is a coin
+        // flip, the rate is 12.96%, and those mispredicts are the *entire*
+        // gap to Rust's driftsort. `cachegrind --branch-sim` over one 150k
+        // sort puts karac at 1.09x driftsort's instructions, 0.62x its data
+        // references and the same cache-miss profile — but 4.56x its
+        // mispredicts (1.061M vs 0.233M). The 0.83M excess at ~20 cycles is
+        // 5.9 ms, which is the measured 14.82 - 8.93 ms gap.
+        //
+        // So the question the code has to answer is exactly "would the
+        // hardware predictor do well here?", and the cheapest honest way to
+        // answer it is to simulate one. `p2.pr.*` runs the branchy merge for
+        // the first `PROBE` outputs of the pass while feeding each take
+        // through a 16-entry, 1-bit-per-entry predictor indexed by four bits
+        // of global take history — six integer ops on one register-width
+        // table.
+        //
+        // The history width is load-bearing, not a round number. A sawtooth
+        // input merges two runs that hold each key `2^(pass-1)` times, so its
+        // take sequence is periodic with period `2^pass`: alternation at pass
+        // 1, AABB at pass 2, AAAABBBB at pass 3. An n-bit history predicts a
+        // period-`p` sequence perfectly exactly when its p windows are
+        // distinct, i.e. when `p <= 2^n`, so 4 bits covers periods up to 8
+        // and degrades gracefully past that (one miss per period: 6% at
+        // period 16). Two bits does not cover AAAABBBB — it reads 25% there,
+        // close enough to the threshold to misroute, which is what the first
+        // version of this code did.
+        //
+        // A plain switch-rate counter is the tempting simplification and it
+        // is wrong in the other direction: it reads 1.0 on perfect
+        // alternation and would route sawtooth — where the hardware
+        // mispredicts 1.86% — straight to the branchless kernel.
+        // Predictability, not switch frequency, is the question being asked.
+        self.builder.position_at_end(p2_mode_chk);
+        let pr_left = self
+            .builder
+            .build_load(i64_t, prleft_a, "pr.left")
+            .unwrap()
+            .into_int_value();
+        let pr_go = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, pr_left, zero, "pr.go")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(pr_go, p2_pr_chk_a, p2_pr_decide)
+            .unwrap();
+
+        // Commit the pass once the probe budget is spent. Idempotent — later
+        // merges in the same pass re-enter here and recompute the same answer
+        // from counters that stopped moving when the budget hit zero.
+        self.builder.position_at_end(p2_pr_decide);
+        let d_miss = self
+            .builder
+            .build_load(i64_t, prmiss_a, "d.miss")
+            .unwrap()
+            .into_int_value();
+        let d_tot = self
+            .builder
+            .build_load(i64_t, prtot_a, "d.tot")
+            .unwrap()
+            .into_int_value();
+        let d_m5 = self.builder.build_int_mul(d_miss, five, "d.m5").unwrap();
+        let d_t2 = self.builder.build_int_mul(d_tot, two, "d.t2").unwrap();
+        // Go branchless only above a 40% simulated miss rate. The asymmetry
+        // is deliberate: choosing branchless wrongly costs up to 2x, choosing
+        // branchy wrongly costs ~1.3x, so the threshold sits well above where
+        // any semi-ordered shape lands and just below the ~50% a coin-flip
+        // take sequence produces. An earlier 1-in-3 threshold measured 8%
+        // and 6% regressions on few-unique and sawtooth from exactly this
+        // misrouting. The comparison is STRICT so that a skipped probe
+        // (`prtot == 0`, short input) resolves to the branchy kernel rather
+        // than reading 0 >= 0 as "unpredictable".
+        let d_bl = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, d_m5, d_t2, "d.bl")
+            .unwrap();
+        let d_mode = self
+            .builder
+            .build_select(d_bl, one, zero, "d.mode")
+            .unwrap();
+        self.builder.build_store(blmode_a, d_mode).unwrap();
+        self.builder
+            .build_unconditional_branch(p2_mode_pick)
+            .unwrap();
+
+        self.builder.position_at_end(p2_mode_pick);
+        let mp_v = self
+            .builder
+            .build_load(i64_t, blmode_a, "mp.v")
+            .unwrap()
+            .into_int_value();
+        let mp_bl = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, mp_v, zero, "mp.bl")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(mp_bl, p2_bl_chk_a, p2_m_chk_a)
+            .unwrap();
+
+        // ── Probe kernel: the branchy merge plus the predictor simulation ──
+        self.builder.position_at_end(p2_pr_chk_a);
+        let pr_a_v = self
+            .builder
+            .build_load(i64_t, aa_a, "pr.a.v")
+            .unwrap()
+            .into_int_value();
+        let pr_mid = self
+            .builder
+            .build_load(i64_t, mid_a, "pr.mid")
+            .unwrap()
+            .into_int_value();
+        let pr_a_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, pr_a_v, pr_mid, "pr.a.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(pr_a_lt, p2_pr_chk_b, p2_da_chk)
+            .unwrap();
+
+        self.builder.position_at_end(p2_pr_chk_b);
+        let pr_b_v = self
+            .builder
+            .build_load(i64_t, bb_a, "pr.b.v")
+            .unwrap()
+            .into_int_value();
+        let pr_hi = self
+            .builder
+            .build_load(i64_t, hi_a, "pr.hi")
+            .unwrap()
+            .into_int_value();
+        let pr_b_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, pr_b_v, pr_hi, "pr.b.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(pr_b_lt, p2_pr_cmp, p2_da_chk)
+            .unwrap();
+
+        self.builder.position_at_end(p2_pr_cmp);
+        let pr_src = self
+            .builder
+            .build_load(ptr_ty, src_a, "pr.src")
+            .unwrap()
+            .into_pointer_value();
+        let pr_a1 = self
+            .builder
+            .build_load(i64_t, aa_a, "pr.a1")
+            .unwrap()
+            .into_int_value();
+        let pr_b1 = self
+            .builder
+            .build_load(i64_t, bb_a, "pr.b1")
+            .unwrap()
+            .into_int_value();
+        let pr_ea_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, pr_src, &[pr_a1], "pr.ea.addr")
+                .unwrap()
+        };
+        let pr_eb_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, pr_src, &[pr_b1], "pr.eb.addr")
+                .unwrap()
+        };
+        let pr_ea = self
+            .builder
+            .build_load(elem_ty, pr_ea_addr, "pr.ea")
+            .unwrap();
+        let pr_eb = self
+            .builder
+            .build_load(elem_ty, pr_eb_addr, "pr.eb")
+            .unwrap();
+        let pr_c =
+            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, pr_ea, pr_eb)?;
+        let pr_take_a = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, pr_c, zero, "pr.take.a")
+            .unwrap();
+        // `cur` is the outcome being predicted: 0 = took the left run,
+        // 1 = took the right. `tab` holds four one-bit predictions indexed by
+        // `hist`, the last two outcomes. Predict, score, then train — the
+        // `xor` writes `cur` into `tab[hist]` exactly when the prediction
+        // missed, which is the whole update.
+        let pr_take_z = self
+            .builder
+            .build_int_z_extend(pr_take_a, i64_t, "pr.take.z")
+            .unwrap();
+        let pr_cur = self
+            .builder
+            .build_int_sub(one, pr_take_z, "pr.cur")
+            .unwrap();
+        let pr_tab = self
+            .builder
+            .build_load(i64_t, prtab_a, "pr.tab")
+            .unwrap()
+            .into_int_value();
+        let pr_hist = self
+            .builder
+            .build_load(i64_t, prhist_a, "pr.hist")
+            .unwrap()
+            .into_int_value();
+        let pr_shifted = self
+            .builder
+            .build_right_shift(pr_tab, pr_hist, false, "pr.shifted")
+            .unwrap();
+        let pr_pred = self.builder.build_and(pr_shifted, one, "pr.pred").unwrap();
+        let pr_miss = self.builder.build_xor(pr_pred, pr_cur, "pr.miss").unwrap();
+        let pr_miss_acc = self
+            .builder
+            .build_load(i64_t, prmiss_a, "pr.miss.acc")
+            .unwrap()
+            .into_int_value();
+        let pr_miss_n = self
+            .builder
+            .build_int_add(pr_miss_acc, pr_miss, "pr.miss.n")
+            .unwrap();
+        self.builder.build_store(prmiss_a, pr_miss_n).unwrap();
+        let pr_tot_acc = self
+            .builder
+            .build_load(i64_t, prtot_a, "pr.tot.acc")
+            .unwrap()
+            .into_int_value();
+        let pr_tot_n = self
+            .builder
+            .build_int_add(pr_tot_acc, one, "pr.tot.n")
+            .unwrap();
+        self.builder.build_store(prtot_a, pr_tot_n).unwrap();
+        let pr_flip = self
+            .builder
+            .build_left_shift(pr_miss, pr_hist, "pr.flip")
+            .unwrap();
+        let pr_tab_n = self.builder.build_xor(pr_tab, pr_flip, "pr.tab.n").unwrap();
+        self.builder.build_store(prtab_a, pr_tab_n).unwrap();
+        let pr_h_sh = self
+            .builder
+            .build_left_shift(pr_hist, one, "pr.h.sh")
+            .unwrap();
+        let pr_h_or = self.builder.build_or(pr_h_sh, pr_cur, "pr.h.or").unwrap();
+        let pr_hist_n = self
+            .builder
+            .build_and(pr_h_or, hist_mask, "pr.hist.n")
+            .unwrap();
+        self.builder.build_store(prhist_a, pr_hist_n).unwrap();
+        let pr_left_v = self
+            .builder
+            .build_load(i64_t, prleft_a, "pr.left.v")
+            .unwrap()
+            .into_int_value();
+        let pr_left_n = self
+            .builder
+            .build_int_sub(pr_left_v, one, "pr.left.n")
+            .unwrap();
+        self.builder.build_store(prleft_a, pr_left_n).unwrap();
+        self.builder
+            .build_conditional_branch(pr_take_a, p2_pr_take_a, p2_pr_take_b)
+            .unwrap();
+
+        self.builder.position_at_end(p2_pr_take_a);
+        self.emit_merge_take(elem_ty, src_a, dst_a, aa_a, kk_a, ptr_ty, i64_t, one);
+        self.builder
+            .build_unconditional_branch(p2_mode_chk)
+            .unwrap();
+
+        self.builder.position_at_end(p2_pr_take_b);
+        self.emit_merge_take(elem_ty, src_a, dst_a, bb_a, kk_a, ptr_ty, i64_t, one);
+        self.builder
+            .build_unconditional_branch(p2_mode_chk)
+            .unwrap();
+
+        // ── Branchless kernel ──────────────────────────────────────────────
+        // Same `cmp <= 0` tie-break as the branchy kernel, so it takes the
+        // left run on a tie and stability is identical. Both element loads
+        // issue unconditionally and the cursors advance by `zext` of the
+        // predicate, so the only conditional branches left per element are
+        // the two loop bounds — and those stay taken until a run drains.
+        self.builder.position_at_end(p2_bl_chk_a);
+        let bl_a_v = self
+            .builder
+            .build_load(i64_t, aa_a, "bl.a.v")
+            .unwrap()
+            .into_int_value();
+        let bl_mid = self
+            .builder
+            .build_load(i64_t, mid_a, "bl.mid")
+            .unwrap()
+            .into_int_value();
+        let bl_a_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, bl_a_v, bl_mid, "bl.a.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bl_a_lt, p2_bl_chk_b, p2_da_chk)
+            .unwrap();
+
+        self.builder.position_at_end(p2_bl_chk_b);
+        let bl_b_v = self
+            .builder
+            .build_load(i64_t, bb_a, "bl.b.v")
+            .unwrap()
+            .into_int_value();
+        let bl_hi = self
+            .builder
+            .build_load(i64_t, hi_a, "bl.hi")
+            .unwrap()
+            .into_int_value();
+        let bl_b_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, bl_b_v, bl_hi, "bl.b.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bl_b_lt, p2_bl_body, p2_da_chk)
+            .unwrap();
+
+        self.builder.position_at_end(p2_bl_body);
+        let bl_src = self
+            .builder
+            .build_load(ptr_ty, src_a, "bl.src")
+            .unwrap()
+            .into_pointer_value();
+        let bl_dst = self
+            .builder
+            .build_load(ptr_ty, dst_a, "bl.dst")
+            .unwrap()
+            .into_pointer_value();
+        let bl_a1 = self
+            .builder
+            .build_load(i64_t, aa_a, "bl.a1")
+            .unwrap()
+            .into_int_value();
+        let bl_b1 = self
+            .builder
+            .build_load(i64_t, bb_a, "bl.b1")
+            .unwrap()
+            .into_int_value();
+        let bl_k = self
+            .builder
+            .build_load(i64_t, kk_a, "bl.k")
+            .unwrap()
+            .into_int_value();
+        let bl_ea_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, bl_src, &[bl_a1], "bl.ea.addr")
+                .unwrap()
+        };
+        let bl_eb_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, bl_src, &[bl_b1], "bl.eb.addr")
+                .unwrap()
+        };
+        let bl_ea = self
+            .builder
+            .build_load(elem_ty, bl_ea_addr, "bl.ea")
+            .unwrap();
+        let bl_eb = self
+            .builder
+            .build_load(elem_ty, bl_eb_addr, "bl.eb")
+            .unwrap();
+        let bl_c =
+            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, bl_ea, bl_eb)?;
+        let bl_take_a = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLE, bl_c, zero, "bl.take.a")
+            .unwrap();
+        let bl_val = self
+            .builder
+            .build_select(bl_take_a, bl_ea, bl_eb, "bl.val")
+            .unwrap();
+        let bl_to = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem_ty, bl_dst, &[bl_k], "bl.to")
+                .unwrap()
+        };
+        self.builder.build_store(bl_to, bl_val).unwrap();
+        let bl_inc_a = self
+            .builder
+            .build_int_z_extend(bl_take_a, i64_t, "bl.inc.a")
+            .unwrap();
+        let bl_inc_b = self
+            .builder
+            .build_int_sub(one, bl_inc_a, "bl.inc.b")
+            .unwrap();
+        let bl_a_n = self
+            .builder
+            .build_int_add(bl_a1, bl_inc_a, "bl.a.n")
+            .unwrap();
+        let bl_b_n = self
+            .builder
+            .build_int_add(bl_b1, bl_inc_b, "bl.b.n")
+            .unwrap();
+        let bl_k_n = self.builder.build_int_add(bl_k, one, "bl.k.n").unwrap();
+        self.builder.build_store(aa_a, bl_a_n).unwrap();
+        self.builder.build_store(bb_a, bl_b_n).unwrap();
+        self.builder.build_store(kk_a, bl_k_n).unwrap();
+        self.builder
+            .build_unconditional_branch(p2_bl_chk_a)
+            .unwrap();
 
         // Drain the left run, then the right run.
         self.builder.position_at_end(p2_da_chk);
