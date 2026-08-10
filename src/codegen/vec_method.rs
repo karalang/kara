@@ -5851,12 +5851,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .value
                     .kind
                 {
-                    ExprKind::Closure { params, body, .. } => self.emit_sort_by_inline_thunk(
-                        params,
-                        body,
-                        elem_ty,
-                        elem_type_name.as_deref(),
-                    )?,
+                    ExprKind::Closure { params, body, .. } => {
+                        let elem_te_owned = self.var_elem_type_exprs.get(var_name).cloned();
+                        self.emit_sort_by_inline_thunk(
+                            params,
+                            body,
+                            elem_ty,
+                            elem_type_name.as_deref(),
+                            elem_te_owned.as_ref(),
+                        )?
+                    }
                     ExprKind::Identifier(name) => {
                         if let Some(&closure_fn_type) = self.closure_fn_types.get(name) {
                             let closure_val = self.compile_expr(&args[0].value)?;
@@ -6451,12 +6455,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 TypeKind::Path(p) => p.segments.last().cloned(),
                                 _ => None,
                             });
-                        self.emit_sort_by_key_inline_thunk(
-                            params,
-                            body.as_ref(),
-                            elem_ty,
-                            elem_type_name.as_deref(),
-                        )?
+                        {
+                            let elem_te_owned = self.var_elem_type_exprs.get(var_name).cloned();
+                            self.emit_sort_by_key_inline_thunk(
+                                params,
+                                body.as_ref(),
+                                elem_ty,
+                                elem_type_name.as_deref(),
+                                elem_te_owned.as_ref(),
+                            )?
+                        }
                     }
                     ExprKind::Identifier(name) => {
                         if let Some(&closure_fn_type) = self.closure_fn_types.get(name) {
@@ -7851,6 +7859,7 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
         elem_ty: BasicTypeEnum<'ctx>,
         elem_type_name: Option<&str>,
+        elem_te: Option<&TypeExpr>,
     ) -> Result<(FunctionValue<'ctx>, PointerValue<'ctx>), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -7974,6 +7983,16 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(name) = elem_type_name {
             self.var_type_names
                 .insert(param_name.clone(), name.to_string());
+        }
+        // B-2026-08-10-13 — `sort_by_key` has the same gap as `sort_by` and is
+        // fixed with it: `v.sort_by_key(|x| x.len())` over a `Vec[String]`
+        // failed identically, because the name registration above serves field
+        // access only and method dispatch resolves through
+        // `vec_elem_types` / `slice_elem_types` / `var_elem_type_exprs`.
+        // Found by probing the sibling after fixing the reported method,
+        // rather than left for the next kata to rediscover.
+        if let Some(te) = elem_te {
+            self.register_var_from_type_expr(&param_name, te);
         }
 
         // 8. First compile (key_a): bind param to element a, compile body.
@@ -8336,6 +8355,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(Some(&res)).unwrap();
 
         // 11. Restore outer state.
+        // B-2026-08-10-13 — drop the key param's container registrations; the
+        // name is thunk-local and must not shadow an enclosing binding.
+        self.vec_elem_types.remove(&param_name);
+        self.slice_elem_types.remove(&param_name);
+        self.var_elem_type_exprs.remove(&param_name);
         self.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;
@@ -8557,6 +8581,7 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
         elem_ty: BasicTypeEnum<'ctx>,
         elem_type_name: Option<&str>,
+        elem_te: Option<&TypeExpr>,
     ) -> Result<(FunctionValue<'ctx>, PointerValue<'ctx>), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -8676,6 +8701,30 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(name) = elem_type_name {
                 self.record_var_type_name(param_name.clone(), name.to_string());
             }
+            // B-2026-08-10-13 — the name alone stops being enough once the
+            // element is itself a CONTAINER. `record_var_type_name` serves
+            // `compile_field_access`, which needs only a struct name; method
+            // dispatch and index lowering instead look the param up in
+            // `vec_elem_types` / `slice_elem_types` / `var_elem_type_exprs`,
+            // and nothing ever registered those for a comparator param. So
+            // `|x, y| x.len().cmp(y.len())` over a `Vec[Vec[i64]]` or
+            // `Vec[String]` reached codegen with an untyped `x` and fell
+            // through method dispatch, while `|a, b| a.0.cmp(b.0)` built —
+            // tuple-field access needs no type lookup, which is why every
+            // earlier `sort_by` in the corpus missed this.
+            //
+            // Registering from the full element `TypeExpr` covers the family
+            // in one arm (Vec, String, Slice, nested), because it is the same
+            // registrar an ordinary `let` binding goes through.
+            //
+            // Only the THUNK path needs this. Its sibling
+            // `emit_sort_by_inline_compare` (the mono path) is gated by
+            // `should_use_mono_vec_sort_by_for` to all-int-field elements, so
+            // a container element never reaches it and the registration would
+            // be dead code there.
+            if let Some(te) = elem_te {
+                self.register_var_from_type_expr(&param_name, te);
+            }
             self.variables
                 .insert(param_name, VarSlot { ptr: alloca, ty });
         }
@@ -8695,6 +8744,20 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(Some(&final_result)).unwrap();
 
         // 8. Restore outer state.
+        // B-2026-08-10-13 — tear down the comparator params' container
+        // registrations. These names are thunk-local; leaving them behind
+        // would let a param named `x` shadow an enclosing `x` of a different
+        // shape for the rest of the function. Recomputed from `params` rather
+        // than tracked, so it cannot drift from the binding loop above.
+        for (i, cp) in params.iter().enumerate().take(2) {
+            let n = match &cp.pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                _ => format!("_cp{}", i),
+            };
+            self.vec_elem_types.remove(&n);
+            self.slice_elem_types.remove(&n);
+            self.var_elem_type_exprs.remove(&n);
+        }
         self.type_subst = saved_subst;
         self.loop_stack = saved_loop_stack;
         self.var_type_names = saved_var_types;

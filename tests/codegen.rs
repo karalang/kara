@@ -40819,6 +40819,116 @@ fn main() {
     /// arms now choose the container shape from the tuple's LLVM field type,
     /// and getting that backwards would read a `cap` word off a 16-byte slice
     /// slot or miss one on a 24-byte Vec slot.
+    /// B-2026-08-10-13 — a `sort_by` / `sort_by_key` closure parameter keeps
+    /// its element type, so the body can call methods and index it.
+    ///
+    /// `v.sort_by(|x, y| x.len().cmp(y.len()))` over a `Vec[Vec[i64]]` or
+    /// `Vec[String]` failed codegen with a self-identified dispatch
+    /// fall-through ("no handler for method 'len' on variable 'x'"), while the
+    /// interpreter ran it. The comparator params were registered with
+    /// `record_var_type_name` only — enough for `compile_field_access`, which
+    /// needs a struct name, and not for method dispatch or index lowering,
+    /// which resolve through `vec_elem_types` / `var_elem_type_exprs`.
+    ///
+    /// That is why the corpus never hit it: every earlier `sort_by` compared
+    /// TUPLE FIELDS (`|a, b| a.0.cmp(b.0)`), and tuple-field access needs no
+    /// type lookup at all. Case 4 keeps that shape as the control — it also
+    /// takes a different code path entirely (the mono sort, gated to
+    /// all-int-field elements), so it proves the fix did not disturb the path
+    /// that already worked.
+    ///
+    /// Case 3 is index-in-comparator and cases 5/6 are `sort_by_key`, the
+    /// sibling method: it had the identical gap and is fixed with it rather
+    /// than left for the next kata to rediscover.
+    #[test]
+    fn test_e2e_sort_by_closure_param_keeps_its_element_type() {
+        // 1. The row's repro — Vec[Vec[i64]] by length.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[Vec[i64]] = Vec.new();\n\
+                     let mut a: Vec[i64] = Vec.new(); a.push(1i64); a.push(2i64); a.push(3i64);\n\
+                     let mut b: Vec[i64] = Vec.new(); b.push(9i64);\n\
+                     let mut c: Vec[i64] = Vec.new(); c.push(4i64); c.push(5i64);\n\
+                     v.push(a); v.push(b); v.push(c);\n\
+                     v.sort_by(|x, y| x.len().cmp(y.len()));\n\
+                     println(f\"{v[0].len()} {v[1].len()} {v[2].len()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 2 3\n")
+        );
+        // 2. Vec[String] by length — a different container element.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(f\"ccc\"); v.push(f\"a\"); v.push(f\"bb\");\n\
+                     v.sort_by(|x, y| x.len().cmp(y.len()));\n\
+                     println(f\"{v[0]} {v[1]} {v[2]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a bb ccc\n")
+        );
+        // 3. INDEX inside the comparator, the other lowering that needs the type.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[Vec[i64]] = Vec.new();\n\
+                     let mut a: Vec[i64] = Vec.new(); a.push(5i64);\n\
+                     let mut b: Vec[i64] = Vec.new(); b.push(2i64);\n\
+                     v.push(a); v.push(b);\n\
+                     v.sort_by(|x, y| x[0].cmp(y[0]));\n\
+                     println(f\"{v[0][0]} {v[1][0]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2 5\n")
+        );
+        // 4. CONTROL — tuple fields, which already built and route through the
+        //    all-int mono sort rather than the thunk this fix touches.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[(i64, i64)] = Vec.new();\n\
+                     v.push((3i64, 1i64)); v.push((1i64, 2i64));\n\
+                     v.sort_by(|a, b| a.0.cmp(b.0));\n\
+                     println(f\"{v[0].0} {v[1].0}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 3\n")
+        );
+        // 5/6. `sort_by_key`, the sibling with the same gap.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(f\"ccc\"); v.push(f\"a\"); v.push(f\"bb\");\n\
+                     v.sort_by_key(|x| x.len());\n\
+                     println(f\"{v[0]} {v[1]} {v[2]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a bb ccc\n")
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[Vec[i64]] = Vec.new();\n\
+                     let mut a: Vec[i64] = Vec.new(); a.push(1i64); a.push(2i64);\n\
+                     let mut b: Vec[i64] = Vec.new(); b.push(9i64);\n\
+                     v.push(a); v.push(b);\n\
+                     v.sort_by_key(|x| x.len());\n\
+                     println(f\"{v[0].len()} {v[1].len()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 2\n")
+        );
+    }
+
     #[test]
     fn test_e2e_index_through_a_slice_typed_tuple_field() {
         // 1. Read and write through a slice-typed tuple field.
