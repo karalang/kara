@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 99 | 0 |
 | run-vs-build | 93 | 0 |
 | missing-feature | 88 | 0 |
-| perf | 59 | 0 |
+| perf | 60 | 1 |
 | false-positive | 57 | 0 |
 | diagnostics | 46 | 0 |
 | soundness | 41 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 775 | 0 |
+| codegen | 776 | 1 |
 | typecheck | 141 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,11 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1068 surfaced · 0 open · 1058 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1069 surfaced · 1 open · 1058 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-10-9 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by(|a,b| a.0.cmp(b.0))` runs ~2x slower than Rust's `sort_by` on the same data. ISOLATED MEASUREMENT (150k pairs, 25 rounds, sort and clone only, no other work): kara 0.34 s vs rustc -O 0.16 s = 2.1x. Corroborated by two independent sort-dominated katas measured separately: #252 meeting-rooms (kara 469.0 ms vs rust 247.9 = 1.89x) and #253 meeting-rooms-ii (kara 598.6 vs rust 370.5 = 1.62x). Both kata ratios are LOWER than the isolated one because each carries non-sort work that is at parity, diluting the ratio -- which is itself evidence the sort is the locus rather than the surrounding code. Sigma is tight throughout (kara 18.0 / 14.6 ms, rust 16.9 / 11.5 ms), so the effect is far outside run-to-run noise. NOT the heap and NOT the copy: #253 adds a hand-rolled binary heap on top of #252's sort+scan and comes out RELATIVELY BETTER (1.62x vs 1.89x), so heap maintenance is not the cost; the isolated kernel above removes the heap and the scan entirely and shows the largest ratio. CAVEAT ON EVIDENCE: all measurements are from ONE host, an x86_64 shared container, and none are from the canonical Apple-silicon bench host. Rust's current sort is driftsort (adaptive, pattern-exploiting) and no claim is made here about which algorithm karac lowers to -- only that the gap is real, repeatable, and localised to the sort. NEXT STEP: re-measure the isolated kernel on the M5 host before any tuning work; if it reproduces, compare the lowered sort against what Rust's adaptive sort does on shuffled-uniform input. | Vec.sort_by / Vec.sort lowering |
 
 ### Fixed (1058)
 
