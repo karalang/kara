@@ -16,7 +16,7 @@ use crate::token::Span;
 
 use super::inference::{expr_as_type_expr, is_literal_const_arg_expr, resolve_type_var_top};
 use super::types::{type_display, ConstArg, DimArg, IntSize, Type, UIntSize};
-use super::TypeErrorKind;
+use super::{FixIt, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
     /// `(explicit_args, formal_generic_params)` into the call-args
@@ -1591,14 +1591,48 @@ impl<'a> super::TypeChecker<'a> {
             // The argument is already a mut-ref (either by type or by
             // place-root) — marking it is redundant and, in the nested
             // mut-ref-return case, actively wrong.
-            self.type_error(
-                "this argument is already a mut-ref; drop the `mut` marker. \
+            let message = "this argument is already a mut-ref; drop the `mut` marker. \
                  The mutation surface was announced at the callee or enclosing \
                  scope's signature."
-                    .to_string(),
-                arg.span.clone(),
-                TypeErrorKind::InvalidMutMarker,
-            );
+                .to_string();
+            // B-2026-08-10-2 — attach the machine-applicable deletion. The
+            // prose prescribes an unambiguous single-token removal, so leaving
+            // `fix_it` empty made `karac fix` skip the cheapest fix class there
+            // is. Same gap B-2026-08-05-12 closed for the call-site `ref` and
+            // `mut ref` arms; those live in the parser, which is why this
+            // typecheck-phase sibling was not covered by that change.
+            //
+            // The `mut` token's extent is derived from the two spans already
+            // in hand rather than recorded in the AST: `CallArg::span` starts
+            // at the marker and `CallArg::value.span` starts at the expression
+            // after it, so the gap between their offsets is exactly `mut` plus
+            // its trailing whitespace. That avoids adding a marker span to
+            // `CallArg` and touching its ~50 construction sites.
+            //
+            // LABELED arguments are excluded deliberately: `CallArg::span`
+            // begins at the LABEL there, not at the marker, so the same
+            // subtraction would delete `name:` along with the `mut`. `CallArg`
+            // records no label span to correct for, so a labeled argument
+            // keeps the textual hint alone until one exists. The unlabeled
+            // form is what the reporting program hit at all four of its sites.
+            let marker_extent = arg.value.span.offset.checked_sub(arg.span.offset);
+            match (arg.label.is_none(), marker_extent) {
+                (true, Some(length)) if length > 0 => self.type_error_with_fix_it(
+                    message,
+                    arg.span.clone(),
+                    TypeErrorKind::InvalidMutMarker,
+                    FixIt {
+                        span: Span {
+                            line: arg.span.line,
+                            column: arg.span.column,
+                            offset: arg.span.offset,
+                            length,
+                        },
+                        replacement: String::new(),
+                    },
+                ),
+                _ => self.type_error(message, arg.span.clone(), TypeErrorKind::InvalidMutMarker),
+            }
             return;
         }
 

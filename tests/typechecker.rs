@@ -36320,3 +36320,74 @@ fn borrowed_payload_accepts_the_correct_closure_param_spellings() {
         );
     }
 }
+
+/// B-2026-08-10-2 — the "already a mut-ref" diagnostic must carry a
+/// machine-applicable edit, not just prose telling the author what to delete.
+///
+/// The typecheck-phase sibling of B-2026-08-05-12, which closed the same gap
+/// for the call-site `ref` and `mut ref` arms. Those live in the PARSER and
+/// route through `ParseResult::fix_edits`; this one is a `TypeError`, so it
+/// carries its edit in `fix_it` — a different channel, which is why the
+/// earlier fix did not cover it and why a test on the parser side would not
+/// have caught this.
+///
+/// The edit spans `mut` PLUS the following whitespace, for the reason the
+/// parser-side test states: deleting the token alone leaves `f(f,  carry)`,
+/// and fix output that needs a formatting pass afterwards is a fix people stop
+/// trusting.
+#[test]
+fn already_mut_ref_arg_carries_a_machine_applicable_deletion() {
+    let src = "fn fill_carry(f: mut ref i64, carry: mut ref i64, n: i64) -> bool {\n\
+               carry = carry + n;\n\
+               true\n\
+               }\n\
+               fn outer(f: mut ref i64, carry: mut ref i64) -> bool {\n\
+               if not fill_carry(f, mut carry, 2880) { return false; }\n\
+               true\n\
+               }";
+    let errors = typecheck_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("already a mut-ref"))
+        .unwrap_or_else(|| panic!("expected the mut-marker diagnostic, got: {errors:?}"));
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("the diagnostic must ship an edit; without one `karac fix` skips it");
+    assert_eq!(fix.replacement, "", "the fix is a deletion");
+    assert_eq!(
+        &src[fix.span.offset..fix.span.offset + fix.span.length],
+        "mut ",
+        "the edit must cover the marker AND its trailing space, so the result is \
+         `fill_carry(f, carry, 2880)` and not `fill_carry(f,  carry, 2880)`"
+    );
+}
+
+/// The case the fix deliberately declines, so the exclusion is pinned rather
+/// than discovered by someone whose source it corrupts.
+///
+/// `CallArg::span` starts at the LABEL for a labeled argument, not at the
+/// marker, so the offset subtraction that locates `mut ` would instead cover
+/// `carry: mut `. `CallArg` records no label span to correct for, so the
+/// labeled form keeps the textual hint alone. The diagnostic must still fire —
+/// only the edit is withheld.
+#[test]
+fn already_mut_ref_labeled_arg_withholds_the_edit() {
+    let src = "fn fill(f: mut ref i64, carry: mut ref i64) -> bool {\n\
+               carry = carry + 1i64;\n\
+               true\n\
+               }\n\
+               fn outer(f: mut ref i64, carry: mut ref i64) -> bool {\n\
+               fill(f, carry: mut carry)\n\
+               }";
+    let errors = typecheck_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("already a mut-ref"))
+        .unwrap_or_else(|| panic!("expected the mut-marker diagnostic, got: {errors:?}"));
+    assert!(
+        err.fix_it.is_none(),
+        "a labeled argument must not offer an edit — the span subtraction would \
+         delete the label along with the marker"
+    );
+}
