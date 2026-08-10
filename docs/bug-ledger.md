@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 228 | 0 |
 | leak | 157 | 0 |
 | double-free | 118 | 0 |
-| codegen-gap | 99 | 1 |
+| codegen-gap | 99 | 0 |
 | run-vs-build | 93 | 0 |
 | missing-feature | 88 | 0 |
 | perf | 59 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 775 | 1 |
-| typecheck | 140 | 0 |
+| codegen | 775 | 0 |
+| typecheck | 141 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1068 surfaced · 1 open · 1057 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1068 surfaced · 0 open · 1058 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-10-5 | 2026-08-10 | codegen | medium | index-assign through a TUPLE FIELD whose type is a Slice is rejected by codegen (`p.0[0] = x`) — the same spelling works when the field is a Vec, and `--interp` accepts both | probe: `let mut t: (mut Slice[i64], i64) = (v.as_slice_mut(), 5i64); t.0[0] = 9i64;` -> `codegen failed: Index assignment target must be a variable` |
+_None — the ledger is fully drained._
 
-### Fixed (1057)
+### Fixed (1058)
 
-<details><summary>1057 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1058 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1225,6 +1223,7 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-10-2 | typecheck | low | the `already a mut-ref; drop the `mut` marker` diagnostic tells the author to delete one token but carries no machine-applicable replacement, so `kar… | 93444f5 + 9c0c8655 -- widened past the reported shape: labeled arguments get the edit instead of being excluded from it (`CallArg::mut_marker_span` replaces the span-subtraction, so the exclusion 93444f5 pinned is removed rather than kept), the sibling "`mut` marker is not legal here" arm gains the same deletion, and the sweep this row asked for found and fixed the two remaining members of the family (`#[profile(name: x)]` prefix, `#[non_exhaustive]` on a union). Family fully enumerated at six. |
 | B-2026-08-10-3 | typecheck+interp+codegen | medium | `File` has no `seek` on the Kāra surface even though the runtime entry point `karac_runtime_file_seek` is already implemented and exported — so any r… | FIXED by 9f1e3c6f — the surface half, across all three backends. `runtime/stdlib/io.kara` gains `File.seek(ref self, whence: SeekFrom, offset: i64) -> Result[i64, IoError] with reads(FileSystem)` plus the payload-free `enum SeekFrom { Start, Current, End }`; `SeekFrom` joins the prelude type list; the interpreter gets a `seek` arm over the `Arc<Mutex<File>>`; codegen declares the extern, truncates the SeekFrom tag to the ABI's u8, and unpacks the io-result as `FileOkKind::ByteCount`. The runtime needed NO change — `karac_runtime_file_seek` was already written, exported, and on the `__preserve_no_mangle_symbols` keep-list, which is exactly the outcome its early-export comment predicted. Pins: interp `test_file_seek_positions_and_reads` + `test_seek_from_variants_discriminate`, e2e `test_e2e_file_seek_positions_and_reads` + `test_e2e_seek_from_prelude_enum_discriminates`; all stash-proven red. |
 | B-2026-08-10-4 | typecheck+interp+codegen | medium | `split_at_mut` is fully specified in design.md but implemented nowhere, so there is NO way to obtain a mutable sub-view of a buffer — `buf[n..]` yiel… | 04bcd16 |
+| B-2026-08-10-5 | typecheck+codegen | medium | index-assign through a TUPLE FIELD whose type is a Slice is rejected by codegen (`p.0[0] = x`) — the same spelling works when the field is a Vec, and… | a51ef80 |
 
 </details>
 
