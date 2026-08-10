@@ -36488,3 +36488,61 @@ fn split_at_mut_yields_two_mutable_halves() {
     // both spec'd receivers must typecheck clean.
     let _ = typecheck_ok(src);
 }
+
+/// B-2026-08-10-17 — a `return` inside a closure is checked against the
+/// CLOSURE's return type, not the enclosing function's.
+///
+/// B-2026-07-31-18 added the closure-scoped `return` collector to the
+/// INFER-direction closure arm only. A closure whose type is known from
+/// context — an annotated `let`, an argument to a fn with a declared `Fn`
+/// param, a `sort_by` comparator — goes through the CHECK-direction arm, which
+/// pushed no frame, so every `return` in its body was checked against
+/// `current_return_type`: the enclosing fn's.
+///
+/// The tell was that the error tracked the ENCLOSING fn: in a `fn main()` the
+/// diagnostic read "expected '()', found 'i64'", and it disappeared entirely
+/// when the enclosing fn happened to return `i64` — the closure's returns were
+/// being validated against an unrelated signature that sometimes matched.
+#[test]
+fn closure_return_is_checked_against_the_closures_own_type() {
+    // Annotated `let` and a user-fn argument, each with a return nested inside
+    // an `if` — the shape that could not be written at all before.
+    let _ = typecheck_ok(
+        "fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+         fn main() {\n\
+             let g: Fn(i64) -> i64 = |n| { if n > 0i64 { return 1i64; } return 0i64; };\n\
+             let r: i64 = apply(|n| { if n > 0i64 { return 2i64; } return 0i64; }, 5i64);\n\
+             println(f\"{g(5i64)} {r}\");\n\
+         }",
+    );
+}
+
+/// The negative direction, which the fix must not lose: a genuinely wrong
+/// `return` inside a closure is still rejected — now against the closure's
+/// type — and the diagnostic points at the RETURN, not at the whole body.
+///
+/// The span is the reason `ClosureReturnFrame` grew one: the collected returns
+/// are checked after the body, so without a per-return span every mismatch
+/// reported at the closure body's span.
+#[test]
+fn a_wrong_closure_return_is_rejected_against_the_closure_type() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let g: Fn(i64) -> i64 = |n| { if n > 0i64 { return f\"oops\"; } return 0i64; };\n\
+             println(f\"{g(5i64)}\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'i64'") && e.message.contains("String")),
+        "the return must be checked against the CLOSURE's i64, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !errors.iter().any(|e| e.message.contains("expected '()'")),
+        "the enclosing fn's return type must not be what a closure return is \
+         checked against, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

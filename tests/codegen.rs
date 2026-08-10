@@ -40860,6 +40860,46 @@ fn main() {
     /// and if-expression tail. They matter because the fix routes ALL bodies
     /// through the retarget now: if the join mishandled a body that never
     /// returns early, these would break while the `return` cases passed.
+    /// B-2026-08-10-17 — kata #254's own comparator, end to end.
+    ///
+    /// A lexicographic comparator is the shape that needs an EARLY return from
+    /// inside a loop: compare element-by-element, exit at the first
+    /// difference. It could not be written before — the `return`s were checked
+    /// against the enclosing fn's return type — and could not be BUILT before
+    /// B-2026-08-10-16, which retargeted the explicit return in a comparator.
+    ///
+    /// It is pinned here rather than only in the typechecker because the two
+    /// fixes are only jointly sufficient: -17 makes it typecheck, -16 makes it
+    /// codegen. This is the case that stayed broken while three successive
+    /// minimised repros were each fixed, so it is worth an end-to-end test of
+    /// its own.
+    #[test]
+    fn test_e2e_lexicographic_comparator_with_early_returns() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[Vec[i64]] = Vec.new();\n\
+                     let mut a: Vec[i64] = Vec.new(); a.push(2i64); a.push(6i64);\n\
+                     let mut b: Vec[i64] = Vec.new(); b.push(2i64); b.push(2i64);\n\
+                     let mut c: Vec[i64] = Vec.new(); c.push(1i64);\n\
+                     v.push(a); v.push(b); v.push(c);\n\
+                     v.sort_by(|x, y| {\n\
+                         let mut i: i64 = 0i64;\n\
+                         while i < x.len() and i < y.len() {\n\
+                             if x[i] < y[i] { return Ordering.Less; }\n\
+                             if x[i] > y[i] { return Ordering.Greater; }\n\
+                             i = i + 1i64;\n\
+                         }\n\
+                         return x.len().cmp(y.len());\n\
+                     });\n\
+                     println(f\"{v[0][0]} {v[1][0]}{v[1][1]} {v[2][0]}{v[2][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 22 26\n")
+        );
+    }
+
     #[test]
     fn test_e2e_explicit_return_in_a_sort_comparator() {
         // 1. Mono path — all-int element, explicit return.

@@ -914,7 +914,34 @@ impl<'a> super::TypeChecker<'a> {
                         ty
                     })
                     .collect();
+                // B-2026-08-10-17 — push the closure-scoped `return` collector
+                // here too. B-2026-07-31-18 added it to the INFER-direction
+                // arm only, so a closure whose type is known from context (an
+                // annotated `let`, an argument to a fn with a declared `Fn`
+                // param, a comparator) checked every `return` in its body
+                // against `current_return_type` — the ENCLOSING FN's return
+                // type. `let f: Fn(i64) -> i64 = |n| { … return 1i64; }` in a
+                // `fn main()` reported "expected '()', found 'i64'", and the
+                // error vanished if the enclosing fn happened to return i64,
+                // which is the tell.
+                //
+                // Here the expected return type is already known, so the
+                // collected returns are CHECKED against it rather than unified
+                // with the tail the way the infer arm has to do.
+                self.closure_return_types
+                    .push(super::ClosureReturnFrame::default());
                 let body_ty = self.check_expr(body, expected_ret);
+                let collected = self
+                    .closure_return_types
+                    .pop()
+                    .expect("closure return collector pushed above");
+                for (t, span) in collected.returns {
+                    let t = resolve_type_var_top(&t, &self.env.substitutions);
+                    if matches!(t, Type::Never | Type::Error) {
+                        continue;
+                    }
+                    self.check_assignable(expected_ret, &t, span);
+                }
                 self.local_scope.pop();
                 let actual = self.closure_type_with_capture_inference(
                     &expr.span,
@@ -4268,7 +4295,7 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Never => None,
                         ref t => Some(t.clone()),
                     };
-                    for t in collected.returns {
+                    for (t, _span) in collected.returns {
                         let t = resolve_type_var_top(&t, &self.env.substitutions);
                         if matches!(t, Type::Never | Type::Error) {
                             continue;
@@ -4328,11 +4355,15 @@ impl<'a> super::TypeChecker<'a> {
                         Some(ref expr) => self.infer_expr(expr),
                         None => Type::Unit,
                     };
+                    let span = inner
+                        .as_ref()
+                        .map(|e| e.span.clone())
+                        .unwrap_or_else(|| expr.span.clone());
                     self.closure_return_types
                         .last_mut()
                         .expect("checked non-empty above")
                         .returns
-                        .push(t);
+                        .push((t, span));
                     return Type::Never;
                 }
                 if let Some(ref expr) = inner {

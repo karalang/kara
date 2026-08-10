@@ -1481,8 +1481,13 @@ pub(super) fn find_struct_def<'m>(
 #[derive(Default)]
 pub(super) struct ClosureReturnFrame {
     /// Types of `return E` statements in this closure body (Unit for bare
-    /// `return;`).
-    pub(super) returns: Vec<Type>,
+    /// `return;`), each with the span of the returned expression.
+    ///
+    /// B-2026-08-10-17 added the span: the CHECK-direction closure arm reports
+    /// a mismatched `return` against the closure's expected return type, and
+    /// without a per-return span every such error pointed at the whole closure
+    /// body instead of the offending `return`.
+    pub(super) returns: Vec<(Type, crate::token::Span)>,
     /// Err types demanded by Result-form `?` sites in this closure body —
     /// on Err the `?` returns `Err(e)` FROM THE CLOSURE, so the closure's
     /// return type must be `Result[_, E]` for each demanded `E`.
