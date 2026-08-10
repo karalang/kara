@@ -97,10 +97,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 118 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 93 | 0 |
-| missing-feature | 86 | 0 |
+| missing-feature | 88 | 2 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
-| diagnostics | 45 | 0 |
+| diagnostics | 46 | 1 |
 | soundness | 41 | 0 |
 | crash | 41 | 0 |
 | other | 24 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 772 | 1 |
-| typecheck | 137 | 0 |
-| interp | 132 | 0 |
+| codegen | 774 | 3 |
+| typecheck | 140 | 3 |
+| interp | 134 | 2 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
 | other | 35 | 0 |
@@ -124,13 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1064 surfaced · 1 open · 1053 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1067 surfaced · 4 open · 1053 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-10-1 | 2026-08-10 | codegen | medium | a NESTED indexed store that overwrites a heap element (`d[i][j] = <String>`) leaks the old value -- the single-index store frees it, the nested one does not | probe: `let mut d: Vec[Vec[String]] = …; d[0][0] = f"zz";` -- the overwritten String is never freed (valgrind --leak-check=full at KARAC_OPT_LEVEL=0: 1 definitely-lost block) |
+| B-2026-08-10-2 | 2026-08-10 | typecheck | low | the `already a mut-ref; drop the `mut` marker` diagnostic tells the author to delete one token but carries no machine-applicable replacement, so `karac fix` leaves it — the exact sibling of B-2026-08-05-12, which was filed and fixed for the call-site `ref` case | the `already a mut-ref; drop the `mut` marker` diagnostic — emitted with no machine-applicable replacement |
+| B-2026-08-10-3 | 2026-08-10 | typecheck+interp+codegen | medium | `File` has no `seek` on the Kāra surface even though the runtime entry point `karac_runtime_file_seek` is already implemented and exported — so any random-access file workload has to be restructured around sequential reads | runtime/src/file.rs (`karac_runtime_file_seek` EXISTS); no Kāra-surface `File.seek` in typechecker/interpreter/codegen |
+| B-2026-08-10-4 | 2026-08-10 | typecheck+interp+codegen | medium | `split_at_mut` is fully specified in design.md but implemented nowhere, so there is NO way to obtain a mutable sub-view of a buffer — `buf[n..]` yields `Slice[u8]`, not `mut Slice[u8]`, and a partly-filled buffer cannot be topped up in place | docs/design.md § `split_at_mut` — disjoint mutable partition; `split_at` is implemented in src/typechecker/stdlib_seq.rs and src/interpreter/method_call_seq.rs, `split_at_mut` is implemented nowhere |
 
 ### Fixed (1053)
 
