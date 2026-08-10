@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 157 | 0 |
 | double-free | 118 | 0 |
 | codegen-gap | 99 | 0 |
-| run-vs-build | 94 | 0 |
+| run-vs-build | 95 | 1 |
 | missing-feature | 88 | 0 |
 | perf | 60 | 1 |
 | false-positive | 57 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 777 | 1 |
+| codegen | 778 | 2 |
 | typecheck | 141 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1070 surfaced · 1 open · 1059 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1071 surfaced · 2 open · 1059 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-10-9 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by(|a,b| a.0.cmp(b.0))` runs ~2x slower than Rust's `sort_by` on the same data. ISOLATED MEASUREMENT (150k pairs, 25 rounds, sort and clone only, no other work): kara 0.34 s vs rustc -O 0.16 s = 2.1x. Corroborated by two independent sort-dominated katas measured separately: #252 meeting-rooms (kara 469.0 ms vs rust 247.9 = 1.89x) and #253 meeting-rooms-ii (kara 598.6 vs rust 370.5 = 1.62x). Both kata ratios are LOWER than the isolated one because each carries non-sort work that is at parity, diluting the ratio -- which is itself evidence the sort is the locus rather than the surrounding code. Sigma is tight throughout (kara 18.0 / 14.6 ms, rust 16.9 / 11.5 ms), so the effect is far outside run-to-run noise. NOT the heap and NOT the copy: #253 adds a hand-rolled binary heap on top of #252's sort+scan and comes out RELATIVELY BETTER (1.62x vs 1.89x), so heap maintenance is not the cost; the isolated kernel above removes the heap and the scan entirely and shows the largest ratio. CAVEAT ON EVIDENCE: all measurements are from ONE host, an x86_64 shared container, and none are from the canonical Apple-silicon bench host. Rust's current sort is driftsort (adaptive, pattern-exploiting) and no claim is made here about which algorithm karac lowers to -- only that the gap is real, repeatable, and localised to the sort. NEXT STEP: re-measure the isolated kernel on the M5 host before any tuning work; if it reproduces, compare the lowered sort against what Rust's adaptive sort does on shuffled-uniform input. | Vec.sort_by / Vec.sort lowering |
+| B-2026-08-10-16 | 2026-08-10 | codegen | medium | An explicit `return` inside a `sort_by` COMPARATOR CLOSURE emits an LLVM module-verification failure: `Module verification failed: "Function return type does not match operand type of return inst! ret { i64 } %ord / i64"`. The comparator is declared to return `i64` but an explicit `return <Ordering>` yields the `{ i64 }` struct unwrapped only on the implicit-tail path. Interpreter runs it. BOUNDARY (probed, all on Vec[(i64,i64)] so the element-type axis is held fixed): single-expression `|x,y| x.0.cmp(y.0)` BUILDS; block with IMPLICIT tail `|x,y| { let d = x.0; d.cmp(y.0) }` BUILDS; if-EXPRESSION tail `|x,y| if .. { .. } else { .. }` BUILDS; block with EXPLICIT `return` `|x,y| { return x.0.cmp(y.0) }` FAILS. So it is the `return` KEYWORD in comparator position, independent of element type -- it fails identically on Vec[Vec[i64]] and on the tuple-field path that #56/#252/#253 use. NOT A REGRESSION FROM B-2026-08-10-13 (b90027e): that commit's diff touches no return-type or fn_type logic (only element-type registration), its tests are all single-expression comparators, and #254 is the ONLY program in the whole kata corpus with a block-bodied comparator -- so nothing else could have exercised this path before or after. It is a SECOND, PRE-EXISTING gap that the first one was masking: before b90027e the same kata failed earlier, at method dispatch on `x.len()`, and never reached module verification. Not bisected against a pre-fix build; the evidence above is circumstantial but consistent. FIX DIRECTION: apply the same Ordering unwrap on the explicit-return path that the implicit-tail path already performs. REPRO (3 lines): `fn main(){ let mut v: Vec[(i64,i64)] = Vec.new(); v.push((1i64,2i64)); v.sort_by(|x,y| { return x.0.cmp(y.0) }); println(f"{v.len()}"); }` | sort_by comparator lowering; closure return-value unwrapping |
 
 ### Fixed (1059)
 
