@@ -4903,6 +4903,75 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-08-09-21 (write half) — NESTED store whose base is a struct
+        // FIELD (`h.data[i][j] = v`). The nested arm just above requires the
+        // outer container to be a named Identifier, and the field arm just
+        // below handles only a SINGLE index on a field, so this shape fell
+        // between them and hit the "must be a variable" gate. Both halves of the
+        // gap are the same one the read side had: `h.data[i][j]` was rejected
+        // while `d[i][j]` and `h.data[i]` each built.
+        //
+        // Normalise rather than re-implement: resolve the field to a synth
+        // identifier exactly as the field arm below does, rebuild the inner
+        // index against it, and recurse. The named-outer nested arm above then
+        // handles it unchanged, so the actual store logic has one implementation.
+        if let ExprKind::Index {
+            object: outer,
+            index: outer_idx,
+        } = &object.kind
+        {
+            if let ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } = &outer.kind
+            {
+                // `self.grid[i][j] = v` — same `SelfValue` normalisation the
+                // field arm below documents.
+                let self_ident;
+                let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
+                    self_ident = Expr {
+                        kind: ExprKind::Identifier("self".to_string()),
+                        span: inner.span.clone(),
+                    };
+                    &self_ident
+                } else {
+                    inner
+                };
+                if let Some((field_ptr, field_ll_ty, field_te)) =
+                    self.lower_field_access_ptr(inner, field, "nested index-store expression")?
+                {
+                    let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    self.variables.insert(
+                        synth.clone(),
+                        super::state::VarSlot {
+                            ptr: field_ptr,
+                            ty: field_ll_ty,
+                        },
+                    );
+                    self.register_var_from_type_expr(&synth, &field_te);
+                    let synth_expr = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: outer.span.clone(),
+                    };
+                    let nested_obj = Expr {
+                        kind: ExprKind::Index {
+                            object: Box::new(synth_expr),
+                            index: outer_idx.clone(),
+                        },
+                        span: object.span.clone(),
+                    };
+                    let result = self.compile_index_store(&nested_obj, index, val, rhs_is_fresh);
+                    self.variables.remove(&synth);
+                    self.vec_elem_types.remove(&synth);
+                    self.slice_elem_types.remove(&synth);
+                    self.var_elem_type_exprs.remove(&synth);
+                    self.var_type_names.remove(&synth);
+                    return result;
+                }
+            }
+        }
+
         // Field-access-rooted index store (`h.items[i] = v`,
         // `node.neighbors[i] = n`, incl. shared-struct receivers):
         // resolve the field's storage pointer via the FR-slice helper,

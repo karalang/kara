@@ -1014,6 +1014,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     .to_string(),
             );
         }
+        // B-2026-08-09-21 — a struct-FIELD base (`h.data[i][j]`). The field has
+        // no entry in `var_elem_type_exprs`, which is the only reason the
+        // name-keyed path below cannot serve it; everything after the element
+        // pointer is name-independent. So resolve the element type from the
+        // field's DECLARED type and the container pointer from the place-
+        // expression path, then rejoin the shared synth-identifier machinery.
+        //
+        // The canonical spelling of any 2D-cursor problem is a struct holding
+        // the grid (`v.data[v.row][v.col]`), so this gap blocked whole programs
+        // from AOT-building while `--interp` ran them (kata #251).
+        if let ExprKind::FieldAccess { .. } = &inner_object.kind {
+            if let Some((elem_ptr, elem_ll_ty, elem_te)) =
+                self.nested_index_field_base_elem(inner_object, inner_idx)?
+            {
+                return self.finish_nested_index_read(
+                    inner_object,
+                    outer_idx,
+                    elem_ptr,
+                    elem_ll_ty,
+                    elem_te,
+                );
+            }
+        }
         let outer_name = if let ExprKind::Identifier(name) = &inner_object.kind {
             name.clone()
         } else {
@@ -1061,8 +1084,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 ));
             }
         };
-        // Mint a synth identifier so the recursive call sees the
-        // inner element as a regular Vec/Slice/Array variable.
+        self.finish_nested_index_read(inner_object, outer_idx, elem_ptr, elem_ll_ty, elem_te)
+    }
+
+    /// Shared tail of [`Self::compile_nested_index_read`]: mint a synth
+    /// identifier so the outer index sees the inner element as a regular
+    /// Vec/Slice/Array variable, dispatch, then tear the registrations down so
+    /// no later site sees a stale entry.
+    ///
+    /// Split out for B-2026-08-09-21 — the field-base arm computes the same
+    /// three values by a different route and must not re-implement this.
+    fn finish_nested_index_read(
+        &mut self,
+        inner_object: &Expr,
+        outer_idx: &Expr,
+        elem_ptr: PointerValue<'ctx>,
+        elem_ll_ty: BasicTypeEnum<'ctx>,
+        elem_te: TypeExpr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let synth = format!("__indexed_elem_{}", self.indexed_elem_counter);
         self.indexed_elem_counter += 1;
         self.variables.insert(
@@ -1073,20 +1112,88 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
         self.register_var_from_type_expr(&synth, &elem_te);
-        // Rebuild the outer Index expression against the synth
-        // identifier and dispatch.
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
             span: inner_object.span.clone(),
         };
         let result = self.compile_index(&synth_expr, outer_idx);
-        // Tear down the per-call synth registrations so subsequent
-        // dispatch sites don't see a stale entry.
         self.variables.remove(&synth);
         self.vec_elem_types.remove(&synth);
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         result
+    }
+
+    /// B-2026-08-09-21 — lower the INNER index of `<place>.field[i][j]` to an
+    /// element pointer, for a base that is a struct field rather than a named
+    /// variable.
+    ///
+    /// Returns `Ok(None)` for anything it cannot resolve — an unknown struct
+    /// type, a non-Vec/Slice field, or a base whose place pointer is
+    /// unavailable (notably a `ref`-param root, where `field_chain_place_ptr`
+    /// deliberately bails because the slot holds a pointer rather than the
+    /// aggregate). The caller then falls through to the existing diagnostic, so
+    /// this widens what builds without turning any current error into a
+    /// miscompile.
+    #[allow(clippy::type_complexity)]
+    fn nested_index_field_base_elem(
+        &mut self,
+        inner_object: &Expr,
+        inner_idx: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, TypeExpr)>, String> {
+        let ExprKind::FieldAccess {
+            object: inner,
+            field,
+        } = &inner_object.kind
+        else {
+            return Ok(None);
+        };
+        // `self.grid[i][j]` — `self` parses as `SelfValue`, which
+        // `lower_field_access_ptr` deliberately declines, so normalise it to a
+        // synthetic identifier exactly as the index-STORE field arm does. This
+        // is the shape the motivating kata actually writes: a 2D cursor keeps
+        // its grid in a field and reads it from a method.
+        let self_ident;
+        let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
+            self_ident = Expr {
+                kind: ExprKind::Identifier("self".to_string()),
+                span: inner.span.clone(),
+            };
+            &self_ident
+        } else {
+            inner
+        };
+        // `lower_field_access_ptr` rather than `field_chain_place_ptr`: the
+        // latter bails on a `ref`-param root by design (the slot holds a
+        // pointer, not the aggregate), which would have left `fn f(h: ref H)`
+        // and every `ref self` method — the common case — still failing. This
+        // one performs the deref for `ref` params and loads the handle for
+        // shared structs. It also raises the existing loud deferral for a
+        // chained receiver (`a.b.c[i][j]`), which stays deferred.
+        let Some((field_ptr, _field_ll_ty, field_te)) =
+            self.lower_field_access_ptr(inner, field, "nested indexed read")?
+        else {
+            return Ok(None);
+        };
+        // The field must itself be an indexable container; its ELEMENT type is
+        // what the synth identifier gets registered as.
+        let Some(elem_te) = super::helpers::vec_inner_type_expr(&field_te) else {
+            return Ok(None);
+        };
+        let head = match &field_te.kind {
+            TypeKind::Path(p) => p.segments.first().map(String::as_str),
+            _ => None,
+        };
+        let elem_ll_ty = self.llvm_type_for_type_expr(&elem_te);
+        let (elem_ptr, ty) = match head {
+            Some("Vec") | Some("VecDeque") => {
+                self.lower_indexed_elem_ptr_vec_at(field_ptr, elem_ll_ty, inner_idx)?
+            }
+            // Any other container class keeps today's diagnostic rather than
+            // guessing at a layout.
+            _ => return Ok(None),
+        };
+        Ok(Some((elem_ptr, ty, elem_te)))
     }
 
     /// Trailing-method dispatch on an entry-chain receiver. When the call
@@ -1241,9 +1348,6 @@ impl<'ctx> super::Codegen<'ctx> {
         outer_name: &str,
         index: &Expr,
     ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
-        let i64_t = self.context.i64_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let vec_ty = self.vec_struct_type();
         let elem_ty = self.vec_elem_type_for_var(outer_name);
         let vec_ptr = self.get_data_ptr(outer_name).ok_or_else(|| {
             format!(
@@ -1251,6 +1355,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 outer_name
             )
         })?;
+        self.lower_indexed_elem_ptr_vec_at(vec_ptr, elem_ty, index)
+    }
+
+    /// B-2026-08-09-21 — the by-POINTER core of
+    /// [`Self::lower_indexed_elem_ptr_vec`]. Only two things in that lowering
+    /// ever needed the variable NAME — the element LLVM type and the pointer to
+    /// the `Vec` struct — so taking both directly lets a base that has no name
+    /// (a struct FIELD, `h.data[i]`) reuse the identical bounds check and GEP
+    /// rather than growing a parallel path.
+    pub(super) fn lower_indexed_elem_ptr_vec_at(
+        &mut self,
+        vec_ptr: PointerValue<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        index: &Expr,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
         let idx_raw = self.compile_expr(index)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
 

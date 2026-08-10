@@ -40587,6 +40587,181 @@ fn main() {
         }
     }
 
+    /// B-2026-08-09-21 — a nested index whose base is a struct FIELD
+    /// (`h.data[i][j]`), read and write.
+    ///
+    /// RUN-VS-BUILD: `--interp` ran these; `karac run` (JIT) and `karac build`
+    /// both refused them. The boundary was oddly narrow and is what identifies
+    /// the cause — `d[i][j]` on a named local BUILT, `h.data[i]` (single index
+    /// on a field) BUILT, `let row = h.data[i]; row[j]` BUILT; only the DOUBLE
+    /// index rooted at a field failed. `compile_nested_index_read` recovered the
+    /// element `TypeExpr` from `var_elem_type_exprs[outer_name]`, which is
+    /// keyed by variable name and so has no entry for a field.
+    ///
+    /// Cases 3 and 4 are the ones that matter most in practice, and they are why
+    /// the read arm resolves the base through `lower_field_access_ptr` rather
+    /// than `field_chain_place_ptr`: the latter deliberately declines a
+    /// `ref`-param root (its slot holds a pointer, not the aggregate), which
+    /// would have left every `ref self` method and `ref H` parameter failing —
+    /// the shape a 2D-cursor struct actually writes, and the motivating kata's
+    /// canonical spelling (`v.data[v.row][v.col]`).
+    ///
+    /// Case 5 pins what stays deferred: a TRIPLE index is still refused by the
+    /// separate MR5 guard, loudly. Widening the field base was not an excuse to
+    /// generalise that too.
+    #[test]
+    fn test_e2e_nested_index_rooted_at_struct_field() {
+        // 1. The filed reproduction — read.
+        assert_eq!(
+            run_program(
+                "struct H { data: Vec[Vec[i64]] }\n\
+                 fn main() {\n\
+                     let mut i: Vec[i64] = Vec.new();\n\
+                     i.push(1i64);\n\
+                     let mut d: Vec[Vec[i64]] = Vec.new();\n\
+                     d.push(i);\n\
+                     let h = H { data: d };\n\
+                     println(f\"{h.data[0][0]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1\n")
+        );
+        // 2. The WRITE half, which failed on a different gate ("Index
+        // assignment target must be a variable") and needed its own arm.
+        assert_eq!(
+            run_program(
+                "struct H { data: Vec[Vec[i64]] }\n\
+                 fn main() {\n\
+                     let mut i: Vec[i64] = Vec.new();\n\
+                     i.push(1i64);\n\
+                     let mut d: Vec[Vec[i64]] = Vec.new();\n\
+                     d.push(i);\n\
+                     let mut h = H { data: d };\n\
+                     h.data[0][0] = 42i64;\n\
+                     println(f\"{h.data[0][0]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("42\n")
+        );
+        // 3. `ref self` / `mut ref self` methods — the canonical 2D-cursor shape.
+        assert_eq!(
+            run_program(
+                "struct G { grid: Vec[Vec[i64]] }\n\
+                 impl G {\n\
+                 \x20   fn get(ref self, i: i64, j: i64) -> i64 { return self.grid[i][j]; }\n\
+                 \x20   fn set(mut ref self, i: i64, j: i64, v: i64) { self.grid[i][j] = v; }\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut r0: Vec[i64] = Vec.new();\n\
+                     r0.push(1i64); r0.push(2i64);\n\
+                     let mut g0: Vec[Vec[i64]] = Vec.new();\n\
+                     g0.push(r0);\n\
+                     let mut g = G { grid: g0 };\n\
+                     println(f\"{g.get(0i64, 1i64)}\");\n\
+                     g.set(0i64, 1i64, 99i64);\n\
+                     println(f\"{g.get(0i64, 1i64)}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2\n99\n")
+        );
+        // 4. A `ref` / `mut ref` PARAM root, the free-function form of case 3.
+        assert_eq!(
+            run_program(
+                "struct H { data: Vec[Vec[i64]] }\n\
+                 fn read(h: ref H, i: i64, j: i64) -> i64 { return h.data[i][j]; }\n\
+                 fn bump(h: mut ref H) { h.data[0][0] = h.data[0][0] + 1i64; }\n\
+                 fn main() {\n\
+                     let mut r: Vec[i64] = Vec.new();\n\
+                     r.push(5i64);\n\
+                     let mut d: Vec[Vec[i64]] = Vec.new();\n\
+                     d.push(r);\n\
+                     let mut h = H { data: d };\n\
+                     println(f\"{read(h, 0i64, 0i64)}\");\n\
+                     bump(mut h);\n\
+                     println(f\"{read(h, 0i64, 0i64)}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("5\n6\n")
+        );
+        // 5. CONTROL — the triple index stays a LOUD deferral (MR5 guard), not
+        // silently accepted and not a miscompile. Widening the field base was
+        // not an excuse to generalise that guard too.
+        let triple = ir_result(
+            "fn main() {\n\
+                 let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(1i64);\n\
+                 let mut b: Vec[Vec[i64]] = Vec.new();\n\
+                 b.push(a);\n\
+                 let mut c: Vec[Vec[Vec[i64]]] = Vec.new();\n\
+                 c.push(b);\n\
+                 println(f\"{c[0][0][0]}\");\n\
+             }",
+        );
+        assert!(
+            triple
+                .as_ref()
+                .err()
+                .is_some_and(|e| e.contains("chained indexed reads")),
+            "triple index must stay a loud deferral, got {triple:?}"
+        );
+        // 6. Bounds checking survives the new path — the inner index goes
+        // through the same checked helper the named-base path uses, so an OOB
+        // outer index panics rather than reading out of the buffer.
+        if let Some(c) = run_program_capturing(
+            "struct H { data: Vec[Vec[i64]] }\n\
+             fn main() {\n\
+                 let mut r: Vec[i64] = Vec.new();\n\
+                 r.push(1i64);\n\
+                 let mut d: Vec[Vec[i64]] = Vec.new();\n\
+                 d.push(r);\n\
+                 let h = H { data: d };\n\
+                 println(f\"{h.data[0][5]}\");\n\
+             }",
+        ) {
+            assert!(
+                c.stdout.contains("vec index out of bounds"),
+                "expected OOB panic, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+        // 7. A shared-struct receiver, and a loop driving computed indices
+        // through both the read and the write.
+        assert_eq!(
+            run_program(
+                "struct H { data: Vec[Vec[i64]] }\n\
+                 fn main() {\n\
+                     let mut r0: Vec[i64] = Vec.new();\n\
+                     r0.push(10i64); r0.push(20i64);\n\
+                     let mut r1: Vec[i64] = Vec.new();\n\
+                     r1.push(30i64); r1.push(40i64);\n\
+                     let mut d: Vec[Vec[i64]] = Vec.new();\n\
+                     d.push(r0); d.push(r1);\n\
+                     let mut h = H { data: d };\n\
+                     let mut i: i64 = 0;\n\
+                     let mut total: i64 = 0;\n\
+                     while i < 2 {\n\
+                         let mut j: i64 = 0;\n\
+                         while j < 2 {\n\
+                             total = total + h.data[i][j];\n\
+                             h.data[i][j] = h.data[i][j] + 1i64;\n\
+                             j = j + 1;\n\
+                         }\n\
+                         i = i + 1;\n\
+                     }\n\
+                     println(f\"{total}\");\n\
+                     println(f\"{h.data[1][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("100\n41\n")
+        );
+    }
+
     #[test]
     fn test_e2e_nested_indexed_read_vec_of_vec() {
         // `grid[0][0]` — nested indexed read on `Vec[Vec[i64]]`.
