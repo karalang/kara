@@ -245,7 +245,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// with any closure-scoped returns that branched to the merge block. If
     /// no `return` fired (`merge_bb` never minted), this is the identity on
     /// `fall_through` — zero IR overhead for the common body.
-    fn join_retargeted_returns(
+    pub(super) fn join_retargeted_returns(
         &mut self,
         rt: super::state::ReturnRetarget<'ctx>,
         fall_through: BasicValueEnum<'ctx>,

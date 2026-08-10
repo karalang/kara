@@ -7853,6 +7853,57 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the default-order `sort()` thunk above), so non-integer keys error
     /// loudly rather than silently producing wrong output.
     #[allow(clippy::too_many_lines)]
+    /// B-2026-08-10-16 — compile a sort comparator / key body with an
+    /// explicit `return` retargeted to the comparator's own result, instead of
+    /// letting it emit a real function return.
+    ///
+    /// The comparator body is INLINED into the thunk (or, on the mono path,
+    /// straight into the sort function). A `return E` inside it was lowered by
+    /// the ordinary fn-level machinery, which is wrong twice over:
+    ///
+    ///   * it emits `ret <Ordering>` in a function whose LLVM return type is
+    ///     `i64` (thunk) or `void` (mono sort) — "Found return instr that
+    ///     returns non-void in Function of void return type", and
+    ///   * it drains the WHOLE cleanup stack, including the CALLER's frames,
+    ///     so the caller's allocas get referenced from inside the emitted sort
+    ///     function — "Instruction does not dominate all uses".
+    ///
+    /// Both disappear by reusing the `ReturnRetarget` machinery
+    /// `with_provider` already uses for the same problem (B-2026-07-31-16): a
+    /// retargeted `return` stores its value into a slot, drains only the
+    /// frames pushed since the retarget, and branches to a merge block. The
+    /// joined value is then an ordinary value, so the caller's existing
+    /// Ordering-unwrap (`{ i64 }` → tag − 1) applies to the `return` path and
+    /// the implicit-tail path identically — which is the whole bug, since only
+    /// the tail path had been unwrapping.
+    ///
+    /// `fn_val` must be the function the body is being emitted into;
+    /// `wp_return_retarget_active` tags on it, so a real closure compiled
+    /// while this is live (which switches `current_fn`) correctly does NOT
+    /// retarget.
+    fn compile_sort_body_retargeting_return(
+        &mut self,
+        fn_val: FunctionValue<'ctx>,
+        body: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let cleanup_depth = self.scope_cleanup_actions.len();
+        self.return_retargets.push(super::state::ReturnRetarget {
+            fn_val,
+            cleanup_depth,
+            merge_bb: None,
+            result_slot: None,
+            result_ty: None,
+            result_type_expr: None,
+        });
+        let body_result = self.compile_expr(body);
+        let rt = self
+            .return_retargets
+            .pop()
+            .expect("retarget pushed just above is still on the stack");
+        let fall_through = body_result?;
+        self.join_retargeted_returns(rt, fall_through)
+    }
+
     pub(super) fn emit_sort_by_key_inline_thunk(
         &mut self,
         params: &[ClosureParam],
@@ -8005,7 +8056,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: param_ty,
             },
         );
-        let key_a_val = self.compile_expr(body)?;
+        let key_a_val = self.compile_sort_body_retargeting_return(thunk_fn, body)?;
 
         // 9. Second compile (key_b): rebind param to element b, compile body
         // again. Compiling the body twice produces two copies of the key
@@ -8021,7 +8072,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: param_ty,
             },
         );
-        let key_b_val = self.compile_expr(body)?;
+        let key_b_val = self.compile_sort_body_retargeting_return(thunk_fn, body)?;
 
         // 10. Compare the two keys → i64 `-1 / 0 / +1`. Three key shapes:
         //   (a) plain integer key — signed compare, matching the
@@ -8730,7 +8781,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // 7. Compile body, transform Ordering result → signed `tag - 1`.
-        let result = self.compile_expr(body)?;
+        let result = self.compile_sort_body_retargeting_return(thunk_fn, body)?;
         let tag = if result.is_struct_value() {
             self.builder
                 .build_extract_value(result.into_struct_value(), 0, "tag")
@@ -8847,7 +8898,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.record_var_type_name(param_name, name.to_string());
             }
         }
-        let result = self.compile_expr(body)?;
+        let result = self.compile_sort_body_retargeting_return(host_fn, body)?;
         let tag = if result.is_struct_value() {
             self.builder
                 .build_extract_value(result.into_struct_value(), 0, "tag")

@@ -40840,6 +40840,82 @@ fn main() {
     /// Case 3 is index-in-comparator and cases 5/6 are `sort_by_key`, the
     /// sibling method: it had the identical gap and is fixed with it rather
     /// than left for the next kata to rediscover.
+    /// B-2026-08-10-16 — an explicit `return` inside a sort comparator body
+    /// produces the comparator's result instead of a real function return.
+    ///
+    /// The body is INLINED into the thunk (or, on the mono path, straight into
+    /// the sort function), so the fn-level return machinery was wrong twice:
+    /// it emitted `ret <Ordering>` where the enclosing LLVM function returns
+    /// `i64` or `void`, and it drained the WHOLE cleanup stack including the
+    /// CALLER's frames, referencing the caller's allocas from inside the sort
+    /// function. Module verification reported both — "Found return instr that
+    /// returns non-void in Function of void return type" and "Instruction does
+    /// not dominate all uses".
+    ///
+    /// Case 1 is the mono path (all-int element) and case 2 the thunk path
+    /// (container element); they are separate emitters and the verifier
+    /// failure differs between them, so one does not cover the other.
+    ///
+    /// Cases 3 and 4 are the shapes that already built — implicit block tail
+    /// and if-expression tail. They matter because the fix routes ALL bodies
+    /// through the retarget now: if the join mishandled a body that never
+    /// returns early, these would break while the `return` cases passed.
+    #[test]
+    fn test_e2e_explicit_return_in_a_sort_comparator() {
+        // 1. Mono path — all-int element, explicit return.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[(i64, i64)] = Vec.new();\n\
+                     v.push((3i64, 1i64)); v.push((1i64, 2i64));\n\
+                     v.sort_by(|x, y| { return x.0.cmp(y.0) });\n\
+                     println(f\"{v[0].0} {v[1].0}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 3\n")
+        );
+        // 2. Thunk path — container element, explicit return.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(f\"ccc\"); v.push(f\"a\"); v.push(f\"bb\");\n\
+                     v.sort_by(|x, y| { return x.len().cmp(y.len()) });\n\
+                     println(f\"{v[0]} {v[1]} {v[2]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("a bb ccc\n")
+        );
+        // 3. CONTROL — implicit block tail, which always built.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[(i64, i64)] = Vec.new();\n\
+                     v.push((3i64, 1i64)); v.push((1i64, 2i64));\n\
+                     v.sort_by(|x, y| { let d = x.0; d.cmp(y.0) });\n\
+                     println(f\"{v[0].0} {v[1].0}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 3\n")
+        );
+        // 4. CONTROL — if-expression tail.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[(i64, i64)] = Vec.new();\n\
+                     v.push((3i64, 1i64)); v.push((1i64, 2i64));\n\
+                     v.sort_by(|x, y| if x.0 < y.0 { Ordering.Less } else { Ordering.Greater });\n\
+                     println(f\"{v[0].0} {v[1].0}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 3\n")
+        );
+    }
+
     #[test]
     fn test_e2e_sort_by_closure_param_keeps_its_element_type() {
         // 1. The row's repro — Vec[Vec[i64]] by length.
