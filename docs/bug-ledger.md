@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 100 | 0 |
 | run-vs-build | 95 | 0 |
 | missing-feature | 88 | 0 |
-| perf | 60 | 1 |
+| perf | 61 | 1 |
 | false-positive | 58 | 0 |
 | diagnostics | 46 | 0 |
 | soundness | 41 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 779 | 1 |
+| codegen | 780 | 1 |
 | typecheck | 142 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1073 surfaced · 1 open · 1062 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1074 surfaced · 1 open · 1063 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-10-9 | 2026-08-10 | codegen | high | `Vec.sort_by` is a NON-ADAPTIVE fixed-32-run bottom-up merge sort; Rust's `sort_by` (driftsort) is adaptive. MEASURED AND RE-SCOPED 2026-08-10 -- see docs/spikes/sort-algorithm-gap.md for the full matrix. (1) THE GAP REPRODUCES: 150k (i64,i64), comparator `|x,y| x.0.cmp(y.0)`, per-round clone+sort kara 15.1 ms vs rust 8.7 ms = 1.74x. (2) IT IS NOT CODEGEN -- this row's original `surface: codegen` framing implied a lowering-quality problem and that is FALSIFIED. Hand-writing karac's exact algorithm (insertion RUN=32 base, bottom-up ping-pong merge, `cmp<=0` takes left, raw pointers) AND karac's exact comparator lowering (Ordering tag, minus 1, test `<=0`) in Rust: on random input karac 14.91 ms vs rustc 15.6-16.2 ms -- karac is 5-8% FASTER than rustc compiling the identical algorithm. Across sorted/reverse/few-unique/sawtooth karac trails rustc by 17-30%, a real but modest lowering gap, nowhere near 2x. So no amount of codegen tuning closes this. (3) THE GAP IS MUCH WORSE THAN 2x AND THIS ROW UNDERSTATED IT: karac/driftsort by input pattern is random 2.1x, SORTED 54x, REVERSE 39x, few-unique 4.3x, sawtooth 1.14x. The row was filed from a shuffled-uniform kata, which is the NARROWEST case. karac does ceil(log2(n/32))=13 full merge passes over 2.4 MB regardless of input order; driftsort detects the run and does one scan. Re-sorting an already-sorted list is common, so this is the larger exposure -- hence severity raised medium -> high. (4) NO CONTAINED TWEAK IS A WIN, all measured across 6 patterns: branchless merge is a TRADE (1.28x on random, but 1.8-2.0x SLOWER on few-unique/sawtooth/nearly-sorted, where the predictor already wins and branchless instead serialises on load->compare->cursor->load); ordered-run bulk-copy fast path is ~free but only ~2x on sorted since the 13 passes still happen as memcpys; cached merge heads shrink from 18% in isolation to 3-5% in the full sweep; RUN tuning 8/16/32/64 is flat within 3%. (5) ALGORITHM DOMINATES INLINING, which corrects the premise behind the mono path (B-2026-07-30-2): merge sort 15.9 inlined / 25.4 indirect, driftsort 7.2 inlined / 10.4 indirect -- inlining is worth ~1.5x, the algorithm ~2.2x, and DRIFTSORT WITH AN INDIRECT CALL STILL BEATS AN INLINED MERGE SORT by 1.5x. FIX (not yet done, needs a decision -- it is a design change to a load-bearing sort): replace the fixed-width bottom-up merge in `emit_sort_by_mono` with a NATURAL-RUN merge sort -- detect maximal ascending runs (and strictly-descending ones, reversed in place, which stays stable), extend short runs to MIN_RUN=32 by insertion, record boundaries in a scratch i64 array, then merge adjacent runs pairwise. This is a PURE WIN with no trade: on random it degenerates to exactly today's cost plus one O(n) scan; on sorted the 54x/39x cases collapse to a single scan. Stability is preserved, so the 'IR mirrors the runtime's sort_fixed_width' invariant holds automatically (any two stable sorts agree on output) and the runtime need NOT change in lockstep; panic-freedom is preserved (one more null-checked malloc), so the ~262 KiB DWARF symbolizer stays dead-strippable. That leaves the random case, which needs driftsort's other half -- a stable quicksort to build long runs when natural runs are short, partitioning against a register-held pivot to avoid the merge's dependent-load chain. Separate, larger, and independent of the run-detection half. | Vec.sort_by / Vec.sort lowering |
+| B-2026-08-10-19 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~2.1x Rust's `sort_by` (karac 14.60 ms vs driftsort 7.0 ms, 150k pairs, this host). Residual of B-2026-08-10-9, which fixed the adaptivity half (natural-run detection, 35x on sorted/reverse) but deliberately left shuffled input unchanged because natural runs there are ~2 elements. Few-unique is the same shape (6.11 vs 1.51 = 4x): keys from a small alphabet also produce short natural runs. WHAT IT NEEDS: driftsort's other half -- a STABLE QUICKSORT to build long runs when natural runs are short. Partitioning beats merging on random data because the comparison is against a pivot held in a register, so there is no dependent-load chain (merge is load -> compare -> cursor -> next load address, which is why B-2026-08-10-9 measured phase 2 at ~5x its own memory traffic, latency-bound not bandwidth-bound). ALREADY RULED OUT with measurements, do not re-litigate: this is NOT a codegen-quality gap (karac is 5-8% faster than rustc compiling the identical algorithm and comparator shape), and no contained merge-kernel tweak works -- branchless merge buys 1.28x on random and costs 1.8-2.0x on few-unique/sawtooth/nearly-sorted, cached merge heads are 3-5%, RUN tuning is flat. Also note inlining is worth only ~1.5x against the algorithm's ~2.2x: driftsort with an INDIRECT comparator still beats an inlined merge sort. Full matrix and rejected-option data in docs/spikes/sort-algorithm-gap.md. | Vec.sort_by / Vec.sort lowering |
 
-### Fixed (1062)
+### Fixed (1063)
 
-<details><summary>1062 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1063 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1226,6 +1226,7 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-10-3 | typecheck+interp+codegen | medium | `File` has no `seek` on the Kāra surface even though the runtime entry point `karac_runtime_file_seek` is already implemented and exported — so any r… | FIXED by 9f1e3c6f — the surface half, across all three backends. `runtime/stdlib/io.kara` gains `File.seek(ref self, whence: SeekFrom, offset: i64) -> Result[i64, IoError] with reads(FileSystem)` plus the payload-free `enum SeekFrom { Start, Current, End }`; `SeekFrom` joins the prelude type list; the interpreter gets a `seek` arm over the `Arc<Mutex<File>>`; codegen declares the extern, truncates the SeekFrom tag to the ABI's u8, and unpacks the io-result as `FileOkKind::ByteCount`. The runtime needed NO change — `karac_runtime_file_seek` was already written, exported, and on the `__preserve_no_mangle_symbols` keep-list, which is exactly the outcome its early-export comment predicted. Pins: interp `test_file_seek_positions_and_reads` + `test_seek_from_variants_discriminate`, e2e `test_e2e_file_seek_positions_and_reads` + `test_e2e_seek_from_prelude_enum_discriminates`; all stash-proven red. |
 | B-2026-08-10-4 | typecheck+interp+codegen | medium | `split_at_mut` is fully specified in design.md but implemented nowhere, so there is NO way to obtain a mutable sub-view of a buffer — `buf[n..]` yiel… | 04bcd16 |
 | B-2026-08-10-5 | typecheck+codegen | medium | index-assign through a TUPLE FIELD whose type is a Slice is rejected by codegen (`p.0[0] = x`) — the same spelling works when the field is a Vec, and… | a51ef80 |
+| B-2026-08-10-9 | codegen | high | `Vec.sort_by`'s mono path was a NON-ADAPTIVE fixed-32-run bottom-up merge sort: it did ceil(log2(n/32)) = 13 full passes over 2.4 MB for 150k element… | 50a50e8 |
 | B-2026-08-10-13 | codegen | medium | Inside a `sort_by` COMPARATOR CLOSURE, a closure parameter supports only TUPLE-FIELD access; any METHOD CALL or INDEX on it falls through codegen's m… | b90027e |
 | B-2026-08-10-16 | codegen | medium | An explicit `return` inside a `sort_by` COMPARATOR CLOSURE emits an LLVM module-verification failure: `Module verification failed: "Function return t… | 568e6ff |
 | B-2026-08-10-17 | typecheck | medium | a `return` NESTED inside a closure body (in an `if` / loop) is typechecked against `()` instead of the closure's return type, so an early return from… | 819af61 |
