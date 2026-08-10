@@ -1736,6 +1736,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let arg = |value: Expr| CallArg {
             label: None,
             mut_marker: false,
+            mut_marker_span: None,
             span: value.span.clone(),
             value,
         };
@@ -2019,6 +2020,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let arg = |value: Expr| CallArg {
                 label: None,
                 mut_marker: false,
+                mut_marker_span: None,
                 span: value.span.clone(),
                 value,
             };
@@ -3292,6 +3294,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let arg = CallArg {
             label: None,
             mut_marker: false,
+            mut_marker_span: None,
             span: call_span.clone(),
             value: mk(ExprKind::Identifier(x_name.to_string())),
         };

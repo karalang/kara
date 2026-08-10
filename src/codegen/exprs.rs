@@ -2907,6 +2907,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let arg = crate::ast::CallArg {
                 label: None,
                 mut_marker: false,
+                mut_marker_span: None,
                 value: elem.clone(),
                 span: elem.span.clone(),
             };

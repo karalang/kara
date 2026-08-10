@@ -969,7 +969,21 @@ impl<'a> super::Resolver<'a> {
                     span: attr.span.clone(),
                     kind: ResolveErrorKind::UnionNonExhaustiveForbidden,
                     suggestion: None,
-                    replacement: None,
+                    // B-2026-08-10-2's sweep. "Remove the attribute" is
+                    // unconditional here — `#[non_exhaustive]` is never valid
+                    // on a union — and the diagnostic is already anchored at
+                    // the whole `#[non_exhaustive]`, so the edit is that span
+                    // deleted. Unlike the call-site markers this cannot absorb
+                    // the trailing newline (the resolver sees spans, not
+                    // source), so it leaves the attribute's line blank; that is
+                    // ordinary between-item whitespace in Kāra, not the
+                    // mid-expression debris that made the marker deletions
+                    // extend past the token.
+                    replacement: Some(Box::new(crate::resolver::TextEdit {
+                        offset: attr.span.offset,
+                        length: attr.span.length,
+                        replacement: String::new(),
+                    })),
                     stub_hint: None,
                 });
             }

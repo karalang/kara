@@ -6515,6 +6515,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 all_args.push(CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: object.clone(),
                     span: object.span.clone(),
                 });
@@ -7063,6 +7064,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: ident(&char_name, &sp),
                     span: sp.clone(),
                 }],
@@ -7819,6 +7821,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     args: vec![CallArg {
                                         label: None,
                                         mut_marker: false,
+                                        mut_marker_span: None,
                                         value: Expr {
                                             kind: ExprKind::Identifier(param.clone()),
                                             span: args[0].value.span.clone(),
@@ -8106,6 +8109,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         args: vec![CallArg {
                             label: None,
                             mut_marker: false,
+                            mut_marker_span: None,
                             value: current,
                             span: sp.clone(),
                         }],
@@ -8830,6 +8834,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         args: vec![CallArg {
                             label: None,
                             mut_marker: false,
+                            mut_marker_span: None,
                             value: iter_of(&zb),
                             span: sp.clone(),
                         }],
@@ -8959,6 +8964,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: body,
                         span: sp.clone(),
                     }],
@@ -9093,6 +9099,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: ident(&elem),
                         span: sp.clone(),
                     }],
@@ -9224,6 +9231,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     args: vec![CallArg {
                                         label: None,
                                         mut_marker: false,
+                                        mut_marker_span: None,
                                         value: ident(&loop_var),
                                         span: sp.clone(),
                                     }],
@@ -9387,6 +9395,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         args: vec![CallArg {
                             label: None,
                             mut_marker: false,
+                            mut_marker_span: None,
                             value: ident(&xname),
                             span: sp.clone(),
                         }],
@@ -9569,6 +9578,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: tuple_idx(ident(&tname), 1),
                         span: sp.clone(),
                     }],
@@ -10800,6 +10810,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: e,
                     span: sp.clone(),
                 }],
@@ -11258,6 +11269,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: e,
                     span: sp.clone(),
                 }],
@@ -11488,6 +11500,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: e,
                     span: sp.clone(),
                 }],
@@ -11664,6 +11677,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: e,
                     span: sp.clone(),
                 }],
@@ -11879,6 +11893,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         args: vec![CallArg {
                             label: None,
                             mut_marker: false,
+                            mut_marker_span: None,
                             value: val,
                             span: sp.clone(),
                         }],
@@ -12077,6 +12092,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: e,
                     span: sp.clone(),
                 }],
@@ -12472,6 +12488,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     args: vec![CallArg {
                                         label: None,
                                         mut_marker: false,
+                                        mut_marker_span: None,
                                         value: ident(loop_var),
                                         span: sp.clone(),
                                     }],
@@ -12607,6 +12624,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: ident(&inner_var),
                         span: sp.clone(),
                     }],
@@ -12711,6 +12729,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: ident(&elem_var),
                         span: sp.clone(),
                     }],
@@ -12877,6 +12896,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         args: vec![CallArg {
                             label: None,
                             mut_marker: false,
+                            mut_marker_span: None,
                             value: closure,
                             span: sp.clone(),
                         }],
@@ -13035,6 +13055,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: val,
                         span: sp.clone(),
                     }],
@@ -13287,6 +13308,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: Expr {
                             kind: ExprKind::Tuple(vec![index_of(base_a), index_of(base_b)]),
                             span: sp.clone(),

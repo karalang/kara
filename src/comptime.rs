@@ -929,6 +929,7 @@ impl Folder<'_> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: Expr {
                         kind: ExprKind::Identifier(type_name.to_string()),
                         span: site.clone(),
@@ -956,6 +957,7 @@ impl Folder<'_> {
                 args: vec![CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: value.clone(),
                     span: site.clone(),
                 }],

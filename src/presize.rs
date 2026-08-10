@@ -447,6 +447,7 @@ fn rewrite_to_with_capacity(stmt: &mut Stmt, coll: Coll, bound: Expr) {
     let arg = CallArg {
         label: None,
         mut_marker: false,
+        mut_marker_span: None,
         value: bound,
         span: span.clone(),
     };

@@ -144,6 +144,7 @@ fn synth_provider_ctor_marker() -> Stmt {
             args: vec![CallArg {
                 label: None,
                 mut_marker: false,
+                mut_marker_span: None,
                 value: Expr {
                     kind: ExprKind::StringLit(PROVIDER_CTOR_MARKER.to_string()),
                     span: zero.clone(),
@@ -213,12 +214,14 @@ fn synth_with_provider_call(resource: &str, provider: Expr, inner: Expr) -> Expr
                 CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: provider,
                     span: zero.clone(),
                 },
                 CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: closure,
                     span: zero.clone(),
                 },

@@ -13188,3 +13188,48 @@ fn call_site_mut_ref_deletes_only_the_ref() {
         "only the `ref` goes — `mut` is a legal call-site marker and must survive"
     );
 }
+
+/// B-2026-08-10-2's sweep — the ledger row asked whether any OTHER
+/// single-token-deletion diagnostic was in the same state, rather than letting
+/// them be found one dogfooding session at a time. This is one of the two that
+/// were.
+///
+/// `#[profile(name: fast)]` prescribes "remove the `name:` / `name =` prefix"
+/// and shipped no edit. The prefix runs from the argument's start to its value,
+/// so unlike the call-site marker case the deletion needs no extra span on the
+/// AST — `AttrArg` already bounds it at both ends.
+#[test]
+fn profile_named_arg_carries_a_machine_applicable_deletion() {
+    let src = "#[profile(name: embedded)]\nfn go() -> i64 { 42 }\n";
+    let result = karac::parse(src);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("E_PROFILE_NAMED_ARG")),
+        "errors: {:?}",
+        result.errors
+    );
+    assert_eq!(
+        result.fix_edits.len(),
+        1,
+        "the diagnostic must ship an edit; without one `karac fix` skips it"
+    );
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.replacement, "", "the fix is a deletion");
+    assert_eq!(
+        &src[edit.offset..edit.offset + edit.length],
+        "name: ",
+        "the edit covers the prefix AND its trailing space, leaving \
+         `#[profile(embedded)]`"
+    );
+}
+
+/// The over-fire direction: a positional `#[profile(...)]` argument is the
+/// correct spelling and must acquire no edit.
+#[test]
+fn positional_profile_arg_carries_no_deletion() {
+    let result = karac::parse("#[profile(embedded)]\nfn go() -> i64 { 42 }\n");
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(result.fix_edits.is_empty());
+}

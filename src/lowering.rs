@@ -1648,6 +1648,7 @@ fn call_ident(name: &str, arg: Expr) -> ExprKind {
         args: vec![CallArg {
             label: None,
             mut_marker: false,
+            mut_marker_span: None,
             span: arg.span.clone(),
             value: arg,
         }],
@@ -1676,6 +1677,7 @@ fn call_path(segments: Vec<String>, args: Vec<Expr>) -> ExprKind {
         .map(|e| CallArg {
             label: None,
             mut_marker: false,
+            mut_marker_span: None,
             span: e.span.clone(),
             value: e,
         })

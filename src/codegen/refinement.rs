@@ -180,6 +180,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ok_arg = CallArg {
             label: None,
             mut_marker: false,
+            mut_marker_span: None,
             value: Expr {
                 kind: ExprKind::Identifier(REFINE_SELF.to_string()),
                 span: span.clone(),
@@ -206,6 +207,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let err_arg = CallArg {
             label: None,
             mut_marker: false,
+            mut_marker_span: None,
             value: Expr {
                 kind: ExprKind::StringLit(format!("value does not satisfy refinement `{rname}`")),
                 span: span.clone(),

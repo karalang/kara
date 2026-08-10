@@ -1970,6 +1970,7 @@ impl<'a> super::TypeChecker<'a> {
                 let synthetic_arg = CallArg {
                     label: None,
                     mut_marker: false,
+                    mut_marker_span: None,
                     value: left.clone(),
                     span: left.span.clone(),
                 };
@@ -2008,6 +2009,7 @@ impl<'a> super::TypeChecker<'a> {
                                 CallArg {
                                     label: arg.label.clone(),
                                     mut_marker: arg.mut_marker,
+                                    mut_marker_span: None,
                                     value: left.clone(),
                                     span: left.span.clone(),
                                 }
@@ -2021,6 +2023,7 @@ impl<'a> super::TypeChecker<'a> {
                     let mut new_args = vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: left.clone(),
                         span: left.span.clone(),
                     }];

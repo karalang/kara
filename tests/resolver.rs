@@ -5652,3 +5652,53 @@ fn lowercase_module_binding_gets_the_naming_diagnostic() {
         "the misdirecting ambiguity error must be gone, got: {errs:?}"
     );
 }
+
+/// B-2026-08-10-2's sweep — the second of the two other single-token-deletion
+/// diagnostics that shipped no machine-applicable edit.
+///
+/// "Remove the attribute" is unconditional here (`#[non_exhaustive]` is never
+/// valid on a union) and the diagnostic is already anchored at the whole
+/// attribute, so the edit is that span deleted. It cannot absorb the trailing
+/// newline the way the call-site marker deletions absorb their trailing space —
+/// the resolver sees spans, not source — so it leaves the attribute's line
+/// blank, which is ordinary between-item whitespace rather than mid-expression
+/// debris.
+#[test]
+fn union_non_exhaustive_carries_a_machine_applicable_deletion() {
+    let src = "#[repr(C)]\n#[non_exhaustive]\nunion Raw { a: i64, b: f64 }\n";
+    let parsed = karac::parse(src);
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let resolved = karac::resolve(&parsed.program);
+    let err = resolved
+        .errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_NON_EXHAUSTIVE_FORBIDDEN"))
+        .expect("union `#[non_exhaustive]` must be rejected");
+    let edit = err
+        .replacement
+        .as_ref()
+        .expect("the diagnostic must ship an edit; without one `karac fix` skips it");
+    assert_eq!(edit.replacement, "", "the fix is a deletion");
+    assert_eq!(
+        &src[edit.offset..edit.offset + edit.length],
+        "#[non_exhaustive]",
+        "the edit removes the whole attribute, not just its name"
+    );
+}
+
+/// The over-fire direction: `#[non_exhaustive]` on an ENUM is the shape the
+/// attribute exists for, and must acquire neither the diagnostic nor an edit.
+#[test]
+fn enum_non_exhaustive_is_left_alone() {
+    let parsed = karac::parse("#[non_exhaustive]\nenum Status { Active, Paused }\n");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let resolved = karac::resolve(&parsed.program);
+    assert!(
+        !resolved
+            .errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_NON_EXHAUSTIVE_FORBIDDEN")),
+        "errors: {:?}",
+        resolved.errors
+    );
+}

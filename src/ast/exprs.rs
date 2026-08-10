@@ -431,6 +431,20 @@ pub struct CallArg {
     /// passed to `mut ref T` / `mut Slice[T]` parameters; rejected elsewhere.
     /// See design.md Feature 4 Part 1½: Call-site Mutation Markers.
     pub mut_marker: bool,
+    /// Source span of the `mut` keyword itself, when the author wrote one.
+    /// `None` for an unmarked argument and for every synthesized `CallArg`
+    /// (desugaring, lowering, codegen-side call synthesis) — those have no
+    /// source token to point at.
+    ///
+    /// B-2026-08-10-2 — the two call-site marker diagnostics prescribe deleting
+    /// this one token, and both shipped without a machine-applicable edit, so
+    /// `karac fix` skipped the least ambiguous fix in the file. `span` cannot
+    /// stand in for it: `span` covers the WHOLE argument, which is right for
+    /// the caret but starts at the LABEL in `f(name: mut x)` — deriving the
+    /// edit from it would delete the label too. The typechecker has neither
+    /// source text nor tokens, so the marker's own span has to be recorded
+    /// here, at the one place that saw the token.
+    pub mut_marker_span: Option<Span>,
     pub value: Expr,
     pub span: Span,
 }

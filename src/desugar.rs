@@ -121,6 +121,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
             CallArg {
                 label: None,
                 mut_marker: false,
+                mut_marker_span: None,
                 value: mv_ident(n, sp.clone()),
                 span: sp.clone(),
             }
@@ -261,6 +262,7 @@ fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
             args: vec![CallArg {
                 label: None,
                 mut_marker: false,
+                mut_marker_span: None,
                 value: Expr {
                     kind: ExprKind::StringLit(feat.to_string()),
                     span: span.clone(),

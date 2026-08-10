@@ -854,6 +854,7 @@ impl<'a> super::Interpreter<'a> {
                         args: vec![CallArg {
                             label: None,
                             mut_marker: false,
+                            mut_marker_span: None,
                             value: left.clone(),
                             span: left.span.clone(),
                         }],
@@ -875,6 +876,7 @@ impl<'a> super::Interpreter<'a> {
                                 CallArg {
                                     label: arg.label.clone(),
                                     mut_marker: false,
+                                    mut_marker_span: None,
                                     value: left.clone(),
                                     span: left.span.clone(),
                                 }
@@ -887,6 +889,7 @@ impl<'a> super::Interpreter<'a> {
                     let mut new_args = vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: left.clone(),
                         span: left.span.clone(),
                     }];

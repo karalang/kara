@@ -5520,6 +5520,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: Expr {
                             kind: ExprKind::Index {
                                 object: Box::new(ident(&var_name)),
@@ -5594,6 +5595,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     args: vec![CallArg {
                         label: None,
                         mut_marker: false,
+                        mut_marker_span: None,
                         value: ident(&n_name),
                         span: sp.clone(),
                     }],
@@ -5843,6 +5845,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         vec![CallArg {
                             label: None,
                             mut_marker: false,
+                            mut_marker_span: None,
                             value: a,
                             span: sp.clone(),
                         }]

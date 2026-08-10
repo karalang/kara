@@ -652,6 +652,7 @@ fn main() {
         let arg = |v: E| crate::ast::CallArg {
             label: None,
             mut_marker: false,
+            mut_marker_span: None,
             span: v.span.clone(),
             value: v,
         };

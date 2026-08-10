@@ -2110,6 +2110,16 @@ impl super::Parser {
             // Optional call-site `mut` marker. Disambiguate from `mut ref`
             // (also rejected) and from `mut <ident> = ...` (never valid in
             // argument position, but parse_expression will handle it).
+            // B-2026-08-10-2 — remember WHERE the `mut` was, not just that it
+            // was there. The typechecker's two call-site marker diagnostics
+            // both prescribe deleting this token and had no way to name it:
+            // `CallArg::span` starts at the label for `f(name: mut x)`, so it
+            // cannot stand in.
+            let mut_marker_span = if self.check(&Token::Mut) {
+                Some(self.current_span())
+            } else {
+                None
+            };
             let mut_marker = if self.check(&Token::Mut) {
                 // Look ahead: if the next token is `ref`, the user wrote
                 // `mut ref <expr>` — reject with a suggesting diagnostic.
@@ -2142,6 +2152,7 @@ impl super::Parser {
             args.push(CallArg {
                 label,
                 mut_marker,
+                mut_marker_span,
                 value,
                 span: self.span_from(&arg_start),
             });

@@ -1572,15 +1572,15 @@ impl<'a> super::TypeChecker<'a> {
 
         if !param_is_mutating {
             if arg.mut_marker {
-                self.type_error(
-                    format!(
-                        "`mut` marker is not legal here — parameter expects `{}` \
-                         (not a mutable borrow). Remove `mut`.",
-                        type_display(param_ty)
-                    ),
-                    arg.span.clone(),
-                    TypeErrorKind::InvalidMutMarker,
+                let message = format!(
+                    "`mut` marker is not legal here — parameter expects `{}` \
+                     (not a mutable borrow). Remove `mut`.",
+                    type_display(param_ty)
                 );
+                // B-2026-08-10-2, the sibling the row asked to enumerate: this
+                // arm prescribes the identical single-token deletion and had
+                // the identical gap.
+                self.emit_marker_deletion(arg, message);
             }
             return;
         }
@@ -1591,48 +1591,13 @@ impl<'a> super::TypeChecker<'a> {
             // The argument is already a mut-ref (either by type or by
             // place-root) — marking it is redundant and, in the nested
             // mut-ref-return case, actively wrong.
-            let message = "this argument is already a mut-ref; drop the `mut` marker. \
+            self.emit_marker_deletion(
+                arg,
+                "this argument is already a mut-ref; drop the `mut` marker. \
                  The mutation surface was announced at the callee or enclosing \
                  scope's signature."
-                .to_string();
-            // B-2026-08-10-2 — attach the machine-applicable deletion. The
-            // prose prescribes an unambiguous single-token removal, so leaving
-            // `fix_it` empty made `karac fix` skip the cheapest fix class there
-            // is. Same gap B-2026-08-05-12 closed for the call-site `ref` and
-            // `mut ref` arms; those live in the parser, which is why this
-            // typecheck-phase sibling was not covered by that change.
-            //
-            // The `mut` token's extent is derived from the two spans already
-            // in hand rather than recorded in the AST: `CallArg::span` starts
-            // at the marker and `CallArg::value.span` starts at the expression
-            // after it, so the gap between their offsets is exactly `mut` plus
-            // its trailing whitespace. That avoids adding a marker span to
-            // `CallArg` and touching its ~50 construction sites.
-            //
-            // LABELED arguments are excluded deliberately: `CallArg::span`
-            // begins at the LABEL there, not at the marker, so the same
-            // subtraction would delete `name:` along with the `mut`. `CallArg`
-            // records no label span to correct for, so a labeled argument
-            // keeps the textual hint alone until one exists. The unlabeled
-            // form is what the reporting program hit at all four of its sites.
-            let marker_extent = arg.value.span.offset.checked_sub(arg.span.offset);
-            match (arg.label.is_none(), marker_extent) {
-                (true, Some(length)) if length > 0 => self.type_error_with_fix_it(
-                    message,
-                    arg.span.clone(),
-                    TypeErrorKind::InvalidMutMarker,
-                    FixIt {
-                        span: Span {
-                            line: arg.span.line,
-                            column: arg.span.column,
-                            offset: arg.span.offset,
-                            length,
-                        },
-                        replacement: String::new(),
-                    },
-                ),
-                _ => self.type_error(message, arg.span.clone(), TypeErrorKind::InvalidMutMarker),
-            }
+                    .to_string(),
+            );
             return;
         }
 
@@ -1648,6 +1613,54 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::MissingMutMarker,
             );
         }
+    }
+
+    /// Report an illegal call-site `mut` marker, carrying the machine-applicable
+    /// deletion when the marker's source span is on record — B-2026-08-10-2.
+    ///
+    /// The edit spans the keyword AND the whitespace up to the argument
+    /// expression, matching the call-site `ref` deletion (B-2026-08-05-12): a
+    /// bare token-span delete leaves `f( carry)`, which is valid but makes
+    /// `karac fix` output that wants a formatting pass afterwards — and a fix
+    /// people have to tidy up is a fix they stop running.
+    ///
+    /// Falls back to the marker's own span when the expression does not start
+    /// after it, and emits no edit at all when there is no marker span (every
+    /// synthesized `CallArg` — desugaring, lowering, codegen call synthesis —
+    /// where deleting source bytes would be meaningless). The diagnostic itself
+    /// is unchanged in either case: prose first, edit only when it is exact.
+    ///
+    /// The marker span is read from the AST rather than derived by subtracting
+    /// `arg.span.offset` from `arg.value.span.offset`. That subtraction is
+    /// cheaper — it needs no new field, so none of `CallArg`'s ~50 construction
+    /// sites move — but it is only correct for an UNLABELED argument:
+    /// `CallArg::span` starts at the label in `f(name: mut x)`, so the same
+    /// gap spans `name: mut ` and the edit would delete the label too. Deriving
+    /// it that way therefore has to exclude labeled arguments and leave them
+    /// with prose alone. Recording where the token actually was removes the
+    /// exclusion instead of pinning it, which is the difference between a fix
+    /// that covers the feature and one that covers the reported shape.
+    fn emit_marker_deletion(&mut self, arg: &CallArg, message: String) {
+        let Some(mut_span) = arg.mut_marker_span.as_ref() else {
+            self.type_error(message, arg.span.clone(), TypeErrorKind::InvalidMutMarker);
+            return;
+        };
+        let end = if arg.value.span.offset > mut_span.offset {
+            arg.value.span.offset
+        } else {
+            mut_span.offset + mut_span.length
+        };
+        let mut edit_span = mut_span.clone();
+        edit_span.length = end - mut_span.offset;
+        self.type_error_with_fix_it(
+            message,
+            arg.span.clone(),
+            TypeErrorKind::InvalidMutMarker,
+            FixIt {
+                span: edit_span,
+                replacement: String::new(),
+            },
+        );
     }
 
     /// An argument is *forwarded* (already a mut-ref handed to this call) if:

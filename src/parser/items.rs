@@ -891,6 +891,25 @@ impl super::Parser {
                             .to_string(),
                         span: arg.span.clone(),
                     });
+                    // B-2026-08-10-2's sweep — the same gap as the call-site
+                    // markers, found by enumerating the family rather than
+                    // waiting for the next dogfooding session to hit it. The
+                    // prefix runs from the argument's start to its value, so
+                    // the deletion is exact without needing the name token's
+                    // own span; an argument with no value (`#[profile(name:)]`)
+                    // has no such bound and keeps prose only.
+                    if let Some(value) = arg.value.as_ref() {
+                        if value.span.offset > arg.span.offset {
+                            self.fix_edits.insert(
+                                crate::resolver::SpanKey::from_span(&arg.span),
+                                crate::resolver::TextEdit {
+                                    offset: arg.span.offset,
+                                    length: value.span.offset - arg.span.offset,
+                                    replacement: String::new(),
+                                },
+                            );
+                        }
+                    }
                     continue;
                 }
                 let Some(value_expr) = &arg.value else {

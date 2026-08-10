@@ -36321,15 +36321,22 @@ fn borrowed_payload_accepts_the_correct_closure_param_spellings() {
     }
 }
 
-/// B-2026-08-10-2 — the "already a mut-ref" diagnostic must carry a
-/// machine-applicable edit, not just prose telling the author what to delete.
-///
-/// The typecheck-phase sibling of B-2026-08-05-12, which closed the same gap
-/// for the call-site `ref` and `mut ref` arms. Those live in the PARSER and
-/// route through `ParseResult::fix_edits`; this one is a `TypeError`, so it
-/// carries its edit in `fix_it` — a different channel, which is why the
-/// earlier fix did not cover it and why a test on the parser side would not
-/// have caught this.
+// ── B-2026-08-10-2: call-site `mut` marker fix-its ─────────────────
+//
+// Both marker diagnostics prescribe deleting one token and both shipped with
+// no machine-applicable edit, so `karac fix` reported "(no fixable
+// diagnostics)" on a file whose only error was a four-character deletion. That
+// is the cheapest possible fix to ship and the most damaging to leave
+// unshipped: `karac fix` being the primary fix path is the AI-first wedge, and
+// the Mend machine-fix rate is measured over exactly this class of edit.
+//
+// Typecheck-phase sibling of B-2026-08-05-12, which closed the call-site `ref`
+// and `mut ref` arms. Those live in the PARSER and route through
+// `ParseResult::fix_edits`; these are `TypeError`s carrying `fix_it` — a
+// different channel, which is why the earlier fix did not reach them and why a
+// parser-side test would not have caught it.
+
+/// The shape the reporting program hit, at all four of its sites.
 ///
 /// The edit spans `mut` PLUS the following whitespace, for the reason the
 /// parser-side test states: deleting the token alone leaves `f(f,  carry)`,
@@ -36363,16 +36370,19 @@ fn already_mut_ref_arg_carries_a_machine_applicable_deletion() {
     );
 }
 
-/// The case the fix deliberately declines, so the exclusion is pinned rather
-/// than discovered by someone whose source it corrupts.
+/// The LABELED argument, which is why the marker's span is recorded on
+/// `CallArg` rather than derived from the spans already in hand.
 ///
-/// `CallArg::span` starts at the LABEL for a labeled argument, not at the
-/// marker, so the offset subtraction that locates `mut ` would instead cover
-/// `carry: mut `. `CallArg` records no label span to correct for, so the
-/// labeled form keeps the textual hint alone. The diagnostic must still fire —
-/// only the edit is withheld.
+/// Deriving it as `value.span.offset - span.offset` needs no new field, but
+/// `CallArg::span` starts at the LABEL here, so that gap covers `carry: mut `
+/// and the edit would delete the label along with the marker. An edit that
+/// silently corrupts source is worse than a missing one for a tool meant to run
+/// unattended, so the derivation has to withhold the edit for labeled
+/// arguments. Recording where the token actually was removes the exclusion
+/// instead of pinning it — this test asserts the labeled form now gets a
+/// correct edit, not that it gets none.
 #[test]
-fn already_mut_ref_labeled_arg_withholds_the_edit() {
+fn already_mut_ref_labeled_arg_deletes_only_the_marker() {
     let src = "fn fill(f: mut ref i64, carry: mut ref i64) -> bool {\n\
                carry = carry + 1i64;\n\
                true\n\
@@ -36385,9 +36395,54 @@ fn already_mut_ref_labeled_arg_withholds_the_edit() {
         .iter()
         .find(|e| e.message.contains("already a mut-ref"))
         .unwrap_or_else(|| panic!("expected the mut-marker diagnostic, got: {errors:?}"));
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("a labeled argument must ship an edit too");
+    assert_eq!(
+        &src[fix.span.offset..fix.span.offset + fix.span.length],
+        "mut ",
+        "only the marker goes — the label is part of the call and must survive"
+    );
+}
+
+/// The sibling arm found by the sweep the ledger row asked for: a `mut` marker
+/// on an argument whose parameter is not a mutable borrow at all. Different
+/// diagnostic, different branch, identical remedy — and it had the identical
+/// gap.
+#[test]
+fn illegal_call_site_mut_marker_carries_a_machine_applicable_deletion() {
+    let src = "fn show(v: i64) { println(v.to_string()); }\n\
+               fn main() { let mut n: i64 = 7; show(mut n); }";
+    let errors = typecheck_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("is not legal here"))
+        .expect("illegal marker must be reported");
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("the diagnostic must ship an edit");
+    assert_eq!(fix.replacement, "");
+    assert_eq!(
+        &src[fix.span.offset..fix.span.offset + fix.span.length],
+        "mut ",
+    );
+}
+
+/// A correct `mut` marker must not acquire a fix-it. The deletion is attached
+/// on the error paths only, so a well-formed call is untouched — the over-fire
+/// direction, cheap to state and the one that would silently break working
+/// code if it ever regressed.
+#[test]
+fn a_required_call_site_mut_marker_is_left_alone() {
+    let result = typecheck_ok(
+        "fn bump(v: mut ref i64) { v = v + 1; }\n\
+         fn main() { let mut n: i64 = 0; bump(mut n); }",
+    );
     assert!(
-        err.fix_it.is_none(),
-        "a labeled argument must not offer an edit — the span subtraction would \
-         delete the label along with the marker"
+        result.errors.iter().all(|e| e.fix_it.is_none()),
+        "a correctly marked call must carry no deletion fix-it: {:?}",
+        result.errors
     );
 }
