@@ -2344,7 +2344,7 @@ pub(super) fn body_any(block: &Block, pred: &dyn Fn(&Expr) -> bool) -> bool {
     !block_all(block, |c| !expr_contains(c, pred))
 }
 
-fn expr_contains(e: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
+pub(super) fn expr_contains(e: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
     pred(e) || !expr_children_all(e, |c| !expr_contains(c, pred))
 }
 

@@ -5369,6 +5369,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let params = params.clone();
                 let body = (**body).clone();
+                // B-2026-08-10-18 — `retain`'s predicate is inlined into the
+                // compaction loop the same way the fused adaptors' bodies are,
+                // so an explicit `return` in it lands in the enclosing
+                // function. Guarded with the same actionable message rather
+                // than left to fail LLVM verification.
+                Self::reject_explicit_return_in_iter_closure(&body, "retain")?;
                 let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
                 let fn_val = self.current_fn.unwrap();
 

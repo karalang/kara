@@ -6170,15 +6170,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         Self::closure_param_name(&params[0].pattern, "__fwa"),
                         Self::closure_param_name(&params[1].pattern, "__fwx"),
                     ) {
-                        if let Some(v) = self.try_compile_iter_chain_fold(
-                            object,
-                            &args[0].value,
-                            &acc_p,
-                            &x_p,
-                            body,
-                            call_span,
-                        )? {
-                            return Ok(v);
+                        Self::reject_explicit_return_in_iter_closure(body, "fold")?;
+                        {
+                            if let Some(v) = self.try_compile_iter_chain_fold(
+                                object,
+                                &args[0].value,
+                                &acc_p,
+                                &x_p,
+                                body,
+                                call_span,
+                            )? {
+                                return Ok(v);
+                            }
                         }
                     }
                 }
@@ -6198,14 +6201,20 @@ impl<'ctx> super::Codegen<'ctx> {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
                     if let Some(param) = Self::closure_param_name(&params[0].pattern, "__aap") {
-                        if let Some(v) = self.try_compile_iter_chain_any_all(
-                            object,
-                            method == "any",
-                            &param,
+                        Self::reject_explicit_return_in_iter_closure(
                             body,
-                            call_span,
-                        )? {
-                            return Ok(v);
+                            if method == "any" { "any" } else { "all" },
+                        )?;
+                        {
+                            if let Some(v) = self.try_compile_iter_chain_any_all(
+                                object,
+                                method == "any",
+                                &param,
+                                body,
+                                call_span,
+                            )? {
+                                return Ok(v);
+                            }
                         }
                     }
                 }
@@ -7983,6 +7992,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => return Ok(None),
                     };
                     match method.as_str() {
+                        // B-2026-08-10-18 — same guard as the `fold` / `any` /
+                        // `all` terminals: these adaptor bodies are spliced into
+                        // the fused loop, so an explicit `return` in one lands in
+                        // the enclosing function. Here it leaves a `ret`
+                        // mid-block and fails LLVM verification with
+                        // "Terminator found in the middle of a basic block",
+                        // which says nothing about the cause.
+                        "map" | "filter" | "take_while" | "skip_while"
+                            if Self::closure_body_has_explicit_return(&body) =>
+                        {
+                            Self::reject_explicit_return_in_iter_closure(&body, method)?;
+                            unreachable!("the rejection above always errors")
+                        }
                         "map" => IterAdaptor::Map { param, body },
                         "filter" => IterAdaptor::Filter { param, pred: body },
                         "take_while" => IterAdaptor::TakeWhile { param, pred: body },
@@ -10578,6 +10600,75 @@ impl<'ctx> super::Codegen<'ctx> {
     /// answer) for any shape it does not fully understand: a non-`map`/`filter`
     /// adaptor in the chain (`enumerate`/`take`/`zip`/…), a non-single-`Binding`
     /// closure, or a base that is itself an unrecognized adaptor MethodCall.
+    /// B-2026-08-10-18 — does this closure body contain an explicit `return`?
+    ///
+    /// The fused iterator emitters SPLICE a closure body into a synthesized
+    /// loop that is then compiled in the ENCLOSING function, so a `return` in
+    /// it lowers to a real function return: `fold` exited `main` on the first
+    /// element (exit 0, remaining output gone), and `map` / `filter` / `any` /
+    /// `all` / `retain` left a `ret` mid-block and failed LLVM verification.
+    ///
+    /// Rather than teach every splice site to retarget the return — which
+    /// needs the body's compile call to be owned by the emitter, and these
+    /// hand it to the loop compiler embedded in a larger AST — the fast paths
+    /// DECLINE this shape and fall back to the general closure lowering, where
+    /// the body is a real function body and `return` means what it says.
+    ///
+    /// Conservative by construction: a false positive costs one fused-pipeline
+    /// optimization on a rare shape, a false negative is a silent miscompile.
+    /// Reuses the BCE walker rather than a hand-rolled match for that reason —
+    /// a bespoke walker that missed an `ExprKind` would fail in the dangerous
+    /// direction.
+    /// B-2026-08-10-18 — fail the build with an actionable message when a
+    /// fused-iterator closure body contains an explicit `return`.
+    ///
+    /// This is a GUARD, not the fix. The fused emitters are the only
+    /// implementation of these terminals — declining them does not fall back
+    /// to a general closure lowering, it falls through to
+    /// "no handler for method '<m>' on non-identifier receiver … this is a
+    /// codegen bug", which sends the reader after the wrong thing entirely.
+    ///
+    /// What it buys is the `fold` arm, which did not fail at all: the spliced
+    /// `return` exited the ENCLOSING function on the first element, so the
+    /// program stopped early and still exited 0. Trading a silently truncated
+    /// program for a named limitation is worth doing on its own, ahead of the
+    /// restructuring the real fix needs (see the row: the emitters splice the
+    /// body into a synthesized loop they do not own the compile of, so
+    /// B-2026-08-10-16's `ReturnRetarget` cannot be scoped to the body here).
+    pub(super) fn reject_explicit_return_in_iter_closure(
+        body: &Expr,
+        method: &str,
+    ) -> Result<(), String> {
+        if Self::closure_body_has_explicit_return(body) {
+            return Err(format!(
+                "an explicit `return` inside a `{method}` closure is not yet supported by \
+                 codegen (B-2026-08-10-18) — the closure body is inlined into the caller, so \
+                 the `return` would return from the ENCLOSING function. Rewrite the body as an \
+                 expression (`|a, b| <expr>`, or an `if`/`match` expression), or run the \
+                 program with `--interp`, which handles it correctly."
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn closure_body_has_explicit_return(body: &Expr) -> bool {
+        fn walk(e: &Expr) -> bool {
+            if matches!(e.kind, ExprKind::Return(_)) {
+                return true;
+            }
+            // A NESTED closure is opaque: a `return` inside it belongs to
+            // THAT closure and is compiled as a real closure body, where it
+            // works. Descending would reject `xs.iter().map(|n| apply(|m| {
+            // … return m; }, n))`, which builds and runs correctly today —
+            // measured, after an earlier version of this guard broke it.
+            if matches!(e.kind, ExprKind::Closure { .. }) {
+                return false;
+            }
+            !super::bce_length_pin::expr_children_all(e, |c| !walk(c))
+        }
+        walk(body)
+    }
+
     fn try_compile_iter_chain_fold(
         &mut self,
         recv: &Expr,

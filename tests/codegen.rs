@@ -12072,6 +12072,27 @@ fn main() {
         super::common::output_with_hang_watchdog(cmd, std::time::Duration::from_secs(15))
     }
 
+    /// Compile `src` expecting codegen to REJECT it, returning the error text.
+    /// Panics if it compiles — a guard that stops guarding must fail loudly.
+    fn compile_src_expecting_error(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::desugar_program(&mut parsed.program);
+        karac::prelude::expand_gated_stdlib_imports(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        match compile_to_ir(&parsed.program, Some(&ownership), None) {
+            Err(e) => e,
+            Ok(_) => panic!("expected codegen to reject this program, but it compiled"),
+        }
+    }
+
     fn run_program(src: &str) -> Option<String> {
         run_program_capturing(src).map(|c| c.stdout)
     }
@@ -40873,6 +40894,103 @@ fn main() {
     /// codegen. This is the case that stayed broken while three successive
     /// minimised repros were each fixed, so it is worth an end-to-end test of
     /// its own.
+    /// B-2026-08-10-18 — an explicit `return` in a fused-iterator closure is
+    /// REJECTED with a named limitation instead of miscompiling.
+    ///
+    /// This pins a GUARD, not a fix, and the distinction is the point. The
+    /// fused emitters splice the closure body into a synthesized loop compiled
+    /// in the ENCLOSING function, so a `return` there returns from that
+    /// function. `fold` did not fail at all: it exited `main` on the first
+    /// element with status 0, silently truncating the program. The other five
+    /// left a `ret` mid-block and failed LLVM verification with "Terminator
+    /// found in the middle of a basic block", which names nothing useful.
+    ///
+    /// Trading both for an actionable error is worth pinning on its own; the
+    /// real fix needs the emitters restructured so they own the body's compile
+    /// call (see the row). `--interp` runs all six correctly and is unaffected.
+    #[test]
+    fn test_codegen_rejects_explicit_return_in_a_fused_iter_closure() {
+        for (label, src) in [
+            (
+                "fold — the arm that silently exited main",
+                "fn main() {\n\
+                     let v: Vec[i64] = [1i64, 2i64, 3i64];\n\
+                     let s: i64 = v.iter().fold(0i64, |acc, n| { return acc + n; });\n\
+                     println(f\"{s}\");\n\
+                 }",
+            ),
+            (
+                "map",
+                "fn main() {\n\
+                     let v: Vec[i64] = [1i64, 2i64];\n\
+                     let d: Vec[i64] = v.iter().map(|n| { return n * 2i64; }).collect();\n\
+                     println(f\"{d[0]}\");\n\
+                 }",
+            ),
+            (
+                "retain",
+                "fn main() {\n\
+                     let mut v: Vec[i64] = [1i64, 2i64, 3i64];\n\
+                     v.retain(|n| { return n > 1i64; });\n\
+                     println(f\"{v.len()}\");\n\
+                 }",
+            ),
+        ] {
+            let err = compile_src_expecting_error(src);
+            assert!(
+                err.contains("B-2026-08-10-18"),
+                "{label}: expected the named limitation, got: {err}"
+            );
+        }
+    }
+
+    /// The two directions the guard above could get wrong, which matter more
+    /// than the rejection itself.
+    ///
+    /// Case 1: every fused pipeline WITHOUT a `return` must still compile and
+    /// run — these are the hot paths the fusion exists for, and a guard that
+    /// tripped on them would be far worse than the bug.
+    ///
+    /// Case 2: a `return` inside a NESTED closure belongs to THAT closure,
+    /// which is lowered as a real closure body where `return` works. An
+    /// earlier version of the guard walked into nested closures and rejected
+    /// this, breaking a program that builds correctly — measured, not
+    /// hypothetical.
+    #[test]
+    fn test_e2e_fused_iter_pipelines_without_return_are_untouched() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let v: Vec[i64] = [1i64, 2i64, 3i64, 4i64];\n\
+                     let d: Vec[i64] = v.iter().map(|n| n * 2i64).collect();\n\
+                     let e: Vec[i64] = v.iter().filter(|n| n > 2i64).collect();\n\
+                     let s: i64 = v.iter().fold(0i64, |acc, n| acc + n);\n\
+                     let a: bool = v.iter().any(|n| n > 3i64);\n\
+                     let b: bool = v.iter().all(|n| n > 0i64);\n\
+                     let mut w: Vec[i64] = v;\n\
+                     w.retain(|n| n > 2i64);\n\
+                     println(f\"{d[3]} {e.len()} {s} {a} {b} {w.len()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("8 2 10 true true 2\n")
+        );
+        assert_eq!(
+            run_program(
+                "fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+                 fn main() {\n\
+                     let v: Vec[i64] = [1i64, 2i64];\n\
+                     let d: Vec[i64] = v.iter()\n\
+                         .map(|n| apply(|m| { if m > 1i64 { return m * 10i64; } return m; }, n))\n\
+                         .collect();\n\
+                     println(f\"{d[0]} {d[1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("1 20\n")
+        );
+    }
+
     #[test]
     fn test_e2e_lexicographic_comparator_with_early_returns() {
         assert_eq!(
