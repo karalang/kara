@@ -6170,7 +6170,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         Self::closure_param_name(&params[0].pattern, "__fwa"),
                         Self::closure_param_name(&params[1].pattern, "__fwx"),
                     ) {
-                        Self::reject_explicit_return_in_iter_closure(body, "fold")?;
+                        self.register_iter_body_retarget(body);
                         {
                             if let Some(v) = self.try_compile_iter_chain_fold(
                                 object,
@@ -6201,10 +6201,7 @@ impl<'ctx> super::Codegen<'ctx> {
             if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
                 if params.len() == 1 {
                     if let Some(param) = Self::closure_param_name(&params[0].pattern, "__aap") {
-                        Self::reject_explicit_return_in_iter_closure(
-                            body,
-                            if method == "any" { "any" } else { "all" },
-                        )?;
+                        self.register_iter_body_retarget(body);
                         {
                             if let Some(v) = self.try_compile_iter_chain_any_all(
                                 object,
@@ -8002,8 +7999,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         "map" | "filter" | "take_while" | "skip_while"
                             if Self::closure_body_has_explicit_return(&body) =>
                         {
-                            Self::reject_explicit_return_in_iter_closure(&body, method)?;
-                            unreachable!("the rejection above always errors")
+                            // B-2026-08-10-18 — register, then fall through to
+                            // the normal adaptor construction below.
+                            self.register_iter_body_retarget(&body);
+                            match method.as_str() {
+                                "map" => IterAdaptor::Map { param, body },
+                                "filter" => IterAdaptor::Filter { param, pred: body },
+                                "take_while" => IterAdaptor::TakeWhile { param, pred: body },
+                                _ => IterAdaptor::SkipWhile { param, pred: body },
+                            }
                         }
                         "map" => IterAdaptor::Map { param, body },
                         "filter" => IterAdaptor::Filter { param, pred: body },
@@ -10635,20 +10639,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// restructuring the real fix needs (see the row: the emitters splice the
     /// body into a synthesized loop they do not own the compile of, so
     /// B-2026-08-10-16's `ReturnRetarget` cannot be scoped to the body here).
-    pub(super) fn reject_explicit_return_in_iter_closure(
-        body: &Expr,
-        method: &str,
-    ) -> Result<(), String> {
+    /// B-2026-08-10-18 — mark a fused-iterator closure body so `compile_expr`
+    /// retargets its `return`s to the body's own value.
+    ///
+    /// A no-op unless the body actually contains one, so the fused pipelines
+    /// keep their existing lowering untouched in the overwhelmingly common
+    /// case and only bodies that need the retarget pay for it.
+    pub(super) fn register_iter_body_retarget(&mut self, body: &Expr) {
         if Self::closure_body_has_explicit_return(body) {
-            return Err(format!(
-                "an explicit `return` inside a `{method}` closure is not yet supported by \
-                 codegen (B-2026-08-10-18) — the closure body is inlined into the caller, so \
-                 the `return` would return from the ENCLOSING function. Rewrite the body as an \
-                 expression (`|a, b| <expr>`, or an `if`/`match` expression), or run the \
-                 program with `--interp`, which handles it correctly."
-            ));
+            self.iter_body_retarget_spans
+                .insert((body.span.offset, body.span.length));
         }
-        Ok(())
     }
 
     pub(super) fn closure_body_has_explicit_return(body: &Expr) -> bool {

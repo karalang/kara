@@ -30,6 +30,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // debug info is enabled, and self-guarded so it only attaches inside
         // the active subprogram's own function). Span line/column are 1-indexed.
         self.di_set_location(expr.span.line as u32, expr.span.column as u32);
+        // B-2026-08-10-18 — a fused-iterator closure body: compile it with its
+        // `return`s retargeted to the body's own value. Registered by span
+        // because the emitters splice the body into a synthesized loop and
+        // compile the loop wholesale; this is the only point that sees the
+        // body as a distinct sub-expression. The key is REMOVED for the
+        // duration so the re-entrant `compile_expr` below runs the ordinary
+        // path, and restored after so a body compiled more than once (the
+        // pipelines emit some bodies twice) retargets on each compile.
+        let retarget_key = (expr.span.offset, expr.span.length);
+        if self.iter_body_retarget_spans.remove(&retarget_key) {
+            let r = self.compile_expr_retargeting_return(expr);
+            self.iter_body_retarget_spans.insert(retarget_key);
+            return r;
+        }
         match &expr.kind {
             ExprKind::Integer(n, sfx) => Ok(self.const_int_for_suffix(*n, *sfx).into()),
             ExprKind::Float(f, sfx) => Ok(self.const_float_for_suffix(*f, *sfx).into()),

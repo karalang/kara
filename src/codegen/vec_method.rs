@@ -5374,7 +5374,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // so an explicit `return` in it lands in the enclosing
                 // function. Guarded with the same actionable message rather
                 // than left to fail LLVM verification.
-                Self::reject_explicit_return_in_iter_closure(&body, "retain")?;
+                self.register_iter_body_retarget(&body);
                 let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
                 let fn_val = self.current_fn.unwrap();
 
@@ -7887,6 +7887,37 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `wp_return_retarget_active` tags on it, so a real closure compiled
     /// while this is live (which switches `current_fn`) correctly does NOT
     /// retarget.
+    /// B-2026-08-10-18 — the fused-iterator sibling of
+    /// [`Self::compile_sort_body_retargeting_return`], reached from
+    /// `compile_expr`'s span hook rather than from an emitter that owns the
+    /// call. Same machinery, same reason: a `return` inside an INLINED closure
+    /// body must produce the body's value, not return from the function the
+    /// body was spliced into.
+    pub(super) fn compile_expr_retargeting_return(
+        &mut self,
+        body: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Some(fn_val) = self.current_fn else {
+            return self.compile_expr(body);
+        };
+        let cleanup_depth = self.scope_cleanup_actions.len();
+        self.return_retargets.push(super::state::ReturnRetarget {
+            fn_val,
+            cleanup_depth,
+            merge_bb: None,
+            result_slot: None,
+            result_ty: None,
+            result_type_expr: None,
+        });
+        let body_result = self.compile_expr(body);
+        let rt = self
+            .return_retargets
+            .pop()
+            .expect("retarget pushed just above is still on the stack");
+        let fall_through = body_result?;
+        self.join_retargeted_returns(rt, fall_through)
+    }
+
     fn compile_sort_body_retargeting_return(
         &mut self,
         fn_val: FunctionValue<'ctx>,

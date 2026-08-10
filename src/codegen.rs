@@ -2506,6 +2506,19 @@ pub(super) struct Codegen<'ctx> {
     /// arm only retargets when the top entry's `fn_val` matches
     /// `current_fn`.
     pub(crate) return_retargets: Vec<state::ReturnRetarget<'ctx>>,
+    /// B-2026-08-10-18 — spans of fused-iterator CLOSURE BODIES whose
+    /// `return` must be retargeted to the body's own value.
+    ///
+    /// These emitters splice the closure body into a synthesized loop and hand
+    /// the whole loop to the ordinary compiler, so they never own the body's
+    /// `compile_expr` call and cannot wrap it the way the sort-comparator
+    /// emitter does (B-2026-08-10-16). Keying on the body's SPAN lets
+    /// `compile_expr` recognise it wherever the splice put it and scope the
+    /// retarget to exactly that sub-expression — the merge block then lands at
+    /// the body's continuation, which is what makes `return` mean "this
+    /// element's value" rather than "exit the loop" (or, before this, "return
+    /// from the enclosing function").
+    pub(crate) iter_body_retarget_spans: std::collections::HashSet<(usize, usize)>,
     /// Phase 7 § *defer / errdefer codegen* slice 4. Staging slot for the
     /// about-to-be-returned Err payload, set by each error-exit site
     /// (`compile_question`'s `fail_bb`, `ExprKind::Return(Err(...))`, and
@@ -8026,6 +8039,7 @@ impl<'ctx> Codegen<'ctx> {
             soa_return_locals: std::collections::HashSet::new(),
             scope_cleanup_actions: Vec::new(),
             return_retargets: Vec::new(),
+            iter_body_retarget_spans: std::collections::HashSet::new(),
             pending_errdefer_payload: None,
             current_fn_err_payload_ty: None,
             main_result_err_te: None,
