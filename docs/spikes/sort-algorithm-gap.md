@@ -236,6 +236,65 @@ Verification:
   32 and 40 before 39, because a reversed run containing equal keys inverts
   them.
 
+## The stable-quicksort half (B-2026-08-10-19): designed, validated, NOT shipped
+
+Prototyped in the same Rust mirror against the *shipped* natural-run baseline.
+Design: keep phase 1's run detection; when a run is short, build a long run by
+stable 3-way quicksorting a span, then let phase 2's pairwise run merge run
+unchanged over the (now far fewer) runs.
+
+Measured at span = 16 K, against shipped:
+
+| pattern | shipped | + stable qsort | |
+|---|---|---|---|
+| random | 13.8 ms | 11.6 ms | 1.2x |
+| few-unique | 4.8 ms | 2.4 ms | **1.9x** |
+| sorted | 0.10 | 0.10 | — |
+| reverse | 0.18 | 0.18 | — |
+| sawtooth | 1.88 | 1.93 | — |
+| nearly-sorted | 3.01 | 2.97 | — |
+
+A clean win with no regressions — but it leaves random at **1.9x driftsort
+(6.0 ms)**, so it does *not* close B-2026-08-10-19. Weighed against ~600 lines
+of IR in a load-bearing sort, that is a poor trade, so it is recorded here
+rather than shipped. The few-unique 1.9x is the strongest argument for
+building it anyway: low-cardinality sort keys (status, category, day) are
+common.
+
+**Why it stalls at 1.9x.** The 3-way branchless scatter costs 3 stores per
+element per level, plus a full copy-back — ~2 loads + 4 stores per element per
+level. driftsort partitions *into* scratch and alternates buffer roles across
+levels (no copy-back) using a 2-way partition: ~1 load + 1 store. Matching it
+means carrying a per-range buffer-parity flag on the stack and normalising at
+the end — i.e. porting driftsort proper, a bigger project than this row.
+
+### Three traps, all of which bit during prototyping
+
+1. **Pivot choice is a correctness-of-performance issue, not a tuning knob.**
+   A middle-element pivot is *catastrophic* on periodic data: sawtooth
+   (`i % 1000`) regressed **44x–100x** (124 ms and 290 ms against a 2.8 ms
+   baseline) because the middle of a period-1000 block is an unrepresentative
+   small key, giving a ~5/95 split and O(n²) behaviour. **Median-of-3 does not
+   fix it** — sampling positions 0/mid/last of a periodic sequence returns
+   three correlated small keys. A fixed-seed xorshift random pivot does fix
+   it (and keeps the binary reproducible, since only *performance* depends on
+   the seed, never the output).
+2. **Never quicksort a block just because the run at this position is short.**
+   Doing so destroys order that already exists: `nearly-sorted` (1% random
+   spikes in an ascending sequence) regressed **2.4x**, because each spike
+   triggered quicksorting 4096 mostly-ordered elements. The correct policy
+   accumulates only *consecutive* short runs, and probes with a cap (32) so
+   discarding a long run costs O(32) rather than O(run).
+3. **"Push the smaller, iterate on the larger" bounds RECURSION depth, not
+   explicit-stack depth.** With an explicit stack a lopsided chain pushes one
+   entry per iteration and never pops, so the stack grows to O(span/base) —
+   this overflowed a 96-entry stack on sawtooth. The sound bound comes from a
+   different argument: every stacked range is disjoint and strictly larger
+   than the base cutoff, so the stack cannot exceed `span/base` entries.
+   3-way partitioning is also what guarantees *progress* (the equal block is
+   at least the pivot and is excluded from both sides), which a 2-way
+   partition does not.
+
 ## Caveats
 
 - **Single host, x86_64 shared container.** Absolute numbers drift a few
