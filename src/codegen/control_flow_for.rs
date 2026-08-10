@@ -965,6 +965,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// type drives `register_var_from_type_expr` (vec_elem_types +
     /// var_elem_type_exprs) and the `is_vec` gate identically to a real
     /// `owned_temp_drops` Vec entry.
+    /// B-2026-08-10-5 — the `Slice[T]` sibling of
+    /// [`Self::vec_type_expr_from_element`], for the tuple-index arms that
+    /// mint a synth binding for a container living in a tuple element.
+    ///
+    /// The two are NOT interchangeable at those sites: a `Vec` slot is a
+    /// 24-byte `{ptr,len,cap}` and a `Slice` slot a 16-byte `{ptr,len}`, so
+    /// registering a slice element as a Vec would read a `cap` word that is
+    /// not there. The arms pick between them structurally, off the tuple's own
+    /// LLVM field type, rather than needing the surface type threaded down.
+    pub(super) fn slice_type_expr_from_element(elem_te: &TypeExpr) -> TypeExpr {
+        TypeExpr {
+            // `MutSlice` regardless of the field's surface mutability: both
+            // spellings lower to the same `{ptr,len}` slot, and this synth
+            // binding exists only to give the identifier-keyed index dispatch
+            // the right LAYOUT. Whether the write was permitted at all is a
+            // typechecker question, already settled before codegen runs.
+            kind: TypeKind::MutSlice(Box::new(elem_te.clone())),
+            span: elem_te.span.clone(),
+        }
+    }
+
     pub(super) fn vec_type_expr_from_element(elem_te: &TypeExpr) -> TypeExpr {
         TypeExpr {
             kind: TypeKind::Path(PathExpr {

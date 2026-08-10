@@ -2096,12 +2096,22 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let key = (object.span.offset, object.span.length);
             if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
-                let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);
+                // B-2026-08-10-5 — pick the CONTAINER shape from the tuple's
+                // own LLVM field type rather than assuming `Vec`. A slice
+                // element is a 16-byte `{ptr,len}` and a Vec a 24-byte
+                // `{ptr,len,cap}`, so registering a slice as a Vec would have
+                // the dispatch read a `cap` word that is not there. Resolved
+                // just below, once `tuple_ty` is in hand.
                 if let (Some(elem_ptr), Some(tuple_ty)) = (
                     self.field_chain_place_ptr(object),
                     self.place_chain_aggregate_llvm_type(tup),
                 ) {
                     if let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) {
+                        let container_te = if elem_ll_ty == self.slice_struct_type().into() {
+                            super::Codegen::slice_type_expr_from_element(&elem_te)
+                        } else {
+                            super::Codegen::vec_type_expr_from_element(&elem_te)
+                        };
                         let synth = format!("__tup_elem_{}", self.indexed_elem_counter);
                         self.indexed_elem_counter += 1;
                         self.variables.insert(
@@ -2111,7 +2121,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: elem_ll_ty,
                             },
                         );
-                        self.register_var_from_type_expr(&synth, &vec_te);
+                        self.register_var_from_type_expr(&synth, &container_te);
                         let synth_expr = Expr {
                             kind: ExprKind::Identifier(synth.clone()),
                             span: object.span.clone(),
@@ -5107,12 +5117,22 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let key = (object.span.offset, object.span.length);
             if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
-                let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);
+                // B-2026-08-10-5 — pick the CONTAINER shape from the tuple's
+                // own LLVM field type rather than assuming `Vec`. A slice
+                // element is a 16-byte `{ptr,len}` and a Vec a 24-byte
+                // `{ptr,len,cap}`, so registering a slice as a Vec would have
+                // the dispatch read a `cap` word that is not there. Resolved
+                // just below, once `tuple_ty` is in hand.
                 if let (Some(elem_ptr), Some(tuple_ty)) = (
                     self.field_chain_place_ptr(object),
                     self.place_chain_aggregate_llvm_type(tup),
                 ) {
                     if let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) {
+                        let container_te = if elem_ll_ty == self.slice_struct_type().into() {
+                            super::Codegen::slice_type_expr_from_element(&elem_te)
+                        } else {
+                            super::Codegen::vec_type_expr_from_element(&elem_te)
+                        };
                         let synth = format!("__tup_elem_{}", self.indexed_elem_counter);
                         self.indexed_elem_counter += 1;
                         self.variables.insert(
@@ -5122,7 +5142,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: elem_ll_ty,
                             },
                         );
-                        self.register_var_from_type_expr(&synth, &vec_te);
+                        self.register_var_from_type_expr(&synth, &container_te);
                         let synth_expr = Expr {
                             kind: ExprKind::Identifier(synth.clone()),
                             span: object.span.clone(),

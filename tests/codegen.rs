@@ -40800,6 +40800,69 @@ fn main() {
     /// — index-assign through a tuple field whose type is a Slice — which
     /// reproduces without `split_at_mut` via `(v.as_slice_mut(), 0)` and is
     /// filed on its own row.
+    /// B-2026-08-10-5 — indexing a SLICE-typed tuple field, read and write.
+    ///
+    /// `t.0[i]` was refused by codegen whenever the field's type was a Slice
+    /// ("Index operator applied to non-array type" on a read, "Index
+    /// assignment target must be a variable" on a store), while the identical
+    /// spelling built fine with a Vec-typed field and `--interp` handled both.
+    ///
+    /// The cause was one gate: the typechecker recorded the element type into
+    /// `temp_recv_elem_types` only for `Type::Named{Vec|VecDeque}`, and a
+    /// `Slice[T]` is `Type::Slice`, so codegen's tuple-index arms never fired
+    /// and the expression fell to the generic tail.
+    ///
+    /// Case 2 is why this mattered enough to fix rather than document:
+    /// `split_at_mut` returns a tuple of slices, so writing through a half by
+    /// index — the obvious use of a mutable partition — hit this on every
+    /// program. Case 3 is the Vec-typed field, which must keep working: the
+    /// arms now choose the container shape from the tuple's LLVM field type,
+    /// and getting that backwards would read a `cap` word off a 16-byte slice
+    /// slot or miss one on a 24-byte Vec slot.
+    #[test]
+    fn test_e2e_index_through_a_slice_typed_tuple_field() {
+        // 1. Read and write through a slice-typed tuple field.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[i64] = [1i64, 2i64, 3i64];\n\
+                     let mut t: (mut Slice[i64], i64) = (v.as_slice_mut(), 5i64);\n\
+                     let r: i64 = t.0[1];\n\
+                     t.0[0] = 9i64;\n\
+                     println(f\"{r} {v[0]} {v[1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2 9 2\n")
+        );
+        // 2. The motivating shape — writing through `split_at_mut` halves.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut buf: Vec[u8] = [0u8, 0u8, 0u8, 0u8];\n\
+                     let mut p: (mut Slice[u8], mut Slice[u8]) = buf.split_at_mut(2i64);\n\
+                     p.0[0] = 7u8;\n\
+                     p.1[1] = 9u8;\n\
+                     println(f\"{buf[0]} {buf[1]} {buf[2]} {buf[3]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("7 0 0 9\n")
+        );
+        // 3. CONTROL — a Vec-typed tuple field, which already worked.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut t: (Vec[i64], i64) = ([1i64, 2i64], 5i64);\n\
+                     t.0[0] = 9i64;\n\
+                     println(f\"{t.0[0]} {t.0[1]} {t.1}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("9 2 5\n")
+        );
+    }
+
     #[test]
     fn test_e2e_split_at_mut_halves_write_through_to_the_source() {
         // Vec receiver.

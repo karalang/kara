@@ -3565,13 +3565,28 @@ impl<'a> super::TypeChecker<'a> {
                 // read the element — a run-vs-build gap (B-2026-07-20-2). Sibling
                 // of the `.iter()`-receiver recording in `infer_method_call`.
                 if matches!(&object.kind, ExprKind::TupleIndex { .. }) {
-                    if let Type::Named { name, args } = &obj_ty {
-                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 {
-                            let resolved = resolve_type_var_top(&args[0], &self.env.substitutions);
-                            let te = Self::type_to_type_expr(&resolved);
-                            self.temp_recv_elem_types
-                                .insert(SpanKey::from_span(&object.span), te);
+                    // B-2026-08-10-5 — a SLICE-typed tuple element needs the
+                    // same recording. `Slice[T]` is `Type::Slice`, not
+                    // `Type::Named`, so it missed this gate entirely and
+                    // codegen's tuple-index arm never fired: `t.0[i]` fell to
+                    // the generic tail and failed the build for both a read
+                    // and a store, while the interpreter handled both. Newly
+                    // common because `split_at_mut` (B-2026-08-10-4) returns
+                    // exactly a tuple of slices.
+                    let recorded = match &obj_ty {
+                        Type::Named { name, args }
+                            if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                        {
+                            Some(args[0].clone())
                         }
+                        Type::Slice { element, .. } => Some((**element).clone()),
+                        _ => None,
+                    };
+                    if let Some(elem) = recorded {
+                        let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
+                        let te = Self::type_to_type_expr(&resolved);
+                        self.temp_recv_elem_types
+                            .insert(SpanKey::from_span(&object.span), te);
                     }
                 }
                 // Phase 11: Tensor multi-dim indexing — `t[i, j, k]`
