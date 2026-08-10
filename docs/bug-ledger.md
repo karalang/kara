@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 228 | 0 |
-| leak | 157 | 1 |
+| leak | 157 | 0 |
 | double-free | 118 | 0 |
 | codegen-gap | 98 | 0 |
 | run-vs-build | 93 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 774 | 3 |
+| codegen | 774 | 2 |
 | typecheck | 140 | 3 |
 | interp | 134 | 2 |
 | ownership | 44 | 0 |
@@ -124,20 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1067 surfaced · 4 open · 1053 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1067 surfaced · 3 open · 1054 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-10-1 | 2026-08-10 | codegen | medium | a NESTED indexed store that overwrites a heap element (`d[i][j] = <String>`) leaks the old value -- the single-index store frees it, the nested one does not | probe: `let mut d: Vec[Vec[String]] = …; d[0][0] = f"zz";` -- the overwritten String is never freed (valgrind --leak-check=full at KARAC_OPT_LEVEL=0: 1 definitely-lost block) |
 | B-2026-08-10-2 | 2026-08-10 | typecheck | low | the `already a mut-ref; drop the `mut` marker` diagnostic tells the author to delete one token but carries no machine-applicable replacement, so `karac fix` leaves it — the exact sibling of B-2026-08-05-12, which was filed and fixed for the call-site `ref` case | the `already a mut-ref; drop the `mut` marker` diagnostic — emitted with no machine-applicable replacement |
 | B-2026-08-10-3 | 2026-08-10 | typecheck+interp+codegen | medium | `File` has no `seek` on the Kāra surface even though the runtime entry point `karac_runtime_file_seek` is already implemented and exported — so any random-access file workload has to be restructured around sequential reads | runtime/src/file.rs (`karac_runtime_file_seek` EXISTS); no Kāra-surface `File.seek` in typechecker/interpreter/codegen |
 | B-2026-08-10-4 | 2026-08-10 | typecheck+interp+codegen | medium | `split_at_mut` is fully specified in design.md but implemented nowhere, so there is NO way to obtain a mutable sub-view of a buffer — `buf[n..]` yields `Slice[u8]`, not `mut Slice[u8]`, and a partly-filled buffer cannot be topped up in place | docs/design.md § `split_at_mut` — disjoint mutable partition; `split_at` is implemented in src/typechecker/stdlib_seq.rs and src/interpreter/method_call_seq.rs, `split_at_mut` is implemented nowhere |
 
-### Fixed (1053)
+### Fixed (1054)
 
-<details><summary>1053 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1054 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1224,6 +1223,7 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-09-19 | interp | low | SIBLING OF B-2026-08-09-18, NOT CLOSED BY bb46a68d: a faulted operand still ICEs the interpreter in THREE more positions, all with the same shape (`u… | 512f59a |
 | B-2026-08-09-20 | codegen | medium | a `File` moved into a `Vec` or a struct is never closed -- the container has no element/field drop for the handle, so the fd leaks until process exit… | FIXED by cc48dcca -- two arms, one per container kind: a `File` element arm in `vec_elem_agg_drop_for_type_expr` (new `emit_file_slot_close_fn`, threaded as `elem_agg_drop` so every `track_vec_of_aggs_var` site picks it up) and a `FieldDrop::FileHandleClose` in the struct drop glue; `te_recursive_drop_fully_supported` admits `File` so `Vec[Vec[File]]` leaves the one-level fast path. Both null the slot after closing, because `karac_runtime_file_close` is not idempotent, and both defer to a user type that shadows the name `File`. Also fixes two shapes the row did not record -- a handle read back out of a container into a fresh binding (`let g = hs[0]` / `let g = h.f`) leaked identically. Pinned by four ASAN fixtures including an over-fire control. The row's unverified `DropChannelEnd` sibling risk was probed and does NOT reproduce. |
 | B-2026-08-09-21 | codegen | medium | A NESTED index whose base is a STRUCT FIELD (`h.data[i][j]`) is rejected by codegen -- `codegen: nested indexed read requires the outer container to… | FIXED by 4f3d6921, BOTH halves. READ: `compile_nested_index_read` gained a struct-FIELD arm -- `nested_index_field_base_elem` resolves the element `TypeExpr` from the field's DECLARED type and the container pointer via `lower_field_access_ptr`, then rejoins the existing synth-identifier tail (factored out as `finish_nested_index_read`). The name-keyed lowering was split into a by-POINTER core, `lower_indexed_elem_ptr_vec_at`, so the field base reuses the identical bounds check and GEP. WRITE: `compile_index_store` gained a matching arm that normalises the field to a synth identifier and recurses, so the existing named-outer nested store handles it unchanged. Pin: e2e `test_e2e_nested_index_rooted_at_struct_field` (7 cases), stash-proven red. |
+| B-2026-08-10-1 | codegen | medium | a NESTED indexed store that overwrites a heap element (`d[i][j] = <String>`) leaks the old value -- the single-index store frees it, the nested one d… | 1b6ed41 |
 
 </details>
 
