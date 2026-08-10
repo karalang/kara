@@ -45190,4 +45190,176 @@ fn main() {
             "chained_result_map_receiver_once",
         );
     }
+
+    /// Write a small fixture file and hand back its escaped path, so a `File`
+    /// fixture opens something real rather than exercising only the `Err` arm.
+    /// Named per label so concurrently-running fixtures never share one path.
+    fn file_fixture_path(label: &str) -> String {
+        let p = std::env::temp_dir().join(format!("karac_asan_{label}.txt"));
+        std::fs::write(&p, b"ABCDEFGH").expect("fixture write");
+        p.to_str().unwrap().replace('\\', "\\\\")
+    }
+
+    /// B-2026-08-09-20 — a `File` MOVED into a `Vec[File]` was owned by nobody.
+    /// B-2026-08-09-17 stopped the ORIGIN binding closing a moved-out handle
+    /// (the fix that made the move usable at all), and nothing took the closing
+    /// over: `vec_elem_agg_drop_for_type_expr` had no `File` arm, so the buffer
+    /// free reclaimed the SLOT and leaked the `Box<KaracFile>` the slot pointed
+    /// at — and with it the fd, until process exit.
+    ///
+    /// LSan is the right gate for this. The user-visible symptom is descriptor
+    /// exhaustion (253 of 400 opens under `ulimit -n 256`, silently — `File.open`
+    /// simply starts returning `Err`), which is awkward to assert portably; the
+    /// leaked Box behind each fd is the same defect one level down, and it is
+    /// exactly what LSan reports.
+    #[test]
+    fn asan_file_moved_into_a_vec_is_closed_by_the_vec() {
+        let path = file_fixture_path("file_into_vec");
+        assert_clean_asan_run(
+            &format!(
+                r#"
+fn main() with reads(FileSystem) {{
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {{
+        let mut hs: Vec[File] = Vec.new();
+        match File.open("{path}") {{
+            Ok(f) => {{ hs.push(f); n = n + 1i64; }}
+            Err(_) => {{ n = n - 1i64; }}
+        }}
+        i = i + 1i64;
+    }}
+    println(n.to_string());
+}}
+"#
+            ),
+            &["40"],
+            "file_moved_into_vec_closed",
+        );
+    }
+
+    /// The struct-field half of B-2026-08-09-20. A `File` field is a bare `ptr`
+    /// to a runtime-owned `Box<KaracFile>`, invisible to every classifier in the
+    /// struct drop glue (not a vec-struct, not a map handle, not an i64
+    /// side-table key), so `struct Holder { f: File }` reclaimed its storage and
+    /// leaked the handle.
+    ///
+    /// Worth a fixture of its own rather than trusting the Vec one: the two are
+    /// different code paths (`FieldDrop` classification vs the element-drain
+    /// hook) that happened to share a symptom, and B-2026-08-09-17's first
+    /// diagnosis went wrong precisely by assuming a struct field and a Vec
+    /// element behave alike here.
+    #[test]
+    fn asan_file_moved_into_a_struct_field_is_closed_by_the_struct() {
+        let path = file_fixture_path("file_into_struct");
+        assert_clean_asan_run(
+            &format!(
+                r#"
+struct Holder {{ f: File }}
+fn main() with reads(FileSystem) {{
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {{
+        match File.open("{path}") {{
+            Ok(fh) => {{ let _h = Holder {{ f: fh }}; n = n + 1i64; }}
+            Err(_) => {{ n = n - 1i64; }}
+        }}
+        i = i + 1i64;
+    }}
+    println(n.to_string());
+}}
+"#
+            ),
+            &["40"],
+            "file_moved_into_struct_closed",
+        );
+    }
+
+    /// The over-fire direction of B-2026-08-09-20, and the reason the new drops
+    /// null their slot: `karac_runtime_file_close` reconstructs the `Box` and
+    /// drops it, so it is NOT idempotent — two owners means a double free, not a
+    /// harmless second call.
+    ///
+    /// Three shapes that each hand the handle to a second candidate owner:
+    /// the struct crosses a function return (B-2026-08-09-17's own pin, here in
+    /// a loop so a double free has 40 chances to land), an element is `pop`ped
+    /// out (the `Some(g)` binding owns it and the `0..len` drain must not
+    /// revisit it), and a field is read into a fresh binding while the struct is
+    /// still live.
+    #[test]
+    fn asan_file_handed_to_a_second_owner_is_closed_exactly_once() {
+        let path = file_fixture_path("file_second_owner");
+        assert_clean_asan_run(
+            &format!(
+                r#"
+struct Holder {{ f: File }}
+fn make(path: String) -> Holder with reads(FileSystem) panics {{
+    match File.open(path) {{
+        Ok(fh) => Holder {{ f: fh }},
+        Err(_) => panic("open-failed"),
+    }}
+}}
+fn main() with reads(FileSystem) writes(FileSystem) panics {{
+    let mut buf: Array[u8, 4] = [0u8; 4];
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {{
+        // (a) moved through a return, then dropped by the caller's binding.
+        let h = make("{path}");
+        match h.f.read(mut buf) {{ Ok(_) => {{ n = n + 1i64; }} Err(_) => {{}} }}
+        // (b) popped out — ownership moves to the `Some` binding.
+        let mut hs: Vec[File] = Vec.new();
+        match File.open("{path}") {{ Ok(f) => {{ hs.push(f); }} Err(_) => {{}} }}
+        match hs.pop() {{
+            Some(g) => {{ match g.read(mut buf) {{ Ok(_) => {{ n = n + 1i64; }} Err(_) => {{}} }} }}
+            None => {{}}
+        }}
+        // (c) field read into a fresh binding while the struct is still live.
+        let h2 = make("{path}");
+        let g2 = h2.f;
+        match g2.read(mut buf) {{ Ok(_) => {{ n = n + 1i64; }} Err(_) => {{}} }}
+        i = i + 1i64;
+    }}
+    println(n.to_string());
+}}
+"#
+            ),
+            &["120"],
+            "file_second_owner_closed_once",
+        );
+    }
+
+    /// The nested shape, which rides in for free on the same element arm:
+    /// `emit_drop_fn_for_type_expr` delegates a named leaf to
+    /// `vec_elem_agg_drop_for_type_expr`, so teaching that one dispatch about
+    /// `File` also teaches the recursive drop family — provided
+    /// `te_recursive_drop_fully_supported` admits `File`, which is the half that
+    /// keeps a `Vec[Vec[File]]` off the one-level buffer-only fast path.
+    #[test]
+    fn asan_file_inside_a_nested_vec_is_closed_at_every_level() {
+        let path = file_fixture_path("file_nested_vec");
+        assert_clean_asan_run(
+            &format!(
+                r#"
+fn main() with reads(FileSystem) {{
+    let mut i: i64 = 0i64;
+    let mut n: i64 = 0i64;
+    while i < 40i64 {{
+        let mut outer: Vec[Vec[File]] = Vec.new();
+        let mut inner: Vec[File] = Vec.new();
+        match File.open("{path}") {{
+            Ok(f) => {{ inner.push(f); n = n + 1i64; }}
+            Err(_) => {{ n = n - 1i64; }}
+        }}
+        outer.push(inner);
+        i = i + 1i64;
+    }}
+    println(n.to_string());
+}}
+"#
+            ),
+            &["40"],
+            "file_nested_vec_closed",
+        );
+    }
 }

@@ -1449,6 +1449,16 @@ impl<'ctx> super::Codegen<'ctx> {
             None,
             VecOrString,
             MapOrSet,
+            /// B-2026-08-09-20 — a `File` field. The handle is a bare `ptr` to
+            /// a runtime-owned `Box<KaracFile>`, invisible to every classifier
+            /// above (it is not a vec-struct, not a map handle, not an i64
+            /// side-table key), so a `struct Holder { f: File }` dropped its
+            /// storage and leaked the fd. Closed via
+            /// `karac_runtime_file_close`, which is null-safe, so the emit arm
+            /// needs no live-guard branch — but it nulls the field afterwards,
+            /// because close is NOT idempotent and the null is what makes a
+            /// second drop of the same storage inert.
+            FileHandleClose,
             /// Phase-8 line 39 follow-up — an i64 field that's an opaque
             /// handle into a runtime side-table; free it via the named
             /// extern (guarded on `handle != 0`) at scope exit.
@@ -2075,6 +2085,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 kinds[idx] = FieldDrop::HttpHandleFree(extern_name);
             }
         }
+        // B-2026-08-09-20 — a `File` FIELD. Same shape of gap as the HTTP
+        // handle above: an opaque runtime-owned handle that no layout-driven
+        // classifier can see (a `ptr`, not a vec-struct or a map handle), so
+        // `struct Holder { f: File }` reclaimed its storage and leaked the fd
+        // — 253 of 400 opens under `ulimit -n 256`, and silently, because the
+        // failure surfaces only as `File.open` starting to return `Err`.
+        //
+        // Guarded the same two ways for the same reason: a user type named
+        // `File` shadows the builtin and keeps whatever class it already had,
+        // and the LLVM field must actually be the `ptr` the handle lowers to,
+        // so a shadowing type whose field is an aggregate can never be read as
+        // a handle and closed.
+        if !self.struct_types.contains_key("File") {
+            let file_idxs: Vec<usize> = field_kinds
+                .iter()
+                .enumerate()
+                .filter(|(idx, fk)| {
+                    fk.as_deref() == Some("File")
+                        && kinds.get(*idx) == Some(&FieldDrop::None)
+                        && matches!(
+                            st.get_field_type_at_index(*idx as u32),
+                            Some(inkwell::types::BasicTypeEnum::PointerType(_))
+                        )
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            for idx in file_idxs {
+                kinds[idx] = FieldDrop::FileHandleClose;
+            }
+        }
         if kinds.iter().all(|k| *k == FieldDrop::None) {
             return None;
         }
@@ -2587,6 +2627,41 @@ impl<'ctx> super::Codegen<'ctx> {
                             )
                             .unwrap();
                     }
+                }
+                FieldDrop::FileHandleClose => {
+                    // B-2026-08-09-20 — load the `*mut KaracFile` and close it,
+                    // then null the field. No live-guard branch: unlike the i64
+                    // side-table handle below, `karac_runtime_file_close`
+                    // returns early on null, so a branch here would only
+                    // restate the runtime's own check in IR. The null STORE is
+                    // the part that carries weight — close reconstructs the
+                    // `Box` and drops it, so it is not idempotent, and the null
+                    // is what makes a second drop of the same storage inert
+                    // rather than a double free.
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.file.p"),
+                        )
+                        .unwrap();
+                    let handle = self
+                        .builder
+                        .build_load(ptr_ty, field_ptr, &format!("drop.field{field_idx}.file"))
+                        .unwrap()
+                        .into_pointer_value();
+                    let close_fn = self
+                        .module
+                        .get_function("karac_runtime_file_close")
+                        .expect("karac_runtime_file_close declared in Codegen::new");
+                    self.builder
+                        .build_call(close_fn, &[handle.into()], "")
+                        .unwrap();
+                    self.builder
+                        .build_store(field_ptr, ptr_ty.const_null())
+                        .unwrap();
                 }
                 FieldDrop::HttpHandleFree(extern_name) => {
                     // Phase-8 line 39 follow-up — load the i64 side-table

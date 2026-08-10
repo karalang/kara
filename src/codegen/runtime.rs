@@ -2536,6 +2536,22 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.enum_layouts.contains_key(&name) {
             return self.emit_enum_drop_switch(&name);
         }
+        // B-2026-08-09-20 — a `File` element (`Vec[File]`). The handle is a bare
+        // `ptr` to a runtime-owned `Box<KaracFile>`, so the outer buffer free
+        // reclaims the SLOT and leaks everything the slot pointed at: the
+        // allocation and, more visibly, the fd. Nothing else owned it —
+        // B-2026-08-09-17 stopped the ORIGIN binding closing a moved-out handle
+        // (the fix that made `hs.push(f)` usable at all) without anything taking
+        // the closing over.
+        //
+        // Placed AFTER the struct/enum/shared checks on purpose: a user type
+        // named `File` is then routed by those, and only the builtin handle
+        // reaches here — the same "don't misread a name-collision as the
+        // builtin" guard the HTTP handle-field override states as an LLVM-type
+        // check.
+        if name == "File" {
+            return Some(self.emit_file_slot_close_fn());
+        }
         // A `Vec[Inner]` ELEMENT (i.e. the container is `Vec[Vec[Inner]]` or
         // deeper) whose `Inner` itself owns heap below the buffer level
         // (`Vec[Vec[String]]`, `Vec[Vec[Vec[T]]]`, `Vec[Vec[Map[..]]]`, …). The
@@ -2666,6 +2682,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         _ => false,
                     },
+                    // B-2026-08-09-20 — a `File` leaf. Reached through the same
+                    // named-type delegation, which now hands back
+                    // `__karac_file_slot_close`, so a `Vec[Vec[File]]` drops
+                    // every handle instead of falling to the one-level
+                    // buffer-only path. Listed BEFORE the user-type arm so the
+                    // builtin wins only when no user type shadows the name —
+                    // if one does, `struct_types` claims it below and its own
+                    // synthesis is what runs, matching the element dispatch.
+                    "File" if !self.struct_types.contains_key("File") => true,
                     // A user struct / enum / shared type: its own drop synthesis
                     // (reached via the `emit_drop_fn_for_type_expr` named-type
                     // delegation) frees every heap field / variant payload, so a
@@ -3247,6 +3272,64 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value();
         let weak_drop = self.weak_runtime_fn("karac_weak_drop", false);
         self.builder.build_call(weak_drop, &[w.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        drop_fn
+    }
+
+    /// The per-slot drop for a `File` handle a container owns — load the
+    /// `*mut KaracFile` and close it, then null the slot.
+    ///
+    /// B-2026-08-09-20. Used as the `elem_agg_drop` of a `Vec[File]` (threaded
+    /// by `vec_elem_agg_drop_for_type_expr`, so every `track_vec_of_aggs_var`
+    /// registration site picks it up at once) and, through
+    /// `emit_drop_fn_for_type_expr`'s named-type delegation, as the leaf drop of
+    /// any nested shape that bottoms out in a `File`.
+    ///
+    /// No null branch: `karac_runtime_file_close` returns early on null, so a
+    /// guard would only duplicate the runtime's own check in IR. The trailing
+    /// store is not decoration, though — close is NOT idempotent (it
+    /// reconstructs the `Box` and drops it, the property
+    /// `karac_runtime_gpu_free_soa` has and this one lacks), and nulling is what
+    /// makes a second drain over the SAME slot inert rather than a double free.
+    /// That is the cheap half of the defence; the load-bearing half is that the
+    /// drain walks `0..len`, so a `pop`ped element — whose `Some(g)` binding
+    /// does own and close the handle — is already outside the walk.
+    pub(super) fn emit_file_slot_close_fn(&mut self) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "__karac_file_slot_close";
+        if let Some(f) = self.module.get_function(fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn =
+            self.module
+                .add_function(fn_name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let slot_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let handle = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "fileslot.handle")
+            .unwrap()
+            .into_pointer_value();
+        let close_fn = self
+            .module
+            .get_function("karac_runtime_file_close")
+            .expect("karac_runtime_file_close declared in Codegen::new");
+        self.builder
+            .build_call(close_fn, &[handle.into()], "")
+            .unwrap();
+        self.builder
+            .build_store(slot_ptr, ptr_ty.const_null())
+            .unwrap();
         self.builder.build_return(None).unwrap();
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
