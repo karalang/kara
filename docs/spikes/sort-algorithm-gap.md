@@ -236,7 +236,37 @@ Verification:
   32 and 40 before 39, because a reversed run containing equal keys inverts
   them.
 
-## The stable-quicksort half (B-2026-08-10-19): designed, validated, NOT shipped
+## The stable-quicksort half (B-2026-08-10-19): built, measured, NOT merged
+
+> **Outcome, added after implementing it in IR.** The run-builder below was
+> built in full and is correct, but it does **not** move shuffled-uniform
+> input — the case the row is about. It is preserved unmerged on branch
+> `claude/kara-open-bugs-list-6r5wke` (`93b438d`). Measured against the
+> shipped natural-run sort: random 14.6 → 13.6–14.4 ms (noise-level),
+> few-unique 6.11 → 3.88 (1.58x), everything else neutral. It also adds a
+> fourth `malloc`/`free` to *every* sort, for a win only large few-unique
+> sorts see; 1145 lines for that is not a trade worth making here.
+>
+> **Why, and the Rust prototype below OBSCURED this** — do not re-derive the
+> plan from the prototype numbers. Building a 16 K run by quicksort takes
+> `log2(span/16)` = 10 partition levels to replace `log2(span/32)` = 9 merge
+> passes: **the pass count does not drop, it slightly rises.** The entire bet
+> was that a partition level is cheaper *per element* than a merge pass, and
+> in IR it is not — the branchless three-way scatter costs 3 stores per
+> element. Writing the "less" bucket in place to eliminate the largest
+> copy-back was also tried and changed nothing, which rules out the copy-back
+> and points at the scatter stores.
+>
+> **So driftsort's advantage is not "quicksort instead of merge."** It is a
+> partition cheap enough per level to beat a merge pass: 2-way, into
+> **alternating** buffers (~1 load + 1 store, no copy-back, buffer parity
+> carried per range on the stack and normalised at the end). A 2-way
+> partition needs its own progress guarantee, since only 3-way gets one free
+> from the equal block. Reusable from `93b438d`: the insertion-sort helper,
+> the bounded explicit stack, the capped non-reversing probe, and the
+> consecutive-short-run policy. Only the partition needs replacing.
+
+### The prototype (kept for the design and the traps)
 
 Prototyped in the same Rust mirror against the *shipped* natural-run baseline.
 Design: keep phase 1's run detection; when a run is short, build a long run by
