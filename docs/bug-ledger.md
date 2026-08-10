@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 157 | 0 |
 | double-free | 118 | 0 |
 | codegen-gap | 99 | 0 |
-| run-vs-build | 93 | 0 |
+| run-vs-build | 94 | 1 |
 | missing-feature | 88 | 0 |
 | perf | 60 | 1 |
 | false-positive | 57 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 776 | 1 |
+| codegen | 777 | 2 |
 | typecheck | 141 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1069 surfaced · 1 open · 1058 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1070 surfaced · 2 open · 1058 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-10-9 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by(|a,b| a.0.cmp(b.0))` runs ~2x slower than Rust's `sort_by` on the same data. ISOLATED MEASUREMENT (150k pairs, 25 rounds, sort and clone only, no other work): kara 0.34 s vs rustc -O 0.16 s = 2.1x. Corroborated by two independent sort-dominated katas measured separately: #252 meeting-rooms (kara 469.0 ms vs rust 247.9 = 1.89x) and #253 meeting-rooms-ii (kara 598.6 vs rust 370.5 = 1.62x). Both kata ratios are LOWER than the isolated one because each carries non-sort work that is at parity, diluting the ratio -- which is itself evidence the sort is the locus rather than the surrounding code. Sigma is tight throughout (kara 18.0 / 14.6 ms, rust 16.9 / 11.5 ms), so the effect is far outside run-to-run noise. NOT the heap and NOT the copy: #253 adds a hand-rolled binary heap on top of #252's sort+scan and comes out RELATIVELY BETTER (1.62x vs 1.89x), so heap maintenance is not the cost; the isolated kernel above removes the heap and the scan entirely and shows the largest ratio. CAVEAT ON EVIDENCE: all measurements are from ONE host, an x86_64 shared container, and none are from the canonical Apple-silicon bench host. Rust's current sort is driftsort (adaptive, pattern-exploiting) and no claim is made here about which algorithm karac lowers to -- only that the gap is real, repeatable, and localised to the sort. NEXT STEP: re-measure the isolated kernel on the M5 host before any tuning work; if it reproduces, compare the lowered sort against what Rust's adaptive sort does on shuffled-uniform input. | Vec.sort_by / Vec.sort lowering |
+| B-2026-08-10-13 | 2026-08-10 | codegen | medium | Inside a `sort_by` COMPARATOR CLOSURE, a closure parameter supports only TUPLE-FIELD access; any METHOD CALL or INDEX on it falls through codegen's method dispatch. `v.sort_by(|x, y| x.len().cmp(y.len()))` on a `Vec[Vec[i64]]` or `Vec[String]` fails with `codegen: no handler for method 'len' on variable 'x' (method dispatch fell through; this is a codegen bug -- add a dispatcher arm in compile_method_call ...)`; the interpreter runs it correctly. The diagnostic SELF-IDENTIFIES as a codegen bug, so this is a known-shaped fall-through rather than a deliberate deferral. BOUNDARY (probed): inside the closure, `x.len()` on Vec[Vec[i64]] FAILS; `x.len()` on Vec[String] FAILS; `x[0]` index FAILS; tuple field `x.0` BUILDS. Outside any closure, `v[0].len()` BUILDS. So the closure parameter is reaching codegen without an element type attached -- field access works because it needs no type lookup, while method dispatch and index lowering both do. IMPACT: this is a whole family, not an edge case -- sorting a `Vec[Vec[T]]` or `Vec[String]` by ANY content-derived key (length, first element, lexicographic) cannot be built. `Vec[(i64,i64)].sort_by(|a,b| a.0.cmp(b.0))` works, which is why #56/#252/#253 never hit it: every earlier sort_by in the corpus compares tuple fields. FIX DIRECTION: register the comparator parameters' element TypeExpr when lowering the sort_by closure (the same registration `var_elem_type_exprs` gets for an ordinary binding), so method dispatch and index lowering can resolve them. REPRO (8 lines): `fn main() { let mut v: Vec[Vec[i64]] = Vec.new(); let mut a: Vec[i64] = Vec.new(); a.push(1i64); v.push(a); v.sort_by(|x, y| x.len().cmp(y.len())); println(f"{v.len()}"); }` | compile_method_call (dispatch fall-through); sort_by closure param typing |
 
 ### Fixed (1058)
 
