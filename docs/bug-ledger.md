@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 228 | 0 |
 | leak | 157 | 0 |
 | double-free | 118 | 0 |
-| codegen-gap | 100 | 1 |
+| codegen-gap | 100 | 0 |
 | run-vs-build | 95 | 0 |
 | missing-feature | 88 | 0 |
 | perf | 60 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 779 | 2 |
+| codegen | 779 | 1 |
 | typecheck | 142 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1073 surfaced · 2 open · 1061 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1073 surfaced · 1 open · 1062 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-10-9 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by(|a,b| a.0.cmp(b.0))` runs ~2x slower than Rust's `sort_by` on the same data. ISOLATED MEASUREMENT (150k pairs, 25 rounds, sort and clone only, no other work): kara 0.34 s vs rustc -O 0.16 s = 2.1x. Corroborated by two independent sort-dominated katas measured separately: #252 meeting-rooms (kara 469.0 ms vs rust 247.9 = 1.89x) and #253 meeting-rooms-ii (kara 598.6 vs rust 370.5 = 1.62x). Both kata ratios are LOWER than the isolated one because each carries non-sort work that is at parity, diluting the ratio -- which is itself evidence the sort is the locus rather than the surrounding code. Sigma is tight throughout (kara 18.0 / 14.6 ms, rust 16.9 / 11.5 ms), so the effect is far outside run-to-run noise. NOT the heap and NOT the copy: #253 adds a hand-rolled binary heap on top of #252's sort+scan and comes out RELATIVELY BETTER (1.62x vs 1.89x), so heap maintenance is not the cost; the isolated kernel above removes the heap and the scan entirely and shows the largest ratio. CAVEAT ON EVIDENCE: all measurements are from ONE host, an x86_64 shared container, and none are from the canonical Apple-silicon bench host. Rust's current sort is driftsort (adaptive, pattern-exploiting) and no claim is made here about which algorithm karac lowers to -- only that the gap is real, repeatable, and localised to the sort. NEXT STEP: re-measure the isolated kernel on the M5 host before any tuning work; if it reproduces, compare the lowered sort against what Rust's adaptive sort does on shuffled-uniform input. | Vec.sort_by / Vec.sort lowering |
-| B-2026-08-10-18 | 2026-08-10 | codegen | medium | an explicit `return` inside an ITERATOR ADAPTOR closure (`map`/`filter`/`any`/`all`/`retain`) fails codegen with `Terminator found in the middle of a basic block!`, and `fold` SILENTLY MISCOMPILES to no output -- the sort-comparator twin of this was B-2026-08-10-16 | iterator-adaptor closure body lowering; the `fold` arm is the silent one. Probe: `v.iter().map(|n| { return n * 2i64; }).collect()` |
 
-### Fixed (1061)
+### Fixed (1062)
 
-<details><summary>1061 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1062 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1230,6 +1229,7 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-10-13 | codegen | medium | Inside a `sort_by` COMPARATOR CLOSURE, a closure parameter supports only TUPLE-FIELD access; any METHOD CALL or INDEX on it falls through codegen's m… | b90027e |
 | B-2026-08-10-16 | codegen | medium | An explicit `return` inside a `sort_by` COMPARATOR CLOSURE emits an LLVM module-verification failure: `Module verification failed: "Function return t… | 568e6ff |
 | B-2026-08-10-17 | typecheck | medium | a `return` NESTED inside a closure body (in an `if` / loop) is typechecked against `()` instead of the closure's return type, so an early return from… | 819af61 |
+| B-2026-08-10-18 | codegen | medium | an explicit `return` inside an ITERATOR ADAPTOR closure (`map`/`filter`/`any`/`all`/`retain`) fails codegen with `Terminator found in the middle of a… | c0c8842 |
 
 </details>
 
