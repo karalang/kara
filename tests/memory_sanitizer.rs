@@ -44823,6 +44823,65 @@ fn main() {
         );
     }
 
+    /// B-2026-08-10-1 — a nested indexed store frees the element it displaces.
+    ///
+    /// `d[i][j] = <String>` left the overwritten buffer orphaned;
+    /// `compile_nested_vec_vec_index_store` ended in a bare `build_store`
+    /// while the single-index path had freed the displaced element since
+    /// B-2026-06-19-7.
+    ///
+    /// COVERAGE, measured against the pre-fix compiler rather than assumed:
+    /// 24 B in 8 blocks at `KARAC_OPT_LEVEL=0` **and** the same at the default
+    /// `-O2`. So unlike its neighbours this fixture does NOT depend on the
+    /// `-O0` leg — the loop-derived labels (`f"r{i}a"`) keep the displaced
+    /// buffers from folding into dead allocations LLVM deletes, which is the
+    /// trap B-2026-08-09-13 and B-2026-08-09-4 document and the reason the row
+    /// insists on `-O0` for hand measurements of this path. A bare `d[0][0] =
+    /// f"zz"` probe is `-O0`-only; this one witnesses at both levels.
+    ///
+    /// The 8 blocks are two per row: the displaced leaf from `o[j][0] = …`,
+    /// and the one from the self-alias store, whose RHS is cloned so the old
+    /// buffer is orphaned just the same.
+    ///
+    /// The self-alias row (`o[j][0] = o[j][0]`) is the direction where an
+    /// over-eager release frees the buffer it is about to store back — an
+    /// invalid free ASAN catches, as opposed to the leak LSan catches.
+    #[test]
+    fn asan_nested_index_store_frees_the_displaced_element() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut o: Vec[Vec[String]] = Vec.new();
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        let mut row: Vec[String] = Vec.new();
+        row.push(f"r{i}a");
+        row.push(f"r{i}b");
+        o.push(row);
+        i = i + 1i64;
+    }
+    let mut j: i64 = 0i64;
+    while j < 4i64 {
+        // Overwrite a heap leaf — the displaced buffer must be freed.
+        o[j][0] = f"n{j}";
+        // SELF-ALIAS — the release must not free the value being stored.
+        o[j][1] = o[j][1];
+        j = j + 1i64;
+    }
+    let mut k: i64 = 0i64;
+    while k < 4i64 {
+        println(o[k][0]);
+        println(o[k][1]);
+        k = k + 1i64;
+    }
+    println("end");
+}
+"#,
+            &["n0", "r0b", "n1", "r1b", "n2", "r2b", "n3", "r3b", "end"],
+            "nested_index_store_displaced_elem",
+        );
+    }
+
     /// B-2026-08-09-14 — the DEAD-source twin of the `while let` case above,
     /// which runs on the transfer path rather than the clone leg.
     ///

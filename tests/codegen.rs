@@ -40762,6 +40762,94 @@ fn main() {
         );
     }
 
+    /// B-2026-08-10-1 — a NESTED indexed store releases the element it
+    /// overwrites, as the single-index store already did.
+    ///
+    /// `compile_nested_vec_vec_index_store` ended in a bare `build_store`, so
+    /// `d[0][0] = f"zz"` orphaned the old String's buffer while the
+    /// single-index `r[0] = f"zz"` freed it. Both paths now go through one
+    /// helper, which is the point — the leak existed because the nested path
+    /// never grew a copy of a discipline the other has carried since
+    /// B-2026-06-19-7, and a second copy would have drifted the same way.
+    ///
+    /// This test asserts VALUES, not memory: the leak itself is invisible in
+    /// output and is gated by the ASAN fixture (whose memory half needs the
+    /// `-O0` leg, since at the default level the orphaned allocation is dead
+    /// and LLVM deletes it). What these cases catch is the release going
+    /// WRONG rather than missing — freeing a buffer that is still live shows
+    /// up here as a wrong or empty string.
+    ///
+    /// Case 2 is the struct-FIELD base, which only reaches this path because
+    /// B-2026-08-09-21 routed it here. Case 3 is the self-alias `d[0][0] =
+    /// d[0][0]`, the shape where a release-before-store would free the very
+    /// buffer being read. Case 4 is a scalar leaf, which must take the
+    /// no-release path untouched.
+    #[test]
+    fn test_e2e_nested_index_store_releases_the_displaced_element() {
+        // 1. The row's own repro.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut r: Vec[String] = Vec.new();\n\
+                     r.push(f\"aa\"); r.push(f\"bb\");\n\
+                     let mut d: Vec[Vec[String]] = Vec.new();\n\
+                     d.push(r);\n\
+                     d[0][0] = f\"zz\";\n\
+                     println(f\"{d[0][0]} {d[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("zz bb\n")
+        );
+        // 2. Struct-FIELD base — the B-2026-08-09-21 route into this path.
+        assert_eq!(
+            run_program(
+                "struct H { data: Vec[Vec[String]] }\n\
+                 fn main() {\n\
+                     let mut r: Vec[String] = Vec.new();\n\
+                     r.push(f\"aa\"); r.push(f\"bb\");\n\
+                     let mut h: H = H { data: Vec.new() };\n\
+                     h.data.push(r);\n\
+                     h.data[0][0] = f\"zz\";\n\
+                     println(f\"{h.data[0][0]} {h.data[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("zz bb\n")
+        );
+        // 3. SELF-ALIAS — releasing before storing must not free the source.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut r: Vec[String] = Vec.new();\n\
+                     r.push(f\"aa\"); r.push(f\"bb\");\n\
+                     let mut d: Vec[Vec[String]] = Vec.new();\n\
+                     d.push(r);\n\
+                     d[0][0] = d[0][0];\n\
+                     d[0][1] = d[0][0];\n\
+                     println(f\"{d[0][0]} {d[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("aa aa\n")
+        );
+        // 4. SCALAR leaf — no release applies; must be untouched.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut r: Vec[i64] = Vec.new();\n\
+                     r.push(1i64); r.push(2i64);\n\
+                     let mut d: Vec[Vec[i64]] = Vec.new();\n\
+                     d.push(r);\n\
+                     d[0][0] = 9i64;\n\
+                     println(f\"{d[0][0]} {d[0][1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("9 2\n")
+        );
+    }
+
     #[test]
     fn test_e2e_nested_indexed_read_vec_of_vec() {
         // `grid[0][0]` — nested indexed read on `Vec[Vec[i64]]`.

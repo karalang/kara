@@ -4502,6 +4502,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // are `{ptr,len,cap}` vec-structs, mutually exclusive with the ptr /
         // 4-word-Option slots handled here.
         let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+        self.emit_elem_store_releasing_displaced(elem_ptr, elem_ty, elem_te, val, rhs_is_fresh)
+    }
+
+    /// Store `val` into an already-computed Vec ELEMENT slot, first releasing
+    /// whatever the slot held — the displaced-value discipline shared by the
+    /// single-index (`v[i] = x`) and nested (`d[i][j] = x`) store paths.
+    ///
+    /// B-2026-08-10-1 — extracted so the two paths cannot drift. The nested
+    /// store had only a bare `build_store` and leaked every overwritten heap
+    /// element (`d[0][0] = f"zz"` orphaned the old String), while the
+    /// single-index path had carried the release since B-2026-06-19-7. Rather
+    /// than grow a second copy of four shape-specific release rules, both now
+    /// call this. The row asked for exactly that: "worth checking whether the
+    /// nested path can simply delegate to it once the inner element pointer is
+    /// known".
+    ///
+    /// `elem_te` is the element's surface type when one is recorded — the
+    /// single-index caller reads the binding's `var_elem_type_exprs` entry, the
+    /// nested caller passes the INNER element type it already had to derive to
+    /// GEP. The refcount shapes below need it; the vec-struct and scalar
+    /// shapes do not, so a missing entry degrades to those rather than failing.
+    fn emit_elem_store_releasing_displaced(
+        &mut self,
+        elem_ptr: inkwell::values::PointerValue<'ctx>,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_te: Option<TypeExpr>,
+        val: BasicValueEnum<'ctx>,
+        rhs_is_fresh: bool,
+    ) -> Result<(), String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let is_opt_shared = elem_te
             .as_ref()
             .is_some_and(|te| self.option_inner_shared_type_for_type_expr(te).is_some());
@@ -4599,6 +4629,7 @@ impl<'ctx> super::Codegen<'ctx> {
         outer_index: &Expr,
         inner_index: &Expr,
         val: BasicValueEnum<'ctx>,
+        rhs_is_fresh: bool,
     ) -> Result<(), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let vec_ty = self.vec_struct_type();
@@ -4688,8 +4719,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(inner_elem_ty, inner_data, &[ii], "nvv.leaf.ptr")
                 .unwrap()
         };
-        self.builder.build_store(leaf_ptr, val).unwrap();
-        Ok(())
+        // B-2026-08-10-1 — release the displaced leaf before overwriting it.
+        // This was a bare `build_store`, so `d[0][0] = f"zz"` orphaned the old
+        // String's buffer while the single-index `r[0] = f"zz"` freed it
+        // correctly. Shared with that path rather than reimplemented, so the
+        // four shape rules (vec-struct buffer, tensor block, shared /
+        // `Option[shared]` refcount, scalar) stay in one place.
+        //
+        // Only visible at `KARAC_OPT_LEVEL=0`: at the default level the
+        // overwritten element is usually a dead allocation LLVM deletes
+        // outright, so a default-level leak run reports clean.
+        self.emit_elem_store_releasing_displaced(
+            leaf_ptr,
+            inner_elem_ty,
+            Some(inner_elem_te),
+            val,
+            rhs_is_fresh,
+        )
     }
 
     pub(super) fn compile_slice_index_store(
@@ -4897,8 +4943,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .and_then(vec_inner_type_expr)
                     .is_some();
                 if outer_is_vec_of_vec {
-                    return self
-                        .compile_nested_vec_vec_index_store(outer_name, outer_idx, index, val);
+                    return self.compile_nested_vec_vec_index_store(
+                        outer_name,
+                        outer_idx,
+                        index,
+                        val,
+                        rhs_is_fresh,
+                    );
                 }
             }
         }
