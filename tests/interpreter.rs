@@ -31494,3 +31494,83 @@ fn file_read_accepts_a_fixed_array_buffer_like_aot() {
         "the interpreter must read through a fixed Array buffer exactly as AOT does; got: {out}"
     );
 }
+
+/// B-2026-08-10-4 — the interpreter twin of `split_at_mut`, pinned separately
+/// from the codegen E2E because its failure mode is different and silent.
+///
+/// The interpreter normalizes a `Value::Slice` receiver into a fresh snapshot
+/// `Array` before the seq method surface sees it — correct for the read-only
+/// methods it was built for, fatal here. Without exempting `split_at_mut` from
+/// that normalization the two halves window a DETACHED copy: their lengths are
+/// right, reads through them are right, and every write is silently lost.
+///
+/// So the assertion has to write through a half and read back through the
+/// ORIGINAL collection. Both receivers are covered because only the `mut
+/// Slice` one goes through the normalization — measured before the fix, the
+/// `Vec` case propagated and the `Slice` case did not, on otherwise identical
+/// programs.
+#[test]
+fn split_at_mut_halves_alias_the_source_for_both_receivers() {
+    // Vec receiver.
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = [1i64, 2i64, 3i64, 4i64];\n\
+                 let mut p: (mut Slice[i64], mut Slice[i64]) = v.split_at_mut(2i64);\n\
+                 p.0[0] = 10i64;\n\
+                 p.1[0] = 30i64;\n\
+                 println(f\"{v[0]} {v[1]} {v[2]} {v[3]}\");\n\
+             }"
+        )
+        .trim(),
+        "10 2 30 4"
+    );
+    // `mut Slice` receiver — the normalization path.
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+                 let mut a: Array[i64, 4] = [1i64, 2i64, 3i64, 4i64];\n\
+                 let mut s: mut Slice[i64] = a.as_slice_mut();\n\
+                 let mut p: (mut Slice[i64], mut Slice[i64]) = s.split_at_mut(1i64);\n\
+                 p.1[0] = 55i64;\n\
+                 println(f\"{a[0]} {a[1]}\");\n\
+             }"
+        )
+        .trim(),
+        "1 55"
+    );
+}
+
+/// The panic the spec requires: "Panics if `mid > self.len()`".
+///
+/// `split_at` clamps with `.min(v.len())`; this must NOT. A silently-clamped
+/// mutable partition hands back an empty second half where the caller expected
+/// a writable tail, and the write then goes nowhere — the same invisible-loss
+/// failure the aliasing test above guards, arrived at from the other side.
+#[test]
+fn split_at_mut_past_the_end_panics_rather_than_clamping() {
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut v: Vec[i64] = [1i64, 2i64];\n\
+             let mut p: (mut Slice[i64], mut Slice[i64]) = v.split_at_mut(5i64);\n\
+             println(f\"{p.0.len()}\");\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("out of bounds")),
+        "expected an out-of-bounds fault, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // mid == len is the legal boundary, not a fault.
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = [1i64, 2i64];\n\
+                 let mut p: (mut Slice[i64], mut Slice[i64]) = v.split_at_mut(2i64);\n\
+                 println(f\"{p.0.len()} {p.1.len()}\");\n\
+             }"
+        )
+        .trim(),
+        "2 0"
+    );
+}

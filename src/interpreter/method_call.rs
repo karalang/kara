@@ -1455,13 +1455,28 @@ impl<'a> super::Interpreter<'a> {
         // Index expression path for read/write through `[i]`. Mutation
         // methods that need source-aliasing semantics (`swap`) dispatch
         // above this fence.
+        //
+        // B-2026-08-10-4 — `split_at_mut` is EXEMPTED here alongside
+        // `as_slice`/`as_slice_mut` rather than moved above the fence, because
+        // it does not mutate at this point: it RETURNS two views, and the seq
+        // arm already builds them from a `Value::Slice` receiver's own
+        // `storage`/`start`. Normalizing first would hand that arm a fresh
+        // snapshot `Array`, so both halves would window a DETACHED copy and
+        // every write through them would be silently lost.
+        //
+        // That failure is worth naming because it is invisible: measured
+        // before this exemption, the identical program propagated writes with
+        // a `Vec` receiver and dropped them with a `mut Slice` receiver — the
+        // returned lengths were correct either way, so only a write-then-read
+        // through the ORIGINAL collection distinguishes them. The test pins
+        // both receivers for exactly that reason.
         let obj = match obj {
             Value::Slice {
                 storage,
                 start,
                 len,
                 ..
-            } if !matches!(method, "as_slice" | "as_slice_mut") => {
+            } if !matches!(method, "as_slice" | "as_slice_mut" | "split_at_mut") => {
                 let snap = storage.read().unwrap()[start..start + len].to_vec();
                 Value::array_of(snap)
             }

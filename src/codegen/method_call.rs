@@ -4389,6 +4389,146 @@ impl<'ctx> super::Codegen<'ctx> {
         // synthesize a `{ptr, i64}` slice header. The element type for the
         // resulting slice is inferred from the source variable, not from a
         // user-supplied argument. See design.md § Slices.
+        // B-2026-08-10-4 — `split_at_mut` (design.md "`split_at_mut` —
+        // disjoint mutable partition"). Sits beside `as_slice_mut` because it
+        // needs exactly the same receiver triage (inline `Array` slot,
+        // pass-through `Slice`, heap `Vec`) and then does one more step: split
+        // the resulting `{ptr, len}` at `mid`.
+        //
+        // NOTE the read-only `split_at` has no codegen arm at all and still
+        // errors with "not yet supported in codegen" — it is interpreter-only.
+        // That is deliberately left alone here: the two differ in the aliasing
+        // contract they hand back, and giving `split_at` a codegen arm means
+        // deciding whether its halves may alias the source, which is that
+        // method's question, not this row's.
+        //
+        // Both halves are `mut Slice[T]` views over the receiver's own buffer
+        // — no copy — which is the whole point: a write through either half
+        // must land in the caller's collection. Disjointness is structural
+        // (`[0, mid)` and `[mid, len)`), which is the spec's argument for why
+        // both may be simultaneously live with no annotation.
+        if method == "split_at_mut" && args.len() == 1 {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                    let i64_t = self.context.i64_type();
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let slice_ty = self.slice_struct_type();
+                    // (base data pointer, length, element type) per receiver
+                    // shape — the same three cases `as_slice` triages.
+                    let parts: Option<(
+                        inkwell::values::PointerValue<'ctx>,
+                        inkwell::values::IntValue<'ctx>,
+                        BasicTypeEnum<'ctx>,
+                    )> = if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                        Some((
+                            slot.ptr,
+                            i64_t.const_int(at.len() as u64, false),
+                            at.get_element_type(),
+                        ))
+                    } else if let Some(elem) = self.slice_elem_types.get(name.as_str()).copied() {
+                        let hdr = self
+                            .builder
+                            .build_load(slice_ty, slot.ptr, "sam.s.hdr")
+                            .unwrap()
+                            .into_struct_value();
+                        let data = self
+                            .builder
+                            .build_extract_value(hdr, 0, "sam.s.data")
+                            .unwrap()
+                            .into_pointer_value();
+                        let len = self
+                            .builder
+                            .build_extract_value(hdr, 1, "sam.s.len")
+                            .unwrap()
+                            .into_int_value();
+                        Some((data, len, elem))
+                    } else if let Some(elem) = self.vec_elem_types.get(name.as_str()).copied() {
+                        let vec_ty = self.vec_struct_type();
+                        let data_pp = self
+                            .builder
+                            .build_struct_gep(vec_ty, slot.ptr, 0, "sam.v.data.pp")
+                            .unwrap();
+                        let data = self
+                            .builder
+                            .build_load(ptr_ty, data_pp, "sam.v.data")
+                            .unwrap()
+                            .into_pointer_value();
+                        let len_p = self
+                            .builder
+                            .build_struct_gep(vec_ty, slot.ptr, 1, "sam.v.len.p")
+                            .unwrap();
+                        let len = self
+                            .builder
+                            .build_load(i64_t, len_p, "sam.v.len")
+                            .unwrap()
+                            .into_int_value();
+                        Some((data, len, elem))
+                    } else {
+                        None
+                    };
+                    if let Some((data, len, elem_ty)) = parts {
+                        let mid = self.compile_expr(&args[0].value)?;
+                        let mid = self.coerce_to_i64(mid)?;
+                        // Spec: "Panics if `mid > self.len()`". The negative
+                        // case is folded into the same guard — an unsigned
+                        // compare would read a negative `mid` as enormous and
+                        // trap anyway, but testing it explicitly keeps the
+                        // diagnostic honest about which bound was violated.
+                        let fn_val = self.current_fn.unwrap();
+                        let bad_hi = self
+                            .builder
+                            .build_int_compare(inkwell::IntPredicate::SGT, mid, len, "sam.hi")
+                            .unwrap();
+                        let bad_lo = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::SLT,
+                                mid,
+                                i64_t.const_zero(),
+                                "sam.lo",
+                            )
+                            .unwrap();
+                        let bad = self.builder.build_or(bad_hi, bad_lo, "sam.bad").unwrap();
+                        let panic_bb = self.context.append_basic_block(fn_val, "sam.panic");
+                        let ok_bb = self.context.append_basic_block(fn_val, "sam.ok");
+                        self.builder
+                            .build_conditional_branch(bad, panic_bb, ok_bb)
+                            .unwrap();
+                        self.builder.position_at_end(panic_bb);
+                        self.emit_panic("split_at_mut index out of bounds");
+                        self.builder.build_unreachable().unwrap();
+                        self.builder.position_at_end(ok_bb);
+                        // Second half starts `mid` ELEMENTS in — GEP on the
+                        // element type so the stride is the element's, not a
+                        // byte's. `inbounds` is justified by the guard above.
+                        let rhs_ptr = unsafe {
+                            self.builder
+                                .build_in_bounds_gep(elem_ty, data, &[mid], "sam.rhs.ptr")
+                                .unwrap()
+                        };
+                        let rhs_len = self.builder.build_int_sub(len, mid, "sam.rhs.len").unwrap();
+                        let lhs = self.build_slice_header(slice_ty, data, mid);
+                        let rhs = self.build_slice_header(slice_ty, rhs_ptr, rhs_len);
+                        let tup_ty = self
+                            .context
+                            .struct_type(&[slice_ty.into(), slice_ty.into()], false);
+                        let mut agg = tup_ty.get_undef();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, lhs, 0, "sam.tup.0")
+                            .unwrap()
+                            .into_struct_value();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, rhs, 1, "sam.tup.1")
+                            .unwrap()
+                            .into_struct_value();
+                        return Ok(agg.into());
+                    }
+                }
+            }
+        }
+
         if (method == "as_slice" || method == "as_slice_mut") && args.is_empty() {
             if let ExprKind::Identifier(name) = &object.kind {
                 if let Some(slot) = self.variables.get(name.as_str()).copied() {

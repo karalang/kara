@@ -40784,6 +40784,76 @@ fn main() {
     /// d[0][0]`, the shape where a release-before-store would free the very
     /// buffer being read. Case 4 is a scalar leaf, which must take the
     /// no-release path untouched.
+    /// B-2026-08-10-4 — `split_at_mut` (design.md "`split_at_mut` — disjoint
+    /// mutable partition"), which was specified in full and implemented
+    /// nowhere. Both halves are `mut Slice[T]` views over the receiver's own
+    /// buffer, so a write through either lands in the caller's collection.
+    ///
+    /// Both receivers the spec names are pinned — `Vec[T]` and `mut Slice[T]`
+    /// — because they take different paths to the base pointer, and the Slice
+    /// one is where the interpreter twin got it wrong: an aliasing bug there
+    /// is INVISIBLE except by writing through a half and reading back through
+    /// the original, since the returned lengths are correct either way.
+    ///
+    /// The halves are passed to a function rather than written as
+    /// `parts.0[0] = x`. That spelling is a separate PRE-EXISTING codegen gap
+    /// — index-assign through a tuple field whose type is a Slice — which
+    /// reproduces without `split_at_mut` via `(v.as_slice_mut(), 0)` and is
+    /// filed on its own row.
+    #[test]
+    fn test_e2e_split_at_mut_halves_write_through_to_the_source() {
+        // Vec receiver.
+        assert_eq!(
+            run_program(
+                "fn fill(s: mut Slice[u8], v: u8) {\n\
+                     let mut i: i64 = 0i64;\n\
+                     while i < s.len() { s[i] = v; i = i + 1i64; }\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut buf: Vec[u8] = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8];\n\
+                     let mut parts: (mut Slice[u8], mut Slice[u8]) = buf.split_at_mut(2i64);\n\
+                     fill(parts.0, 7u8);\n\
+                     fill(parts.1, 9u8);\n\
+                     println(f\"{buf[0]} {buf[1]} {buf[2]} {buf[5]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("7 7 9 9\n")
+        );
+        // `mut Slice` receiver, over an Array — the second spec'd receiver.
+        assert_eq!(
+            run_program(
+                "fn fill(s: mut Slice[i64], v: i64) {\n\
+                     let mut i: i64 = 0i64;\n\
+                     while i < s.len() { s[i] = v; i = i + 1i64; }\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut a: Array[i64, 4] = [1i64, 2i64, 3i64, 4i64];\n\
+                     let mut s: mut Slice[i64] = a.as_slice_mut();\n\
+                     let mut p: (mut Slice[i64], mut Slice[i64]) = s.split_at_mut(1i64);\n\
+                     fill(p.0, 100i64);\n\
+                     fill(p.1, 200i64);\n\
+                     println(f\"{a[0]} {a[1]} {a[2]} {a[3]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("100 200 200 200\n")
+        );
+        // Boundary: mid == 0 and mid == len are legal; only `mid > len` panics.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut v: Vec[i64] = [1i64, 2i64, 3i64];\n\
+                     let mut a: (mut Slice[i64], mut Slice[i64]) = v.split_at_mut(0i64);\n\
+                     let mut b: (mut Slice[i64], mut Slice[i64]) = v.split_at_mut(3i64);\n\
+                     println(f\"{a.0.len()} {a.1.len()} {b.0.len()} {b.1.len()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("0 3 3 0\n")
+        );
+    }
+
     #[test]
     fn test_e2e_nested_index_store_releases_the_displaced_element() {
         // 1. The row's own repro.

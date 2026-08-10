@@ -1124,6 +1124,35 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Tuple(vec![slice_elem.clone(), slice_elem])
             }
+            // B-2026-08-10-4 — the mutable partition (design.md
+            // "`split_at_mut` — disjoint mutable partition"). Same index
+            // arithmetic as `split_at`, but both halves come back
+            // `mut Slice[T]`, which is what makes an in-place top-up of a
+            // partly-filled buffer expressible at all.
+            //
+            // No aliasing annotation is needed and none is checked here: the
+            // spec's argument is that disjointness is STRUCTURAL — the halves
+            // are `[0, mid)` and `[mid, len)`, so the "one mutable view at a
+            // time" rule is satisfied by construction rather than by proof.
+            "split_at_mut" => {
+                if !mutable {
+                    self.type_error(
+                        "Slice.split_at_mut() requires a mutable slice (`mut Slice[T]`)"
+                            .to_string(),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                }
+                let mut_slice = Type::Slice {
+                    element: Box::new(elem.clone()),
+                    mutable: true,
+                };
+                Type::Tuple(vec![mut_slice.clone(), mut_slice])
+            }
             "chunks" | "windows" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
@@ -1272,6 +1301,7 @@ impl<'a> super::TypeChecker<'a> {
                     "sort_by",
                     "sort_by_key",
                     "split_at",
+                    "split_at_mut",
                     "swap",
                     "windows",
                 ],
@@ -1378,6 +1408,22 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
                 }
                 Type::Tuple(vec![slice_elem.clone(), slice_elem])
+            }
+            // B-2026-08-10-4 — the Vec receiver of the mutable partition. The
+            // spec names `Vec[T]` and `mut Slice[T]` as the two receivers.
+            // Unlike the Slice arm there is no `mutable` flag to test here:
+            // a Vec's mutation surface is checked at the binding layer, the
+            // same way `sort` / `reverse` / `clear` are on this receiver.
+            "split_at_mut" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span.clone());
+                }
+                let mut_slice = Type::Slice {
+                    element: Box::new(elem.clone()),
+                    mutable: true,
+                };
+                Type::Tuple(vec![mut_slice.clone(), mut_slice])
             }
             "chunks" | "windows" => {
                 for arg in args {

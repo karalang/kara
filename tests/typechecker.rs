@@ -36446,3 +36446,45 @@ fn a_required_call_site_mut_marker_is_left_alone() {
         result.errors
     );
 }
+
+/// B-2026-08-10-4 — `split_at_mut` types as the spec writes it:
+/// `(mut Slice[T], mut Slice[T])`, and requires a mutable receiver.
+///
+/// The mutability gate is the half worth pinning. Returning two `mut Slice[T]`
+/// from a READ-ONLY `Slice[T]` would hand out a write capability the receiver
+/// never had — the type system's whole job at this method — so the arm rejects
+/// it the same way `sort` / `reverse` do on that receiver.
+#[test]
+fn split_at_mut_requires_a_mutable_receiver() {
+    let errors = typecheck_errors(
+        "fn take(s: Slice[i64]) {\n\
+             let p: (mut Slice[i64], mut Slice[i64]) = s.split_at_mut(1i64);\n\
+         }\n\
+         fn main() { let v: Vec[i64] = [1i64, 2i64]; take(v.as_slice()); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("requires a mutable slice")),
+        "a read-only Slice must not yield two mut halves, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The accepting side, for both receivers the spec names, plus the shape of
+/// what comes back. A `Vec` receiver has no `mutable` flag to test — its
+/// mutation surface is checked at the binding layer, like `sort` — so this
+/// also pins that the Vec arm is not accidentally gated on one.
+#[test]
+fn split_at_mut_yields_two_mutable_halves() {
+    let src = "fn main() {\n\
+                   let mut v: Vec[i64] = [1i64, 2i64, 3i64];\n\
+                   let mut a: (mut Slice[i64], mut Slice[i64]) = v.split_at_mut(1i64);\n\
+                   let mut s: mut Slice[i64] = v.as_slice_mut();\n\
+                   let mut b: (mut Slice[i64], mut Slice[i64]) = s.split_at_mut(2i64);\n\
+                   println(f\"{a.0.len()} {b.1.len()}\");\n\
+               }";
+    // `typecheck_ok` panics if anything is reported, which is the assertion:
+    // both spec'd receivers must typecheck clean.
+    let _ = typecheck_ok(src);
+}

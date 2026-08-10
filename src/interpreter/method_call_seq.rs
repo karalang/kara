@@ -1123,6 +1123,71 @@ impl<'a> super::Interpreter<'a> {
                     });
                 }
             }
+            // B-2026-08-10-4 — the mutable partition (design.md
+            // "`split_at_mut` — disjoint mutable partition").
+            //
+            // Deliberately NOT modelled on the `split_at` arm above, which
+            // returns `Value::array_of(v[..i].to_vec())` — two COPIES. That is
+            // survivable for a read-only view but would make this method
+            // silently useless: a write through either half would land in a
+            // detached buffer and the caller's collection would never see it,
+            // which is the exact opposite of the point.
+            //
+            // Instead both halves are `Value::Slice` windows sharing the
+            // receiver's `Arc<RwLock<Vec<Value>>>`, the same aliasing
+            // construction `as_slice_mut` uses, so writes propagate and the
+            // runtime write-guard still fires. Disjointness is structural —
+            // `[0, mid)` and `[mid, len)` — which is the spec's argument for
+            // why both may be live at once with no annotation.
+            //
+            // `mid > len` PANICS per the spec, rather than saturating the way
+            // `split_at` clamps with `.min(v.len())`. A silently-clamped
+            // mutable partition would hand back a second half that is empty
+            // when the caller expected a writable tail, and the write would go
+            // nowhere.
+            "split_at_mut" => {
+                let (storage, base, total) = match &obj {
+                    Value::Array(rc) => {
+                        let len = rc.read().unwrap().len();
+                        (rc.clone(), 0usize, len)
+                    }
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => (storage.clone(), *start, *len),
+                    _ => return None,
+                };
+                let idx = args
+                    .first()
+                    .map(|a| self.eval_expr_inner(&a.value))
+                    .unwrap_or(Value::Int(0));
+                let Value::Int(mid) = idx else {
+                    return Some(Value::Unit);
+                };
+                if mid < 0 || (mid as usize) > total {
+                    return Some(self.record_runtime_error(
+                        format!("split_at_mut index {mid} out of bounds (len {total})"),
+                        span,
+                    ));
+                }
+                let mid = mid as usize;
+                return Some(Value::Tuple(vec![
+                    Value::Slice {
+                        storage: storage.clone(),
+                        start: base,
+                        len: mid,
+                        mutable: true,
+                    },
+                    Value::Slice {
+                        storage,
+                        start: base + mid,
+                        len: total - mid,
+                        mutable: true,
+                    },
+                ]));
+            }
             "chunks" => {
                 if let Value::Array(ref rc) = obj {
                     let v = rc.read().unwrap();
