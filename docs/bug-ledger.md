@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 228 | 0 |
-| leak | 156 | 1 |
+| leak | 157 | 2 |
 | double-free | 118 | 0 |
 | codegen-gap | 98 | 0 |
-| run-vs-build | 93 | 1 |
+| run-vs-build | 93 | 0 |
 | missing-feature | 86 | 0 |
 | perf | 59 | 0 |
 | false-positive | 57 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 771 | 2 |
+| codegen | 772 | 2 |
 | typecheck | 137 | 0 |
 | interp | 132 | 0 |
 | ownership | 44 | 0 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1063 surfaced · 2 open · 1051 fixed** (2026-05-20 → 2026-08-09). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1064 surfaced · 2 open · 1052 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-09-20 | 2026-08-09 | codegen | medium | a `File` moved into a `Vec` or a struct is never closed -- the container has no element/field drop for the handle, so the fd leaks until process exit (253 of 400 opens succeed under `ulimit -n 256`) | src/codegen/synth_drop.rs (`vec_element_drain_fn`) and the struct drop glue -- neither emits `karac_runtime_file_close` for a `File` element/field |
-| B-2026-08-09-21 | 2026-08-09 | codegen | medium | A NESTED index whose base is a STRUCT FIELD (`h.data[i][j]`) is rejected by codegen -- `codegen: nested indexed read requires the outer container to be a named variable in v1 (got non-identifier inner expression)` -- while the interpreter runs it. RUN-VS-BUILD: `karac run --interp` prints the right value; `karac run` (JIT) and `karac build` both fail. LOUD, not a miscompile, and the JIT failure carries an actionable `--interp` hint. BOUNDARY (probed): `d[i][j]` on a named local BUILDS; `h.data[i][j]` FAILS; `let row = h.data[i]; row[j]` BUILDS; `h.data[i].len()` (single index on a field, then a method) BUILDS; the nested WRITE `h.data[i][j] = v` FAILS the same way. So it is specifically the DOUBLE index rooted at a field access, read and write alike -- single-index-on-field and double-index-on-local are both fine. CAUSE: `compile_nested_index_read` requires `inner_object` to be `ExprKind::Identifier` because it recovers the element TypeExpr from `var_elem_type_exprs[outer_name]` and registers a synthetic identifier for the element slot; a field access has no entry in that map. FIX DIRECTION: resolve the element TypeExpr from the FIELD's declared type (struct field type -> Vec/Slice/Array element) rather than from the variable map, and compile the base to a pointer via the existing place-expression path, so the synthetic-element machinery can stay as-is. Sibling deferral in the same function: chained `a[i][j][k]` is rejected by an explicit MR5 guard, so any fix should decide whether it generalises to arbitrary place expressions or only to field bases. REPRO (9 lines): `struct H { data: Vec[Vec[i64]] } fn main() { let mut i: Vec[i64] = Vec.new(); i.push(1i64); let mut d: Vec[Vec[i64]] = Vec.new(); d.push(i); let h = H { data: d }; println(f"{h.data[0][0]}"); }` | src/codegen/calls.rs:1021 (compile_nested_index_read) |
+| B-2026-08-10-1 | 2026-08-10 | codegen | medium | a NESTED indexed store that overwrites a heap element (`d[i][j] = <String>`) leaks the old value -- the single-index store frees it, the nested one does not | probe: `let mut d: Vec[Vec[String]] = …; d[0][0] = f"zz";` -- the overwritten String is never freed (valgrind --leak-check=full at KARAC_OPT_LEVEL=0: 1 definitely-lost block) |
 
-### Fixed (1051)
+### Fixed (1052)
 
-<details><summary>1051 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1052 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1220,6 +1220,7 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-09-17 | codegen | high | a `File` MOVED out of its binding (into a `Vec`, a struct, or a return) is still closed by the origin binding at scope exit, so the new owner holds f… | fdc874b |
 | B-2026-08-09-18 | interp | low | Interpreter ICEs (`internal error: entered unreachable code`) on a METHOD CALL whose RECEIVER faulted, instead of reporting the receiver's runtime er… | FIXED by bb46a68d -- `eval_method_call` short-circuits on `pending_cf` immediately after evaluating the receiver, so a faulted receiver propagates its own runtime error instead of being dispatched on as a `Unit` poison. Placed at the single receiver-eval site rather than in the arm that reported it: the receiver assertions are per-method (`len`, `chars`, ... each have their own; `is_empty` has none), so one check covers every method on every builtin receiver. Pinned by `test_faulted_method_receiver_reports_the_fault_not_an_ice` plus a healthy-receiver over-fire control. |
 | B-2026-08-09-19 | interp | low | SIBLING OF B-2026-08-09-18, NOT CLOSED BY bb46a68d: a faulted operand still ICEs the interpreter in THREE more positions, all with the same shape (`u… | 512f59a |
+| B-2026-08-09-21 | codegen | medium | A NESTED index whose base is a STRUCT FIELD (`h.data[i][j]`) is rejected by codegen -- `codegen: nested indexed read requires the outer container to… | FIXED by 4f3d6921, BOTH halves. READ: `compile_nested_index_read` gained a struct-FIELD arm -- `nested_index_field_base_elem` resolves the element `TypeExpr` from the field's DECLARED type and the container pointer via `lower_field_access_ptr`, then rejoins the existing synth-identifier tail (factored out as `finish_nested_index_read`). The name-keyed lowering was split into a by-POINTER core, `lower_indexed_elem_ptr_vec_at`, so the field base reuses the identical bounds check and GEP. WRITE: `compile_index_store` gained a matching arm that normalises the field to a synth identifier and recurses, so the existing named-outer nested store handles it unchanged. Pin: e2e `test_e2e_nested_index_rooted_at_struct_field` (7 cases), stash-proven red. |
 
 </details>
 
