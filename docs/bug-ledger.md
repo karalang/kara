@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 100 | 0 |
 | run-vs-build | 95 | 0 |
 | missing-feature | 88 | 0 |
-| perf | 61 | 1 |
+| perf | 62 | 1 |
 | false-positive | 58 | 0 |
 | diagnostics | 46 | 0 |
 | soundness | 41 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 780 | 1 |
+| codegen | 781 | 1 |
 | typecheck | 142 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1074 surfaced · 1 open · 1063 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1075 surfaced · 1 open · 1064 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-10-19 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~2.1x Rust's `sort_by` (karac 14.60 ms vs driftsort 7.0 ms, 150k pairs, this host). Residual of B-2026-08-10-9, which fixed the adaptivity half (natural-run detection, 35x on sorted/reverse) but deliberately left shuffled input unchanged because natural runs there are ~2 elements. Few-unique is the same shape (6.11 vs 1.51 = 4x): keys from a small alphabet also produce short natural runs. WHAT IT NEEDS: driftsort's other half -- a STABLE QUICKSORT to build long runs when natural runs are short. Partitioning beats merging on random data because the comparison is against a pivot held in a register, so there is no dependent-load chain (merge is load -> compare -> cursor -> next load address, which is why B-2026-08-10-9 measured phase 2 at ~5x its own memory traffic, latency-bound not bandwidth-bound). ALREADY RULED OUT with measurements, do not re-litigate: this is NOT a codegen-quality gap (karac is 5-8% faster than rustc compiling the identical algorithm and comparator shape), and no contained merge-kernel tweak works -- branchless merge buys 1.28x on random and costs 1.8-2.0x on few-unique/sawtooth/nearly-sorted, cached merge heads are 3-5%, RUN tuning is flat. Also note inlining is worth only ~1.5x against the algorithm's ~2.2x: driftsort with an INDIRECT comparator still beats an inlined merge sort. Full matrix and rejected-option data in docs/spikes/sort-algorithm-gap.md. | Vec.sort_by / Vec.sort lowering |
+| B-2026-08-10-20 | 2026-08-10 | codegen | low | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.28-1.33x Rust's `sort_by` (karac 11.05-11.23 ms vs driftsort 8.2-8.9, 150k pairs, this host). Residual of B-2026-08-10-19, which closed the branch-misprediction half (1.66x -> 1.30x) by making phase 2 pick a branchless merge kernel per pass. WHAT IS LEFT, with the cause already measured: the branchless merge trades mispredicts for a SERIAL DEPENDENCY CHAIN -- load -> compare -> cursor -> next-load address, ~7 cycles per element -- because the next load address depends on the comparison result. A partition loop has no such chain: its read pointer advances unconditionally, so loads run ahead freely and only the STORE address is data-dependent, and stores do not feed loads. That, and not pass counts or memory traffic, is driftsort's remaining edge. | Vec.sort_by / Vec.sort lowering |
 
-### Fixed (1063)
+### Fixed (1064)
 
-<details><summary>1063 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1064 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1231,6 +1231,7 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-10-16 | codegen | medium | An explicit `return` inside a `sort_by` COMPARATOR CLOSURE emits an LLVM module-verification failure: `Module verification failed: "Function return t… | 568e6ff |
 | B-2026-08-10-17 | typecheck | medium | a `return` NESTED inside a closure body (in an `if` / loop) is typechecked against `()` instead of the closure's return type, so an early return from… | 819af61 |
 | B-2026-08-10-18 | codegen | medium | an explicit `return` inside an ITERATOR ADAPTOR closure (`map`/`filter`/`any`/`all`/`retain`) fails codegen with `Terminator found in the middle of a… | c0c8842 |
+| B-2026-08-10-19 | codegen | medium | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.66x Rust's `sort_by` (karac 14.82 ms vs driftsort 8.93 ms, 150k pairs, this host, both progr… | 31485cd |
 
 </details>
 
