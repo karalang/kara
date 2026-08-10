@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 229 | 1 |
+| miscompile | 228 | 0 |
 | leak | 157 | 0 |
 | double-free | 118 | 0 |
-| codegen-gap | 99 | 0 |
+| codegen-gap | 100 | 1 |
 | run-vs-build | 95 | 0 |
 | missing-feature | 88 | 0 |
 | perf | 60 | 1 |
@@ -131,7 +131,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1073 surfaced
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-10-9 | 2026-08-10 | codegen | medium | `Vec[(i64,i64)].sort_by(|a,b| a.0.cmp(b.0))` runs ~2x slower than Rust's `sort_by` on the same data. ISOLATED MEASUREMENT (150k pairs, 25 rounds, sort and clone only, no other work): kara 0.34 s vs rustc -O 0.16 s = 2.1x. Corroborated by two independent sort-dominated katas measured separately: #252 meeting-rooms (kara 469.0 ms vs rust 247.9 = 1.89x) and #253 meeting-rooms-ii (kara 598.6 vs rust 370.5 = 1.62x). Both kata ratios are LOWER than the isolated one because each carries non-sort work that is at parity, diluting the ratio -- which is itself evidence the sort is the locus rather than the surrounding code. Sigma is tight throughout (kara 18.0 / 14.6 ms, rust 16.9 / 11.5 ms), so the effect is far outside run-to-run noise. NOT the heap and NOT the copy: #253 adds a hand-rolled binary heap on top of #252's sort+scan and comes out RELATIVELY BETTER (1.62x vs 1.89x), so heap maintenance is not the cost; the isolated kernel above removes the heap and the scan entirely and shows the largest ratio. CAVEAT ON EVIDENCE: all measurements are from ONE host, an x86_64 shared container, and none are from the canonical Apple-silicon bench host. Rust's current sort is driftsort (adaptive, pattern-exploiting) and no claim is made here about which algorithm karac lowers to -- only that the gap is real, repeatable, and localised to the sort. NEXT STEP: re-measure the isolated kernel on the M5 host before any tuning work; if it reproduces, compare the lowered sort against what Rust's adaptive sort does on shuffled-uniform input. | Vec.sort_by / Vec.sort lowering |
-| B-2026-08-10-18 | 2026-08-10 | codegen | high | an explicit `return` inside an ITERATOR ADAPTOR closure (`map`/`filter`/`any`/`all`/`retain`) fails codegen with `Terminator found in the middle of a basic block!`, and `fold` SILENTLY MISCOMPILES to no output -- the sort-comparator twin of this was B-2026-08-10-16 | iterator-adaptor closure body lowering; the `fold` arm is the silent one. Probe: `v.iter().map(|n| { return n * 2i64; }).collect()` |
+| B-2026-08-10-18 | 2026-08-10 | codegen | medium | an explicit `return` inside an ITERATOR ADAPTOR closure (`map`/`filter`/`any`/`all`/`retain`) fails codegen with `Terminator found in the middle of a basic block!`, and `fold` SILENTLY MISCOMPILES to no output -- the sort-comparator twin of this was B-2026-08-10-16 | iterator-adaptor closure body lowering; the `fold` arm is the silent one. Probe: `v.iter().map(|n| { return n * 2i64; }).collect()` |
 
 ### Fixed (1061)
 
