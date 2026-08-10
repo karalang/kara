@@ -98,6 +98,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Ordering",
     "MemoryOrdering",
     "IoError",
+    // `SeekFrom` — the `whence` selector for `File.seek` (B-2026-08-10-3).
+    // Prelude-visible like `IoError`, since every `seek` call site names a
+    // variant and would otherwise need an import for a three-value enum.
+    "SeekFrom",
     "VarError",
     "AllocError",
     "Utf8Error",

@@ -71652,6 +71652,110 @@ fn main() {
     // `Result[i64, IoError]` and uses `?` to propagate `File.open`'s
     // Err arm; the caller matches the propagated IoError variant.
 
+    /// B-2026-08-10-3 — `File.seek` through the compiled backends.
+    ///
+    /// The runtime entry point `karac_runtime_file_seek` has existed since the
+    /// File slice shipped, exported early and kept on the
+    /// `__preserve_no_mangle_symbols` list precisely so adding the surface
+    /// would need no runtime rebuild. This pins that the promise held: the only
+    /// codegen work was declaring the extern, truncating the `SeekFrom` tag to
+    /// the ABI's `u8`, and unpacking the io-result as a byte count.
+    ///
+    /// Reads the byte AT the sought position rather than only checking the
+    /// returned offset — a position check alone passes even if the cursor never
+    /// moved. The file is "ABCD", so seeking to 2 must yield 'C' (67).
+    #[test]
+    fn test_e2e_file_seek_positions_and_reads() {
+        let tmp = std::env::temp_dir().join("karac_e2e_file_seek.bin");
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let _ = std::fs::remove_file(&tmp);
+        let out = run_program(&format!(
+            r#"
+fn main() {{
+    match File.create("{path}") {{
+        Ok(f) => {{
+            let data = [65u8, 66u8, 67u8, 68u8];
+            match f.write(data[0..4]) {{ Ok(_) => {{}} Err(_) => println("write err") }}
+            match f.flush() {{ Ok(_) => {{}} Err(_) => println("flush err") }}
+        }}
+        Err(_) => println("create err"),
+    }}
+    match File.open("{path}") {{
+        Ok(g) => {{
+            match g.seek(SeekFrom.Start, 2i64) {{
+                Ok(p) => println("pos " + p.to_string()),
+                Err(_) => println("seek err"),
+            }}
+            let mut buf = [0u8, 0u8];
+            match g.read(mut buf) {{
+                Ok(n) => println("read " + n.to_string() + " b0 " + buf[0].to_string()),
+                Err(_) => println("read err"),
+            }}
+            match g.seek(SeekFrom.End, -1i64) {{
+                Ok(e) => println("end " + e.to_string()),
+                Err(_) => println("seek err"),
+            }}
+            match g.seek(SeekFrom.Current, 0i64) {{
+                Ok(c) => println("cur " + c.to_string()),
+                Err(_) => println("seek err"),
+            }}
+            match g.seek(SeekFrom.Start, -5i64) {{
+                Ok(_) => println("unexpected ok"),
+                Err(_) => println("neg rejected"),
+            }}
+        }}
+        Err(_) => println("open err"),
+    }}
+}}
+"#
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(
+            out.as_deref(),
+            Some("pos 2\nread 2 b0 67\nend 3\ncur 3\nneg rejected\n")
+        );
+    }
+
+    /// B-2026-08-10-3 — the pin that actually caught the bug in this slice, and
+    /// the reason it is a separate test from `seek` itself.
+    ///
+    /// `SeekFrom` is a PRELUDE enum, and prelude enums reach the typechecker
+    /// through `STDLIB_PROGRAMS` but never codegen's `declare_enums`, which
+    /// walks only the user's `program.items`. Each one therefore needs an
+    /// explicit layout seed (`Ordering`, `VarError`, `IoError` all carry one).
+    /// Without it every variant construction falls through to the `i64 0`
+    /// placeholder.
+    ///
+    /// That failure is silent and DIRECTIONAL, which is what makes it worth its
+    /// own pin: `Start` is tag 0, so seeking from the start kept working while
+    /// `Current` and `End` both silently became `Start` — a wrong seek, not an
+    /// error. Measured pre-seed, `f.seek(SeekFrom.End, -1)` returned `Err`
+    /// (negative absolute position) and `f.seek(SeekFrom.Current, 0)` reported
+    /// position 0. A seek-only test would have caught it here by luck; this one
+    /// catches the CAUSE, and would catch it for any future prelude enum whose
+    /// seed is forgotten.
+    #[test]
+    fn test_e2e_seek_from_prelude_enum_discriminates() {
+        assert_eq!(
+            run_program(
+                "fn name(w: SeekFrom) -> String {\n\
+                 \x20   match w {\n\
+                 \x20       SeekFrom.Start => { return \"start\"; }\n\
+                 \x20       SeekFrom.Current => { return \"current\"; }\n\
+                 \x20       SeekFrom.End => { return \"end\"; }\n\
+                 \x20   }\n\
+                 }\n\
+                 fn main() {\n\
+                     println(name(SeekFrom.Start));\n\
+                     println(name(SeekFrom.Current));\n\
+                     println(name(SeekFrom.End));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("start\ncurrent\nend\n")
+        );
+    }
+
     #[test]
     fn test_e2e_file_open_question_propagates_not_found() {
         // `File.open` on a nonexistent path returns

@@ -152,6 +152,34 @@ impl File {
 
     #[compiler_builtin]
     fn sync_data(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    // B-2026-08-10-3 — random access. Returns the NEW absolute position
+    // from the start of the file, so the common "where am I?" query is
+    // `f.seek(SeekFrom.Current, 0)` with no separate `tell`.
+    //
+    // `reads(FileSystem)` rather than `writes`: seek moves the handle's
+    // cursor and never touches file CONTENTS. That matches `read`, which
+    // also advances the cursor and is likewise `reads` — the effect
+    // describes what happens to the resource's data, not to the handle.
+    //
+    // Note the argument order mirrors the runtime ABI (`whence` then
+    // `offset`) rather than Rust's payload-carrying `SeekFrom::Start(n)`.
+    // See the ledger row for that trade.
+    #[compiler_builtin]
+    fn seek(ref self, whence: SeekFrom, offset: i64) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+}
+
+// B-2026-08-10-3. Payload-free by design: the offset rides `File.seek`'s
+// second parameter, so this enum is exactly the runtime's `whence` byte
+// (0 = Start, 1 = Current, 2 = End) and the lowering is a tag truncation.
+//
+// `Start` counts forward from byte 0 and rejects a negative offset at the
+// OS layer (surfacing as `Err`); `Current` and `End` accept negatives, so
+// `SeekFrom.End, -4` addresses the last four bytes.
+enum SeekFrom {
+    Start,
+    Current,
+    End,
 }
 
 struct Env { }

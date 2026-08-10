@@ -5427,6 +5427,26 @@ impl<'ctx> Codegen<'ctx> {
             file_flush_type,
             Some(Linkage::External),
         );
+        // Seek: (out, handle, whence: u8, offset: i64) -> void
+        // (B-2026-08-10-3). The runtime symbol has existed since the
+        // File slice shipped — exported early precisely so adding the
+        // surface needs no runtime rebuild — and is already on the
+        // `__preserve_no_mangle_symbols` keep-list, so the JIT runner
+        // resolves it too.
+        let file_seek_type = file_call_void_type.fn_type(
+            &[
+                ptr_type.into(),
+                ptr_type.into(),
+                context.i8_type().into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_file_seek",
+            file_seek_type,
+            Some(Linkage::External),
+        );
         // `FileSystem.read_lines(path)` — one-shot whole-file read split
         // into a `Vec[String]` of lines: (out_io, out_vec, path_ptr,
         // path_len) -> void. Two out-params: the KaracIoResult (Ok/Err

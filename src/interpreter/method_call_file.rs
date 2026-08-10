@@ -11,9 +11,9 @@
 //! design: `reads(FileSystem)` on `read`; `writes(FileSystem)` on
 //! `write` / `flush` / `sync_all` / `sync_data`.
 //!
-//! Seek / metadata are deferred to a follow-on slice.
+//! `seek` landed with B-2026-08-10-3; metadata is still deferred.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::ast::*;
 use crate::token::Span;
@@ -199,6 +199,78 @@ impl<'a> super::Interpreter<'a> {
                 };
                 match sync_result {
                     Ok(()) => Some(io_ok(Value::Unit)),
+                    Err(e) => Some(io_err_value(io_error_from_std(&e))),
+                }
+            }
+            // B-2026-08-10-3 — `seek(whence: SeekFrom, offset: i64) ->
+            // Result[i64, IoError]`, returning the NEW absolute position.
+            // `reads(FileSystem)` for the same reason `read` is: the cursor
+            // moves, the contents do not.
+            "seek" => {
+                self.track_effect("reads(FileSystem)");
+                let (Some(whence_arg), Some(offset_arg)) = (args.first(), args.get(1)) else {
+                    return Some(self.record_runtime_error(
+                        "File.seek expects (whence: SeekFrom, offset: i64)".to_string(),
+                        span,
+                    ));
+                };
+                let whence_val = self.eval_expr_inner(&whence_arg.value);
+                let offset_val = self.eval_expr_inner(&offset_arg.value);
+                let Value::Int(offset) = offset_val else {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "File.seek offset must be an i64, got {}",
+                            offset_val.variant_name()
+                        ),
+                        span,
+                    ));
+                };
+                // The variant NAME is the selector — `SeekFrom` is payload-free
+                // precisely so this stays a three-way match rather than a
+                // payload unpack.
+                let pos = match &whence_val {
+                    Value::EnumVariant {
+                        enum_name, variant, ..
+                    } if enum_name == "SeekFrom" => match variant.as_str() {
+                        "Start" => {
+                            // A negative `Start` offset is an OS-layer error,
+                            // not a wrap-around: report it as `Err` rather than
+                            // casting it into a huge u64.
+                            if offset < 0 {
+                                return Some(io_err_value(io_error_from_std(
+                                    &std::io::Error::new(
+                                        std::io::ErrorKind::InvalidInput,
+                                        "invalid seek to a negative position",
+                                    ),
+                                )));
+                            }
+                            SeekFrom::Start(offset as u64)
+                        }
+                        "Current" => SeekFrom::Current(offset),
+                        "End" => SeekFrom::End(offset),
+                        other => {
+                            return Some(self.record_runtime_error(
+                                format!("File.seek: unknown SeekFrom variant '{other}'"),
+                                span,
+                            ));
+                        }
+                    },
+                    _ => {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "File.seek whence must be a SeekFrom, got {}",
+                                whence_val.variant_name()
+                            ),
+                            span,
+                        ));
+                    }
+                };
+                let seek_result = {
+                    let mut guard = file_arc.lock().unwrap();
+                    guard.seek(pos)
+                };
+                match seek_result {
+                    Ok(p) => Some(io_ok(Value::Int(p as i64))),
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }
             }

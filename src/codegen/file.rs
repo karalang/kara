@@ -993,4 +993,66 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.lower_kara_io_result(slot, FileOkKind::Unit)
     }
+
+    /// Compile `file.seek(whence, offset)` — B-2026-08-10-3. Returns
+    /// `Result[i64, IoError]` carrying the NEW absolute position, which is
+    /// `FileOkKind::ByteCount`'s exact shape (an i64 out of the io-result
+    /// slot), so no new unpack kind is needed.
+    ///
+    /// `whence_val` is a `SeekFrom` value. The enum is payload-free by design,
+    /// so its runtime representation is just the discriminant and the lowering
+    /// is a truncation to the runtime's `u8` — variant order in
+    /// `runtime/stdlib/io.kara` (Start, Current, End) is what makes the tag
+    /// equal the ABI's whence, and the two must stay in step.
+    ///
+    /// Accepts either an int or a single-field aggregate for the discriminant:
+    /// a payload-free enum can lower either way depending on layout, and
+    /// guessing wrong would silently pass a garbage whence — the runtime
+    /// rejects an out-of-range value with `Err`, but a wrong-but-valid one
+    /// would seek to the wrong place.
+    pub(super) fn compile_file_seek(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        whence_val: BasicValueEnum<'ctx>,
+        offset_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let handle = self_val.into_pointer_value();
+        let i8_t = self.context.i8_type();
+        let tag = match whence_val {
+            BasicValueEnum::IntValue(v) => v,
+            BasicValueEnum::StructValue(sv) => self
+                .builder
+                .build_extract_value(sv, 0, "file.seek.whence.tag")
+                .map_err(|e| format!("codegen: File.seek whence tag: {e:?}"))?
+                .into_int_value(),
+            other => {
+                return Err(format!(
+                    "codegen: File.seek expects a SeekFrom whence, got {other:?}"
+                ))
+            }
+        };
+        let whence = self
+            .builder
+            .build_int_truncate_or_bit_cast(tag, i8_t, "file.seek.whence")
+            .unwrap();
+        let offset = self.coerce_to_i64(offset_val)?;
+        let slot = self.alloca_io_result_slot()?;
+        let f = self
+            .module
+            .get_function("karac_runtime_file_seek")
+            .expect("karac_runtime_file_seek declared in Codegen::new");
+        self.builder
+            .build_call(
+                f,
+                &[
+                    BasicMetadataValueEnum::PointerValue(slot),
+                    BasicMetadataValueEnum::PointerValue(handle),
+                    BasicMetadataValueEnum::IntValue(whence),
+                    BasicMetadataValueEnum::IntValue(offset),
+                ],
+                "file.seek.call",
+            )
+            .unwrap();
+        self.lower_kara_io_result(slot, FileOkKind::ByteCount)
+    }
 }

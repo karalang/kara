@@ -1798,6 +1798,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 let self_val = self.compile_expr(object)?;
                 return self.compile_file_flush(self_val);
             }
+            // B-2026-08-10-3 — `file.seek(whence: SeekFrom, offset: i64)`.
+            if key == "File.seek" && args.len() == 2 {
+                let self_val = self.compile_expr(object)?;
+                let whence_val = self.compile_expr(&args[0].value)?;
+                let offset_val = self.compile_expr(&args[1].value)?;
+                return self.compile_file_seek(self_val, whence_val, offset_val);
+            }
             if (key == "File.sync_all" || key == "File.sync_data") && args.is_empty() {
                 let self_val = self.compile_expr(object)?;
                 return self.compile_file_sync(self_val, key == "File.sync_data");

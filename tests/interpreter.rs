@@ -9050,6 +9050,94 @@ fn test_file_create_write_flush_reopen_read_roundtrip() {
     let _ = std::fs::remove_file(&tmp);
 }
 
+/// B-2026-08-10-3 — `File.seek(whence: SeekFrom, offset: i64) ->
+/// Result[i64, IoError]`, returning the NEW absolute position.
+///
+/// The runtime entry point `karac_runtime_file_seek` had shipped long before
+/// the surface did, deliberately, so that adding `seek` would need no runtime
+/// rebuild. This is the surface half arriving: stdlib stub, interpreter arm,
+/// codegen lowering.
+///
+/// Random access is what the file holds: after seeking to 2 in "ABCD", the
+/// next byte read must be 'C' (67) — a position check alone would pass even
+/// if the cursor never moved.
+///
+/// `Start` with a negative offset is an error rather than a wrap-around: the
+/// runtime takes a `u64` there, so casting -5 would seek to ~1.8e19 instead of
+/// failing. The interpreter rejects it before the cast for that reason.
+#[test]
+fn test_file_seek_positions_and_reads() {
+    let tmp = std::env::temp_dir().join("karac_test_file_seek.bin");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     let data = [65u8, 66u8, 67u8, 68u8];
+                     match f.write(data[0..4]) {{ Ok(_) => {{}} Err(_) => println(\"write err\") }}
+                     match f.flush() {{ Ok(_) => {{}} Err(_) => println(\"flush err\") }}
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+             match File.open(\"{path}\") {{
+                 Ok(g) => {{
+                     match g.seek(SeekFrom.Start, 2i64) {{
+                         Ok(p) => println(\"pos \" + p.to_string()),
+                         Err(_) => println(\"seek err\"),
+                     }}
+                     let mut buf = [0u8, 0u8];
+                     match g.read(mut buf) {{
+                         Ok(n) => println(\"read \" + n.to_string() + \" b0 \" + buf[0].to_string()),
+                         Err(_) => println(\"read err\"),
+                     }}
+                     match g.seek(SeekFrom.End, -1i64) {{
+                         Ok(e) => println(\"end \" + e.to_string()),
+                         Err(_) => println(\"seek err\"),
+                     }}
+                     match g.seek(SeekFrom.Current, 0i64) {{
+                         Ok(c) => println(\"cur \" + c.to_string()),
+                         Err(_) => println(\"seek err\"),
+                     }}
+                     match g.seek(SeekFrom.Start, -5i64) {{
+                         Ok(_) => println(\"unexpected ok\"),
+                         Err(_) => println(\"neg rejected\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    // seek(Start,2) → 2; the byte there is 'C' (67), so the cursor really
+    // moved; seek(End,-1) → 3 on a 4-byte file; seek(Current,0) → 3 (the
+    // "where am I" query, which is why no separate `tell` is needed).
+    assert_eq!(out, "pos 2\nread 2 b0 67\nend 3\ncur 3\nneg rejected\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// B-2026-08-10-3 — `SeekFrom` is a PRELUDE enum, and prelude enums reach the
+/// typechecker through `STDLIB_PROGRAMS` but never codegen's `declare_enums`.
+/// This pins the interpreter side of the three-way agreement; the codegen twin
+/// (`test_e2e_seek_from_prelude_enum_discriminates`) is the one that would have
+/// caught the seed being missing.
+#[test]
+fn test_seek_from_variants_discriminate() {
+    let src = "fn name(w: SeekFrom) -> String {
+                   match w {
+                       SeekFrom.Start => { return \"start\"; }
+                       SeekFrom.Current => { return \"current\"; }
+                       SeekFrom.End => { return \"end\"; }
+                   }
+               }
+               fn main() {
+                   println(name(SeekFrom.Start));
+                   println(name(SeekFrom.Current));
+                   println(name(SeekFrom.End));
+               }";
+    assert_eq!(run_no_errors(src), "start\ncurrent\nend\n");
+}
+
 #[test]
 fn test_file_open_nonexistent_returns_io_error_not_found() {
     // Same NotFound variant as FileSystem.read_to_string — the

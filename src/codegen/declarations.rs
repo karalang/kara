@@ -3945,6 +3945,49 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("VarError".to_string());
         }
 
+        // Stdlib `SeekFrom` enum (`runtime/stdlib/io.kara`) — the `whence`
+        // selector for `File.seek` (B-2026-08-10-3). Same story as `VarError`
+        // directly above: it reaches the typechecker through `STDLIB_PROGRAMS`
+        // but never `declare_enums`, so without this seed every variant
+        // construction falls through to the `i64 0` placeholder. That failure
+        // is SILENT and directional — `SeekFrom.Start` happens to be tag 0, so
+        // seeking from the start kept working while `Current` and `End` both
+        // became `Start`, i.e. a wrong seek rather than an error. Measured
+        // before the seed: `f.seek(SeekFrom.End, -1)` returned `Err` (the
+        // runtime rejects a negative absolute position) and
+        // `f.seek(SeekFrom.Current, 0)` reported position 0.
+        //
+        // 1-word `{ i64 tag }`, no payload, no drop kinds. Tags follow stdlib
+        // declaration order — Start = 0, Current = 1, End = 2 — which is also
+        // the runtime ABI's `whence` encoding, so `compile_file_seek` truncates
+        // the tag straight to the `u8` argument. Reordering the variants in
+        // io.kara silently changes the ABI mapping; keep the two in step.
+        if !self.enum_layouts.contains_key("SeekFrom") {
+            let seek_from_type = self.context.struct_type(&[i64_t], false);
+            let mut tags = HashMap::new();
+            let mut field_counts = HashMap::new();
+            let mut field_word_offsets = HashMap::new();
+            let mut field_drop_kinds = HashMap::new();
+            for (i, v) in ["Start", "Current", "End"].iter().enumerate() {
+                tags.insert((*v).to_string(), i as u64);
+                field_counts.insert((*v).to_string(), 0usize);
+                field_word_offsets.insert((*v).to_string(), Vec::new());
+                field_drop_kinds.insert((*v).to_string(), Vec::new());
+            }
+            self.enum_layouts.insert(
+                "SeekFrom".to_string(),
+                EnumLayout {
+                    llvm_type: seek_from_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("SeekFrom".to_string());
+        }
+
         // Stdlib `IoError` enum (`runtime/stdlib/io_error.kara`) — the `Err`
         // payload of every I/O API (`FileSystem.read_to_string`, `env.args`,
         // `examples/word_count.kara`'s `main() -> Result[(), IoError]`, …).
