@@ -1,12 +1,13 @@
 # `Vec.sort_by` vs Rust's `sort_by` — where the gap actually is
 
-**Status:** measurement complete (B-2026-08-10-9). The gap reproduces. The
-cause is **not** codegen quality — karac's lowering is at parity with rustc
-for the same algorithm — it is the **algorithm**: a fixed-32-run bottom-up
-merge sort with no adaptivity, versus Rust's driftsort. No contained
-merge-kernel tweak is a reliable win; the measured options are all listed
-below with the data that rejects them. The fix is an algorithm change, scoped
-at the end.
+**Status:** measured, and the adaptivity half **landed** (B-2026-08-10-9).
+The gap reproduces. The cause is **not** codegen quality — karac's lowering
+is at parity with rustc for the same algorithm — it is the **algorithm**: a
+fixed-32-run bottom-up merge sort with no adaptivity, versus Rust's
+driftsort. No contained merge-kernel tweak is a reliable win; the measured
+options are all listed below with the data that rejects them. The fix that
+shipped is a natural-run merge sort — see "What landed". The remaining
+shuffled-uniform gap needs a stable quicksort and is tracked separately.
 
 ## The claim under test
 
@@ -196,6 +197,44 @@ Partitioning beats merging there because the comparison is against a pivot
 held in a register, so there is no dependent-load chain. That is a separate,
 larger piece of work; the run-detection step above is the cheap half and is
 strictly independent of it.
+
+## What landed
+
+The natural-run merge sort above, in `emit_sort_by_mono`. Measured on the
+same host, karac pure sort (clone subtracted), before vs after:
+
+| pattern | before | after | change | driftsort |
+|---|---|---|---|---|
+| random | 14.91 ms | 14.60 ms | unchanged | 7.0 ms |
+| **sorted** | 4.91 ms | **0.14 ms** | **35x** | 0.09 ms |
+| **reverse** | 6.65 ms | **0.19 ms** | **35x** | 0.17 ms |
+| few-unique | 6.43 ms | 6.11 ms | 1.05x | 1.51 ms |
+| sawtooth | 4.99 ms | **3.15 ms** | 1.58x | 4.38 ms |
+
+The shape is exactly what the design predicted: **no change on shuffled
+input** (natural runs there are ~2 elements, so `RUN` padding reproduces the
+old 32-element runs and the old pass count) and an order of magnitude on
+ordered input. Sorted and reverse-sorted now land within 1.1–1.6x of
+driftsort instead of 39–54x behind it, and sawtooth is now *faster* than
+driftsort. Few-unique barely moves, because random keys drawn from a small
+alphabet still produce short natural runs — that case rides on the
+stable-quicksort half.
+
+Verification:
+- Full `--features llvm` suite: 102 targets, 13,381 passed, 0 failed —
+  including `codegen` 2882/0 and `memory_sanitizer` 1028/0. On Linux the
+  latter runs LeakSanitizer, so it is the authoritative gate for the two
+  extra allocations this change introduces.
+- `valgrind --leak-check=full` at `KARAC_OPT_LEVEL=0` over a program hitting
+  all three new paths (ordinary merge, the `nr == 1` skip, the descending
+  reversal): 20 allocs / 20 frees, no errors.
+- Sortedness + stability + permutation checked over 98 (pattern, size)
+  combinations, AOT against `--interp` as oracle.
+- Two regression tests pinned in `tests/codegen.rs`. Both have teeth against
+  the specific way this can go wrong: with a non-strict (`>=`) descending
+  extension, `natural_run_sort_keeps_descending_runs_stable` prints 33 before
+  32 and 40 before 39, because a reversed run containing equal keys inverts
+  them.
 
 ## Caveats
 

@@ -73996,6 +73996,113 @@ fn main() {
         }
     }
 
+    /// B-2026-08-10-9: the mono sort is a NATURAL-RUN merge sort, so input
+    /// ORDER now selects the code path — a strictly-descending run is
+    /// detected and reversed in place. The extension test must stay STRICT
+    /// (`cmp > 0`): reversing a run that contains equal keys would invert
+    /// them and break stability, which design.md requires.
+    ///
+    /// Both halves have teeth. `.1` carries the original position, so with a
+    /// non-strict (`>=`) extension the first block prints 33 before 32 and
+    /// the second prints 40 before 39. The first case's descending run is
+    /// shorter than RUN=32 so it is then padded by insertion sort; the
+    /// second is longer, so it is recorded as-is and the padding never runs
+    /// — the two exercise different exits from phase 1.
+    #[test]
+    fn natural_run_sort_keeps_descending_runs_stable() {
+        let out = run_program(
+            r#"
+fn main() {
+    // Short strictly-descending run ending at a TIE: 5,4,3,3,2,1.
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((5i64, 0i64)); v.push((4i64, 1i64)); v.push((3i64, 2i64));
+    v.push((3i64, 3i64)); v.push((2i64, 4i64)); v.push((1i64, 5i64));
+    v.sort_by(|x, y| x.0.cmp(y.0));
+    let mut i: i64 = 0i64;
+    while i < v.len() {
+        println(v[i].0 * 10i64 + v[i].1);
+        i = i + 1i64;
+    }
+    // Descending run LONGER than RUN=32, also ending at a tie.
+    let mut w: Vec[(i64, i64)] = Vec.new();
+    let mut j: i64 = 0i64;
+    while j < 40i64 {
+        w.push((100i64 - j, j));
+        j = j + 1i64;
+    }
+    w.push((61i64, 40i64));
+    w.sort_by(|x, y| x.0.cmp(y.0));
+    println(w[0i64].1);
+    println(w[1i64].1);
+}
+"#,
+        );
+        assert_eq!(
+            out.as_deref().map(str::trim),
+            Some("15\n24\n32\n33\n41\n50\n39\n40")
+        );
+    }
+
+    /// B-2026-08-10-9 sibling: sortedness AND stability over the input
+    /// shapes the run detector treats differently (one ascending run, one
+    /// descending run, an all-equal run, and shuffled-with-ties), at sizes
+    /// straddling RUN=32 where phase 1 switches between padding a short run
+    /// and keeping a natural one. Counts violations in-program so a single
+    /// `0` covers all 24 combinations; `.1` is the original index, so an
+    /// out-of-order equal pair counts as a violation too.
+    #[test]
+    fn natural_run_sort_stable_across_shapes_and_sizes() {
+        let out = run_program(
+            r#"
+fn viol(v: Vec[(i64, i64)]) -> i64 {
+    let mut bad: i64 = 0i64;
+    let mut i: i64 = 1i64;
+    while i < v.len() {
+        let p: (i64, i64) = v[i - 1i64];
+        let c: (i64, i64) = v[i];
+        if p.0 > c.0 { bad = bad + 1i64; }
+        if p.0 == c.0 and p.1 > c.1 { bad = bad + 1i64; }
+        i = i + 1i64;
+    }
+    return bad;
+}
+fn main() {
+    let mut bad: i64 = 0i64;
+    let mut si: i64 = 0i64;
+    while si < 6i64 {
+        let mut n: i64 = 0i64;
+        if si == 0i64 { n = 31i64; }
+        if si == 1i64 { n = 32i64; }
+        if si == 2i64 { n = 33i64; }
+        if si == 3i64 { n = 63i64; }
+        if si == 4i64 { n = 64i64; }
+        if si == 5i64 { n = 65i64; }
+        let mut k: i64 = 0i64;
+        while k < 4i64 {
+            let mut v: Vec[(i64, i64)] = Vec.new();
+            let mut i: i64 = 0i64;
+            while i < n {
+                let mut key: i64 = 0i64;
+                if k == 0i64 { key = i; }
+                if k == 1i64 { key = n - i; }
+                if k == 2i64 { key = 7i64; }
+                if k == 3i64 { key = (i * 37i64) % 11i64; }
+                v.push((key, i));
+                i = i + 1i64;
+            }
+            v.sort_by(|x, y| x.0.cmp(y.0));
+            bad = bad + viol(v);
+            k = k + 1i64;
+        }
+        si = si + 1i64;
+    }
+    println(bad);
+}
+"#,
+        );
+        assert_eq!(out.as_deref().map(str::trim), Some("0"));
+    }
+
     /// B-2026-07-30-2: an inline non-capturing comparator must monomorphize
     /// at EVERY length. Before the fix a `len > 64` check sent larger sorts
     /// to `karac_vec_sort_by`, whose comparator is a function pointer — an
