@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 41 | 0 |
 | crash | 41 | 0 |
 | other | 24 | 0 |
-| use-after-free | 17 | 0 |
+| use-after-free | 18 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 781 | 1 |
+| codegen | 782 | 2 |
 | typecheck | 142 | 0 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,13 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1075 surfaced · 1 open · 1064 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1076 surfaced · 2 open · 1064 fixed** (2026-05-20 → 2026-08-10). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-10-20 | 2026-08-10 | codegen | low | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.30x Rust's `sort_by` (karac 11.05 ms vs driftsort 8.2-8.9, 150k pairs, this host). Residual of B-2026-08-10-19. THE DIRECTION THIS ROW WAS FILED WITH IS NOW RULED OUT BY MEASUREMENT -- do not build the 2-way partition run-builder. Counting instructions and mispredicts for one 150k sort (differenced against a clone-only twin): pre-19 karac was 52.79M instr / 1.061M mispredicts, the shipped adaptive kernel is 74.07M / 0.192M, driftsort is 48.56M / 0.233M. So the gap FLIPPED: karac used to run 1.09x driftsort's instructions and 4.56x its mispredicts, and now runs 1.53x its instructions and 0.82x its mispredicts -- karac mispredicts LESS OFTEN THAN DRIFTSORT and is instruction-bound, not stall-bound. B-2026-08-10-19 bought its 1.29x by spending +21.3M instructions to remove -0.87M mispredicts, which is a good trade at ~20 cycles each and a trade that can only be made ONCE. The partition direction is the same trade: the 3-way run-builder measured +34.2M instructions to save 0.58M mispredicts (87.02M / 0.485M), which cancel almost exactly and fully explain its wall-clock wash. With only 0.192M mispredicts left there is nothing for a partition to buy. Budgeted from measured per-element costs -- branchless merge element ~33 instructions, measured 3-way partition element ~47, an optimistically tight 2-way element ~24 -- ten partition levels at 24 replacing nine merge passes at 33 saves ~57 instructions/element = ~8.6M = ABOUT 12%, best case, for ~1000 lines of IR in a load-bearing sort. WHAT TO DO INSTEAD: hoist the branchless kernel's two per-element bounds checks (`a < mid`, `b < hi`) by running min(mid-a, hi-b) iterations unchecked and re-testing only at the block boundary -- ~5 instructions per element over 1.95M merge elements = ~9.8M = ~13%, MORE than the full partition rewrite for a fraction of the work. Full accounting in docs/spikes/sort-algorithm-gap.md. | Vec.sort_by / Vec.sort lowering |
+| B-2026-08-10-21 | 2026-08-10 | codegen | high | the defensive copy that makes `UseAfterMove` non-fatal is NOT emitted when the moved-from value was read out of a CONTAINER (`v[i]`, `m.get(k)`), so the second use reads a freed buffer -- AOT prints garbage, the JIT aborts on a `copy_nonoverlapping` UB precondition, and the interpreter is correct | the `UseAfterMove` defensive-copy path in codegen -- present for a plain binding and a struct field, ABSENT for a Vec element and a Map value |
 
 ### Fixed (1064)
 
