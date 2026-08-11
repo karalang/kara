@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 158 | 1 |
 | double-free | 118 | 0 |
 | codegen-gap | 100 | 0 |
-| run-vs-build | 97 | 1 |
+| run-vs-build | 98 | 1 |
 | missing-feature | 89 | 1 |
 | perf | 62 | 1 |
 | false-positive | 58 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 784 | 4 |
-| typecheck | 147 | 4 |
+| typecheck | 148 | 4 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1084 surfaced · 9 open · 1065 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1085 surfaced · 9 open · 1066 fixed** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -134,15 +134,15 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1084 surfaced
 | B-2026-08-10-21 | 2026-08-10 | codegen | medium | the `UseAfterMove` defensive copy that `cli.rs` promises DOES NOT EXIST for any heap type on the binding-to-binding move path -- `karac check` exits 0 by design, `karac build` exits 0, and the reuse reads freed memory: garbage for String/Vec/struct, a hard SEGFAULT for Map and Set. Filed as a container-source gap; measured, the container read is the one case that IS defended and the 'working' rows were static-literal and `.len()` artifacts | no `UseAfterMove`-keyed mechanism exists in codegen; `src/cli.rs` `is_fatal_ownership_kind` asserts one. Fix funnels: `OwnershipError.consume_span` (spans already computed), `suppress_source_vec_cleanup_for_arg_ex` (single disarm funnel), `emit_clone_fn_for_type_expr` (type-directed copy) |
 | B-2026-08-11-1 | 2026-08-11 | codegen | high | a `Vec[char]` INDEX used directly as a method receiver (`cs[0].to_string()`) loses its `char` type and dispatches to the INTEGER method, so codegen silently prints `120` where the interpreter prints `x` -- the same root gap hard-errors on `VecDeque[char]` and `Array[char, N]` | the indexed-receiver element-TypeExpr lookup in `compile_method_call` (src/codegen/method_call.rs) -- the same resolution B-2026-08-10-13 fixed for sort_by comparator params, still missing for an index expression used directly as a receiver |
 | B-2026-08-11-3 | 2026-08-11 | codegen | medium | a GENERIC struct with a `Vec[T]` field monomorphized at `T = Vec[i64]` never drains its elements' buffers at drop -- every unconsumed element leaks its whole buffer, while the identical NON-generic `struct Holder { items: Vec[Vec[i64]] }` is clean and `Stack[String]` is clean | `emit_struct_drop_synthesis_mono` / the `Vec[T]` field element resolution it drives (src/codegen/synth_drop.rs) -- resolves a bare-T monomorph to `String` correctly, not to a nested `Vec` |
-| B-2026-08-11-4 | 2026-08-11 | typecheck | low | `v.cast()` on ANY primitive receiver passes `karac check` and then fails at run time -- `cast` sits on the PRIMITIVE_VALUE_METHODS exemption but is not implemented on any backend, so the exemption guards nothing and only holds the hole open | the PRIMITIVE_VALUE_METHODS list in src/typechecker/expr_method_call.rs |
 | B-2026-08-11-5 | 2026-08-11 | parser | high | EVERY parse-phase diagnostic raised inside an f-string interpolation hole is DISCARDED. Two consequences: (a) a hard syntax error degrades SILENTLY to literal text -- `println(f"typo={n.}")` passes `karac check` and prints `typo={n.}` on all three backends; (b) recoverable errors go unenforced -- `f"{takes(ref xs)}"` compiles clean while the identical call outside an f-string is a hard parse error. | src/parser/exprs.rs:771 -- `let result = crate::parse(&wrapper);` consumes only `result.program.items`; `result.errors` and `result.fix_edits` are dropped on the floor. |
 | B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
 | B-2026-08-11-7 | 2026-08-11 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles. With a NaN present, `sort()` silently leaves the Vec UNSORTED (all three backends agree), so a percentile/statistics program yields wrong answers with no diagnostic. `.sorted()`, `.max()`, `.min()` and `.contains()` on `Vec[f64]` are ungated the same way, while `Map[f64,_]`, `Set[f64]`, `SortedSet[f64]` and free `max(f64,f64)` all gate correctly. | src/typechecker/stdlib_seq.rs:1436 -- the Vec `"sort" | "reverse"` arm calls `expect_no_args` and returns `Type::Unit` with NO element-type Ord check; the Slice twin at :1164 checks mutability only. Working gate to copy: stdlib_map.rs:516/633 (SortedSet/SortedMap element+key Ord). |
 | B-2026-08-11-8 | 2026-08-11 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix for `f64` in an Ord/Eq/Hash context -- is unimplemented: `no associated function 'from' on type 'F64'`. Every spelling a user would try next fails, and one of them (`F64(1.5)`) panics the interpreter. | the `F64`/`F32` stdlib surface; the diagnostic that prescribes it is the `T: Ord` bound message (it renders "use the total-order wrapper `F64` (`F64.from(x)`)"), and design.md § Float semantics line ~2264 writes `scores.map(F64.from).sort()  # OK`. |
+| B-2026-08-11-9 | 2026-08-11 | typecheck | low | the seven comparison-op names are exempted from method-existence checking by NAME rather than by whether the receiver carries the baked impl, so `f.cmp(g)` / `f.eq(g)` / `f.lt(g)` on a FLOAT receiver pass `karac check` and then fail at run time -- floats are deliberately excluded from the Eq/Ord registration | the PRIMITIVE_VALUE_METHODS list in src/typechecker/expr_method_call.rs, against eq_ord_targets in src/typechecker/env_build.rs |
 
-### Fixed (1065)
+### Fixed (1066)
 
-<details><summary>1065 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1066 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1252,6 +1252,13 @@ carry a hint naming the spelling that exists. Pins: five tests in
 `tests/typechecker.rs` -- the bogus-name matrix, the four-annotation unification
 case, the full real char/bool surface, user impls on both (dispatch AND return
 type), and the hint. |
+| B-2026-08-11-4 | typecheck | low | `v.cast()` on ANY primitive receiver passes `karac check` and then fails at run time -- `cast` sits on the PRIMITIVE_VALUE_METHODS exemption but is n… | FIXED by 0aca4db. `"cast"` dropped from `PRIMITIVE_VALUE_METHODS`
+(`src/typechecker/expr_method_call.rs`); no replacement needed, because the
+normal path already does the right thing in both directions. Pins: three tests
+in `tests/typechecker.rs` -- `v.cast()` rejected on i64/f64/char/bool/u8, a user
+`impl i64 { fn cast }` / `impl char { fn cast }` reachable AND its return type
+enforced, and a regression guard that the seven comparison ops stay exempt on
+every receiver that carries the baked impl. |
 
 </details>
 
