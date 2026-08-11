@@ -96,26 +96,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 100 | 0 |
-| run-vs-build | 98 | 0 |
-| missing-feature | 90 | 1 |
+| run-vs-build | 99 | 1 |
+| missing-feature | 90 | 0 |
 | perf | 63 | 1 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 0 |
 | soundness | 42 | 1 |
 | crash | 42 | 1 |
-| other | 24 | 0 |
+| other | 25 | 1 |
 | use-after-free | 18 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 786 | 1 |
-| typecheck | 150 | 3 |
-| interp | 134 | 0 |
+| codegen | 787 | 2 |
+| typecheck | 150 | 2 |
+| interp | 135 | 1 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
-| other | 35 | 0 |
+| other | 36 | 1 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced · 4 open · 1073 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1090 surfaced · 5 open · 1074 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
 | B-2026-08-11-7 | 2026-08-11 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles. With a NaN present, `sort()` silently leaves the Vec UNSORTED (all three backends agree), so a percentile/statistics program yields wrong answers with no diagnostic. `.sorted()`, `.max()`, `.min()` and `.contains()` on `Vec[f64]` are ungated the same way, while `Map[f64,_]`, `Set[f64]`, `SortedSet[f64]` and free `max(f64,f64)` all gate correctly. | src/typechecker/stdlib_seq.rs:1436 -- the Vec `"sort" | "reverse"` arm calls `expect_no_args` and returns `Type::Unit` with NO element-type Ord check; the Slice twin at :1164 checks mutability only. Working gate to copy: stdlib_map.rs:516/633 (SortedSet/SortedMap element+key Ord). |
-| B-2026-08-11-8 | 2026-08-11 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix for `f64` in an Ord/Eq/Hash context -- is unimplemented: `no associated function 'from' on type 'F64'`. Every spelling a user would try next fails, and one of them (`F64(1.5)`) panics the interpreter. | the `F64`/`F32` stdlib surface; the diagnostic that prescribes it is the `T: Ord` bound message (it renders "use the total-order wrapper `F64` (`F64.from(x)`)"), and design.md § Float semantics line ~2264 writes `scores.map(F64.from).sort()  # OK`. |
+| B-2026-08-11-13 | 2026-08-11 | codegen+interp | medium | `F64`/`F32` ordering and equality depend on the SIGN BIT of a NaN, which is not stable across backends or optimization levels -- so `Vec[F64].sort()` on NaN-bearing data puts NaN FIRST under the interpreter and LAST under both compiled backends, and `F64 { value: nan } < F64 { value: 1.0 }` is `true` interp / `false` compiled. Measured three ways on one program: a NaN from a constant `0.0 / 0.0` gives interp true / JIT false / AOT false, while a NaN computed at runtime (`z / z` behind a fn call) gives interp true / JIT true / AOT FALSE -- i.e. the same source expression flips answer with optimization level, because AOT inlines the call and constant-folds the division. NOT a comparator bug: both backends implement the same documented IEEE-754 totalOrder key and agree on every non-NaN value. The divergence is in WHICH NaN gets produced -- x86 runtime division yields a NEGATIVE NaN (sign bit set) while LLVM's constant folder yields a POSITIVE one, and totalOrder sorts -NaN before -Infinity but +NaN after +Infinity. | the total-order float wrappers: total_order_key / compile_total_order_wrapper_cmp in src/codegen/assoc_call.rs, and the `TotalFloat*` arms of value_compare in src/interpreter/helpers.rs (both correct in isolation — see detail) |
+| B-2026-08-11-14 | 2026-08-11 | other | low | design.md § Float semantics specifies the `F32`/`F64` total order as `-Infinity < ... < -0.0 == 0.0 < ... < +Infinity < NaN`, but ALL THREE backends implement `-0.0 < 0.0` (and `-0.0 != 0.0`) -- the IEEE-754 totalOrder / Rust `total_cmp` behaviour, verified interp/JIT/AOT agreeing. The implementation is the more standard reading and is already shipped with tests (test_e2e_total_order_float_wrappers asserts `-0<+0` true and `-0==+0` false), so the SPEC LINE is what should change, not the code. | docs/design.md § Float semantics, the `F32`/`F64` total-order bullet list |
 | B-2026-08-11-10 | 2026-08-11 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is 5.93 ms / 48.8M instructions vs driftsort's 1.81 ms / 14.2M on this host -- a 3.3x gap, NOT the 1.3-1.5x originally filed. The stable 2-way quicksort run-builder built for B-2026-08-10-20 is a real 1.43x (to 34.25M / 4.15 ms) but is NOT a route to parity as this row first claimed: it still leaves 2.4x on instructions and 2.3x on wall clock. Both previously proposed options (pay down the sawtooth regression; gate on a cardinality signal) only bank that 1.43x, and the sawtooth one defends the pattern karac ALREADY WINS (22.5M vs 31.6M). Any future attempt should be budgeted against driftsort's 14.2M -- ~95 instructions per element against karac's ~325 -- before a line is written. | Vec.sort_by / Vec.sort lowering |
 
 ### Wontfix (1)
@@ -145,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced
 
 </details>
 
-### Fixed (1073)
+### Fixed (1074)
 
-<details><summary>1073 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1074 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1330,6 +1331,7 @@ something the original four did not:
     only test that exercises the diagnostic-span-keyed `fix_edits` merge
     through the real `cmd_fix` path -- the half of the fix that fails silently
     (correct edit, orphaned key, zero fixes applied) rather than loudly. |
+| B-2026-08-11-8 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix f… | d8ddc56 (three parts: an ordinary Kāra `impl <W> { fn from }` in each of runtime/stdlib/{f32,f64,f16,bf16}.kara makes the call typecheck; a codegen intercept in assoc_call.rs BUILDS the wrapper struct, because codegen does not route path-calls to baked stdlib impls and the call was otherwise reaching the unknown-callee tail as a const i64 0; and type_name_of_expr in expr_ops.rs types the call-result temp so a direct `F64.from(x).value` chain resolves its field. Display is a fourth part: one seam in build_struct_display_parts covering both println and f-strings.) |
 | B-2026-08-11-9 | typecheck | low | the seven comparison-op names are exempted from method-existence checking by NAME rather than by whether the receiver carries the baked impl, so `f.c… | FIXED by 22ba601. The exemption is now keyed on whether the receiver
 carries the baked impl instead of on the method name alone: one
 `let exempt_comparison_ops = !matches!(&receiver_for_lookup, Type::Float(_));`
