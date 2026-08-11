@@ -2938,6 +2938,50 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
             };
+            // B-2026-08-11-11 — a BORROW-returning receiver (`m.get(k)`) hands
+            // back an Option whose payload words ALIAS the map's stored value.
+            // `unwrap_or` returns that as an owned result, so the caller's free
+            // and the map's stored-value drop hit one buffer: `free(): double
+            // free detected in tcache 2` on a `Map[K, String]`, with no move
+            // anywhere in the program.
+            //
+            // The `match` spelling of the same read has been correct throughout
+            // because the arm path classifies this receiver as a borrow and
+            // deep-clones an escaping payload. This reuses that path's own
+            // predicate (`borrow_get_payload_clone_te`), so the two agree on
+            // which receivers alias and on how deep the clone goes — it
+            // self-gates to a heap-owning, non-shared payload the clone family
+            // fully supports, and returns `None` for the `Option[ref T]`
+            // Vec/Slice accessors whose escapes the typechecker already rejects.
+            // `inner_te` rather than `borrow_get_payload_clone_te(object)`: that
+            // predicate resolves the payload type through a SPAN-keyed table
+            // populated at match-scrutinee sites, and a receiver in argument
+            // position has no entry there — measured, the receiver classified as
+            // a borrow call and the payload type still came back `None`. The
+            // payload type is already in hand here, so only the shape GATE is
+            // borrowed from that path.
+            let borrow_clone_te = if self.scrutinee_is_borrow_call(object) {
+                self.borrow_payload_clone_te_gate(&inner_te)
+            } else {
+                None
+            };
+            let present_val = match borrow_clone_te {
+                Some(te) => {
+                    let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+                    let src = self.create_entry_alloca(fn_val, "uo.borrow.src", inner_ll);
+                    self.builder.position_at_end(present_bb);
+                    self.builder.build_store(src, present_val).unwrap();
+                    let dst = self.create_entry_alloca(fn_val, "uo.borrow.clone", inner_ll);
+                    self.builder.position_at_end(present_bb);
+                    self.builder
+                        .build_call(clone_fn, &[src.into(), dst.into()], "")
+                        .unwrap();
+                    self.builder
+                        .build_load(inner_ll, dst, "uo.borrow.cloned")
+                        .unwrap()
+                }
+                None => present_val,
+            };
             // `unwrap_or`'s default is evaluated EAGERLY (before the branch), so
             // in the present (Some/Ok) path it is DISCARDED and its heap buffer
             // leaks once per call — unbounded in a loop (the pure-constant-Some

@@ -45119,6 +45119,48 @@ fn main() {
         );
     }
 
+    /// B-2026-08-11-11 under ASAN — `get(k).unwrap_or(d)` over a heap value
+    /// must hand back a buffer the container does not also own.
+    ///
+    /// The default opt level aborts outright on this (`free(): double free
+    /// detected in tcache 2`) while -O0 shows a single silent invalid read, so
+    /// the two levels disagree about how bad it looks; ASAN names it either way.
+    ///
+    /// Case 3 is the direction that would break if the clone were made
+    /// unconditional: on an ABSENT key the result IS the caller's own default,
+    /// and cloning it there would leak one buffer per call. LSan is what holds
+    /// that line.
+    #[test]
+    fn asan_borrow_accessor_unwrap_or_clones_heap_payload() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. Map value — the filed reproduction.
+        let mut m: Map[String, String] = Map.new();
+        m.insert(f"k{i}", f"al{i}");
+        println(m.get(f"k{i}").unwrap_or(f"-"));
+        // 2. Vec element — the same accessor family.
+        let mut vv: Vec[String] = Vec.new();
+        vv.push(f"bb{i}");
+        println(vv.get(0).unwrap_or(f"-"));
+        // 3. CONTROL — absent key, so the DEFAULT is returned and must not be
+        // cloned (that would leak it once per iteration).
+        println(m.get(f"zz{i}").unwrap_or(f"dd{i}"));
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "al0", "bb0", "dd0", "al1", "bb1", "dd1", "al2", "bb2", "dd2", "al3", "bb3", "dd3",
+                "end",
+            ],
+            "borrow_accessor_unwrap_or",
+        );
+    }
+
     /// B-2026-08-10-21 under ASAN — the `UseAfterMove` defensive copy, and the
     /// first fixture of that mechanism the suite has ever been able to hold.
     ///

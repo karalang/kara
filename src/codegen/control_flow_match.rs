@@ -4188,7 +4188,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// supports the shape — anything else keeps the status-quo alias (a
     /// pre-existing, narrower leak/double-free is never made worse by a
     /// partial clone).
-    fn borrow_get_payload_clone_te(&mut self, scrutinee: &Expr) -> Option<TypeExpr> {
+    pub(super) fn borrow_get_payload_clone_te(&mut self, scrutinee: &Expr) -> Option<TypeExpr> {
         // A `let g = m.get(k)` binding re-enters here as an IDENTIFIER scrutinee
         // (`match g { … }` / `if let Some(v) = g`); its recorded `Option[V]`
         // type comes from `borrow_accessor_let_payload`, not the span-keyed
@@ -4220,6 +4220,23 @@ impl<'ctx> super::Codegen<'ctx> {
         let GenericArg::Type(payload_te) = p.generic_args.as_ref()?.first()? else {
             return None;
         };
+        let payload_te = payload_te.clone();
+        self.borrow_payload_clone_te_gate(&payload_te)
+    }
+
+    /// The payload-shape gate of [`Self::borrow_get_payload_clone_te`], split
+    /// out so a caller that already HAS the payload `TypeExpr` can reuse the
+    /// identical safety rules instead of restating them (B-2026-08-11-11).
+    ///
+    /// `unwrap_or` is that caller: it knows its own `inner_te`, while the
+    /// span-keyed `enum_inst_type_exprs` lookup above has no entry at a
+    /// non-scrutinee use site — so the receiver reads as a borrow call and the
+    /// payload type still came back `None`, which is why the double-free
+    /// survived a first fix attempt that only reused the whole predicate.
+    pub(super) fn borrow_payload_clone_te_gate(
+        &mut self,
+        payload_te: &TypeExpr,
+    ) -> Option<TypeExpr> {
         let payload_te = payload_te.clone();
         // Slice 3u: a TUPLE payload passes through whole — the fixup's
         // Tuple-pattern arm gates each ELEMENT individually. A `ref`-typed

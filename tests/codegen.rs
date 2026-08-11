@@ -10579,6 +10579,104 @@ fn main() {
     /// the interpreter moved to MATCH these (already-correct) behaviors, so
     /// this twin guards the target semantics from drifting. Same program as
     /// `tests/interpreter.rs`'s `test_let_move_source_frozen`.
+    /// B-2026-08-11-11 — `m.get(k).unwrap_or(d)` over a HEAP value.
+    ///
+    /// A borrow-returning accessor hands back an `Option` whose payload words
+    /// ALIAS the container's stored value. `unwrap_or` returned that as an
+    /// owned result, so the caller's free and the container's stored-value drop
+    /// hit one buffer: `free(): double free detected in tcache 2`, with no move
+    /// anywhere in the program.
+    ///
+    /// The `match` spelling of the same read was correct throughout (case 4),
+    /// because the arm path already classifies this receiver as a borrow and
+    /// deep-clones an escaping payload. The fix reuses that path's own shape
+    /// gate, so the two agree on which receivers alias and how deep to clone.
+    ///
+    /// Cases 5 and 6 are the controls that keep the clone off everything else:
+    /// a scalar value has nothing to alias, and an ABSENT key returns the
+    /// caller's own default, which must not be touched.
+    #[test]
+    fn test_e2e_borrow_accessor_unwrap_or_clones_heap_payload() {
+        // 1. The filed reproduction — `Map[String, String]`.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, String] = Map.new();\n\
+                     m.insert(f\"k\", f\"alpha\");\n\
+                     println(m.get(f\"k\").unwrap_or(f\"-\"));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 2. `Vec[String].get(i)` — the same accessor family, and broken the
+        // same way, so the fix must not be Map-specific.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut vv: Vec[String] = Vec.new();\n\
+                     vv.push(f\"alpha\");\n\
+                     println(vv.get(0).unwrap_or(f\"-\"));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 3. A nested heap value — the clone must go element-deep, not just
+        // duplicate the outer buffer.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, Vec[String]] = Map.new();\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(f\"alpha\");\n\
+                     m.insert(f\"k\", v);\n\
+                     let got = m.get(f\"k\").unwrap_or(Vec.new());\n\
+                     println(got[0]);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 4. CONTROL — the `match` spelling, correct before and after.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, String] = Map.new();\n\
+                     m.insert(f\"k\", f\"alpha\");\n\
+                     match m.get(f\"k\") { Some(v) => println(v), None => println(f\"-\") }\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 5. CONTROL — a scalar value has no buffer to alias.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(f\"k\", 7i64);\n\
+                     println(m.get(f\"k\").unwrap_or(0i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("7\n")
+        );
+        // 6. CONTROL — ABSENT key, so the caller's own default is returned and
+        // must be handed back untouched.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, String] = Map.new();\n\
+                     m.insert(f\"k\", f\"alpha\");\n\
+                     println(m.get(f\"zz\").unwrap_or(f\"-\"));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("-\n")
+        );
+    }
+
     /// B-2026-08-10-21 — the `UseAfterMove` defensive copy, for the
     /// `{ptr,len,cap}` family.
     ///
