@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 47 | 0 |
 | crash | 44 | 1 |
 | soundness | 42 | 0 |
-| other | 26 | 0 |
+| other | 27 | 0 |
 | use-after-free | 18 | 0 |
 
 ### By surface
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
 | autopar | 40 | 0 |
-| other | 37 | 0 |
+| other | 38 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced · 3 open · 1091 fixed · 2 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1107 surfaced · 3 open · 1092 fixed · 2 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -145,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced
 
 </details>
 
-### Fixed (1091)
+### Fixed (1092)
 
-<details><summary>1091 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1092 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2108,6 +2108,7 @@ spelling; re-entry guarded through the closure walk's name stack).
 Pins: two tests in `tests/concurrency.rs` -- the mutation case, stash-proven red
 against the pre-fix analysis, and the read-only case as the over-serialization
 guard. Both use a plain `Vec[i64]` shared struct. |
+| B-2026-08-11-31 | other | medium | `tests/par_codegen.rs` -- the ONLY lane that threads `ConcurrencyAnalysis` into codegen -- had no JIT leg at all, so the DEFAULT `karac build` config… | FIXED by a10b0d6. `jit_dispatch_par` in `tests/par_codegen.rs` compiles each test program to IR with both analyses threaded and executes it through the sibling `karac_jit_runner`, gated on `KARAC_TEST_JIT=1`; two CI steps schedule it on x86 and arm64. Verified by negative control (a corrupted expectation fails the JIT leg), and hardened to panic rather than soft-skip so it cannot silently become vacuous. |
 
 </details>
 
