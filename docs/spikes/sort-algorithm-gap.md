@@ -1097,6 +1097,53 @@ reverted and is not in git history, so pursuing option (a) means writing ~500
 lines of emitter first. Doing that to chase a target the same measurement says
 it cannot hit is the mistake this document already made once.
 
+
+## Where shuffled-uniform stands after Direction 7 (B-2026-08-11-28)
+
+Direction 7 landed (`3d77cc6`) and B-2026-08-11-28 was filed independently
+against the shuffled-uniform residual, from the B-2026-08-10-9 lineage rather
+than the -19/-20 one. Re-measured on current `main`, instructions, which is the
+metric this document trusts:
+
+| pattern | karac before D7 | karac after D7 | driftsort | |
+|---|---|---|---|---|
+| few-unique | 48.8 M | **13.2 M** | 14.2 M | karac now AHEAD |
+| sawtooth | 22.5 M | 23.4 M | 31.6 M | karac ahead |
+| **random** | 72.3 M | **72.1 M** | 48.2 M | **1.50x, unchanged** |
+
+Two things follow, and they point the same way.
+
+**Direction 7 did exactly what the arithmetic predicted, on exactly the pattern
+it predicted.** Few-unique fell 3.7x and passed the 14.2 M target set when the
+driftsort baseline was corrected. Random did not move at all — 72.3 → 72.1 M is
+noise. A full-array partition collapses the array when there are 8 distinct
+keys; with 150 k distinct keys it still leaves ~log2(n) passes to do, so the
+pass-count reduction that carried few-unique has nothing to give here.
+
+**And the direction B-2026-08-11-28 proposes is the one Direction 6 retired.**
+That row's stated next step is "compare the emitted merge inner loop against
+driftsort's ... any remaining gap is in the merge itself". That is the
+cost-per-merge-output family, and § Direction 6 refuted the whole family by
+arithmetic rather than by trying its members: `n · log2(n/RUN)` outputs is
+fixed, so no per-output constant reaches the target. Seven directions have now
+been measured against this residual and the only one with the required property
+— reducing full passes — is the one that landed and does not apply to shuffled
+input.
+
+### A note on the ratio, because three rows now quote three numbers
+
+B-2026-08-10-20 says 1.30x, B-2026-08-11-28 says 1.64x, and a fresh wall-clock
+pass in one sitting produced 1.26x and then 1.71x from the same binaries. None
+of these disagree about the code; they disagree about the host. The slope method
+(subprocess spawns) and best-of-N in-process timing respond differently to
+contention on a shared container, and driftsort's random figure alone moved
+8.65 → 5.80 ms between two measurements an hour apart while karac's moved
+10.92 → 9.90.
+
+**Quote instructions for this residual, not wall clock.** 72.1 M vs 48.2 M
+is reproducible to three significant figures across sessions and hosts; the
+wall-clock ratio is not stable to two.
+
 ## Caveats
 
 - **Single host, x86_64 shared container.** Absolute numbers drift a few

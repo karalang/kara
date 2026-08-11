@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 103 | 0 |
 | run-vs-build | 100 | 0 |
 | missing-feature | 90 | 0 |
-| perf | 64 | 1 |
+| perf | 64 | 0 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 0 |
 | crash | 44 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 801 | 4 |
+| codegen | 801 | 3 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
@@ -124,24 +124,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced · 4 open · 1091 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced · 3 open · 1091 fixed · 2 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-24 | 2026-08-11 | codegen | high | A String EQUALITY comparison between an unbound TEMPORARY and a `ref String` PARAMETER leaks the temporary, every evaluation. `hay.substring(0, 4) == needle` inside `fn f(hay: ref String, needle: ref String)` leaks; the same comparison against a LOCAL, or with the temp `let`-bound first, or with an OWNED `String` param, is clean. The leak is unbounded in input size -- the ordinary `substring(i, i+n) == needle` scan loop leaks one allocation per iteration. | the String `==`/`!=` lowering in codegen (the operand-cleanup decision). NOT the RC-elision hint and NOT optimization-dependent -- both ruled out by measurement, see detail. |
-| B-2026-08-11-28 | 2026-08-11 | codegen | low | RESIDUAL of B-2026-08-10-9, split out per the live-remainder rule: on SHUFFLED-UNIFORM input the mono `sort_by` is still ~1.6x Rust's driftsort. 50a50e8 replaced the fixed-32-run merge sort with a natural-run merge sort, which was the right fix and moved the ORDERED patterns enormously (sorted and reverse went from 39-54x behind to roughly 2x AHEAD -- measured here at 0.47x and 0.52x). It deliberately did not move the shuffled case, and the closing note records that in its own numbers: `random 14.91 -> 14.60 ms (UNCHANGED)`, because shuffled input has ~2-element natural runs so the RUN padding reproduces the old run length and the old pass count. MEASURED FRESH (hyperfine, 10 runs each, clone subtracted via an identical kernel minus the sort call; 25 rounds x 150k (i64,i64) pairs, x86 container): kara pure sort 260.6 ms vs rust 159.0 ms = 1.64x. Same kernel by pattern: shuffled 1.51x total / 1.64x pure, sorted 0.47x, reverse 0.52x. SEVERITY LOW deliberately -- shuffled-uniform is the regime where an adaptive sort has least to exploit, driftsort is a strong baseline, and 1.6x on the hardest pattern while beating it 2x on ordered input is a defensible place to sit. Filed so the remainder is visible in the work queue rather than only inside a closed row's prose, NOT as a claim that it must be closed. CAVEAT: single host, x86_64 shared container, not the canonical Apple-silicon bench host. NEXT STEP if picked up: compare the emitted merge inner loop against driftsort's on shuffled input; the run-detection phase is already known not to help there, so any remaining gap is in the merge itself. | mono sort_by lowering (natural-run merge sort, 50a50e8) |
 | B-2026-08-11-29 | 2026-08-11 | codegen | high | SEGV (exit 139) on a DEFAULT `karac build`: a struct with a `Map`/`Set` field, bound out of a `Result`'s `Ok(..)` match arm and then passed BY VALUE to a function, dereferences a wild pointer in `karac_map_free_with_drop_vec`. `karac check` is clean and the interpreter prints the right answer. Five conditions, all necessary -- `Option` instead of `Result` is clean, a `Vec` field is clean, using the value inline instead of passing it is clean. | `karac_map_free_with_drop_vec` -- the ASAN frame is `#0 karac_map_free_with_drop_vec` called directly from `main`, on `SEGV on unknown address 0x0b`, i.e. the Map handle slot holds a non-pointer when the drop runs. Family: B-2026-08-07-19 (`struct { s: Result[Map,E] }`) is the INVERSE nesting and is fixed. |
 | B-2026-08-11-30 | 2026-08-11 | codegen | medium | The two NON-CRASHING siblings of B-2026-08-11-29, same area (a container field of a struct inside a `Result` crossing a by-value boundary), different trigger conditions and different symptom -- a silent leak instead of a SEGV. LEG A: a `Map`/`Set` field leaks ~600 B when the Result is `let`-bound before the match, while matching the call inline is clean. LEG B: a `Vec` field leaks one allocation per Vec, but only when the struct ALSO has another heap field and the Result is a fresh temp passed as an argument. | same area as B-2026-08-11-29 (`Result[struct-with-container-field]` drop across a by-value boundary); may or may not be one fix with it -- the trigger conditions differ materially, see detail. |
 
-### Wontfix (1)
+### Wontfix (2)
 
-<details><summary>1 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>2 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
 | B-2026-08-10-20 | 2026-08-10 | codegen | low | ACCEPTED COST, not a pending fix: `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.30x Rust's `sort_by` (karac ~11.1 ms vs driftsort 8.2-8.9, 150k pairs, this host). Residual of B-2026-08-10-19. FIVE DIRECTIONS WERE MEASURED AGAINST IT AND NONE CLOSES IT -- merge-kernel tweaks, RUN tuning, the bounds-check hoist, a 3-way quicksort run-builder and a 2-way one; do not reopen any of them without new information. The last and most promising, a stable 2-way branchless quicksort run-builder, was BUILT IN FULL, verified correct (98/98 pattern x size, element-type coverage across AOT/LLJIT/interp) and measured: random 11.11 -> 11.73 ms (0.95x, i.e. SLOWER) with instructions 74.05M -> 82.18M (+11%); sawtooth 2.82 -> 3.22 (0.87x). A sweep of the configuration space (span 512/2048/8192/16384/65536, base 16/32/64) found NO setting that beats main on random -- the best, span 16384 base 64, reaches 11.17 vs main's 11.11, i.e. parity. Not merged; the implementation was reverted. This is the cost of the algorithm karac has. The one direction that DID pay, few-unique, is split out as its own open row B-2026-08-11-10. Full write-up in docs/spikes/sort-algorithm-gap.md. |
+| B-2026-08-11-28 | 2026-08-11 | codegen | low | RESIDUAL of B-2026-08-10-9, split out per the live-remainder rule: on SHUFFLED-UNIFORM input the mono `sort_by` is still ~1.6x Rust's driftsort. 50a50e8 replaced the fixed-32-run merge sort with a natural-run merge sort, which was the right fix and moved the ORDERED patterns enormously (sorted and reverse went from 39-54x behind to roughly 2x AHEAD -- measured here at 0.47x and 0.52x). It deliberately did not move the shuffled case, and the closing note records that in its own numbers: `random 14.91 -> 14.60 ms (UNCHANGED)`, because shuffled input has ~2-element natural runs so the RUN padding reproduces the old run length and the old pass count. MEASURED FRESH (hyperfine, 10 runs each, clone subtracted via an identical kernel minus the sort call; 25 rounds x 150k (i64,i64) pairs, x86 container): kara pure sort 260.6 ms vs rust 159.0 ms = 1.64x. Same kernel by pattern: shuffled 1.51x total / 1.64x pure, sorted 0.47x, reverse 0.52x. SEVERITY LOW deliberately -- shuffled-uniform is the regime where an adaptive sort has least to exploit, driftsort is a strong baseline, and 1.6x on the hardest pattern while beating it 2x on ordered input is a defensible place to sit. Filed so the remainder is visible in the work queue rather than only inside a closed row's prose, NOT as a claim that it must be closed. CAVEAT: single host, x86_64 shared container, not the canonical Apple-silicon bench host. NEXT STEP if picked up: compare the emitted merge inner loop against driftsort's on shuffled input; the run-detection phase is already known not to help there, so any remaining gap is in the merge itself. |
 
 </details>
 
