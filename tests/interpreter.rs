@@ -6891,16 +6891,24 @@ fn test_float_nan_not_equal() {
 
 // ── F64/F32 Total-Order Types ─────────────────────────────────
 
+// B-2026-08-11-8: these two asserted `F64(3.14)` / `F32(2.5…)`, a rendering
+// that no CHECKED program could ever observe — both `println(x)` and `f"{x}"`
+// rejected `F64` at typecheck ("does not implement Display"), and this
+// harness's `run()` bypasses that gate. Giving the wrapper Display meant
+// choosing a rendering, and it renders as the inner float so that wrapping a
+// value for its `Ord` contract does not change how it prints. Codegen's
+// `synth_display.rs` arm reuses the same shortest-round-trip float formatter,
+// so the two backends cannot drift.
 #[test]
 fn test_f64_from_constructor() {
     let output = run("fn main() { let x = F64.from(3.14); println(x); }");
-    assert_eq!(output, "F64(3.14)\n");
+    assert_eq!(output, "3.14\n");
 }
 
 #[test]
 fn test_f32_from_constructor() {
     let output = run("fn main() { let x = F32.from(2.5); println(x); }");
-    assert!(output.starts_with("F32(2.5"));
+    assert!(output.starts_with("2.5"), "got {output:?}");
 }
 
 #[test]
@@ -7016,8 +7024,13 @@ fn test_map_set_from_enum_payload_interp_parity() {
 
 #[test]
 fn test_f16_bf16_from_constructor() {
-    assert!(run("fn main() { let x = F16.from(2.5); println(x); }").starts_with("F16(2.5"));
-    assert!(run("fn main() { let x = Bf16.from(3.25); println(x); }").starts_with("Bf16(3.25"));
+    // B-2026-08-11-8: renders as the inner float now, like its F32/F64
+    // siblings — see `test_f64_from_constructor` for why the old
+    // `F16(2.5)` form was never observable from a checked program.
+    let f16 = run("fn main() { let x = F16.from(2.5); println(x); }");
+    assert!(f16.starts_with("2.5"), "got {f16:?}");
+    let bf16 = run("fn main() { let x = Bf16.from(3.25); println(x); }");
+    assert!(bf16.starts_with("3.25"), "got {bf16:?}");
 }
 
 #[test]

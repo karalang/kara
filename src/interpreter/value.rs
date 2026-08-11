@@ -1283,10 +1283,18 @@ impl std::fmt::Display for Value {
                 }
             },
             Value::Function { name, .. } => write!(f, "<fn {}>", name),
-            Value::TotalFloat32(v) => write!(f, "F32({})", v),
-            Value::TotalFloat64(v) => write!(f, "F64({})", v),
-            Value::TotalFloat16(v) => write!(f, "F16({})", v),
-            Value::TotalBFloat16(v) => write!(f, "Bf16({})", v),
+            // B-2026-08-11-8: render the INNER float, matching the bare
+            // primitive (`1.5`) and codegen's `synth_display.rs` arm — NOT
+            // `F64(1.5)`. Until this slice the Display gate rejected every
+            // `F64` in `println` / f-strings, so the wrapper form was
+            // unreachable from checked Kāra and only ever appeared in
+            // typecheck-bypassing interpreter tests; making it printable
+            // meant picking a rendering, and the wrapper is an ordering
+            // contract, not a distinct textual form.
+            Value::TotalFloat32(v) => write!(f, "{}", v),
+            Value::TotalFloat64(v) => write!(f, "{}", v),
+            Value::TotalFloat16(v) => write!(f, "{}", v),
+            Value::TotalBFloat16(v) => write!(f, "{}", v),
             Value::Atomic(v) => write!(f, "Atomic({})", v.lock().unwrap()),
             Value::Mutex(v) => write!(f, "Mutex({})", v.lock().unwrap()),
             Value::TaskGroup => write!(f, "TaskGroup"),

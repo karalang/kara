@@ -178,6 +178,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (buf_ptr, len) = self.format_f64_to_stack_buf(v);
                 self.emit_string_append_raw(acc, buf_ptr, len);
             }
+            // Total-order float wrappers (B-2026-08-11-8). Render the INNER
+            // float exactly as the bare primitive would — `1.5`, not
+            // `F64(1.5)`. The wrapper exists to supply `Eq`/`Ord`/`Hash`, not
+            // a distinct textual form; a percentile report that sorts through
+            // `F64` should print the numbers, not the wrapper. (Java's
+            // `Double` prints the same as `double` for the same reason.)
+            // Reuses the `f32`/`f64` shortest-round-trip formatter below, so
+            // wrapped and unwrapped renderings cannot drift apart.
+            "F32" | "F64" | "F16" | "Bf16" => {
+                let inner_ty: BasicTypeEnum<'ctx> = match type_name {
+                    "F32" => self.context.f32_type().into(),
+                    "F64" => self.context.f64_type().into(),
+                    "F16" => self.context.f16_type().into(),
+                    _ => self.context.bf16_type().into(),
+                };
+                let st = self.context.struct_type(&[inner_ty], false);
+                let loaded = self
+                    .builder
+                    .build_load(st, val_ptr, "tfw")
+                    .unwrap()
+                    .into_struct_value();
+                let v = self
+                    .builder
+                    .build_extract_value(loaded, 0, "tfw.inner")
+                    .unwrap()
+                    .into_float_value();
+                let (buf_ptr, len) = self.format_f64_to_stack_buf(v);
+                self.emit_string_append_raw(acc, buf_ptr, len);
+            }
             "bool" => {
                 // Select "true"/"false" pointer AND length, then append.
                 let v = self
@@ -1024,6 +1053,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.enum_layouts.contains_key(seg) {
                         return self.emit_enum_display_fn(seg);
                     }
+                    // Total-order float wrappers render as their INNER float
+                    // (B-2026-08-11-8), so they must be pulled out before the
+                    // struct check below. They are real entries in
+                    // `struct_field_names` (seeded in `declarations.rs`), so
+                    // that check would otherwise claim them and emit the
+                    // struct-debug shape — `F64 { value: 3.14 }` where the
+                    // interpreter prints `3.14`, a run-vs-build divergence on
+                    // every `println` of a wrapper. Covers the nested cases
+                    // too: `Vec[F64]` recurses here for its element.
+                    if matches!(seg.as_str(), "F32" | "F64" | "F16" | "Bf16") {
+                        let llvm_ty = self.llvm_type_for_type_expr(te);
+                        return self.emit_display_fn_for_type(seg, llvm_ty);
+                    }
                     // User struct nested in another type's Display (an enum
                     // payload / collection element): debug/field format,
                     // matching the interpreter (B-2026-07-08-18). Without this a
@@ -1278,6 +1320,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(type_name)
             .cloned()
             .unwrap_or_default();
+        // Total-order float wrappers (B-2026-08-11-8) render as the bare
+        // inner float — `3.14`, not `F64 { value: 3.14 }`. Emitting just the
+        // `.value` part reuses the ordinary float interpolation path, so the
+        // wrapper prints byte-identically to the primitive it wraps and to
+        // the interpreter's `Display for Value`. This is the single seam that
+        // covers BOTH `println(x)` and `f"{x}"`: they both arrive here via
+        // `expr_user_struct_name` → `compile_struct_display_string`.
+        if matches!(type_name, "F32" | "F64" | "F16" | "Bf16") {
+            return Ok(vec![P::Expr(
+                Box::new(Expr {
+                    kind: ExprKind::FieldAccess {
+                        object: Box::new(base.clone()),
+                        field: "value".to_string(),
+                    },
+                    span: base.span.clone(),
+                }),
+                None,
+            )]);
+        }
         let mut parts: Vec<P> = vec![P::Text(format!("{type_name} {{ "))];
         for (i, fname) in field_names.iter().enumerate() {
             if i > 0 {

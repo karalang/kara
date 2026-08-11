@@ -13222,6 +13222,64 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_total_order_wrapper_from_and_display() {
+        // B-2026-08-11-8 — `F64.from(x)` is the constructor design.md § Float
+        // semantics names and the `T: Ord` bound diagnostic prescribes
+        // verbatim, and it did not exist: `no associated function 'from' on
+        // type 'F64'`. Every other spelling failed too, and `F64(1.5)` (the
+        // natural next guess) panicked the interpreter — so a correct
+        // diagnostic steered users, `karac fix`, and any LLM reading it into
+        // an API that was not there.
+        //
+        // Two halves, both covered here because they broke in different
+        // backends:
+        //  * `from` — the baked stdlib body makes it TYPECHECK, but codegen
+        //    does not route path-calls to baked stdlib impls, so without the
+        //    `assoc_call.rs` intercept the call yielded a const `i64` 0 and
+        //    then failed as "cannot resolve field 'value'". The
+        //    `F64.from(x).value` chain additionally needs `type_name_of_expr`
+        //    to type the call-result temp (a let-bound receiver resolves via
+        //    `var_type_names`; a bare temp has no binding to key on).
+        //  * Display — BOTH `println(x)` and `f"{x}"` rejected every wrapper
+        //    ("does not implement Display"), making the type the compiler
+        //    recommends for `Ord` contexts unprintable. It renders as the
+        //    INNER float, so wrapping a value for its ordering contract does
+        //    not change how it prints.
+        let out = run_program(
+            "fn main() {\n\
+                 let a = F64.from(3.25);\n\
+                 let b = F32.from(2.5);\n\
+                 println(a);\n\
+                 println(b);\n\
+                 println(f\"{a} {b}\");\n\
+                 println(F64.from(1.5).value);\n\
+                 println(a.value + 1.0);\n\
+                 let mut v: Vec[F64] = Vec.new();\n\
+                 v.push(F64.from(3.0));\n\
+                 v.push(F64.from(1.0));\n\
+                 v.push(F64.from(2.0));\n\
+                 v.sort();\n\
+                 let lo = v[0];\n\
+                 let hi = v[2];\n\
+                 println(lo);\n\
+                 println(hi);\n\
+                 println(v);\n\
+                 let mut m: Map[F64, i64] = Map.new();\n\
+                 let _ = m.insert(F64.from(2.0), 20);\n\
+                 match m.get(F64.from(2.0)) { Some(x) => println(x), None => println(0 - 1) }\n\
+                 println(F64.from(2.0) == F64.from(2.0));\n\
+                 println(F64.from(1.0) < F64.from(2.0));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "3.25\n2.5\n3.25 2.5\n1.5\n4.25\n1\n3\n[1, 2, 3]\n20\ntrue\ntrue\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_total_order_f16_bf16_wrappers() {
         // The 16-bit siblings of the F32/F64 total-order wrappers
         // (`struct F16 { value: f16 }` / `struct Bf16 { value: bf16 }`,

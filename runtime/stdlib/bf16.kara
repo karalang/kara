@@ -19,3 +19,12 @@
 struct Bf16 {
     value: bf16,
 }
+
+// B-2026-08-11-8 — sibling of `F64.from`; see f64.kara for the full
+// rationale. Ordinary Kāra body: the wrapper is a single-field struct
+// in both backends, so the struct literal lowers correctly everywhere.
+impl Bf16 {
+    fn from(value: bf16) -> Bf16 {
+        Bf16 { value: value }
+    }
+}

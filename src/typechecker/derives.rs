@@ -337,6 +337,18 @@ impl<'a> super::TypeChecker<'a> {
                 "Map" | "SortedMap" | "Result" if args.len() == 2 => {
                     self.type_supports_display(&args[0]) && self.type_supports_display(&args[1])
                 }
+                // Total-order float wrappers Display as their inner float
+                // (B-2026-08-11-8). Not expressible as a `#[derive(Display)]`
+                // on the baked stdlib struct: the derive renders the struct
+                // shape (`F64 { value: 1.5 }`), where the wrapper must render
+                // exactly like the primitive it wraps (`1.5`). Both backends
+                // implement that directly — `synth_display.rs` for codegen,
+                // the `TotalFloat*` arms of `Display for Value` in the
+                // interpreter — so this arm is what lets a checked program
+                // reach either of them. Before it, BOTH `println(x)` and
+                // `f"{x}"` rejected every `F64`, which made the wrapper the
+                // compiler recommends for `Ord` contexts unprintable.
+                "F32" | "F64" | "F16" | "Bf16" if args.is_empty() => true,
                 _ => {
                     if self.env.has_impl("Display", name, args) {
                         return true;

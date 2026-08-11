@@ -7,3 +7,24 @@
 struct F64 {
     value: f64,
 }
+
+// B-2026-08-11-8. `F64.from(x)` is the constructor design.md § Float
+// semantics names (`scores.map(F64.from).sort()`) and that the `T: Ord`
+// bound diagnostic prescribes verbatim ("use the total-order wrapper
+// `F64` (`F64.from(x)`)"). It was missing, so following either one hit
+// `no associated function 'from' on type 'F64'` — a correct diagnostic
+// pointing at an API that did not exist.
+//
+// An ordinary Kāra body, like `ExitCode.from`: the wrapper is a plain
+// single-field struct in both backends, so the struct literal already
+// lowers correctly everywhere and no per-backend intercept is needed.
+// (The interpreter additionally carries a hardcoded `"F64.from"` arm in
+// eval_call.rs that predates this and yields the same value.)
+//
+// Unwrap is the plain field read, `x.value` — no accessor method, so
+// the round trip is `F64.from(v).value`.
+impl F64 {
+    fn from(value: f64) -> F64 {
+        F64 { value: value }
+    }
+}

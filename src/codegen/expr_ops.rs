@@ -2992,6 +2992,29 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 Some("Option".to_string())
             }
+            // `F64.from(x)` / `F32` / `F16` / `Bf16` return the wrapper struct
+            // itself (B-2026-08-11-8). Needed for a DIRECT chain on the call
+            // result — `F64.from(2.25).value`, `xs.map(F64.from)[0].value`: a
+            // let-bound receiver resolves through `var_type_names`, but a
+            // call-result temp has no binding to key on, so without this the
+            // field read hits the loud "cannot resolve field" gap.
+            ExprKind::Call { callee, .. }
+                if matches!(
+                    &callee.kind,
+                    ExprKind::Path { segments, .. }
+                        if segments.len() == 2
+                            && matches!(
+                                segments[0].as_str(),
+                                "F32" | "F64" | "F16" | "Bf16"
+                            )
+                            && segments[1] == "from"
+                ) =>
+            {
+                match &callee.kind {
+                    ExprKind::Path { segments, .. } => segments.first().cloned(),
+                    _ => None,
+                }
+            }
             ExprKind::StructLiteral { path, .. } => path.last().cloned(),
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.type_name_of_expr(object)?;

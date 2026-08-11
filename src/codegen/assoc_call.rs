@@ -1287,6 +1287,23 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             return Ok(agg);
         }
+        // Total-order float wrapper construction (B-2026-08-11-8):
+        // `F64.from(x)` — the constructor design.md § Float semantics and
+        // the `T: Ord` bound diagnostic both prescribe. The baked stdlib
+        // body (`impl F64 { fn from(value: f64) -> F64 { … } }`, f64.kara)
+        // is what makes the call typecheck, but codegen does not route
+        // path-calls to baked stdlib impls: without this intercept the call
+        // reaches the unknown-callee tail and yields a const `i64` 0, which
+        // then fails downstream as "cannot resolve field 'value'" (a `.value`
+        // read) or "operand is not a struct/float value" (a comparison).
+        // Build the single-field wrapper struct directly, exactly as the
+        // `F64 { value: x }` literal does.
+        if matches!(type_name, "F32" | "F64" | "F16" | "Bf16")
+            && method == "from"
+            && _args.len() == 1
+        {
+            return self.compile_total_order_wrapper_from(type_name, &_args[0].value);
+        }
         // Total-order float wrapper comparison (B-2026-07-22-11):
         // `a > b` / `a == b` on an `F32`/`F64` wrapper lowers to
         // `F32.gt(a, b)` / `F32.eq(a, b)`. These must NOT use the IEEE
@@ -3722,6 +3739,62 @@ impl<'ctx> super::Codegen<'ctx> {
             "Bf16" => (ctx.bf16_type(), ctx.i16_type(), 15),
             _ => return None,
         })
+    }
+
+    /// Emit `F32.from(x)` / `F64.from(x)` / `F16.from(x)` / `Bf16.from(x)` —
+    /// wrap a bare float in its total-order wrapper (B-2026-08-11-8).
+    ///
+    /// The wrapper is a single-field struct (`{ float }`, seeded in
+    /// `declarations.rs`), so this is an insert into that aggregate. The
+    /// argument is width-adjusted first: codegen carries float literals and
+    /// most float expressions as `f64`, so building an `F32`/`F16`/`Bf16`
+    /// needs an explicit truncation — storing an `f64` into an `f32` field
+    /// would produce a type-mismatched aggregate that LLVM rejects.
+    pub(super) fn compile_total_order_wrapper_from(
+        &mut self,
+        type_name: &str,
+        arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (float_ty, _, _) = self
+            .total_float_wrapper_widths(type_name)
+            .ok_or_else(|| format!("not a total-order float wrapper: {type_name}"))?;
+        let raw = self.compile_expr(arg)?;
+        // Accept an int-valued argument (`F64.from(2)`) by converting rather
+        // than rejecting: the interpreter's long-standing `"F64.from"` arm
+        // takes `Value::Int` too, and diverging here would be a run-vs-build
+        // split on a call the typechecker admits via literal promotion.
+        let inner = match raw {
+            BasicValueEnum::FloatValue(f) => {
+                let from_ty = f.get_type();
+                if from_ty == float_ty {
+                    f
+                } else if from_ty.get_bit_width() > float_ty.get_bit_width() {
+                    self.builder
+                        .build_float_trunc(f, float_ty, "tf.from.trunc")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_float_ext(f, float_ty, "tf.from.ext")
+                        .unwrap()
+                }
+            }
+            BasicValueEnum::IntValue(i) => self
+                .builder
+                .build_signed_int_to_float(i, float_ty, "tf.from.sitofp")
+                .unwrap(),
+            other => {
+                return Err(format!(
+                    "`{type_name}.from` expects a float argument, got {:?}",
+                    other.get_type()
+                ))
+            }
+        };
+        let st = self.context.struct_type(&[float_ty.into()], false);
+        let agg = self
+            .builder
+            .build_insert_value(st.get_undef(), inner, 0, "tf.from.wrap")
+            .unwrap();
+        Ok(agg.into_struct_value().into())
     }
 
     /// Emit a TOTAL-order comparison of two `F32`/`F64`/`F16`/`Bf16` wrapper
