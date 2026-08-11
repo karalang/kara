@@ -3413,6 +3413,103 @@ fn main() {
         }
     }
 
+    /// B-2026-08-11-1 — an INDEX used directly as a method receiver.
+    ///
+    /// `cs[0].to_string()` on a `Vec[char]` printed `120` under both compiled
+    /// backends where the interpreter printed `x`. Not a corrupted buffer: a
+    /// correctly-built string of the WRONG THING, on code the typechecker
+    /// accepts. Found dogfooding a recursive-descent evaluator, whose tokenizer
+    /// built identifier names character by character — every expression
+    /// referencing a variable returned `ERR:unknown variable` while the
+    /// numbers-only ones were right.
+    ///
+    /// THREE root causes sat behind the one symptom, and only the first was
+    /// silent:
+    ///
+    /// 1. `register_var_from_type_expr` recorded `var_type_names` for structs,
+    ///    enums and INTEGER primitives but not `char`. `expr_is_char` reads
+    ///    exactly that map, so a binding with no name is indistinguishable from
+    ///    an `i32` and the renderer emits the code point. Fixing it in the
+    ///    registrar rather than at the indexed-receiver call site is what makes
+    ///    it general — the `__indexed_elem_N` synth, for-loop elements,
+    ///    destructured elements and params all route through it. (`let c: char
+    ///    = cs[0]` was always correct because `stmts.rs` records the annotation
+    ///    itself, which is why the bug looked like it belonged to indexing.)
+    ///
+    /// 2. `Array[T, N]` keeps its element TypeExpr in its own table, so the
+    ///    indexed-receiver lookup missed it and errored on a variable that IS an
+    ///    Array. Not char-specific: `Array[i64, N]` and `Array[String, N]`
+    ///    failed identically, so EVERY indexed-receiver method on an Array was
+    ///    unreachable.
+    ///
+    /// 3. The typechecker's scalar integer-index arm resolved Array / Slice /
+    ///    Vector / Vec but not `VecDeque`, so `d[i]` inferred `Type::Error`.
+    ///    Most uses survive that (`d[0] + 1` and `let x: i64 = d[0]` recover the
+    ///    type from the operator or the annotation) but method dispatch cannot:
+    ///    an `Error` receiver records no callee type, so `d[0].to_string()` hit
+    ///    "no handler for method". Only `to_string` failed — `abs()` and
+    ///    `is_alphabetic()` route through paths that never needed the key.
+    ///
+    /// The trailing rows are the row's own measured boundary: each was already
+    /// correct and pins a way the fix could over-reach. `char` and `i64` share a
+    /// representation, so a regression here is silent by nature — the expected
+    /// VALUES are the assertion, not the fact that it compiles.
+    #[test]
+    fn test_e2e_indexed_receiver_char_element_method() {
+        let out = run_program(
+            r#"
+fn main() {
+    // 1 — the reported shape, both spellings (argument position and `let`).
+    let cs: Vec[char] = "xy".chars().collect();
+    let mut acc: String = f"";
+    acc.push_str(cs[0].to_string());
+    println(f"{acc.len()}:{acc}");
+    let s: String = cs[1].to_string();
+    println(f"{s.len()}:{s}");
+    println(f"[{cs[0].to_string()}]");
+
+    // 2 — Array, every element type (all three were hard errors).
+    let ac: Array[char, 2] = ['p', 'q'];
+    println(ac[0].to_string());
+    let ai: Array[i64, 2] = [7i64, 8i64];
+    println(ai[0].to_string());
+    let astr: Array[String, 2] = ["abc", "de"];
+    println(astr[0].len());
+
+    // 3 — VecDeque, the `to_string` gap and the methods that always worked.
+    let mut dc: VecDeque[char] = VecDeque.new();
+    dc.push_back('z');
+    println(dc[0].to_string());
+    let mut di: VecDeque[i64] = VecDeque.new();
+    di.push_back(-7i64);
+    println(di[0].to_string());
+    println(di[0].abs());
+
+    // Boundary rows — each already correct, each a way to over-reach.
+    let c: char = cs[0];
+    println(c.to_string());
+    println('w'.to_string());
+    println(f"[{cs[0]}]");
+    if cs[0] == 'x' { println("eq"); } else { println("ne"); }
+    let vs: Vec[String] = vec!["abc"];
+    println(vs[0].len());
+    let mut m: Map[i64, char] = Map.new();
+    let _ = m.insert(1i64, 'k');
+    match m.get(1i64) { Some(mc) => println(mc.to_string()), None => println("-") }
+    let mut fc: String = f"";
+    for ch in cs { fc.push_str(ch.to_string()); }
+    println(fc);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim_end(),
+                "1:x\n1:y\n[x]\np\n7\n3\nz\n-7\n7\nx\nw\n[x]\neq\n3\nk\nxy"
+            );
+        }
+    }
+
     /// B-2026-08-09-5 — the HEAP half of the borrowed-payload mapper. An
     /// indirect call site lowered the closure's return from the SURFACE `Fn(..)`
     /// type while the emitted body used its own; when the two disagreed, the

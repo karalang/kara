@@ -1932,10 +1932,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "i128"
                         | "isize"
                 );
+                // `char` belongs to that same list and was the one primitive
+                // missing from it (B-2026-08-11-1). It is recorded for the
+                // identical reason and against an identical failure: `char`
+                // lowers to an integer, so a binding with no recorded type name
+                // is INDISTINGUISHABLE from an `i32` downstream —
+                // `expr_is_char` reads exactly this map, and when it answers
+                // false the renderer prints the CODE POINT. `cs[0].to_string()`
+                // on a `Vec[char]` produced "120" where the interpreter
+                // produced "x": not a corrupted buffer, a correctly-built
+                // string of the wrong thing.
+                //
+                // Fixing it HERE rather than at the indexed-receiver call site
+                // is what makes it general: every binding form that routes
+                // through this registrar gets the name — the `__indexed_elem_N`
+                // synth that `compile_indexed_receiver_method` mints, for-loop
+                // and destructured elements, and function params. The `let c:
+                // char = …` spelling was always correct because `stmts.rs`
+                // records the annotation itself, which is why the bug looked
+                // like it belonged to indexing.
+                let is_char_prim = seg.as_str() == "char";
                 if self.struct_types.contains_key(seg.as_str())
                     || self.shared_types.contains_key(seg.as_str())
                     || self.enum_layouts.contains_key(seg.as_str())
                     || is_int_prim
+                    || is_char_prim
                 {
                     self.record_var_type_name(var_name.to_string(), seg);
                 }

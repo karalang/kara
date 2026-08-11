@@ -3933,7 +3933,20 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         *element.clone()
                     }
-                    Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                    // `VecDeque` indexes exactly like `Vec` and was simply
+                    // absent from this arm (B-2026-08-11-1), so `d[i]` inferred
+                    // `Type::Error`. Most uses survive that — `d[0] + 1` and
+                    // `let x: i64 = d[0]` both work, because they recover the
+                    // type from the operator or the annotation — but METHOD
+                    // DISPATCH cannot: an `Error` receiver records no
+                    // `method_callee_types` entry, so codegen's `dispatch_key`
+                    // is `None` and `d[0].to_string()` fell through to "no
+                    // handler for method 'to_string'". The range-index arm
+                    // above already pairs the two names; this brings scalar
+                    // indexing in line.
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                    {
                         args[0].clone()
                     }
                     // Peel an immutable/exclusive borrow before extracting the
@@ -3958,7 +3971,11 @@ impl<'a> super::TypeChecker<'a> {
                             }
                             *element.clone()
                         }
-                        Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                        // Same pairing behind a borrow — `d[i]` where
+                        // `d: ref VecDeque[T]` (B-2026-08-11-1).
+                        Type::Named { name, args }
+                            if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                        {
                             args[0].clone()
                         }
                         _ => Type::Error,

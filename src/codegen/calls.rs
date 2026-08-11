@@ -257,6 +257,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_te = self
             .var_elem_type_exprs
             .get(outer_name.as_str())
+            // `Array[T, N]` records its element TypeExpr in its OWN table
+            // (B-2026-07-30-3), so the shared lookup above misses it and this
+            // diagnostic fired on a variable that IS an Array — the message
+            // named "Vec/Slice/Array" while Array was exactly the hole
+            // (B-2026-08-11-1). Read the array table as a fallback rather than
+            // widening `var_elem_type_exprs`: that table has ~170 readers that
+            // treat a present entry as "this binding is a Vec/Slice/Map", which
+            // is precisely why the Array arm was kept separate. This adds one
+            // reader, here.
+            //
+            // Not char-specific: `Array[i64, N]` and `Array[String, N]` failed
+            // identically, so every indexed-receiver method on an Array was
+            // unreachable, not just the one the row's `char` probe hit.
+            .or_else(|| self.array_elem_type_exprs.get(outer_name.as_str()))
             .cloned()
             .ok_or_else(|| {
                 format!(
