@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 42 | 1 |
 | crash | 42 | 1 |
 | other | 24 | 0 |
-| use-after-free | 18 | 1 |
+| use-after-free | 18 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 785 | 3 |
+| codegen | 785 | 2 |
 | typecheck | 150 | 4 |
 | interp | 134 | 0 |
 | ownership | 44 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced · 8 open · 1068 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced · 7 open · 1069 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-10-21 | 2026-08-10 | codegen | medium | the `UseAfterMove` defensive copy that `cli.rs` promises DOES NOT EXIST for any heap type on the binding-to-binding move path -- `karac check` exits 0 by design, `karac build` exits 0, and the reuse reads freed memory: garbage for String/Vec/struct, a hard SEGFAULT for Map and Set. Filed as a container-source gap; measured, the container read is the one case that IS defended and the 'working' rows were static-literal and `.len()` artifacts | no `UseAfterMove`-keyed mechanism exists in codegen; `src/cli.rs` `is_fatal_ownership_kind` asserts one. Fix funnels: `OwnershipError.consume_span` (spans already computed), `suppress_source_vec_cleanup_for_arg_ex` (single disarm funnel), `emit_clone_fn_for_type_expr` (type-directed copy) |
 | B-2026-08-11-3 | 2026-08-11 | codegen | medium | a generic struct's method whose parameter is the TYPE PARAMETER leaks a fresh TEMPORARY argument's buffer -- `s.push([1i64,2i64])` on a `Stack[T]` leaks while the same call with a NAMED binding is clean. The row's original framing (a `Vec[T]` field's element resolution at drop, char/element-type specific) is REFUTED by measurement: the drop synthesis already resolves the monomorph correctly, and `Vec[String]` leaks too | the caller-side temporary cleanup for a mono'd generic METHOD whose param is a bare `T` -- NOT `emit_struct_drop_synthesis_mono`, which was instrumented and shown to select the right per-element drain for the leaking monomorph |
 | B-2026-08-11-5 | 2026-08-11 | parser | high | EVERY parse-phase diagnostic raised inside an f-string interpolation hole is DISCARDED. Two consequences: (a) a hard syntax error degrades SILENTLY to literal text -- `println(f"typo={n.}")` passes `karac check` and prints `typo={n.}` on all three backends; (b) recoverable errors go unenforced -- `f"{takes(ref xs)}"` compiles clean while the identical call outside an f-string is a hard parse error. | src/parser/exprs.rs:771 -- `let result = crate::parse(&wrapper);` consumes only `result.program.items`; `result.errors` and `result.fix_edits` are dropped on the floor. |
 | B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
@@ -149,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1087 surfaced
 
 </details>
 
-### Fixed (1068)
+### Fixed (1069)
 
-<details><summary>1068 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1069 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1249,6 +1248,7 @@ stash-proven red with an explicit heap-use-after-free. |
 | B-2026-08-10-17 | typecheck | medium | a `return` NESTED inside a closure body (in an `if` / loop) is typechecked against `()` instead of the closure's return type, so an early return from… | 819af61 |
 | B-2026-08-10-18 | codegen | medium | an explicit `return` inside an ITERATOR ADAPTOR closure (`map`/`filter`/`any`/`all`/`retain`) fails codegen with `Terminator found in the middle of a… | c0c8842 |
 | B-2026-08-10-19 | codegen | medium | `Vec[(i64,i64)].sort_by` on SHUFFLED-UNIFORM input is ~1.66x Rust's `sort_by` (karac 14.82 ms vs driftsort 8.93 ms, 150k pairs, this host, both progr… | 31485cd |
+| B-2026-08-10-21 | codegen | medium | the `UseAfterMove` defensive copy that `cli.rs` promises DOES NOT EXIST for any heap type on the binding-to-binding move path -- `karac check` exits… | FIXED by bb663f1d for the `{ptr,len,cap}` family (`String` / `Vec` / `VecDeque`); `Map`, `Set` and user structs remain, pinned as an `#[ignore]`d test and described below. THE GATE CAME FIRST, and had to: `tests/common/mod.rs`'s `assert_ownership_clean` refused every program with ownership errors, so no fixture could exercise this mechanism at all. It now mirrors `cli.rs`'s `is_fatal_ownership_kind`, admitting the two ADVISORY kinds production is documented to accept. The fix itself is two halves that must move together: `OwnershipCheckResult::use_after_move_consume_sites` ships the flagged consume spans (derived from the diagnostics, so warning and copy can never disagree); codegen's identifier load deep-copies at those spans (`uam_defensive_copy`), and the single disarm funnel `suppress_source_vec_cleanup_for_arg_ex` skips the source disarm — but keys on `uam_copied_sites` (a copy ACTUALLY happened), not on the flagged span. Pins: e2e `test_e2e_use_after_move_defensive_copy_vecstr_family` and asan `asan_use_after_move_defensive_copy_frees_each_buffer_once`, both stash-proven red (the ASAN one with an explicit heap-use-after-free). Follow-up 1bfac4da closes the STRUCT-LITERAL consume site (`H { name: s }`) in both `compile_struct_init` branches; the function-arg and container-push consume shapes measured already clean. The remaining gap is the TYPE axis (Map/Set/struct-value moves). Follow-up aafb6b69 closes the TYPE axis -- `Map`/`Set` via `emit_map_clone_fn` and user structs via field recursion -- so the row is fully fixed for every family except `shared struct`, which needs no copy (RC-managed). The `#[ignore]`d deferral test is now live as `test_e2e_use_after_move_defensive_copy_map_set_struct`. |
 | B-2026-08-11-2 | typecheck | medium | `char` and `bool` receivers skip method-existence checking entirely, so ANY method name passes `karac check` and unifies with ANY return type -- the… | FIXED by c2be671. `char` and `bool` receivers now route through the
 SCALAR-PRIMITIVE arm in `src/typechecker/expr_method_call.rs` -- the same arm
 `i64`/`u32`/`f64`/`u8` have used since B-2026-07-03-5. One `matches!` gains
