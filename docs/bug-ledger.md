@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 63 | 0 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 0 |
-| crash | 43 | 1 |
+| crash | 43 | 0 |
 | soundness | 42 | 0 |
 | other | 25 | 0 |
 | use-after-free | 18 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 794 | 2 |
+| codegen | 794 | 1 |
 | typecheck | 152 | 0 |
 | interp | 138 | 2 |
 | ownership | 44 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced · 3 open · 1084 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced · 2 open · 1085 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-17 | 2026-08-11 | interp | high | The INTERPRETER's `sort_by_key` with a float key returns a COMPLETELY UNSORTED sequence when a NaN is present, while both compiled backends sort correctly with NaN last. Measured on one program, `[3.5, NaN, 1.2, -2.0, 2.7].sort_by_key(|x| x)`: interp gives `3.5 NaN -2 1.2 2.7` (not sorted in any order -- 3.5 stays first), JIT and AOT both give `-2 1.2 2.7 3.5 NaN`. A silent wrong answer AND a run-vs-build divergence. The typechecker deliberately ALLOWS float keys here (stdlib_seq.rs documents the concession) on the grounds that the backends implement bit-level total-order semantics via `karac_float_cmp` -- that is true of codegen and NOT of the interpreter, which appears to use IEEE partial comparison, so NaN makes its sort incoherent. A shipped codegen test (test_e2e_vec_sort_by_key_float_nan_sorts_largest) pins the COMPILED behaviour on this exact input; the interpreter side was never asserted, which is why this survived. | interpreter float ordering |
 | B-2026-08-11-21 | 2026-08-11 | codegen+interp | high | EVERY un-annotated `let` holding an unsigned value prints SIGNED under both compiled backends while the interpreter prints it correctly -- `let a = 18446744073709551615u64; println(f"{a}")` is -1 under JIT/AOT and correct under `--interp`. An explicit `let a: u64` fixes it, so the value is right and only codegen's signedness classifier is wrong. Separately and in the OPPOSITE direction, the INTERPRETER's `u64.to_string()` renders signed while its f-string of the same value is correct | var_type_names population for un-annotated `let` (src/codegen/stmts.rs) against expr_is_unsigned_int (src/codegen/expr_ops.rs); interpreter to_string for unsigned ints |
-| B-2026-08-11-22 | 2026-08-11 | codegen | medium | CHAINING ONTO A SCALAR'S `.to_string()` BREAKS CODEGEN TWO WAYS, both check-green and both interpreter-correct: `n.to_string().to_string()` PANICS the compiler at src/codegen/method_call.rs:2683 ("Found IntValue ... but expected the StructValue variant" -- it loads the i64 and treats it as a String struct), and `n.to_string().len()` is a clean but wrong error ("codegen: no handler for method 'to_string'"). Measured on i64, f64 and bool. Breaking the chain with a `let` fixes both, and a String-typed receiver (`s.to_string().to_string()`) is fine -- it is specifically a further call chained onto a SCALAR's to_string. Same chained-call span-aliasing family as B-2026-08-11-19, different table. | chained method-call receiver typing |
 
 ### Wontfix (1)
 
@@ -144,9 +143,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1098 surfaced
 
 </details>
 
-### Fixed (1084)
+### Fixed (1085)
 
-<details><summary>1084 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1085 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1883,6 +1882,76 @@ receiver is a float, so it answered `false` and codegen emitted `%lld`.
 Pin: `e2e_to_bits_renders_unsigned` in `tests/codegen.rs` -- negative, negative
 non-power-of-two, a positive control, `to_bits32`, and the bare `println` path
 alongside the f-string one. |
+| B-2026-08-11-22 | codegen | medium | CHAINING ONTO A SCALAR'S `.to_string()` BREAKS CODEGEN TWO WAYS, both check-green and both interpreter-correct: `n.to_string().to_string()` PANICS th… | FIXED — and the row's HYPOTHESIS WAS RIGHT: it is the same span-aliasing
+mechanism as B-2026-08-11-19, in the two gates that route a `to_string` call.
+
+CONFIRMED BY INSTRUMENTATION, not by reading. Printing the gate's inputs for
+`n.to_string().to_string()`:
+
+    outer link  obj=MethodCall  dispatch_key=Some("String.to_string")  string_like=true
+    inner link  obj=Identifier  dispatch_key=Some("String.to_string")  string_like=false
+
+The inner link is reading the OUTER's key. The parser sets a MethodCall's span
+equal to its receiver's, so both links share one `method_callee_types` entry and
+the last write wins. There IS already a chained-call collision guard where
+`dispatch_key` is computed -- it separates links by requiring the key's method
+segment to match this call's method -- but it cannot help here, because BOTH
+links are named `to_string`. That is the specific reason this shape slipped
+through a guard written for exactly this class.
+
+TWO GATES WERE READING THAT KEY, which is why the row had two arms:
+
+  1. The String-copy path (`method_call.rs`) tested the key's type segment for
+     "String"/"StringSlice". The inner link passed it with an `i64` receiver,
+     compiled `n` to an IntValue, and unwrapped it as a struct: the compiler
+     panic.
+  2. `recv_is_scalar_primitive` tested the same key for a scalar type name. With
+     the key shadowed to "String.to_string" it declined too, so once the panic
+     was vetoed the call fell through to the catch-all as "no handler for method
+     'to_string'". Fixing only the first arm converts a panic into a wrong
+     error, which is why both had to move.
+
+BOTH NOW CONSULT `type_name_of_expr(object)`, which is keyed by the receiver
+EXPRESSION and so cannot be shadowed. It separates the two links exactly -- the
+inner reports Some("i64"), the outer None -- so nothing that previously worked
+changes. It is also a static lookup, which preserves the property the scalar
+gate was written for: the receiver is NOT pre-compiled, so a side-effecting
+receiver is still evaluated once. The veto is applied ONLY to the span-keyed
+half of the String test; `expr_is_string_like` reads the receiver expression, so
+it is left alone.
+
+SECOND LEG, found while building the ASAN fixture and fixed here because leaving
+it would have made the surface MORE irregular, not less: `x.clone()` as a
+receiver in a chain had no resolvable type, so the same shadowed key broke
+`s.clone().to_string().len()` (String receiver) and `n.clone().to_string()
+.len()` (scalar). `clone` preserves its receiver's type, so `type_name_of_expr`
+now resolves it by recursion, and `expr_is_string_like` does the same. Recursion
+rather than adding `clone` to the neighbouring string-like NAME list, because
+that list deliberately excludes `sorted`/`replace`/`repeat` for naming Vec
+methods too -- a blanket `clone` entry would misroute `v.clone().to_string()` on
+a Vec into the String-copy path. `v.clone().len()` is pinned as that control.
+
+VERIFIED build == interp on i64 / f64 / bool / char, for `.to_string()
+.to_string()` and `.to_string().len()`, and for identifier, struct-field and
+call-result receivers. Controls that must keep their existing routing all hold:
+String and literal receivers, `trim()` / `to_uppercase()` / `clone()` chains,
+and `Vec.clone()`.
+
+ASAN, which the value pins cannot cover: the String-copy path both mallocs a
+fresh buffer and frees the intermediate receiver when it is a fresh owned
+String, and this fix changes WHICH calls reach it -- so a routing fix with the
+ownership wrong is a per-iteration leak or a double free. The new fixture loops
+both sides of the veto (a scalar receiver that must now allocate its own String,
+and a String receiver chained through a builtin that must still free the
+intermediate) and is clean at the default level and on the -O0 leg.
+
+STILL LATENT, and worth stating plainly since this is now the third row in this
+family: `method_callee_types` is still keyed by `SpanKey::from_span`, so a chain
+still collapses to one entry for its 6 writers and 7 readers. B-2026-08-11-19
+fixed one consumer by giving it a collision-free side table; this row fixed two
+more by having them consult the receiver's own type instead. Neither re-keyed
+the map. A consumer that needs the key and cannot use either workaround will hit
+this again. |
 
 </details>
 
