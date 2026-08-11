@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 100 | 0 |
 | run-vs-build | 99 | 0 |
 | missing-feature | 90 | 0 |
-| perf | 63 | 1 |
+| perf | 63 | 0 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 0 |
 | soundness | 42 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 788 | 2 |
+| codegen | 788 | 1 |
 | typecheck | 151 | 1 |
 | interp | 135 | 0 |
 | ownership | 44 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced · 2 open · 1078 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced · 1 open · 1079 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-15 | 2026-08-11 | typecheck+codegen | medium | `Vec[f64].max()` / `.min()` return an ORDER-DEPENDENT element instead of erroring, and there is currently no working remedy to point users at -- which is why B-2026-08-11-7 gated `sort`/`sorted`/`binary_search` but deliberately left these alone. Measured: `[3.0, NaN, 1.0].max()` silently skips the NaN and answers 3, while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN -- the result depends on where the NaN sits. The two obvious remedies are both broken: (a) `Vec[F64].max()`, the wrapper -7's own sort gate prescribes, is rejected at typecheck by the iterator arm's numeric-or-String element test, and when that test is widened to admit the wrapper it then FAILS IN CODEGEN with 'no handler for method max on non-identifier receiver' -- i.e. it would trade a wrong answer for a run-vs-build gap; (b) `Stats.max(v)`, the f64-shaped alternative, is itself wrong AND BACKEND-DIVERGENT -- on `[NaN, 3.0, 1.0]` the interpreter answers 3 and the JIT answers NaN. Fixing (a) is the real task: add the codegen max/min-over-wrapper arm, then widen the element test, then gate. That makes `F64` a COMPLETE answer instead of a partial one. | `max`/`min` on a float sequence: the numeric-or-String element test and the (withdrawn) Ord gate in typechecker/stdlib_iter.rs `"max" | "min"`; the missing codegen dispatcher arm for max/min over a wrapper struct; and Stats.max/min in the interpreter vs try_compile_stats_call |
-| B-2026-08-11-10 | 2026-08-11 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is 5.93 ms / 48.8M instructions vs driftsort's 1.81 ms / 14.2M on this host -- a 3.3x gap, NOT the 1.3-1.5x originally filed. The stable 2-way quicksort run-builder built for B-2026-08-10-20 is a real 1.43x (to 34.25M / 4.15 ms) but is NOT a route to parity as this row first claimed: it still leaves 2.4x on instructions and 2.3x on wall clock. Both previously proposed options (pay down the sawtooth regression; gate on a cardinality signal) only bank that 1.43x, and the sawtooth one defends the pattern karac ALREADY WINS (22.5M vs 31.6M). Any future attempt should be budgeted against driftsort's 14.2M -- ~95 instructions per element against karac's ~325 -- before a line is written. | Vec.sort_by / Vec.sort lowering |
 
 ### Wontfix (1)
 
@@ -143,9 +142,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced
 
 </details>
 
-### Fixed (1078)
+### Fixed (1079)
 
-<details><summary>1078 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1079 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1443,6 +1442,107 @@ rejected, the operators and the real float methods left working, a user
 `impl f64 { fn cmp }` reachable with its return type enforced, and a
 cross-check that the direct-method surface now agrees with the `T: Ord` bound
 surface. |
+| B-2026-08-11-10 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is 5.93 ms / 48.8M instructions vs driftsort's 1.81 ms / 14.2M on this… | FIXED — the full-array stable partition of § Direction 7 was budget-checked,
+built, and measured. On the pattern this row filed as 3.3x behind driftsort,
+karac now runs FEWER INSTRUCTIONS THAN DRIFTSORT and lands at wall-clock
+parity. Fixed in 3d77cc60; emitter in `emit_sort_by_mono` (src/codegen/vec_method.rs); write-up in
+docs/spikes/sort-algorithm-gap.md § Direction 7.
+
+Before/after on the same container, baseline reproducing this row's own
+recorded checksum (48.8M / 22.5M) exactly:
+
+    pattern         instructions           driftsort   was            now
+    few-unique      48.8M -> 13.2M  3.70x     14.2M    3.44x behind   1.08x AHEAD
+    sawtooth        22.5M -> 23.4M  0.96x     31.6M    1.40x ahead    1.35x ahead
+    random          72.3M -> 72.1M  1.00x     48.2M    1.50x behind   unchanged
+    nearly-sorted   31.5M -> 32.9M  0.96x
+    sorted           1.0M ->  1.0M  1.00x
+    reverse          1.8M ->  1.8M  1.00x
+
+Wall clock on the target, same session and slope method: 4.760 -> 1.742 ms
+(2.73x), against driftsort's 1.514 ms best / 1.764 ms bulk average. Wall clock
+on the other five rows is noise -- it swings several percent in BOTH directions
+against IDENTICAL instruction counts, and sorted/reverse sit at 0.03-0.4 ms,
+under the slope method's floor. Argue from the instruction column.
+
+THE 4% ON SAWTOOTH AND NEARLY-SORTED IS REAL AND IS NOT WHAT IT LOOKS LIKE, and
+three candidate explanations were each measured and killed. Not the probe:
+sorted and reverse call it on every sort and did not move off 1.0M / 1.8M, which
+bounds it under 0.05M. Not the partition running: neither pattern passes the
+gate. Not the call-graph change: the obvious suspect was that `qpart` calling
+back into the merge gives the merge a second caller, but DELETING that call (a
+deliberately incorrect build, valid to measure because neither pattern ever
+reaches `qpart`) made both WORSE, 24.4M and 34.4M. What is left is codegen
+jitter -- perturbing the module around a 60-block function moves these two
+patterns a few percent either way, and the shipped arrangement is the better end
+of the measured range. Also measured and rejected: hoisting the probe into its
+own function changed nothing (13.2/23.4/72.1/32.9 identical), so it is kept out
+of line on structure, not on evidence of a win.
+
+THE DESIGN, and the two things that made it work where six earlier directions
+did not. (1) It occupies the OTHER END OF THE RECURSION from the bounded
+run-builder that was built and reverted for B-2026-08-10-20: partition from n
+DOWN to a span and merge below, rather than merge above a span and partition
+below. So it removes the TOP passes, and every partition runs on a large range
+rather than paying a fixed per-range cost near its base size. (2) It STOPS
+EARLY, which no merge can -- a range whose every element ties with the pivot is
+sorted and stable and is finished. Instrumented on few-unique: 8 all-equal exits
+for 8 distinct keys, and NOT ONE merge pass over the array.
+
+GATE PLACEMENT WAS MOST OF THE WORK, because ungated this is 11-13x WORSE on
+sorted and reverse. Both full-pass placements lose: a counting pass BEFORE phase
+1 costs ~1.3M, which is 42% of sorted's entire budget; AFTER phase 1 it is free
+for sorted/reverse but costs few-unique 19.4M -> 33.9M, because phase 1's RUN=32
+insertion padding spends ~14.5M on an input whose natural runs are ~2 long and
+the partition then discards it -- no better than the 34.25M run-builder this row
+already rejected. So the entry gate is O(1): 512 samples estimating BOTH
+cardinality (ties with a random pivot) and existing orderedness (ordered
+adjacent pairs). Both are needed -- cardinality alone would partition an input
+that is ALREADY SORTED over few keys. The in-recursion gate is exact and free:
+`neq = nle - nlt` is already computed by the partition's own counting pass, so
+each range re-decides for nothing and a mixed input partitions the part that
+pays and merges the part that does not.
+
+FOUR KERNEL DETAILS, NONE OPTIONAL. (a) The pivot must be RANDOMISED; a
+fixed-position median-of-3 is degenerate on periodic input -- on the sawtooth
+lo/lo+len/2/hi-1 hold 0, 0, 999, the median is 0, and 0 is the range MINIMUM, so
+each level peels only the copies of the minimum: measured 2328.7M instructions,
+~100x the merge. (b) ONE counting pass tallies both `< pivot` and `<= pivot`,
+which picks the split predicate without a second pass and folds the old t=1
+retry into it. (c) Count-then-scatter, two cursors over one in-order walk --
+the whole stability argument. (d) `allow_part` on the merge sort's signature:
+without it an abandoned range is re-probed, accepted by the sampling estimate
+that the exact tie count just rejected, and handed straight back -- same range,
+same pivot, forever. A depth limit of 64 keeps the worst case O(n log n) after
+introducing a randomised pivot.
+
+GATE THRESHOLD VALIDATED AGAINST A MEASURED CROSSOVER, not tuned to the
+benchmark. With the partition forced on, so the crossover is a property of the
+algorithms: distinct keys 2/8/32/64/128/256/512 -> partition 7.6/22.4/30.7/36.8/
+60.6/64.8/67.0M against merge 38.7/49.7/53.0/52.0/51.0/50.5/50.5M, i.e. the
+crossover is between 64 and 128. The arithmetic predicts d < 68 (a partition
+level costs two passes against the merge's one, so it wins while 2*log2(d) <
+log2(n/RUN) = 12.2). GATE = 64 sits just on the winning side of both.
+
+VERIFICATION. A 756-case sweep -- 6 patterns x 14 sizes x 9 cardinalities,
+sizes straddling the probe floor (4095/4096/4097) and cardinalities straddling
+the gate (63/64/65/129) -- asserting sorted AND stable, with the ORACLE ITSELF
+VALIDATED by poisoning it (two deliberately unsorted cases produce 27,500 FAIL
+lines, so a silent pass means something). Element types i64, all-int struct and
+heap String. Full `cargo test --features llvm` green; ASAN clean at the default
+level and on the `-O0` leg (1032 passed, quarantine list matched exactly).
+`should_use_mono_vec_sort_by_for` admits only i64 and all-int structs, so no
+heap-owning element ever reaches this path -- the memory-safety class here is
+bounds, not ownership. Pins: `test_e2e_vec_sort_by_partition_path_low_cardinality`
+(tests/codegen.rs, strict assert_eq so a stale archive fails loudly) and
+`asan_vec_sort_by_partition_path_in_bounds` (tests/memory_sanitizer.rs), both
+checking sortedness, stability, and the all-equal early exit -- that branch
+returns a range declaring it sorted WITHOUT writing it, so only stability can
+catch it having moved anything.
+
+WHAT THIS DOES NOT CLOSE: B-2026-08-10-20, the shuffled-uniform 1.50x, which
+remains `wontfix`. Random is untouched here (72.3M -> 72.1M) by design -- the
+gate rejects it after one 512-sample probe. |
 | B-2026-08-11-1 | codegen+typecheck | high | a `Vec[char]` INDEX used directly as a method receiver (`cs[0].to_string()`) loses its `char` type and dispatches to the INTEGER method, so codegen s… | 7372313 (three root causes: the `char` name in register_var_from_type_expr, the Array element-TypeExpr fallback at the indexed-receiver site, and VecDeque in the typechecker's scalar index arm) |
 | B-2026-08-11-11 | typecheck | medium | TWO defects at the tuple receiver, filed together and NOT one bug: (a) tuple-index projection through a `ref` is rejected while the identical struct-… | FIXED by 3abdda1, in two independent places, because the row's "one root
 cause" guess was wrong (see the correction below).
