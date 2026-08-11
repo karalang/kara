@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 233 | 0 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
-| codegen-gap | 103 | 1 |
+| codegen-gap | 103 | 0 |
 | run-vs-build | 100 | 0 |
 | missing-feature | 90 | 0 |
 | perf | 63 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 795 | 1 |
+| codegen | 795 | 0 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
@@ -124,13 +124,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced · 1 open · 1087 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced · 0 open · 1088 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-11-23 | 2026-08-11 | codegen | low | `Vec[T].sorted_by_key(f)` PASSES `karac check` and then fails at build: "Vec/String method 'sorted_by_key' is not yet supported in codegen". It is the ONLY hole in the six-method sort family -- measured on one `Vec[i64]` program, `sort` / `sort_by` / `sort_by_key` / `sorted` / `sorted_by` all check AND compile, and `sorted_by_key` alone checks-but-does-not-compile. The interpreter implements it correctly (it shares the precompute-keys path with `sort_by_key`, and got the B-2026-08-11-17 float-ordering fix for free), so the program runs under `karac run --interp` and fails under both `karac run` and `karac build`. Fails LOUDLY with an actionable message naming `--interp`, so this is a missing feature rather than a miscompile -- hence low severity despite being a check-vs-build divergence. | the Vec/String method dispatch in codegen — the arm that serves `sorted_by` has no `sorted_by_key` twin; interpreter side is method_call_seq.rs "sorted_by_key" |
+_None — the ledger is fully drained._
 
 ### Wontfix (1)
 
@@ -142,9 +140,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1099 surfaced
 
 </details>
 
-### Fixed (1087)
+### Fixed (1088)
 
-<details><summary>1087 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1088 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2030,6 +2028,7 @@ fixed one consumer by giving it a collision-free side table; this row fixed two
 more by having them consult the receiver's own type instead. Neither re-keyed
 the map. A consumer that needs the key and cannot use either workaround will hit
 this again. |
+| B-2026-08-11-23 | codegen | low | `Vec[T].sorted_by_key(f)` PASSES `karac check` and then fails at build: "Vec/String method 'sorted_by_key' is not yet supported in codegen" | a243f2a (folded into the existing `sorted_by` arm in src/codegen/vec_method.rs rather than copied — the two are one desugar with a different inner method) |
 
 </details>
 
