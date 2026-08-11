@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 231 | 2 |
+| miscompile | 231 | 1 |
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 100 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 789 | 2 |
+| codegen | 789 | 1 |
 | typecheck | 151 | 1 |
 | interp | 135 | 0 |
 | ownership | 44 | 0 |
-| autopar | 39 | 1 |
+| autopar | 39 | 0 |
 | other | 36 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1092 surfaced · 2 open · 1079 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1092 surfaced · 1 open · 1080 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-15 | 2026-08-11 | typecheck+codegen | medium | `Vec[f64].max()` / `.min()` return an ORDER-DEPENDENT element instead of erroring, and there is currently no working remedy to point users at -- which is why B-2026-08-11-7 gated `sort`/`sorted`/`binary_search` but deliberately left these alone. Measured: `[3.0, NaN, 1.0].max()` silently skips the NaN and answers 3, while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN -- the result depends on where the NaN sits. The two obvious remedies are both broken: (a) `Vec[F64].max()`, the wrapper -7's own sort gate prescribes, is rejected at typecheck by the iterator arm's numeric-or-String element test, and when that test is widened to admit the wrapper it then FAILS IN CODEGEN with 'no handler for method max on non-identifier receiver' -- i.e. it would trade a wrong answer for a run-vs-build gap; (b) `Stats.max(v)`, the f64-shaped alternative, is itself wrong AND BACKEND-DIVERGENT -- on `[NaN, 3.0, 1.0]` the interpreter answers 3 and the JIT answers NaN. Fixing (a) is the real task: add the codegen max/min-over-wrapper arm, then widen the element test, then gate. That makes `F64` a COMPLETE answer instead of a partial one. | `max`/`min` on a float sequence: the numeric-or-String element test and the (withdrawn) Ord gate in typechecker/stdlib_iter.rs `"max" | "min"`; the missing codegen dispatcher arm for max/min over a wrapper struct; and Stats.max/min in the interpreter vs try_compile_stats_call |
-| B-2026-08-11-16 | 2026-08-11 | autopar+codegen | high | Auto-par (ON BY DEFAULT) silently DROPS every LITERAL-step accumulator in a `while` loop that also contains a NON-literal-step one: `while i < n { b = b + f(x); a = a + 1; }` leaves `a` at its PRE-LOOP value, with no diagnostic and no crash -- just wrong arithmetic. MIXING IS THE TRIGGER: two literal-step accumulators are fine, two non-literal ones are fine, and a bare call that feeds no accumulator is fine. Interpreter is CORRECT; `karac build` and `karac run` (JIT) are wrong at BOTH -O0 and -O2, so it is karac's own transform and not an LLVM pass. `KARAC_AUTO_PAR=0` fixes it. `for` loops are unaffected. | auto-par reduction lowering |
 
 ### Wontfix (1)
 
@@ -143,9 +142,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1092 surfaced
 
 </details>
 
-### Fixed (1079)
+### Fixed (1080)
 
-<details><summary>1079 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1080 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1565,6 +1564,82 @@ Pins: three tests in `tests/typechecker.rs` -- projection through a ref
 on both by-value and ref tuples (plus all three poison-unification spellings),
 and `to_string` surviving AND being typed `String`. |
 | B-2026-08-11-12 | codegen | high | a borrow-returning accessor's payload handed through `unwrap_or` (`m.get(k).unwrap_or(d)`, `v.get(i).unwrap_or(d)`) is an ALIAS of the container's st… | FIXED by bf43b275. `unwrap_or`'s PRESENT path now deep-clones the payload when the receiver is a borrow-returning accessor, so the result the caller owns is not the container's stored buffer. Reuses the match path's own shape gate -- split out of `borrow_get_payload_clone_te` as `borrow_payload_clone_te_gate` -- so the two paths agree on which payloads are safe to clone and how deep. Pins: e2e `test_e2e_borrow_accessor_unwrap_or_clones_heap_payload` (6 cases incl. the scalar and absent-key controls) and asan `asan_borrow_accessor_unwrap_or_clones_heap_payload`, both stash-proven red -- the ASAN one with an explicit double-free. |
+| B-2026-08-11-16 | autopar+codegen | high | Auto-par (ON BY DEFAULT) silently DROPS every LITERAL-step accumulator in a `while` loop that also contains a NON-literal-step one: `while i < n { b… | FIXED — one condition in `classify_loop_body`
+(src/concurrency.rs). The induction-step skip was tied to a SHAPE when it
+needed to be tied to a NAME.
+
+    // before
+    if induction_step_via_assign(value, &name) {
+        // i = i + const_lit -- loop-counter step; ignored.
+    } else { ...reduction... }
+
+    // after
+    if induction_step_via_assign(value, &name) && induction_var == Some(name.as_str())
+    { ... }
+
+THE COMMENT ABOVE THAT LINE ALREADY STATED THE INTENT CORRECTLY -- "an explicit
+`while`-loop counter would be tagged as the reduction accumulator" -- so the
+defect was that the test never checked the write was against the loop's OWN
+counter. `x = x + <literal>` is the counter's shape, but it is also any
+literal-step accumulator's shape, so `a = a + 1` was swallowed by a branch
+written for `i = i + 1`: neither classified as a reduction nor rejected, just
+dropped on the floor. The fan-out lowering then rebinds only the accumulator and
+the loop variable per worker and captures everything else, so `a`'s writes went
+into per-worker copies and the parent kept its pre-loop value.
+
+A new helper `loop_induction_var(expr)` names the counter -- the `for` pattern
+binding, or the variable in a `while k < end` condition via
+`par_cost::parse_lt_condition`, which is the SAME matcher the cost model and the
+fan-out lowering use, so the analysis agrees with the shape codegen will
+actually lower. The same one-name rule was applied to the `+=` arm, which had
+its own copy of the skip.
+
+WITH THE NAME CHECK, A NON-COUNTER LITERAL-STEP WRITE BECOMES A REDUCTION
+CANDIDATE -- which is what it is, `+` with a constant delta -- and the existing
+"two distinct accumulators decline the loop" rule three lines below then rejects
+the mixed loop by itself. No new rejection logic was needed; the bug was that
+these writes never reached that rule.
+
+CORROBORATION THAT THIS WAS THE ODD ONE OUT, not a new restriction: the SAME
+statement wrapped in a conditional (`if cond { a = a + 1; }`) was always
+classified as a reduction by `conditional_acc_update_shape`, with no
+induction-shape exclusion at all. The bare form was the only spelling that
+vanished.
+
+TWO BEHAVIOUR CHANGES, both measured, neither a correctness risk:
+  - A loop whose ONLY accumulator is literal-step (`while i < n { a = a + 1;
+    i = i + 1; }`) is now a recognized reduction where before it was invisible.
+    That is a legitimate reduction (identity 0, associative, commutative) and
+    the codegen cost gates still decide whether to lower it. Verified correct.
+  - A `while` whose counter cannot be named -- e.g. `i <= n`, which
+    `parse_lt_condition` does not match -- now treats its counter as a reduction
+    candidate, so a loop with a real accumulator alongside it DECLINES instead
+    of lowering. That is perf-only and fail-safe, and `while k < hi` is the
+    shape the reduction lowering supports anyway. Verified the answer stays
+    correct.
+
+PINS. Three in tests/concurrency.rs (analysis level): the mixed loop must
+decline, the `+=` spelling must decline, and the ordinary single-accumulator
+loop must STILL be recognized -- that last one is the guard against fixing this
+by breaking auto-par generally. One in tests/par_codegen.rs (value level):
+asserts `4 6 3`, and pre-fix produces `1 0 3`.
+
+THE VALUE PIN HAD TO MOVE, and the reason generalises. It was written first in
+tests/codegen.rs, where it PASSED PRE-FIX and so asserted nothing: that
+harness's `run_program` compiles without `concurrency_analyze`, so auto-par
+never fires there and the sequential fallback happens to give the right answer.
+tests/par_codegen.rs has its own `run_program` that threads the analysis into
+codegen -- its doc comment says exactly this -- and there the pin fails pre-fix
+with `left: Some("1 0 3\n")`. AN AUTO-PAR E2E ASSERTION PLACED IN
+tests/codegen.rs IS VACUOUS; it must go in tests/par_codegen.rs. Checked by
+stashing the fix and re-running, which is the only reason the vacuous placement
+was caught.
+
+VERIFICATION. The 12-line repro and every variant from the row's boundary map
+now give the right answer, as does the original 648-case harness this was found
+in (`combinations=648`, was 0). Full `cargo test --features llvm` green; ASAN
+clean at the default level and on the `-O0` leg. Also re-ran the sort sweep the
+harness was built for: 648 combinations, 0 failures. |
 
 </details>
 
