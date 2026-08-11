@@ -96,26 +96,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 158 | 0 |
 | double-free | 119 | 0 |
 | codegen-gap | 100 | 0 |
-| run-vs-build | 99 | 1 |
+| run-vs-build | 99 | 0 |
 | missing-feature | 90 | 0 |
 | perf | 63 | 1 |
 | false-positive | 58 | 0 |
 | diagnostics | 47 | 0 |
 | soundness | 42 | 0 |
 | crash | 42 | 1 |
-| other | 25 | 1 |
+| other | 25 | 0 |
 | use-after-free | 18 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 788 | 3 |
+| codegen | 788 | 2 |
 | typecheck | 151 | 2 |
-| interp | 135 | 1 |
+| interp | 135 | 0 |
 | ownership | 44 | 0 |
 | autopar | 38 | 0 |
-| other | 36 | 1 |
+| other | 36 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
@@ -124,16 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced · 5 open · 1075 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced · 3 open · 1077 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
 | B-2026-08-11-15 | 2026-08-11 | typecheck+codegen | medium | `Vec[f64].max()` / `.min()` return an ORDER-DEPENDENT element instead of erroring, and there is currently no working remedy to point users at -- which is why B-2026-08-11-7 gated `sort`/`sorted`/`binary_search` but deliberately left these alone. Measured: `[3.0, NaN, 1.0].max()` silently skips the NaN and answers 3, while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN -- the result depends on where the NaN sits. The two obvious remedies are both broken: (a) `Vec[F64].max()`, the wrapper -7's own sort gate prescribes, is rejected at typecheck by the iterator arm's numeric-or-String element test, and when that test is widened to admit the wrapper it then FAILS IN CODEGEN with 'no handler for method max on non-identifier receiver' -- i.e. it would trade a wrong answer for a run-vs-build gap; (b) `Stats.max(v)`, the f64-shaped alternative, is itself wrong AND BACKEND-DIVERGENT -- on `[NaN, 3.0, 1.0]` the interpreter answers 3 and the JIT answers NaN. Fixing (a) is the real task: add the codegen max/min-over-wrapper arm, then widen the element test, then gate. That makes `F64` a COMPLETE answer instead of a partial one. | `max`/`min` on a float sequence: the numeric-or-String element test and the (withdrawn) Ord gate in typechecker/stdlib_iter.rs `"max" | "min"`; the missing codegen dispatcher arm for max/min over a wrapper struct; and Stats.max/min in the interpreter vs try_compile_stats_call |
-| B-2026-08-11-13 | 2026-08-11 | codegen+interp | medium | `F64`/`F32` ordering and equality depend on the SIGN BIT of a NaN, which is not stable across backends or optimization levels -- so `Vec[F64].sort()` on NaN-bearing data puts NaN FIRST under the interpreter and LAST under both compiled backends, and `F64 { value: nan } < F64 { value: 1.0 }` is `true` interp / `false` compiled. Measured three ways on one program: a NaN from a constant `0.0 / 0.0` gives interp true / JIT false / AOT false, while a NaN computed at runtime (`z / z` behind a fn call) gives interp true / JIT true / AOT FALSE -- i.e. the same source expression flips answer with optimization level, because AOT inlines the call and constant-folds the division. NOT a comparator bug: both backends implement the same documented IEEE-754 totalOrder key and agree on every non-NaN value. The divergence is in WHICH NaN gets produced -- x86 runtime division yields a NEGATIVE NaN (sign bit set) while LLVM's constant folder yields a POSITIVE one, and totalOrder sorts -NaN before -Infinity but +NaN after +Infinity. | the total-order float wrappers: total_order_key / compile_total_order_wrapper_cmp in src/codegen/assoc_call.rs, and the `TotalFloat*` arms of value_compare in src/interpreter/helpers.rs (both correct in isolation — see detail) |
-| B-2026-08-11-14 | 2026-08-11 | other | low | design.md § Float semantics specifies the `F32`/`F64` total order as `-Infinity < ... < -0.0 == 0.0 < ... < +Infinity < NaN`, but ALL THREE backends implement `-0.0 < 0.0` (and `-0.0 != 0.0`) -- the IEEE-754 totalOrder / Rust `total_cmp` behaviour, verified interp/JIT/AOT agreeing. The implementation is the more standard reading and is already shipped with tests (test_e2e_total_order_float_wrappers asserts `-0<+0` true and `-0==+0` false), so the SPEC LINE is what should change, not the code. | docs/design.md § Float semantics, the `F32`/`F64` total-order bullet list |
 | B-2026-08-11-10 | 2026-08-11 | codegen | low | `Vec[(i64,i64)].sort_by` on FEW-UNIQUE input (150k pairs over 8 distinct keys) is 5.93 ms / 48.8M instructions vs driftsort's 1.81 ms / 14.2M on this host -- a 3.3x gap, NOT the 1.3-1.5x originally filed. The stable 2-way quicksort run-builder built for B-2026-08-10-20 is a real 1.43x (to 34.25M / 4.15 ms) but is NOT a route to parity as this row first claimed: it still leaves 2.4x on instructions and 2.3x on wall clock. Both previously proposed options (pay down the sawtooth regression; gate on a cardinality signal) only bank that 1.43x, and the sawtooth one defends the pattern karac ALREADY WINS (22.5M vs 31.6M). Any future attempt should be budgeted against driftsort's 14.2M -- ~95 instructions per element against karac's ~325 -- before a line is written. | Vec.sort_by / Vec.sort lowering |
 
 ### Wontfix (1)
@@ -146,9 +144,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1091 surfaced
 
 </details>
 
-### Fixed (1075)
+### Fixed (1077)
 
-<details><summary>1075 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1077 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1333,6 +1331,99 @@ something the original four did not:
     (correct edit, orphaned key, zero fixes applied) rather than loudly. |
 | B-2026-08-11-7 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles | e51d3e7 (gate on Vec/Slice `sort`, Vec `sorted`, Vec/Slice `binary_search`, via a new `require_ord_element` in typechecker/derives.rs. `max`/`min` split to B-2026-08-11-15; `contains` deliberately left allowed — see detail.) |
 | B-2026-08-11-8 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix f… | d8ddc56 (three parts: an ordinary Kāra `impl <W> { fn from }` in each of runtime/stdlib/{f32,f64,f16,bf16}.kara makes the call typecheck; a codegen intercept in assoc_call.rs BUILDS the wrapper struct, because codegen does not route path-calls to baked stdlib impls and the call was otherwise reaching the unknown-callee tail as a const i64 0; and type_name_of_expr in expr_ops.rs types the call-result temp so a direct `F64.from(x).value` chain resolves its field. Display is a fourth part: one seam in build_struct_display_parts covering both println and f-strings.) |
+| B-2026-08-11-13 | codegen+interp | medium | `F64`/`F32` ordering and equality depend on the SIGN BIT of a NaN, which is not stable across backends or optimization levels -- so `Vec[F64].sort()`… | FIXED by 284d44a4, by canonicalizing NaN at CONSTRUCTION in all three backends --
+the row's own preferred shape ("doing it at construction is the stronger
+invariant"), chosen over normalizing in the comparison key.
+
+1. Codegen: `canonicalize_wrapper_nan` (src/codegen/assoc_call.rs) emits
+   `select(fcmp uno x, x, <canonical quiet NaN>, x)` and runs inside
+   `compile_total_order_wrapper_from`.
+2. Codegen: `F64 { value: x }` previously fell through the GENERIC struct-init
+   path and stored raw bits. It is now intercepted at the top of
+   `compile_struct_init` and routed through that same
+   `compile_total_order_wrapper_from`, so the literal and `.from` are ONE
+   lowering rather than two that can drift apart.
+3. Interpreter: `canonical_wrapper_f64` / `_f32` (src/interpreter/helpers.rs)
+   applied at both producers -- the four `X.from` arms in eval_call.rs and the
+   struct-literal arm in interpreter.rs.
+
+The canonical value is spelled as an explicit bit pattern on both sides
+(0x7FF8000000000000 / 0x7FC00000, plus the 16-bit siblings) rather than
+`f64::NAN`, so the interpreter and the compiled backends are provably the same
+bits instead of the same by convention.
+
+WHY CONSTRUCTION AND NOT THE COMPARISON KEY. The key-side fix is narrower per
+site but has MORE sites -- cmp, eq, the two sort-key paths in vec_method.rs, and
+the Map/Set hash -- and a site that forgot would fail SILENTLY: `eq` calls two
+keys equal while `hash` sends them to different buckets. Construction gives one
+invariant ("no wrapper ever holds a non-canonical NaN") that every consumer
+inherits, at two sites per backend. The producer set is closed and small, which
+is what makes that tractable: there is no `F64.NAN` constant (it does not
+exist -- see B-2026-08-11-14) and the wrapper has no arithmetic, so `X.from` and
+the struct literal are the ONLY ways to make one.
+
+`-0.0` is deliberately NOT normalized. Unlike a NaN's sign it is a distinct,
+well-defined point of the total order that all three backends already agreed on,
+with a pin (`test_e2e_total_order_float_wrappers`) asserting it.
+
+WHAT THE ROW UNDER-STATED. It reported a 3-way split; measured here it is 4-way,
+and the extra leg is the sharpest evidence: the default `-O2` AOT build and
+`KARAC_OPT_LEVEL=0` disagree on the SAME source, because -O2 inlines the call and
+constant-folds the division while -O0 leaves a real one. Two further findings the
+row did not have, both worse than a split:
+  - `Vec[F64].sort()` under the JIT returned NaN at BOTH ENDS (`NaN -1 1 NaN`).
+    That IS correctly sorted under raw totalOrder -- -NaN precedes -Infinity,
+    +NaN follows +Infinity -- and completely unreadable, since both print `NaN`.
+  - A two-NaN `Map[F64, i64]` had a different LEN per backend (interp 1, JIT 2,
+    AOT -O2 1, AOT -O0 2), so a collection silently gained or lost an entry
+    depending on how the program was run.
+
+MEASUREMENT TRAP WORTH RECORDING. The first codegen pin PASSED pre-fix. At -O2
+LLVM folds both the constant NaN and the nominally-runtime one to the same
+positive NaN, so AOT agreed with the correct answer by luck, and the bug is only
+visible where a NaN genuinely survives to run time. The pin now sources its zero
+from `env.args().len()`, which the optimizer cannot see through; that made it red
+at every opt level. A codegen E2E test that exercises constant-foldable
+arithmetic is testing the folder, not the backend.
+
+Pins: twin tests asserting the SAME string in tests/interpreter.rs
+(`test_total_order_wrapper_nan_canonicalized_interp_parity`) and tests/codegen.rs
+(`test_e2e_total_order_wrapper_nan_canonicalized`) -- the pairing IS the
+contract, run == build. Both stash-proven red. |
+| B-2026-08-11-14 | other | low | design.md § Float semantics specifies the `F32`/`F64` total order as `-Infinity < .. | FIXED by 284d44a4, in the same commit as B-2026-08-11-13 and for the reason this row
+gave: once NaN is canonicalized, the bullet can be stated CORRECTLY as a whole
+instead of patched in place. Doing this row alone was not actually possible
+honestly -- writing today's raw-totalOrder NaN behaviour into the spec would have
+documented a run-vs-build divergence as intended semantics.
+
+The `F32`/`F64` bullet list in docs/design.md § Float semantics now reads:
+  - Ordering `-Infinity < ... < -0.0 < 0.0 < ... < +Infinity < NaN`, with `-0.0`
+    and `0.0` called out as DISTINCT adjacent values and `-0.0 == 0.0` stated
+    explicitly as `false`, contrasted against the `f64` primitive where it is
+    `true`. That is the correction this row asked for.
+  - Equality is bit-equality, with the reason attached: it is what makes `Hash`
+    sound, since equal keys have identical bits and cannot hash apart.
+  - NaN is ONE value, canonicalized at construction -- now true of the code as
+    well as the spec.
+Plus a paragraph on why canonicalizing is not cosmetic, since a reader who
+assumes raw totalOrder would reasonably expect the sign to matter.
+
+THE CODE BLOCK WAS ALSO WRONG, in three ways this row did not list, each found by
+RUNNING it rather than reading it:
+  - It used `#` for comments. Kāra's comment is `//`; `#` begins an attribute, so
+    every commented line was a parse error. This was the ONLY `#`-commented kara
+    block in design.md, against 600 `//` comments elsewhere.
+  - `F64.NAN` does not exist -- no associated constants are implemented on the
+    wrapper (`no associated function 'NAN' on type 'F64'`). Rewritten as
+    `F64.from(f64.NAN)`.
+  - `scores.map(F64.from)` is rejected: iterator adaptors require an explicit
+    `.iter()`. Rewritten as `scores.iter().map(F64.from).collect()` -- which is
+    also verbatim what B-2026-08-11-7's new `Ord`-gate diagnostic tells users to
+    write, so the spec and the compiler's own advice now agree.
+
+Every line of the replacement block was executed on interp, JIT and AOT before
+being written down, including the two claims stated as compile errors
+(`Map[f64, String]` and `Vec[f64].sort()`). |
 | B-2026-08-11-9 | typecheck | low | the seven comparison-op names are exempted from method-existence checking by NAME rather than by whether the receiver carries the baked impl, so `f.c… | FIXED by 22ba601. The exemption is now keyed on whether the receiver
 carries the baked impl instead of on the method name alone: one
 `let exempt_comparison_ops = !matches!(&receiver_for_lookup, Type::Float(_));`
