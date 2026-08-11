@@ -10662,7 +10662,56 @@ fn main() {
             .as_deref(),
             Some("alpha\n")
         );
-        // 5. CONTROL — a program with no `UseAfterMove` at all must be
+        // 5. The STRUCT-LITERAL consume site (`H { name: s }`), which the
+        // let-site hook does not reach.
+        //
+        // Opt level changes what this looks like, which is worth knowing before
+        // trusting either result: at the DEFAULT level the second read prints
+        // garbage (so this assertion catches it), while at KARAC_OPT_LEVEL=0 it
+        // prints the right bytes and only a sanitizer sees the two invalid
+        // reads. The ASAN twin carries it for that reason — a -O0 probe alone
+        // would have called this shape clean.
+        assert_eq!(
+            run_program(
+                "struct H { name: String }\n\
+                 fn main() {\n\
+                     let s: String = f\"alpha\";\n\
+                     { let h = H { name: s }; println(h.name); }\n\
+                     println(s);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\nalpha\n")
+        );
+        // 6. The SHARED-struct branch of the same site — a separate code path
+        // in `compile_struct_init`, so a fix to one does not imply the other.
+        assert_eq!(
+            run_program(
+                "shared struct H { name: String }\n\
+                 fn main() {\n\
+                     let s: String = f\"alpha\";\n\
+                     { let h = H { name: s }; println(h.name); }\n\
+                     println(s);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\nalpha\n")
+        );
+        // 7. A `Vec[String]` field — element-deep through the same site.
+        assert_eq!(
+            run_program(
+                "struct H { items: Vec[String] }\n\
+                 fn main() {\n\
+                     let mut v: Vec[String] = Vec.new();\n\
+                     v.push(f\"alpha\");\n\
+                     { let h = H { items: v }; println(h.items[0]); }\n\
+                     println(v[0]);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\nalpha\n")
+        );
+        // 8. CONTROL — a program with no `UseAfterMove` at all must be
         // untouched. The copy is gated on the ownership pass's flagged spans,
         // so the overwhelming majority of programs emit exactly what they did
         // before.

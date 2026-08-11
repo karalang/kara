@@ -2443,6 +2443,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // deep-copy — the caller retains the buffer's free
                     // under the by-value header ABI (kata-22 family).
                     let val = self.maybe_defensive_copy_param_arg(&field_init.value, val);
+                    // B-2026-08-10-21 (struct-literal consume site) — the field
+                    // init is a MOVE, and if the ownership pass flagged this
+                    // binding as read again afterwards the field must own an
+                    // independent buffer. Without it the `suppress_source_vec_
+                    // cleanup_for_arg` below disarms the source and the later
+                    // read dangles: `let s = f"a"; { let h = H { name: s }; }
+                    // println(s)` is valgrind-dirty (2 invalid reads) while
+                    // PRINTING CORRECTLY at -O0, which is why the output test
+                    // alone does not catch it.
+                    let val = self.uam_defensive_copy(&field_init.value, val);
                     // Fields start at index `base` (0 headerless;
                     // 1 headered — index 0 is the refcount).
                     let field_ptr = self
@@ -2666,6 +2676,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Owned String/Vec PARAM captured into a field — deep-copy,
                 // same rationale as the shared-struct branch above.
                 let val = self.maybe_defensive_copy_param_arg(&field_init.value, val);
+                // B-2026-08-10-21 (struct-literal consume site) — see the
+                // shared-struct branch above for the rationale.
+                let val = self.uam_defensive_copy(&field_init.value, val);
                 // Width coercion at the field-init boundary — inserting
                 // a default-width literal into a narrower member builds
                 // a malformed aggregate that reads back as garbage. See

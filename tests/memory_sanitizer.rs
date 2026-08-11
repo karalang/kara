@@ -45147,6 +45147,7 @@ fn main() {
     fn asan_use_after_move_defensive_copy_frees_each_buffer_once() {
         assert_clean_asan_run(
             r#"
+struct H { name: String }
 fn main() {
     let mut i: i64 = 0i64;
     while i < 4i64 {
@@ -45159,7 +45160,13 @@ fn main() {
         w.push(f"bb{i}");
         { let keep: Vec[String] = w; println(keep[0]); }
         println(w[0]);
-        // 3. CONTROL — no reuse, so no copy may be made. A copy here without
+        // 3. The STRUCT-LITERAL consume site. This one is ASAN-only in
+        // practice: it prints the right thing at -O0 and only valgrind/ASAN
+        // sees the two invalid reads.
+        let t: String = f"cc{i}";
+        { let h = H { name: t }; println(h.name); }
+        println(t);
+        // 4. CONTROL — no reuse, so no copy may be made. A copy here without
         // the source disarm would leak the original every pass.
         let d: String = f"dd{i}";
         let moved: String = d;
@@ -45170,8 +45177,9 @@ fn main() {
 }
 "#,
             &[
-                "al0", "al0", "bb0", "bb0", "dd0", "al1", "al1", "bb1", "bb1", "dd1", "al2", "al2",
-                "bb2", "bb2", "dd2", "al3", "al3", "bb3", "bb3", "dd3", "end",
+                "al0", "al0", "bb0", "bb0", "cc0", "cc0", "dd0", "al1", "al1", "bb1", "bb1", "cc1",
+                "cc1", "dd1", "al2", "al2", "bb2", "bb2", "cc2", "cc2", "dd2", "al3", "al3", "bb3",
+                "bb3", "cc3", "cc3", "dd3", "end",
             ],
             "use_after_move_defensive_copy",
         );
