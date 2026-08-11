@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 233 | 0 |
+| miscompile | 234 | 1 |
 | leak | 159 | 1 |
 | double-free | 120 | 1 |
 | codegen-gap | 103 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 797 | 2 |
+| codegen | 798 | 3 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
-| autopar | 39 | 0 |
+| autopar | 40 | 1 |
 | other | 37 | 0 |
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1102 surfaced · 2 open · 1089 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1103 surfaced · 3 open · 1089 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-24 | 2026-08-11 | codegen | high | A String EQUALITY comparison between an unbound TEMPORARY and a `ref String` PARAMETER leaks the temporary, every evaluation. `hay.substring(0, 4) == needle` inside `fn f(hay: ref String, needle: ref String)` leaks; the same comparison against a LOCAL, or with the temp `let`-bound first, or with an OWNED `String` param, is clean. The leak is unbounded in input size -- the ordinary `substring(i, i+n) == needle` scan loop leaks one allocation per iteration. | the String `==`/`!=` lowering in codegen (the operand-cleanup decision). NOT the RC-elision hint and NOT optimization-dependent -- both ruled out by measurement, see detail. |
 | B-2026-08-11-25 | 2026-08-11 | codegen | high | DOUBLE FREE on both compiled backends: a heap field of a struct held as a Vec ELEMENT, read back by ASSIGNMENT to an existing binding (`out = stats[0].region`), aborts with `free(): double free detected in tcache 2`. The `let` form of the same read is clean (that leg was fixed), a plain struct BINDING is clean, and a tuple element is clean -- it is specifically the Vec-element + assignment pair. `karac check` passes and the interpreter is correct. | the field-move-out cap-zeroing path for an ASSIGNMENT whose source is `<vec>[i].<heapfield>`. Family: B-2026-08-03-8 / B-2026-08-01-31 fixed the `let x = h.f` form; B-2026-08-04-19 is the precedent for an assignment twin of a fixed `let` bug. |
+| B-2026-08-11-27 | 2026-08-11 | autopar+codegen | high | NONDETERMINISTIC SILENT WRONG ANSWER on the DEFAULT `karac build`: a 13-line program that overwrites a `Vec[Tensor]` element through a `shared struct` (`s.grads[0] = old + g`) prints `0` instead of `1` on ~2% of runs and SEGVs on ~1.3%, measured over 300 runs of one binary. Auto-par is the trigger — `KARAC_AUTO_PAR=0` is 0 failures in 200 — and the crashing frame is `karac_clone_Tensor_f32` inside `__par_branch_0_1` on a runtime worker thread. The wrong answer is the worse half: the program exits 0 and lies | the auto-par admission decision for `go(s)`'s body and the `Tensor` element clone it hoists into `__par_branch_0_1` — the ASAN frame is `karac_clone_Tensor_f32` called from `__par_branch_0_1` on a `karac_runtime::worker_loop` thread, so the question is why this body was admitted, not how the clone is emitted. Start at the three auto-par admission changes in the window: 7fe2b6dd (2026-08-11, induction-step skip tied to the loop counter by name), 4e01841e (2026-08-08, a closure call writes what the closure captured), eb21d86e (2026-08-05, auto-par admits `frozen` values). NOT bisected — see the detail. |
 
 ### Wontfix (1)
 
