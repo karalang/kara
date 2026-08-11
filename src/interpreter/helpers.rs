@@ -74,7 +74,47 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),
-        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+        // B-2026-08-11-17 — TOTAL order, matching the runtime's
+        // `karac_float_cmp` (which is verbatim Rust's `total_cmp` transform)
+        // that codegen dispatches float sort keys to.
+        //
+        // This used to be `partial_cmp(…).unwrap_or(Equal)`, which answers
+        // "equal" for EVERY comparison involving a NaN. A single NaN therefore
+        // did not merely land in the wrong place — it made the whole ordering
+        // intransitive and the sort incoherent: `[3.5, NaN, 1.2, -2.0, 2.7]
+        // .sort_by_key(|x| x)` came back `3.5 NaN -2 1.2 2.7`, not sorted in
+        // any order, while both compiled backends gave `-2 1.2 2.7 3.5 NaN`.
+        // A silent wrong answer and a run-vs-build divergence at once.
+        //
+        // `value_compare` is only ever asked for a TOTAL order (sort keys,
+        // binary_search, SortedSet/SortedMap ordering, is-sorted checks,
+        // derived-`Ord` aggregate comparison), so `total_cmp` is the right
+        // answer at every call site. IEEE `==` / `<` on bare floats does NOT
+        // route here — `eval_ops.rs` compares `Value::Float` operands
+        // directly — so `NaN != NaN` on `f64` is untouched, as design.md
+        // § Float semantics requires.
+        //
+        // The only behavioural change for NaN-free data is that `-0.0` now
+        // sorts before `+0.0` instead of tying; that is what `total_cmp` and
+        // `karac_float_cmp` both do, so it moves the interpreter TOWARD the
+        // compiled backends rather than away.
+        //
+        // NaN is canonicalized first, for the same reason B-2026-08-11-13
+        // canonicalizes it in the wrappers: `total_cmp` is sign- and
+        // payload-sensitive, so a NEGATIVE NaN sorts before `-Infinity` while
+        // a POSITIVE one sorts after `+Infinity` — and nothing in the source
+        // picks which you get (x86 runtime division yields a negative NaN,
+        // LLVM's constant folder a positive one). Without this, `total_cmp`
+        // alone would fix the incoherence but leave the run-vs-build split:
+        // measured NaN-first under interp and JIT but NaN-LAST under AOT,
+        // which inlines the producing call and folds the division. The
+        // runtime's `karac_float_cmp` canonicalizes identically, so all three
+        // backends now put every NaN last regardless of how it was produced —
+        // the contract `test_e2e_vec_sort_by_key_float_nan_sorts_largest`
+        // already pinned for the compiled path.
+        (Value::Float(x), Value::Float(y)) => {
+            canonical_wrapper_f64(*x).total_cmp(&canonical_wrapper_f64(*y))
+        }
         // B-2026-07-22-11: total-order float wrappers. Without these arms two
         // wrappers hit the discriminant catch-all → always Equal, so
         // `Vec[F32].sort()` was a silent no-op and `SortedSet`/`SortedMap`

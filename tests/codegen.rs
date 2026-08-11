@@ -76298,6 +76298,18 @@ fn main() {
         // NaN-handling policy and guards against a regression to IEEE 754
         // unordered semantics (where NaN would compare unordered with
         // everything and produce a non-deterministic permutation).
+        //
+        // B-2026-08-11-17: the interpreter twin of this test now exists
+        // (`test_sort_by_key_float_nan_sorts_largest_interp_parity`) and
+        // asserts the SAME order. Only this compiled side was pinned, which
+        // is how the interpreter shipped an incoherent float sort — it
+        // ordered with `partial_cmp(…).unwrap_or(Equal)`, so any NaN made
+        // every comparison "equal". Keep the two in lockstep.
+        //
+        // Note the NaN here is CONSTANT-FOLDED, which only exercises one of
+        // the two provenances — see
+        // `test_e2e_sort_by_key_float_nan_provenance_independent` below for
+        // the runtime-produced one, which is what actually split the backends.
         let out = run_program(
             r#"
 fn main() {
@@ -76315,6 +76327,46 @@ fn main() {
             // NaN now prints "NaN" (Rust `{}` via karac_runtime_f64_to_str),
             // matching the interpreter — was lowercase "nan" under C `%g`.
             assert_eq!(lines, vec!["5", "-2", "1.2", "2.7", "3.5", "NaN"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_sort_by_key_float_nan_provenance_independent() {
+        // B-2026-08-11-17 — a float sort key must order the same whatever
+        // produced its NaN. `karac_float_cmp` is Rust's `total_cmp` transform,
+        // which is sign-sensitive: a NEGATIVE NaN sorts before `-Infinity`
+        // while a POSITIVE one sorts after `+Infinity`. Nothing at the source
+        // level chooses between them — an x86 runtime `z / z` yields a
+        // negative NaN and LLVM's constant folder a positive one — so the same
+        // program sorted NaN-first under the JIT and NaN-LAST under AOT, which
+        // inlines `zero()` and folds the division. Fixed by canonicalizing
+        // every NaN inside `karac_float_cmp` (and identically in the
+        // interpreter's `value_compare`), so provenance stops being
+        // observable.
+        //
+        // `zero()` is what defeats the folding; a literal `0.0 / 0.0` would
+        // give both vectors the same constant NaN and assert nothing.
+        let out = run_program(
+            r#"
+fn zero() -> f64 { return 0.0; }
+fn main() {
+    let z = zero();
+    let rt = z / z;
+    let ct = 0.0 / 0.0;
+    let mut a: Vec[f64] = Vec.new();
+    a.push(1.0); a.push(rt); a.push(-1.0);
+    a.sort_by_key(|x| x);
+    let mut b: Vec[f64] = Vec.new();
+    b.push(1.0); b.push(ct); b.push(-1.0);
+    b.sort_by_key(|x| x);
+    for x in a.iter() { println(x); }
+    for x in b.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["-1", "1", "NaN", "-1", "1", "NaN"]);
         }
     }
 

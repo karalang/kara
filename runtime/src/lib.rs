@@ -8608,6 +8608,20 @@ pub unsafe extern "C" fn karac_secret_ct_eq(
 /// across optimisation levels.
 #[no_mangle]
 pub extern "C" fn karac_float_cmp(a: f64, b: f64) -> i64 {
+    // B-2026-08-11-17 — collapse every NaN to one canonical quiet NaN before
+    // ordering. The transform below is sign- and payload-sensitive, so a
+    // NEGATIVE NaN sorts before `-Infinity` while a POSITIVE one sorts after
+    // `+Infinity`, and nothing at the source level chooses which you get: an
+    // x86 runtime `z / z` produces a negative NaN, LLVM's constant folder a
+    // positive one. Measured on one `sort_by_key` program, that gave NaN-first
+    // under the JIT and NaN-LAST under AOT (which inlined the producing call
+    // and folded the division). Canonicalizing here makes every NaN sort last
+    // whatever its provenance — the contract this function's own doc comment
+    // above already claims ("then positive NaNs (largest)") and that
+    // `test_e2e_vec_sort_by_key_float_nan_sorts_largest` pins. The
+    // interpreter's `value_compare` canonicalizes identically, so run == build.
+    let a = if a.is_nan() { f64::NAN } else { a };
+    let b = if b.is_nan() { f64::NAN } else { b };
     // Convert to a sortable i64 via Rust's standard total_cmp algorithm:
     // (left ^ ((left >> 63) >> 1)) gives the same ordering as IEEE 754 for
     // finite values and a well-defined ordering for NaNs (largest by

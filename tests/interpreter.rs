@@ -6889,6 +6889,64 @@ fn test_float_nan_not_equal() {
     assert_eq!(output, "false\n");
 }
 
+#[test]
+fn test_sort_by_key_float_nan_sorts_largest_interp_parity() {
+    // B-2026-08-11-17 — the INTERPRETER twin of
+    // `test_e2e_vec_sort_by_key_float_nan_sorts_largest` (tests/codegen.rs),
+    // same input and same expected order. Only the compiled side was ever
+    // asserted, which is why this survived: `value_compare` ordered floats
+    // with `partial_cmp(…).unwrap_or(Equal)`, so EVERY comparison involving a
+    // NaN answered "equal". That is not merely a misplaced NaN — it makes the
+    // order intransitive and the whole sort incoherent. This exact input came
+    // back `3.5 NaN -2 1.2 2.7`, not sorted in any order, while both compiled
+    // backends gave `-2 1.2 2.7 3.5 NaN`.
+    //
+    // The typechecker deliberately ALLOWS a float sort KEY (the concession is
+    // documented at `check_sort_key_closure`) on the grounds that the backends
+    // implement bit-level total order — true of codegen via `karac_float_cmp`,
+    // and now true of the interpreter. It is also the last remaining way to
+    // get an incoherent float ordering without a diagnostic, since
+    // B-2026-08-11-7 gated `sort`/`sorted`/`binary_search` and -15 gated
+    // `max`/`min` on `Vec[f64]`.
+    let out = run("fn main() {\n\
+             let mut v: Vec[f64] = Vec.new();\n\
+             let nan: f64 = 0.0 / 0.0;\n\
+             v.push(3.5); v.push(nan); v.push(1.2); v.push(0.0 - 2.0); v.push(2.7);\n\
+             v.sort_by_key(|x| x);\n\
+             for x in v.iter() { println(x); }\n\
+         }");
+    assert_eq!(out, "-2\n1.2\n2.7\n3.5\nNaN\n", "got {out:?}");
+}
+
+#[test]
+fn test_sort_by_key_float_nan_order_is_provenance_independent() {
+    // B-2026-08-11-17, second half. `total_cmp` alone fixes the incoherence
+    // but NOT the run-vs-build split, because it is sign-sensitive: a NEGATIVE
+    // NaN sorts before `-Infinity` while a POSITIVE one sorts after
+    // `+Infinity`, and nothing in the source chooses which you get — an x86
+    // runtime `z / z` yields a negative NaN, LLVM's constant folder a positive
+    // one. Mid-fix this was measured NaN-first under interp and JIT but
+    // NaN-LAST under AOT, which inlined `zero()` and folded the division.
+    //
+    // Both NaNs must therefore sort identically. `zero()` defeats constant
+    // folding so the two provenances appear in one program.
+    let out = run("fn zero() -> f64 { return 0.0; }\n\
+         fn main() {\n\
+             let z = zero();\n\
+             let rt = z / z;\n\
+             let ct = 0.0 / 0.0;\n\
+             let mut a: Vec[f64] = Vec.new();\n\
+             a.push(1.0); a.push(rt); a.push(0.0 - 1.0);\n\
+             a.sort_by_key(|x| x);\n\
+             let mut b: Vec[f64] = Vec.new();\n\
+             b.push(1.0); b.push(ct); b.push(0.0 - 1.0);\n\
+             b.sort_by_key(|x| x);\n\
+             for x in a.iter() { println(x); }\n\
+             for x in b.iter() { println(x); }\n\
+         }");
+    assert_eq!(out, "-1\n1\nNaN\n-1\n1\nNaN\n", "got {out:?}");
+}
+
 // ── F64/F32 Total-Order Types ─────────────────────────────────
 
 // B-2026-08-11-8: these two asserted `F64(3.14)` / `F32(2.5…)`, a rendering
