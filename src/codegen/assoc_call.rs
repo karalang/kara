@@ -3741,6 +3741,67 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// The canonical quiet-NaN bit pattern for a total-order float wrapper:
+    /// sign clear, exponent all ones, mantissa MSB (the quiet bit) set, payload
+    /// zero. B-2026-08-11-13 — see [`Self::canonicalize_wrapper_nan`].
+    fn canonical_nan_bits(type_name: &str) -> Option<u64> {
+        Some(match type_name {
+            "F32" => 0x7FC0_0000,
+            "F64" => 0x7FF8_0000_0000_0000,
+            "F16" => 0x7E00,
+            "Bf16" => 0x7FC0,
+            _ => return None,
+        })
+    }
+
+    /// Replace ANY NaN bit pattern with the one canonical quiet NaN on the way
+    /// into a total-order wrapper (B-2026-08-11-13).
+    ///
+    /// The wrapper's order and equality are BIT-level (IEEE 754 totalOrder, the
+    /// `f64::total_cmp` transform), which distinguishes NaNs by sign and
+    /// payload — so `-NaN` sorts before `-Infinity` while `+NaN` sorts after
+    /// `+Infinity`, and two NaNs with different payloads compare UNEQUAL. That
+    /// is unusable as a language contract, because nothing at the source level
+    /// controls which NaN you get: x86 runtime division yields a NEGATIVE NaN
+    /// while LLVM's constant folder yields a POSITIVE one, so the SAME source
+    /// expression changed answer between `karac run` and `karac build`, and
+    /// between `-O0` and `-O2` (measured: `F64 { value: z / z } < F64 { value:
+    /// 1.0 }` was true on the interpreter, true under the JIT, false in AOT).
+    /// A `Map[F64, _]` keyed on NaN even changed SIZE across backends.
+    ///
+    /// Canonicalizing at construction rather than in the comparison key is the
+    /// stronger invariant: no wrapper value ever HOLDS a non-canonical NaN, so
+    /// `cmp`, `eq`, `hash`, `sort` and the `Map`/`Set` key path all inherit the
+    /// property without each having to remember to normalize — and a site that
+    /// forgot would fail silently (equal keys hashing differently).
+    fn canonicalize_wrapper_nan(
+        &mut self,
+        inner: inkwell::values::FloatValue<'ctx>,
+        type_name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        let (Some((float_ty, int_ty, _)), Some(bits)) = (
+            self.total_float_wrapper_widths(type_name),
+            Self::canonical_nan_bits(type_name),
+        ) else {
+            return inner;
+        };
+        let canon = self
+            .builder
+            .build_bit_cast(int_ty.const_int(bits, false), float_ty, "tf.qnan")
+            .unwrap()
+            .into_float_value();
+        // `uno` (unordered) is true exactly when either operand is NaN; with
+        // both operands the same value it is a NaN test.
+        let is_nan = self
+            .builder
+            .build_float_compare(inkwell::FloatPredicate::UNO, inner, inner, "tf.isnan")
+            .unwrap();
+        self.builder
+            .build_select(is_nan, canon, inner, "tf.canon")
+            .unwrap()
+            .into_float_value()
+    }
+
     /// Emit `F32.from(x)` / `F64.from(x)` / `F16.from(x)` / `Bf16.from(x)` —
     /// wrap a bare float in its total-order wrapper (B-2026-08-11-8).
     ///
@@ -3789,6 +3850,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 ))
             }
         };
+        // Every NaN becomes the one canonical quiet NaN (B-2026-08-11-13) —
+        // the wrapper's bit-level order would otherwise expose which NaN the
+        // hardware or the constant folder happened to produce.
+        let inner = self.canonicalize_wrapper_nan(inner, type_name);
         let st = self.context.struct_type(&[float_ty.into()], false);
         let agg = self
             .builder

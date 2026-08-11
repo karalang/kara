@@ -2247,24 +2247,30 @@ This rule covers `arr + 1` without opening the implicit-widening middle-ground b
 
 **Float semantics:** `f32` and `f64` follow IEEE 754 exactly. `NaN != NaN`. They implement `PartialEq` and `PartialOrd` but **not** `Eq`, `Ord`, or `Hash` — IEEE NaN violates the reflexivity required by `Eq` (`a == a` must hold for all `a`) and the totality required by `Ord`. As a consequence `f64` cannot be used as a `Map`/`Set` key or in any context requiring `Ord`. This keeps FFI semantics consistent — `f32`/`f64` cross `extern` boundaries and behave identically on both sides.
 
-**`F32` and `F64` — total-order float types.** The standard library provides `F32` and `F64` for contexts that require `Eq`, `Ord`, or `Hash`. They store the same bits as `f32`/`f64` but define a total order:
+**`F32` and `F64` — total-order float types.** The standard library provides `F32` and `F64` (and `F16`/`Bf16`) for contexts that require `Eq`, `Ord`, or `Hash`. They store the same bits as `f32`/`f64` and order them by the IEEE 754 **totalOrder** predicate — the bit-level transform Rust spells `f64::total_cmp` — with NaN normalized on the way in:
 
-- `NaN == NaN` is `true`
-- Ordering: `-Infinity < ... < -0.0 == 0.0 < ... < +Infinity < NaN`
-- Implement `Eq`, `Ord`, `Hash` — usable as `Map`/`Set` keys, in `TreeMap`, and anywhere `T: Ord` is required
+- **Ordering:** `-Infinity < ... < -0.0 < 0.0 < ... < +Infinity < NaN`. Note `-0.0` and `0.0` are **distinct, adjacent** values here: the wrapper compares bit patterns, not IEEE values, so `-0.0 == 0.0` is `false` (on the `f64` primitive it is `true`).
+- **Equality is bit-equality.** This is what makes the `Hash` impl sound — equal keys have identical bits, so they necessarily hash alike, with no normalization step that `Eq` and `Hash` could implement inconsistently.
+- **NaN is one value.** Every NaN bit pattern is canonicalized to a single quiet NaN when a wrapper is *constructed* (`F64.from(x)` and `F64 { value: x }` both do it), so `NaN == NaN` is `true` and NaN sorts after every other value regardless of the sign and payload the NaN arrived with.
+- Implement `Eq`, `Ord`, `Hash` — usable as `Map`/`Set` keys, in `TreeMap`, and anywhere `T: Ord` is required.
+
+Canonicalizing NaN is not cosmetic. Raw totalOrder distinguishes NaNs by sign, which places `-NaN` *before* `-Infinity` and `+NaN` *after* `+Infinity` — and nothing at the source level chooses between them: on x86 a runtime `z / z` yields a negative NaN while the same expression constant-folded at compile time yields a positive one. Without normalization the identical program sorted differently under `karac run` and `karac build`, changed answer with the optimization level, and gave a `Map[F64, _]` a different *size* on each backend. Canonicalization at construction is what makes the order a property of the program rather than of how it was compiled.
 
 The naming follows Kāra's convention: lowercase primitives (`f64`) have minimal trait surface; PascalCase stdlib types (`F64`) carry richer semantics. Java programmers will recognize the `double`/`Double` analogy — same underlying representation, richer object-level contract.
 
 ```kara
-Map[f64, String]              # compile error: f64 does not implement Hash
-Map[F64, String]              # OK — F64 defines total order, NaN sorts last
+Map[f64, String]                 // compile error: f64 does not implement Hash
+Map[F64, String]                 // OK — F64 defines a total order, NaN sorts last
 
 let scores: Vec[f64] = [1.0, f64.NAN, 2.0];
-scores.sort()                 # compile error: f64 does not implement Ord
-scores.map(F64.from).sort()  # OK
+scores.sort();                   // compile error: f64 has no total order
 
-let a = F64.NAN;
-a == a                        # true — total order
+let mut ranked: Vec[F64] = scores.iter().map(F64.from).collect();
+ranked.sort();                   // OK — 1.0, 2.0, NaN
+
+let a = F64.from(f64.NAN);
+let b = F64 { value: 0.0 / 0.0 };
+a == b                           // true — every NaN canonicalizes to one value
 ```
 
 **Diagnostic.** When `f64` appears where `Eq`, `Ord`, or `Hash` is required, the compiler names the fix:

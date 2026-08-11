@@ -13177,6 +13177,67 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_total_order_wrapper_nan_canonicalized() {
+        // B-2026-08-11-13 — codegen twin of
+        // `test_total_order_wrapper_nan_canonicalized_interp_parity`; the two
+        // assert the SAME string because run == build is the property at
+        // stake. The wrapper's order is bit-level (IEEE totalOrder), so the
+        // sign of a NaN used to decide the answer while nothing in the source
+        // controlled it: x86 runtime division produces a negative NaN, LLVM's
+        // constant folder a positive one, and totalOrder sorts -NaN before
+        // -Infinity but +NaN after +Infinity. One program gave four different
+        // results (interp / JIT / AOT -O2 / AOT -O0) -- a sort with NaN at
+        // both ends, and a two-NaN `Map` whose len was 1 or 2 by backend.
+        //
+        // Both producers -- `F64.from(x)` and the `F64 { value: x }` literal,
+        // which now share one lowering -- canonicalize NaN at construction, so
+        // `cmp`/`eq`/`hash`/`sort` inherit the invariant rather than each
+        // having to normalize (a site that forgot would fail SILENTLY, with
+        // equal keys hashing apart).
+        let out = run_program(
+            "fn main() {\n\
+                 let n = env.args().len();\n\
+                 let z = (n as f64) - (n as f64);\n\
+                 let c: F64 = F64 { value: 0.0 / 0.0 };\n\
+                 let r: F64 = F64.from(z / z);\n\
+                 let one: F64 = F64 { value: 1.0 };\n\
+                 let inf: F64 = F64 { value: 1.0 / 0.0 };\n\
+                 println(c == r);\n\
+                 println(c < one);\n\
+                 println(r < one);\n\
+                 println(r > inf);\n\
+                 let mut v: Vec[F64] = Vec.new();\n\
+                 v.push(r);\n\
+                 v.push(one);\n\
+                 v.push(c);\n\
+                 v.push(F64 { value: 0.0 - 1.0 });\n\
+                 v.sort();\n\
+                 println(v[0].value);\n\
+                 println(v[1].value);\n\
+                 println(v[3].value);\n\
+                 let mut m: Map[F64, i64] = Map.new();\n\
+                 let _ = m.insert(c, 1);\n\
+                 let _ = m.insert(r, 2);\n\
+                 println(m.len());\n\
+                 match m.get(r) { Some(x) => println(x), None => println(0 - 1) }\n\
+                 let n0: F64 = F64 { value: 0.0 * (0.0 - 1.0) };\n\
+                 let p0: F64 = F64 { value: 0.0 };\n\
+                 println(n0 < p0);\n\
+                 println(n0 == p0);\n\
+                 let c32: F32 = F32 { value: 0.0 / 0.0 };\n\
+                 let r32: F32 = F32.from(z / z);\n\
+                 println(c32 == r32);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "true\nfalse\nfalse\ntrue\n-1\n1\nNaN\n1\n2\ntrue\nfalse\ntrue\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_total_order_float_wrappers() {
         // B-2026-07-22-11 — the total-order `F32`/`F64` wrappers
         // (`struct F32 { value: f32 }`, `#[derive(Eq, Ord, Hash)]`) silently

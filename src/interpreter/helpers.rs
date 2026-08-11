@@ -17,6 +17,44 @@ use crate::token::Span;
 
 use super::{EnumData, Value};
 
+/// The one canonical quiet NaN a total-order float wrapper may hold: sign
+/// clear, exponent all ones, quiet bit set, payload zero. Spelled as an
+/// explicit bit pattern rather than `f64::NAN` so it is provably the SAME
+/// value codegen's `canonical_nan_bits` emits — the interpreter and the
+/// compiled backends have to agree bit-for-bit or the wrapper's order splits
+/// again by a different route.
+pub(super) const CANONICAL_NAN_F64: u64 = 0x7FF8_0000_0000_0000;
+/// `f32` sibling of [`CANONICAL_NAN_F64`].
+pub(super) const CANONICAL_NAN_F32: u32 = 0x7FC0_0000;
+
+/// Normalize a value on its way INTO an `F64`/`F16`/`Bf16` wrapper: any NaN bit
+/// pattern becomes the canonical quiet NaN, everything else passes through
+/// untouched (`-0.0` included — it is a distinct, well-defined point of the
+/// total order, unlike a NaN's sign).
+///
+/// B-2026-08-11-13. The wrapper orders and compares by BIT pattern, so without
+/// this the sign and payload of a NaN — which no source-level construct
+/// controls — leak into program behaviour: x86 runtime division produces a
+/// negative NaN and LLVM's constant folder a positive one, and totalOrder puts
+/// the first before `-Infinity` and the second after `+Infinity`. Canonicalizing
+/// at construction keeps `cmp`/`eq`/`hash`/`sort` consistent for free.
+pub(super) fn canonical_wrapper_f64(x: f64) -> f64 {
+    if x.is_nan() {
+        f64::from_bits(CANONICAL_NAN_F64)
+    } else {
+        x
+    }
+}
+
+/// `f32` sibling of [`canonical_wrapper_f64`], for the `F32` wrapper.
+pub(super) fn canonical_wrapper_f32(x: f32) -> f32 {
+    if x.is_nan() {
+        f32::from_bits(CANONICAL_NAN_F32)
+    } else {
+        x
+    }
+}
+
 /// `value_compare` variant that orders `Value::Int` as **unsigned 64-bit** —
 /// reinterpreting the i64 carrier's bits as `u64`. Used by the sort / sorted /
 /// argsort / argmin / argmax paths when the element type is `u64` / `usize`, so

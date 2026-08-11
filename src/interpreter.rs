@@ -2263,11 +2263,15 @@ impl<'a> Interpreter<'a> {
                 Some(Value::Int(i)) => *i as f64,
                 _ => 0.0,
             };
+            // NaN is canonicalized here exactly as in the `F64.from(x)` arm
+            // (B-2026-08-11-13): the wrapper compares by bit pattern, so the
+            // sign and payload of a NaN — which no source construct controls —
+            // would otherwise decide sort order and `Map`/`Set` identity.
             return match name.as_str() {
-                "F32" => Value::TotalFloat32(f as f32),
-                "F64" => Value::TotalFloat64(f),
-                "F16" => Value::TotalFloat16(f),
-                _ => Value::TotalBFloat16(f),
+                "F32" => Value::TotalFloat32(helpers::canonical_wrapper_f32(f as f32)),
+                "F64" => Value::TotalFloat64(helpers::canonical_wrapper_f64(f)),
+                "F16" => Value::TotalFloat16(helpers::canonical_wrapper_f64(f)),
+                _ => Value::TotalBFloat16(helpers::canonical_wrapper_f64(f)),
             };
         }
         // Enum struct-variant construction `Enum.Variant { field: val, ... }`:

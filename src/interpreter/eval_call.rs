@@ -828,7 +828,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         0.0
                     };
-                    return Value::TotalFloat32(val);
+                    return Value::TotalFloat32(super::helpers::canonical_wrapper_f32(val));
                 }
                 "F64.from" => {
                     let val = if let Some(arg) = args.first() {
@@ -840,7 +840,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         0.0
                     };
-                    return Value::TotalFloat64(val);
+                    return Value::TotalFloat64(super::helpers::canonical_wrapper_f64(val));
                 }
                 "F16.from" => {
                     // Stored promoted to f64 (the tree-walk interpreter has no
@@ -855,7 +855,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         0.0
                     };
-                    return Value::TotalFloat16(val);
+                    return Value::TotalFloat16(super::helpers::canonical_wrapper_f64(val));
                 }
                 "Bf16.from" => {
                     let val = if let Some(arg) = args.first() {
@@ -867,7 +867,7 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         0.0
                     };
-                    return Value::TotalBFloat16(val);
+                    return Value::TotalBFloat16(super::helpers::canonical_wrapper_f64(val));
                 }
                 "Regex.compile" => {
                     let pattern = if let Some(arg) = args.first() {

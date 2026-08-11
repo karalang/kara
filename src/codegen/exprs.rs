@@ -2364,6 +2364,19 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(&storage_ty) = self.union_types.get(name) {
             return self.compile_union_init(name, storage_ty, fields);
         }
+        // Total-order float wrapper literal — `F64 { value: x }` and friends.
+        // Routed through the SAME lowering as `F64.from(x)` so the two spellings
+        // cannot drift: both width-adjust the inner float and both canonicalize
+        // NaN (B-2026-08-11-13). Before this, the literal fell through to the
+        // generic aggregate build below and stored the raw bits, so
+        // `F64 { value: 0.0 / 0.0 }` and `F64.from(0.0 / 0.0)` could compare
+        // unequal to each other depending on which NaN each path produced.
+        if self.total_float_wrapper_widths(name).is_some()
+            && fields.len() == 1
+            && fields[0].name == "value"
+        {
+            return self.compile_total_order_wrapper_from(name, &fields[0].value);
+        }
         // Shared struct: heap-allocate with refcount header — unless
         // phase-D headerless layout applies to this (fn, type), in
         // which case the rc word is omitted entirely (no header slot,

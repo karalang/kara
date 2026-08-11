@@ -6953,6 +6953,66 @@ fn test_total_order_wrapper_compare_map_sort_interp_parity() {
 }
 
 #[test]
+fn test_total_order_wrapper_nan_canonicalized_interp_parity() {
+    // B-2026-08-11-13 — the wrapper orders and compares by BIT pattern, so
+    // before the fix the sign of a NaN decided the answer, and nothing in the
+    // source chooses that sign: x86 runtime division yields a NEGATIVE NaN
+    // while LLVM's constant folder yields a POSITIVE one, and totalOrder puts
+    // the first before `-Infinity` and the second after `+Infinity`. One
+    // program therefore gave four different results — interp, JIT, AOT at -O2,
+    // and AOT at -O0 — including a `Vec[F64].sort()` that put NaN at BOTH ends
+    // (correctly sorted under raw totalOrder; nonsense to a reader, since both
+    // print `NaN`) and a two-NaN `Map` whose LEN differed by backend.
+    //
+    // Every NaN is now canonicalized to one quiet NaN at construction, so all
+    // of it collapses to a single answer. Same program + expected output as
+    // the codegen E2E twin (`test_e2e_total_order_wrapper_nan_canonicalized`);
+    // that pairing is the actual contract — run == build.
+    let output = run("fn main() {\n\
+            let n = env.args().len();\n\
+            let z = (n as f64) - (n as f64);\n\
+            let c: F64 = F64 { value: 0.0 / 0.0 };\n\
+            let r: F64 = F64.from(z / z);\n\
+            let one: F64 = F64 { value: 1.0 };\n\
+            let inf: F64 = F64 { value: 1.0 / 0.0 };\n\
+            println(c == r);\n\
+            println(c < one);\n\
+            println(r < one);\n\
+            println(r > inf);\n\
+            let mut v: Vec[F64] = Vec.new();\n\
+            v.push(r);\n\
+            v.push(one);\n\
+            v.push(c);\n\
+            v.push(F64 { value: 0.0 - 1.0 });\n\
+            v.sort();\n\
+            println(v[0].value);\n\
+            println(v[1].value);\n\
+            println(v[3].value);\n\
+            let mut m: Map[F64, i64] = Map.new();\n\
+            let _ = m.insert(c, 1);\n\
+            let _ = m.insert(r, 2);\n\
+            println(m.len());\n\
+            match m.get(r) { Some(x) => println(x), None => println(0 - 1) }\n\
+            let n0: F64 = F64 { value: 0.0 * (0.0 - 1.0) };\n\
+            let p0: F64 = F64 { value: 0.0 };\n\
+            println(n0 < p0);\n\
+            println(n0 == p0);\n\
+            let c32: F32 = F32 { value: 0.0 / 0.0 };\n\
+            let r32: F32 = F32.from(z / z);\n\
+            println(c32 == r32);\n\
+        }");
+    // The two `< one` lines are the crux: pre-fix they DISAGREED with each
+    // other (the const NaN sorted last, the runtime NaN first) even though
+    // both print `NaN`. Then: c==r across provenance, r>inf, sort[0]/[1]/[3],
+    // map len (1, not 2), map get, -0<+0 and -0==+0 (B-2026-08-11-14: still
+    // DISTINCT — only NaN is normalized), and the F32 twin.
+    assert_eq!(
+        output,
+        "true\nfalse\nfalse\ntrue\n-1\n1\nNaN\n1\n2\ntrue\nfalse\ntrue\n"
+    );
+}
+
+#[test]
 fn test_float_wrapper_value_from_enum_payload_interp_parity() {
     // B-2026-07-23-2 — `.value` on a float-wrapper bound out of a user-enum
     // payload, in a match arm beside an `f64` arm. The interpreter was already
