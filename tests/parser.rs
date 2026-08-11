@@ -13341,3 +13341,24 @@ fn well_formed_interp_holes_report_nothing() {
         );
     }
 }
+
+/// The remaining branch of the `None` arm: the nested parse produced NEITHER an
+/// expression NOR a diagnostic. `let q = 1` parses cleanly inside the synthetic
+/// wrapper — as a *statement*, so the `find_map` for a `StmtKind::Expr` comes
+/// back empty and there is no error to forward. Silence there would be the
+/// exact failure this row is about, in a new shape, so the arm has to speak for
+/// itself. Pinned separately because it is the one path where dropping the
+/// `Text` fallback is not itself enough.
+#[test]
+fn interp_hole_that_parses_as_a_statement_is_still_an_error() {
+    for src in [
+        r#"fn main() { let s = f"v={let q = 1}"; }"#,
+        r#"fn main() { let s = f"v={}"; }"#,
+    ] {
+        let result = karac::parse(src);
+        assert!(
+            !result.errors.is_empty(),
+            "hole vanished without a diagnostic for: {src}"
+        );
+    }
+}

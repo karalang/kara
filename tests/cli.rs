@@ -24754,3 +24754,108 @@ fn check_renders_a_source_snippet_with_a_caret_under_the_span() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── f-string interpolation-hole diagnostics reach the CLI (B-2026-08-11-5) ──
+//
+// The parser used to discard the nested hole parse's `errors` and
+// `fix_edits`, so a syntax error inside `f"{…}"` compiled clean and the
+// hole printed as literal text. That made the class invisible to the Mend
+// loop specifically: `--output=json` carried `"diagnostics":[]`, so there
+// was nothing to feed back and nothing for `karac fix` to apply.
+
+#[test]
+fn test_check_reports_fstring_hole_syntax_error() {
+    let path = fix_scratch_file(
+        "holecheck",
+        "fn main() {\n    let n = 3;\n    println(f\"good={n}\");\n    println(f\"typo={n.}\");\n}\n",
+    );
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "a malformed hole must fail `check`, not pass silently"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Expected field name or tuple index after '.'"),
+        "missing hole diagnostic:\n{stderr}"
+    );
+    // Rebased onto the real file: line 4, column 23 — the byte right after the
+    // dangling `.`, inside the f-string. An un-rebased span would report line 1
+    // and a column in the synthetic `fn __interp__() { ` prologue.
+    assert!(
+        stderr.contains(":4:23:"),
+        "diagnostic is not anchored on the hole:\n{stderr}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_check_json_carries_fstring_hole_diagnostic() {
+    let path = fix_scratch_file(
+        "holejson",
+        "fn main() {\n    let n = 3;\n    println(f\"typo={n.}\");\n}\n",
+    );
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"diagnostics\": []") && !stdout.contains("\"diagnostics\":[]"),
+        "Mend loop still sees an empty diagnostic list:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Expected field name or tuple index after '.'"),
+        "hole diagnostic missing from JSON:\n{stdout}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_fix_applies_edit_from_inside_an_fstring_hole() {
+    // The call-site `ref` marker carries a machine-applicable deletion. Its
+    // `fix_edits` entry is keyed on the diagnostic's span, so BOTH the key
+    // and the edit's byte range have to be rebased out of wrapper
+    // coordinates — an unrebased key arrives orphaned and `karac fix`
+    // silently applies nothing.
+    let path = fix_scratch_file(
+        "holefix",
+        concat!(
+            "fn takes(xs: ref Vec[i64]) -> i64 { xs.len() as i64 }\n",
+            "fn main() {\n",
+            "    let xs = [1, 2, 3];\n",
+            "    println(f\"n={takes(ref xs)}\");\n",
+            "}\n",
+        ),
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("applied 1 fix"), "got: {stdout}");
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("f\"n={takes(xs)}\""),
+        "in-hole `ref` not removed: {rewritten}"
+    );
+    // And the repaired program is clean.
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "repaired program still fails check: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_file(&path);
+}

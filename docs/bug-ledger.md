@@ -1307,7 +1307,29 @@ prologue, where the old arithmetic wrapped to a huge `usize`).
 Pins: four tests in `tests/parser.rs` -- the five swallowed shapes reporting,
 the span landing inside the hole rather than on the wrapper, Leg B enforced
 with its edit surviving both in-hole and outside, and a guard that well-formed
-holes (nested f-strings and format specs included) still report nothing. |
+holes (nested f-strings and format specs included) still report nothing.
+
+FOLLOW-UP COVERAGE (same day, separate session that had reached the same fix
+independently and rebased onto this one rather than duplicating it). Four pins
+added on top, all stash-proven red against the pre-fix parser, each covering
+something the original four did not:
+
+  - `tests/parser.rs::interp_hole_that_parses_as_a_statement_is_still_an_error`
+    -- the `nested_errors == 0` branch. `f"{let q = 1}"` parses cleanly inside
+    the wrapper as a STATEMENT, so the `find_map` for a `StmtKind::Expr` comes
+    back empty AND there is no error to forward; that branch is the one place
+    where dropping the `Text` fallback is not by itself enough, and it was
+    written but unpinned. Also covers the empty hole `f"{}"`.
+
+  - Three in `tests/cli.rs` for the MEND-LOOP surface the row's own
+    "MEND-LOOP CONSEQUENCE" paragraph is about, which parser-level pins cannot
+    reach: `check` exits NON-ZERO with the diagnostic rebased onto the right
+    line/column; `--output=json` no longer emits `"diagnostics":[]`; and
+    `karac fix` end-to-end actually rewrites an in-hole `takes(ref xs)` to
+    `takes(xs)` and the repaired file then checks clean. The last one is the
+    only test that exercises the diagnostic-span-keyed `fix_edits` merge
+    through the real `cmd_fix` path -- the half of the fix that fails silently
+    (correct edit, orphaned key, zero fixes applied) rather than loudly. |
 | B-2026-08-11-9 | typecheck | low | the seven comparison-op names are exempted from method-existence checking by NAME rather than by whether the receiver carries the baked impl, so `f.c… | FIXED by 22ba601. The exemption is now keyed on whether the receiver
 carries the baked impl instead of on the method name alone: one
 `let exempt_comparison_ops = !matches!(&receiver_for_lookup, Type::Float(_));`
