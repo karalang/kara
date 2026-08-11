@@ -2663,7 +2663,7 @@ fn test_trait_method_effects_union_with_with_e_binding() {
                       cb(); store.fetch() \
                   }\n\
                   pub fn main() with reads(Cache) writes(Log) {\n\
-                      let _ = pipeline(DiskStore, || write_log());\n\
+                      let _ = pipeline(DiskStore {}, || write_log());\n\
                   }";
     effectcheck_full_pipeline(source);
 }
@@ -2688,7 +2688,7 @@ fn test_trait_method_effect_missing_from_caller_declaration_fails() {
                       cb(); store.fetch() \
                   }\n\
                   pub fn main() with writes(Log) {\n\
-                      let _ = pipeline(DiskStore, || write_log());\n\
+                      let _ = pipeline(DiskStore {}, || write_log());\n\
                   }";
     let mut parsed = parse(source);
     assert!(parsed.errors.is_empty(), "Parse: {:?}", parsed.errors);
@@ -2741,7 +2741,7 @@ fn test_with_e_closure_effect_missing_from_caller_declaration_fails() {
                       cb(); store.fetch() \
                   }\n\
                   pub fn main() with reads(Cache) {\n\
-                      let _ = pipeline(DiskStore, || write_log());\n\
+                      let _ = pipeline(DiskStore {}, || write_log());\n\
                   }";
     let mut parsed = parse(source);
     assert!(parsed.errors.is_empty(), "Parse: {:?}", parsed.errors);
@@ -2798,7 +2798,7 @@ fn test_trait_method_effects_compose_at_call_site_not_during_unification() {
                       cb(); store.fetch() \
                   }\n\
                   pub fn main() with reads(Cache) {\n\
-                      let _ = pipeline(DiskStore, || {});\n\
+                      let _ = pipeline(DiskStore {}, || {});\n\
                   }";
     effectcheck_full_pipeline(source);
 }

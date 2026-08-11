@@ -94,6 +94,21 @@ impl<'a> super::TypeChecker<'a> {
                 };
             }
         }
+        // A bare TYPE NAME as the field-access base, with the const intercepts
+        // above having already declined it (`i64.NONEXISTENT`). Return the
+        // historical silent `Type::Error` WITHOUT routing through `infer_expr`,
+        // whose bare-identifier arm would otherwise raise B-2026-08-11-6's
+        // "type, not a function" diagnostic — wrong wording for a field access,
+        // and a behaviour change this file does not own. Tightening it into a
+        // proper "unknown associated const" diagnostic is the follow-up that
+        // `test_primitive_const_unknown_silent_fall_through` already names.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.local_scope.lookup(name).is_none()
+                && self.type_name_in_value_position_message(name).is_some()
+            {
+                return Type::Error;
+            }
+        }
         let obj_ty = self.infer_expr(object);
         if obj_ty == Type::Error {
             return Type::Error;

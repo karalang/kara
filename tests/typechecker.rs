@@ -37103,3 +37103,126 @@ fn a_wrong_closure_return_is_rejected_against_the_closure_type() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── B-2026-08-11-6: a type name is not a value ──────────────────
+
+#[test]
+fn test_bare_type_name_in_call_position_rejected() {
+    // Every checking phase accepted `i64(42)` and each backend then failed
+    // differently and late: the interpreter raised its own "this is a compiler
+    // bug" internal error or hit an `unreachable!`, while JIT and AOT silently
+    // discarded the argument and evaluated the call to `0` — `let a = i64(42);
+    // println(f"val={a}")` printed `val=0`. The silent leg is the worse one: a
+    // user writing a C/Java-style conversion cast got a zero, not an error.
+    for (src, ty) in [
+        ("fn main() { let a = i64(42); let _ = a; }", "i64"),
+        ("fn main() { let a = bool(1); let _ = a; }", "bool"),
+        ("fn main() { let a = char(1); let _ = a; }", "char"),
+        (
+            r#"fn main() { let a = String("hi"); let _ = a; }"#,
+            "String",
+        ),
+        ("fn main() { let a = F64(1.5); let _ = a; }", "F64"),
+        ("fn main() { let a = F32(1.5); let _ = a; }", "F32"),
+        ("fn main() { let a = Vec(1); let _ = a; }", "Vec"),
+        (
+            "struct P { x: i64 }\nfn main() { let a = P(1); let _ = a; }",
+            "P",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("is a type, not a function") && e.message.contains(ty)),
+            "expected '{ty}' rejected as a type in call position, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    // Same root cause, value position rather than call position.
+    let errors = typecheck_errors("fn main() { let x = i64; let _ = x; }");
+    assert!(
+        errors.iter().any(|e| e.message.contains("is a type")),
+        "a bare type name as a value must be rejected too, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_type_name_rejection_names_the_right_remedy() {
+    // The row is reachable by FOLLOWING THE COMPILER'S OWN ADVICE: `max(1.5,
+    // 2.5)` is rejected with "use the total-order wrapper `F64`", so `F64(1.5)`
+    // is the very next thing written. The remedy therefore has to differ per
+    // family — a single generic message would send `F64` users to `as` and
+    // `i64` users to `.from`, both wrong.
+    for (src, needle) in [
+        ("fn main() { let a = i64(42); let _ = a; }", "x as i64"),
+        ("fn main() { let a = F64(1.5); let _ = a; }", "F64.from(x)"),
+        ("fn main() { let a = Vec(1); let _ = a; }", "Vec.new("),
+        (
+            r#"fn main() { let a = String("hi"); let _ = a; }"#,
+            "String.from(x)",
+        ),
+        (
+            "struct P { x: i64 }\nfn main() { let a = P(1); let _ = a; }",
+            "P { x:",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "expected the remedy to name `{needle}`, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_legal_name_call_forms_survive_the_type_name_rejection() {
+    // The guard. Everything with a real bare-name constructor form must keep
+    // working — these are what the rejection has to thread between. (Kāra has
+    // no tuple structs: `struct T(i64)` is a parse error, so enum variants and
+    // distinct types are the whole list.)
+    typecheck_ok("fn main() { let a = Some(1); let _ = a; }");
+    typecheck_ok(
+        "enum Shape { Circle(i64), Unit }\n\
+         fn main() { let s = Shape.Circle(2); let _ = s; }",
+    );
+    typecheck_ok("distinct type UserId = i64;\nfn main() { let u = UserId(42); let _ = u; }");
+    typecheck_ok("struct P { x: i64 }\nfn main() { let a = P { x: 7 }; let _ = a.x; }");
+    typecheck_ok("fn main() { let v: Vec[i64] = Vec.new(); let _ = v.len(); }");
+    typecheck_ok("fn main() { let a = F64.from(1.5); let _ = a; }");
+    // An EMPTY struct is constructed `D {}`, not `D`. Four effectchecker tests
+    // passed `DiskStore` bare and were green only because the poison made the
+    // generic `T: Storage` bound vacuous; pre-fix that program was
+    // check-green/run-red ("unknown comptime reflection method `fetch`").
+    typecheck_ok(
+        "struct D {}\nimpl D { fn f(self) -> i64 { return 7 } }\n\
+         fn main() { let d = D {}; let _ = d.f(); }",
+    );
+}
+
+#[test]
+fn test_type_name_rejection_stays_out_of_path_and_field_bases() {
+    // Two collateral paths this diagnostic must NOT fire on — both found by the
+    // suite, and both places a future refactor would reintroduce the bug by
+    // moving the check back into `resolve_identifier_type`.
+    //
+    // 1. A field-access base. `i64.NONEXISTENT` keeps its documented silent
+    //    `Type::Error` (see `test_primitive_const_unknown_silent_fall_through`);
+    //    "is a type, not a function" is the wrong wording for a field access.
+    typecheck_ok("fn main() { let x = i64.NONEXISTENT; let _ = x; }");
+    typecheck_ok("fn main() { let x = i64.MAX + 1_i64; let _y: i64 = x; }");
+    // 2. A path's first segment. `resolve_path_type` falls back to
+    //    `resolve_identifier_type` on segment 0 BEFORE later machinery gets its
+    //    turn, which is how resource dispatch resolves — erroring there rejects
+    //    `RandomSource.next()` outright (two repl tests caught it).
+    typecheck_ok(
+        "effect resource Cache;\n\
+         pub trait Storage { fn fetch(self) -> i64 with reads(Cache); }\n\
+         pub struct DiskStore {}\n\
+         impl Storage for DiskStore { fn fetch(self) -> i64 with reads(Cache) { 0 } }\n\
+         pub fn go(s: DiskStore) -> i64 with reads(Cache) { s.fetch() }\n\
+         fn main() { let _ = go(DiskStore {}); }",
+    );
+}

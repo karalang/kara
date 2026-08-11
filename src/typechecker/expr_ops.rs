@@ -395,10 +395,79 @@ impl<'a> super::TypeChecker<'a> {
                 }),
             };
         }
+        // NOTE (B-2026-08-11-6): the type-name-in-value-position diagnostic is
+        // NOT raised here, even though this is where such a name lands. This
+        // helper is also the fallback inside `resolve_path_type`, which calls it
+        // on a path's FIRST segment before later machinery gets its turn —
+        // resource dispatch (`RandomSource.next()`) resolves that way, and
+        // erroring here rejects it. The silent `Error` is load-bearing for that
+        // caller. The diagnostic belongs on the bare-identifier arm of
+        // `infer_expr`, which is reached only when the identifier really is the
+        // whole expression; see `type_name_in_value_position_message`.
+        //
         // Fallback — likely a name the resolver already handled
         // Return Error silently (resolver already reported it)
         let _ = span;
         Type::Error
+    }
+
+    /// `Some(diagnostic)` when `name` is a TYPE used where a value belongs, and
+    /// that type has no callable/constructible bare-name form. `None` for
+    /// anything legal, so callers can use it as the gate as well as the message.
+    ///
+    /// The remedy is per-family because the right answer genuinely differs, and
+    /// this is the diagnostic a user meets after following the compiler's own
+    /// advice: `max(1.5, 2.5)` is rejected with "use the total-order wrapper
+    /// `F64`", and `F64(1.5)` is the next thing anyone writes.
+    pub(super) fn type_name_in_value_position_message(&self, name: &str) -> Option<String> {
+        if !is_prelude_type_or_module_name(name) && !self.is_type_name(name) {
+            return None;
+        }
+        // ORDER MATTERS. The prelude arms come FIRST because the baked types
+        // are registered in `env.structs` too — keying on that alone told the
+        // author to write `F64 { … }` and `Vec { … }`, neither of which is a
+        // thing. Only a genuinely user-declared struct reaches the literal arm.
+        let msg = match name {
+            // The remedy that motivated the row: `max(1.5, 2.5)` is rejected
+            // with "use the total-order wrapper `F64`", so `F64(1.5)` is the
+            // very next thing written. `F64.from` exists as of B-2026-08-11-8.
+            "F64" | "F32" | "F16" | "Bf16" => {
+                format!("wrap a float with `{name}.from(x)`")
+            }
+            // Numeric primitives only — `bool`/`char`/`String` are in
+            // PRELUDE_PRIMITIVES too but have no cast from an arbitrary value,
+            // so the cast advice would be wrong for them.
+            "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "u128"
+            | "usize" | "f16" | "bf16" | "f32" | "f64" => {
+                format!("a numeric conversion is the cast `x as {name}`, not a call")
+            }
+            "String" => "build a string with `String.from(x)`, `x.to_string()` or an \
+                         f-string"
+                .to_string(),
+            "bool" | "char" => {
+                format!("there is no `{name}` conversion call; compare or match on the value")
+            }
+            _ if is_prelude_type_or_module_name(name) => {
+                format!("construct one with an associated function such as `{name}.new(…)`")
+            }
+            _ => {
+                // A user struct: name a real field, so the literal form is
+                // copy-pasteable rather than a gesture.
+                let field = self
+                    .env
+                    .structs
+                    .get(name)
+                    .and_then(|i| i.fields.first().map(|f| f.0.clone()));
+                match field {
+                    Some(f) => format!(
+                        "it has named fields, so construct it with a struct literal: \
+                         `{name} {{ {f}: … }}`"
+                    ),
+                    None => format!("construct it with a struct literal: `{name} {{ … }}`"),
+                }
+            }
+        };
+        Some(format!("'{name}' is a type, not a function — {msg}"))
     }
 
     pub(super) fn resolve_path_type(&mut self, segments: &[String], span: &Span) -> Type {

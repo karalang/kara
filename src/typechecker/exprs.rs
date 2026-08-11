@@ -3453,7 +3453,40 @@ impl<'a> super::TypeChecker<'a> {
                     self.frozen_param_use_spans
                         .insert(SpanKey::from_span(&expr.span));
                 }
-                self.resolve_identifier_type(name, &expr.span)
+                let ty = self.resolve_identifier_type(name, &expr.span);
+                // A TYPE NAME where a value belongs (B-2026-08-11-6). Reaching
+                // `Type::Error` here means every real resolution failed —
+                // including the enum-variant, distinct-type and comptime-`Type`
+                // arms, which are the only bare-name value/constructor forms
+                // there are (Kāra has no tuple structs: `struct T(i64)` is a
+                // parse error). `resolve_identifier_type`'s own fallback is
+                // SILENT on the assumption that the resolver already reported
+                // the name — true for a typo, false for a type name, which
+                // resolves perfectly well and simply is not a value.
+                //
+                // Nothing downstream could honour it and each backend failed
+                // differently and late: the interpreter raised its own
+                // "this is a compiler bug" internal error or hit an
+                // `unreachable!`, while JIT and AOT silently discarded the
+                // argument and evaluated the call to `0` — `let a = i64(42)`
+                // printed `val=0`. The call form `i64(42)` lands here too,
+                // because `infer_call` infers its callee through this arm.
+                //
+                // Deliberately on the BARE-IDENTIFIER arm rather than inside
+                // `resolve_identifier_type`: that helper is also the first-
+                // segment fallback for `resolve_path_type`, where a resource
+                // dispatch like `RandomSource.next()` legitimately passes
+                // through before later machinery resolves it.
+                if ty == Type::Error {
+                    if let Some(msg) = self.type_name_in_value_position_message(name) {
+                        self.type_error(
+                            msg,
+                            expr.span.clone(),
+                            crate::typechecker::TypeErrorKind::NotCallable,
+                        );
+                    }
+                }
+                ty
             }
             ExprKind::Path { segments, .. } => self.resolve_path_type(segments, &expr.span),
 
