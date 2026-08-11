@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 234 | 0 |
 | leak | 160 | 2 |
-| double-free | 120 | 1 |
+| double-free | 120 | 0 |
 | codegen-gap | 103 | 0 |
 | run-vs-build | 100 | 0 |
 | missing-feature | 90 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 801 | 5 |
+| codegen | 801 | 4 |
 | typecheck | 152 | 0 |
 | interp | 138 | 0 |
 | ownership | 44 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced · 5 open · 1090 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced · 4 open · 1091 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-11-24 | 2026-08-11 | codegen | high | A String EQUALITY comparison between an unbound TEMPORARY and a `ref String` PARAMETER leaks the temporary, every evaluation. `hay.substring(0, 4) == needle` inside `fn f(hay: ref String, needle: ref String)` leaks; the same comparison against a LOCAL, or with the temp `let`-bound first, or with an OWNED `String` param, is clean. The leak is unbounded in input size -- the ordinary `substring(i, i+n) == needle` scan loop leaks one allocation per iteration. | the String `==`/`!=` lowering in codegen (the operand-cleanup decision). NOT the RC-elision hint and NOT optimization-dependent -- both ruled out by measurement, see detail. |
-| B-2026-08-11-25 | 2026-08-11 | codegen | high | DOUBLE FREE on both compiled backends: a heap field of a struct held as a Vec ELEMENT, read back by ASSIGNMENT to an existing binding (`out = stats[0].region`), aborts with `free(): double free detected in tcache 2`. The `let` form of the same read is clean (that leg was fixed), a plain struct BINDING is clean, and a tuple element is clean -- it is specifically the Vec-element + assignment pair. `karac check` passes and the interpreter is correct. | the field-move-out cap-zeroing path for an ASSIGNMENT whose source is `<vec>[i].<heapfield>`. Family: B-2026-08-03-8 / B-2026-08-01-31 fixed the `let x = h.f` form; B-2026-08-04-19 is the precedent for an assignment twin of a fixed `let` bug. |
 | B-2026-08-11-28 | 2026-08-11 | codegen | low | RESIDUAL of B-2026-08-10-9, split out per the live-remainder rule: on SHUFFLED-UNIFORM input the mono `sort_by` is still ~1.6x Rust's driftsort. 50a50e8 replaced the fixed-32-run merge sort with a natural-run merge sort, which was the right fix and moved the ORDERED patterns enormously (sorted and reverse went from 39-54x behind to roughly 2x AHEAD -- measured here at 0.47x and 0.52x). It deliberately did not move the shuffled case, and the closing note records that in its own numbers: `random 14.91 -> 14.60 ms (UNCHANGED)`, because shuffled input has ~2-element natural runs so the RUN padding reproduces the old run length and the old pass count. MEASURED FRESH (hyperfine, 10 runs each, clone subtracted via an identical kernel minus the sort call; 25 rounds x 150k (i64,i64) pairs, x86 container): kara pure sort 260.6 ms vs rust 159.0 ms = 1.64x. Same kernel by pattern: shuffled 1.51x total / 1.64x pure, sorted 0.47x, reverse 0.52x. SEVERITY LOW deliberately -- shuffled-uniform is the regime where an adaptive sort has least to exploit, driftsort is a strong baseline, and 1.6x on the hardest pattern while beating it 2x on ordered input is a defensible place to sit. Filed so the remainder is visible in the work queue rather than only inside a closed row's prose, NOT as a claim that it must be closed. CAVEAT: single host, x86_64 shared container, not the canonical Apple-silicon bench host. NEXT STEP if picked up: compare the emitted merge inner loop against driftsort's on shuffled input; the run-detection phase is already known not to help there, so any remaining gap is in the merge itself. | mono sort_by lowering (natural-run merge sort, 50a50e8) |
 | B-2026-08-11-29 | 2026-08-11 | codegen | high | SEGV (exit 139) on a DEFAULT `karac build`: a struct with a `Map`/`Set` field, bound out of a `Result`'s `Ok(..)` match arm and then passed BY VALUE to a function, dereferences a wild pointer in `karac_map_free_with_drop_vec`. `karac check` is clean and the interpreter prints the right answer. Five conditions, all necessary -- `Option` instead of `Result` is clean, a `Vec` field is clean, using the value inline instead of passing it is clean. | `karac_map_free_with_drop_vec` -- the ASAN frame is `#0 karac_map_free_with_drop_vec` called directly from `main`, on `SEGV on unknown address 0x0b`, i.e. the Map handle slot holds a non-pointer when the drop runs. Family: B-2026-08-07-19 (`struct { s: Result[Map,E] }`) is the INVERSE nesting and is fixed. |
 | B-2026-08-11-30 | 2026-08-11 | codegen | medium | The two NON-CRASHING siblings of B-2026-08-11-29, same area (a container field of a struct inside a `Result` crossing a by-value boundary), different trigger conditions and different symptom -- a silent leak instead of a SEGV. LEG A: a `Map`/`Set` field leaks ~600 B when the Result is `let`-bound before the match, while matching the call inline is clean. LEG B: a `Vec` field leaks one allocation per Vec, but only when the struct ALSO has another heap field and the Result is a fresh temp passed as an argument. | same area as B-2026-08-11-29 (`Result[struct-with-container-field]` drop across a by-value boundary); may or may not be one fix with it -- the trigger conditions differ materially, see detail. |
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1106 surfaced
 
 </details>
 
-### Fixed (1090)
+### Fixed (1091)
 
-<details><summary>1090 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1091 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2035,6 +2034,60 @@ more by having them consult the receiver's own type instead. Neither re-keyed
 the map. A consumer that needs the key and cannot use either workaround will hit
 this again. |
 | B-2026-08-11-23 | codegen | low | `Vec[T].sorted_by_key(f)` PASSES `karac check` and then fails at build: "Vec/String method 'sorted_by_key' is not yet supported in codegen" | a243f2a (folded into the existing `sorted_by` arm in src/codegen/vec_method.rs rather than copied — the two are one desugar with a different inner method) |
+| B-2026-08-11-25 | codegen | high | DOUBLE FREE on both compiled backends: a heap field of a struct held as a Vec ELEMENT, read back by ASSIGNMENT to an existing binding (`out = stats[0… | FIXED — the Assign arm never called the field-move-out suppressors the Let arm
+has called since B-2026-08-03-8 / B-2026-08-01-31. Three lines of dispatch, not
+new machinery.
+
+WHAT THE DIAGNOSIS TURNED ON: the row's own control table already said the
+`let` form of the identical read is clean, INCLUDING through a Vec index. So
+`suppress_place_field_struct_move_source` — the deeper-place suppressor that
+resolves the owner through `field_chain_place_ptr` / `place_chain_type_name` —
+already handled `stats[0].region` exactly. It had simply never been reachable
+from an assignment: grepping its call sites (plus
+`suppress_struct_field_move_into_literal` and `disarm_struct_field_move_bodies`)
+finds the Let arm and struct-literal field init, and nothing else. The
+ASSIGNMENT path compiled the RHS and stored it while leaving the field live in
+its owner, so the owner's drop freed the buffer the target now owned.
+
+That is why the row's three necessary conditions are what they are, and each is
+now explained rather than just observed: the read must be an ASSIGNMENT (the
+`let` arm calls the suppressors), the struct must be reached through a Vec INDEX
+(a plain binding or `self` takes the SHALLOW suppressor, which the Let arm also
+calls but which a deeper place never reaches), and the field must be heap-owning
+(there is nothing to double-free otherwise).
+
+The fix mirrors the Let arm's block verbatim — same three calls, same gates
+(`owned_struct_params` sources are deep-copied instead, shallow forms take the
+dedicated suppressor, deeper places take the place-chain sibling) — so the two
+arms cannot drift apart again. Gated on the assignment TARGET being a
+heap-shaped local, which is the Let arm's `vec_elem_types` gate.
+
+ORDERING IS LOAD-BEARING and is commented at the site: the calls go AFTER
+`compile_expr(value)`, because they cap-zero the SOURCE in place. Emitting them
+first hands the target a cap of 0 and converts the double free into a leak —
+the same bug wearing different clothes, and one the value pins cannot see.
+
+VERIFIED on the row's full eight-row table: the four aborting shapes (String
+field, `Vec[i64]` field, an unrelated earlier read of the same field, a source
+built by `+` instead of `push_str`) and the four over-fire controls that were
+already clean and that a broad fix would regress (the `let` form, a plain struct
+binding, a tuple element, a `Vec[String]` with no struct). All eight now agree
+with the interpreter. The row's real-world shape — a max-by-revenue scan
+assigning `best_region = stats[j].region` in a loop — runs correctly too.
+
+ASAN IS THE GATE THAT DISTINGUISHES A FIX FROM A RELABELLING, since the repair
+is precisely "stop the owner freeing". The new fixture loops 40 iterations so a
+per-iteration leak accumulates, and covers String fields, a `Vec[i64]` field and
+a `+`-built source. Clean at the default level and on the `-O0` leg; pre-fix it
+reports `AddressSanitizer: attempting double-free`. The value pin pre-fix
+returns `Some("")` — the abort beats the stdout flush, which is exactly the
+"appears to produce NO output" failure mode the row warns sends debugging in the
+wrong direction.
+
+FIXTURE HAZARD, carried forward from the row because it is easy to re-introduce:
+every payload in both pins is built at RUN TIME (`String.new()` + `push_str`, or
+`a + b`). A `String` LITERAL field is static, so the second free lands on a
+non-heap pointer and the fixture passes while the bug is present. |
 | B-2026-08-11-26 | other | medium | the codegen suite's JIT lane — the ONE lane whose stated job is run==build parity — fed codegen `ownership: None` while its AOT twin fed `Some(&owner… | FIXED by 883fcbe1 — `jit_dispatch` now takes the `OwnershipCheckResult` the harness ALREADY computes a few lines above the dispatch, and forwards it to `compile_to_ir_with_options`, so the JIT leg's codegen arguments match its AOT twin's `compile_to_object_with_options(..., Some(&ownership), None, ...)` argument for argument.
 
 `concurrency` stays `None` on BOTH legs, deliberately, and that is parity rather than a second half-fix: `tests/codegen.rs` is the SEQUENTIAL lane by design and `tests/par_codegen.rs` is the auto-par one (its own comments name the split — "`tests/codegen.rs`'s harness compiles without `concurrency_analyze`"). The bar for this lane is its AOT twin, not cli.rs.
