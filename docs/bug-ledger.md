@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 90 | 1 |
 | perf | 63 | 1 |
 | false-positive | 58 | 0 |
-| diagnostics | 47 | 1 |
+| diagnostics | 47 | 0 |
 | soundness | 42 | 1 |
 | crash | 42 | 1 |
 | other | 24 | 0 |
@@ -119,18 +119,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 28 | 0 |
 | runtime | 21 | 0 |
 | resolver | 18 | 0 |
-| parser | 13 | 1 |
+| parser | 13 | 0 |
 | lexer | 4 | 0 |
 | effect | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced · 5 open · 1072 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced · 4 open · 1073 fixed · 1 wontfix** (2026-05-20 → 2026-08-11). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-11-5 | 2026-08-11 | parser | high | EVERY parse-phase diagnostic raised inside an f-string interpolation hole is DISCARDED. Two consequences: (a) a hard syntax error degrades SILENTLY to literal text -- `println(f"typo={n.}")` passes `karac check` and prints `typo={n.}` on all three backends; (b) recoverable errors go unenforced -- `f"{takes(ref xs)}"` compiles clean while the identical call outside an f-string is a hard parse error. | src/parser/exprs.rs:771 -- `let result = crate::parse(&wrapper);` consumes only `result.program.items`; `result.errors` and `result.fix_edits` are dropped on the floor. |
 | B-2026-08-11-6 | 2026-08-11 | typecheck | high | A bare TYPE NAME in call position -- `i64(42)`, `F64(1.5)`, `bool(1)`, `String("hi")`, `Vec(1)`, or a named-field user struct `P(1)` -- is accepted by EVERY checking phase, then breaks downstream: the interpreter panics on an `unreachable!` (or raises its own 'This is a compiler bug' internal error) while the compiled backends silently evaluate it to `0`. | src/interpreter/eval_call.rs:2101 (the `unreachable!` whose message already says 'the typechecker accepted a non-callable callee'); the missing rejection belongs in the typechecker's call-callee resolution. |
 | B-2026-08-11-7 | 2026-08-11 | typecheck | high | `Vec[f64].sort()` bypasses the `Ord` gate that design.md § Float semantics REQUIRES -- the spec's own verbatim counter-example compiles. With a NaN present, `sort()` silently leaves the Vec UNSORTED (all three backends agree), so a percentile/statistics program yields wrong answers with no diagnostic. `.sorted()`, `.max()`, `.min()` and `.contains()` on `Vec[f64]` are ungated the same way, while `Map[f64,_]`, `Set[f64]`, `SortedSet[f64]` and free `max(f64,f64)` all gate correctly. | src/typechecker/stdlib_seq.rs:1436 -- the Vec `"sort" | "reverse"` arm calls `expect_no_args` and returns `Type::Unit` with NO element-type Ord check; the Slice twin at :1164 checks mutability only. Working gate to copy: stdlib_map.rs:516/633 (SortedSet/SortedMap element+key Ord). |
 | B-2026-08-11-8 | 2026-08-11 | typecheck | medium | `F64.from(x)` / `F32.from(x)` -- the total-order wrapper constructor that design.md AND the compiler's own `T: Ord` diagnostic both name as THE fix for `f64` in an Ord/Eq/Hash context -- is unimplemented: `no associated function 'from' on type 'F64'`. Every spelling a user would try next fails, and one of them (`F64(1.5)`) panics the interpreter. | the `F64`/`F32` stdlib surface; the diagnostic that prescribes it is the `T: Ord` bound message (it renders "use the total-order wrapper `F64` (`F64.from(x)`)"), and design.md § Float semantics line ~2264 writes `scores.map(F64.from).sort()  # OK`. |
@@ -146,9 +145,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1088 surfaced
 
 </details>
 
-### Fixed (1072)
+### Fixed (1073)
 
-<details><summary>1072 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1073 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1292,6 +1291,23 @@ in `tests/typechecker.rs` -- `v.cast()` rejected on i64/f64/char/bool/u8, a user
 `impl i64 { fn cast }` / `impl char { fn cast }` reachable AND its return type
 enforced, and a regression guard that the seven comparison ops stay exempt on
 every receiver that carries the baked impl. |
+| B-2026-08-11-5 | parser | high | EVERY parse-phase diagnostic raised inside an f-string interpolation hole is DISCARDED | FIXED by 3baa5a4. Three parts at the single site the row identified
+(`src/parser/exprs.rs`, the `InterpolatedStringLit` arm): rebase and append the
+nested parse's `errors` onto the enclosing parser; rebase and merge its
+`fix_edits`; and drop the `Text` fallback, which existed only to hide the
+error the first part now surfaces. A hole that neither parses nor produces a
+diagnostic emits `could not parse interpolation` rather than vanishing.
+
+The rebase is factored out of `shift_expr_spans` as
+`span_visitor::shift_interp_span`, so the expression, the diagnostics and the
+edits share one implementation and cannot drift; it also clamps the offset at
+0, which matters only on the new path (an ERROR can point into the synthetic
+prologue, where the old arithmetic wrapped to a huge `usize`).
+
+Pins: four tests in `tests/parser.rs` -- the five swallowed shapes reporting,
+the span landing inside the hole rather than on the wrapper, Leg B enforced
+with its edit surviving both in-hole and outside, and a guard that well-formed
+holes (nested f-strings and format specs included) still report nothing. |
 | B-2026-08-11-9 | typecheck | low | the seven comparison-op names are exempted from method-existence checking by NAME rather than by whether the receiver carries the baked impl, so `f.c… | FIXED by 22ba601. The exemption is now keyed on whether the receiver
 carries the baked impl instead of on the method name alone: one
 `let exempt_comparison_ops = !matches!(&receiver_for_lookup, Type::Float(_));`
