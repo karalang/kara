@@ -33628,6 +33628,254 @@ fn main() {
     }
 
     #[test]
+    fn asan_string_eq_temp_vs_ref_param_no_leak() {
+        // B-2026-08-11-24 — a String equality between an UNBOUND TEMPORARY and
+        // a `ref String` PARAMETER leaked the temporary on every evaluation.
+        // Three conditions are jointly necessary: (1) one operand is an
+        // unbound temp (a call result, not a binding); (2) the other is a
+        // `ref`-mode parameter (a local or an owned param is fine); (3) the
+        // operation is String equality. Side does not matter and `!=` behaves
+        // like `==`.
+        //
+        // The cause was that the equality lowering suppressed the temp
+        // operand's drop whenever EITHER operand was borrowed, instead of
+        // suppressing it only for the borrowed one. The `ref` param is
+        // correctly not dropped — the caller owns it — and the fresh temp on
+        // the other side was then also not dropped, with nothing else ever
+        // freeing it.
+        //
+        // These four are the regression pins; the over-fire controls (shapes
+        // that were already clean and must stay clean) are in
+        // `asan_string_eq_borrowed_operand_controls_stay_clean`.
+        for (shape, src, expect) in [
+            (
+                "temp_eq_ref_param",
+                r#"
+fn f(hay: ref String, needle: ref String) -> bool { hay.substring(0, 4) == needle }
+fn main() { let h = "abcdefgh"; let n = "abcd"; println(f"{f(h, n)}"); }
+"#,
+                "true",
+            ),
+            (
+                // Operands swapped — the borrowed side is now on the left.
+                "ref_param_eq_temp",
+                r#"
+fn f(hay: ref String, needle: ref String) -> bool { needle == hay.substring(0, 4) }
+fn main() { let h = "abcdefgh"; let n = "abcd"; println(f"{f(h, n)}"); }
+"#,
+                "true",
+            ),
+            (
+                "temp_ne_ref_param",
+                r#"
+fn f(hay: ref String, needle: ref String) -> bool { hay.substring(0, 4) != needle }
+fn main() { let h = "abcdefgh"; let n = "zzzz"; println(f"{f(h, n)}"); }
+"#,
+                "true",
+            ),
+            (
+                // The temp's producer is irrelevant — a user fn returning
+                // String leaks exactly like the builtin `substring`.
+                "user_fn_temp_eq_ref_param",
+                r#"
+fn mk(s: ref String) -> String { s.substring(0, 4) }
+fn f(hay: ref String, needle: ref String) -> bool { mk(hay) == needle }
+fn main() { let h = "abcdefgh"; let n = "abcd"; println(f"{f(h, n)}"); }
+"#,
+                "true",
+            ),
+        ] {
+            assert_clean_asan_run(src, &[expect], &format!("string_eq_{shape}"));
+        }
+    }
+
+    #[test]
+    fn asan_string_eq_scan_loop_is_not_unbounded() {
+        // B-2026-08-11-24, the magnitude case and the reason it was filed
+        // `high` rather than as a 4-byte curiosity. The triggering shape is
+        // the ordinary substring-scan inner loop, so the leak was
+        // proportional to INPUT SIZE with no bound — the dogfood program this
+        // came from, a `{{key}}` renderer over one ~120-character template,
+        // leaked 290 bytes in 145 allocations, one per scan step.
+        //
+        // The early `return` is deliberately absent here: an accumulator
+        // variant leaks once per iteration too, so the loop (not the exit)
+        // is the multiplier. A per-iteration leak is what LSan reports as
+        // many small allocations rather than one, which is also why this
+        // never looked like a "big" leak in any single fixture.
+        assert_clean_asan_run(
+            r#"
+fn count_from(hay: ref String, needle: ref String) -> i64 {
+    let h = hay.len();
+    let n = needle.len();
+    let mut i = 0;
+    let mut hits = 0;
+    while i + n <= h {
+        if hay.substring(i, i + n) == needle { hits = hits + 1; }
+        i = i + 1;
+    }
+    hits
+}
+fn main() {
+    let hay = "abcabcabcabcabc";
+    let needle = "abc";
+    println(f"{count_from(hay, needle)}");
+}
+"#,
+            &["5"],
+            "string_eq_scan_loop",
+        );
+    }
+
+    #[test]
+    fn asan_string_eq_borrowed_operand_controls_stay_clean() {
+        // B-2026-08-11-24 over-fire controls. Every shape here was ALREADY
+        // clean before the fix, and a naive fix — always drop the temp
+        // operand — would break the ones whose operand is genuinely borrowed
+        // or already owned elsewhere. They are the half of the matrix that
+        // says the fix suppressed the drop for the RIGHT operand rather than
+        // simply stopping suppressing.
+        for (shape, src, expect) in [
+            // A LOCAL on the other side: no borrowed operand, so no
+            // suppression was ever triggered.
+            (
+                "temp_eq_local",
+                r#"
+fn f(hay: ref String) -> bool { let n = "abcd"; hay.substring(0, 4) == n }
+fn main() { let h = "abcdefgh"; println(f"{f(h)}"); }
+"#,
+                "true",
+            ),
+            // No parameters at all.
+            (
+                "temp_eq_local_in_main",
+                r#"
+fn main() {
+    let h = "abcdefgh";
+    let n = "abcd";
+    println(f"{h.substring(0, 4) == n}");
+}
+"#,
+                "true",
+            ),
+            // `let`-binding the temp gives it ordinary scope cleanup instead
+            // of the comparison's temp path.
+            (
+                "bound_temp_eq_ref_param",
+                r#"
+fn f(hay: ref String, needle: ref String) -> bool { let s = hay.substring(0, 4); s == needle }
+fn main() { let h = "abcdefgh"; let n = "abcd"; println(f"{f(h, n)}"); }
+"#,
+                "true",
+            ),
+            // An OWNED-mode param is not borrowed, so nothing is suppressed.
+            (
+                "temp_eq_owned_param",
+                r#"
+fn f(hay: ref String, needle: String) -> bool { hay.substring(0, 4) == needle }
+fn main() { let h = "abcdefgh"; let n = "abcd"; println(f"{f(h, n)}"); }
+"#,
+                "true",
+            ),
+            // Same two values, no comparison — isolates the comparison as the
+            // faulty step rather than the temp's construction.
+            (
+                "bound_temp_no_comparison",
+                r#"
+fn f(hay: ref String, needle: ref String) -> i64 { let s = hay.substring(0, 4); s.len() + needle.len() }
+fn main() { let h = "abcdefgh"; let n = "abcd"; println(f"{f(h, n)}"); }
+"#,
+                "8",
+            ),
+            // CONCAT with a `ref` param — the same operand pairing under a
+            // different operation, which never leaked. Confirms the defect is
+            // local to the equality lowering.
+            (
+                "temp_concat_ref_param",
+                r#"
+fn f(hay: ref String, suffix: ref String) -> i64 { let s = hay.substring(0, 4) + suffix; s.len() }
+fn main() { let h = "abcdefgh"; let x = "!!"; println(f"{f(h, x)}"); }
+"#,
+                "6",
+            ),
+            // The temp as a method ARGUMENT rather than an equality operand.
+            (
+                "temp_as_method_arg",
+                r#"
+fn mk(s: ref String) -> String { s.substring(0, 4) }
+fn f(hay: ref String, other: ref String) -> bool { other.contains(mk(hay)) }
+fn main() { let h = "abcdefgh"; let o = "xxabcdyy"; println(f"{f(h, o)}"); }
+"#,
+                "true",
+            ),
+            // Derived struct equality carrying a String field, against a `ref`
+            // param — a different equality lowering, which stayed clean.
+            // Derived struct equality against a `ref` param with a LITERAL
+            // String field — nothing heap-allocated, so nothing to leak. Its
+            // heap-field sibling DOES leak and is deferred as
+            // B-2026-08-11-33; this row stays because it records that the
+            // struct path only misbehaves when there is something to free,
+            // which is exactly why the filing row's control read as clean.
+            (
+                "derive_eq_struct_literal_field",
+                r#"
+#[derive(Eq)]
+struct P { name: String }
+fn mk() -> P { P { name: "abcd" } }
+fn f(other: ref P) -> bool { mk() == other }
+fn main() {
+    let p = P { name: "abcd" };
+    println(f"{f(p)}");
+}
+"#,
+                "true",
+            ),
+        ] {
+            assert_clean_asan_run(src, &[expect], &format!("string_eq_ctl_{shape}"));
+        }
+    }
+
+    #[test]
+    #[ignore = "B-2026-08-11-33 — derived-struct `==` leaks a fresh temp's heap FIELD;                 sibling of B-2026-08-11-24, different lowering (compile_struct_eq)"]
+    fn asan_derive_eq_struct_heap_field_vs_ref_param() {
+        // B-2026-08-11-33, split out of B-2026-08-11-24 and NOT fixed by it.
+        //
+        // Same operand pairing as that row — an unbound temp against a `ref`
+        // param — but a `#[derive(Eq)]` STRUCT whose String field is heap
+        // allocated. The temp struct is never dropped, so its field's buffer
+        // leaks: 4 bytes in 1 allocation.
+        //
+        // B-2026-08-11-24's filing measured this shape as CLEAN and concluded
+        // the defect was narrow to String equality. That control used a
+        // LITERAL field (see `derive_eq_struct_literal_field` above), which
+        // allocates nothing and so could not leak — the pairing was right and
+        // the payload was not. Swapping the literal for a `substring` makes it
+        // reproduce every time.
+        //
+        // Not fixed with -24 because it is a different lowering:
+        // `compile_struct_eq`, not the surface-`Binary` String path, and the
+        // fix is to materialize the fresh temp into a slot and register its
+        // struct drop (the `track_freshtemp_field_access_object` pattern from
+        // B-2026-07-22-2) rather than to free a buffer. That carries
+        // double-free risk and deserves its own matrix.
+        assert_clean_asan_run(
+            r#"
+#[derive(Eq)]
+struct P { name: String }
+fn mk(s: ref String) -> P { P { name: s.substring(0, 4) } }
+fn f(hay: ref String, other: ref P) -> bool { mk(hay) == other }
+fn main() {
+    let h = "abcdefgh";
+    let p = P { name: "abcd" };
+    println(f"{f(h, p)}");
+}
+"#,
+            &["true"],
+            "derive_eq_struct_heap_field_vs_ref_param",
+        );
+    }
+
+    #[test]
     fn asan_vec_sorted_by_key_heap_elements() {
         // B-2026-08-11-23 — `sorted_by_key` desugars to `{ let mut tmp =
         // v.clone(); tmp.sort_by_key(f); tmp }`, so with heap-bearing elements
@@ -40289,7 +40537,7 @@ fn main() {
 
     #[test]
     fn asan_vec_element_field_move_by_assignment_no_double_free() {
-        // B-2026-08-11-25 — `out = stats[0].region` moves a heap field out of a
+        // B-2026-08-11-33 — `out = stats[0].region` moves a heap field out of a
         // struct held as a Vec ELEMENT into an EXISTING binding. Nothing
         // cap-zeroed the field in its owner, so the owner's drop freed the
         // buffer the target now owned: `free(): double free detected in tcache

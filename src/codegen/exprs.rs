@@ -560,6 +560,42 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.free_fresh_owned_str_arg(left, lhs);
                         self.free_fresh_owned_str_arg(right, rhs);
                     }
+                    // B-2026-08-11-24 — the EQUALITY sibling of the concat free
+                    // directly above, and it leaks for exactly the same reason:
+                    // `rewrite_binary` skips the `String.eq` desugar when an
+                    // operand is ref-typed, so `hay.substring(0, 4) == needle`
+                    // with `needle: ref String` stays a surface `Binary`,
+                    // lands here, and misses the assoc-call route's operand
+                    // frees. B-2026-07-21-12 closed that hole for `Add` and
+                    // left `Eq`/`NotEq` open.
+                    //
+                    // This is why the leak needed a `ref`-mode PARAMETER on the
+                    // other side: with a local or an owned param the desugar
+                    // fires and the assoc route frees correctly. It is not a
+                    // borrowed-operand suppression bug, as the shape of the
+                    // symptom suggests — nothing is suppressed here, the free
+                    // was simply never written for this operator.
+                    //
+                    // Gated on the OPERANDS being String-shaped rather than the
+                    // result, since a comparison yields `i1` (the `Add` gate
+                    // above can look at its result because concat yields a
+                    // String). `free_fresh_owned_str_arg` self-gates to
+                    // fresh-owned Call/MethodCall shapes with a `cap > 0`
+                    // runtime backstop, so the borrowed operand — and any
+                    // identifier, place or rodata literal — is left untouched;
+                    // that is what keeps the swapped-operand and
+                    // owned-param shapes from double-freeing. Emitted AFTER the
+                    // comparison so every read of both buffers dominates the
+                    // free.
+                    if matches!(op, BinOp::Eq | BinOp::NotEq)
+                        && lhs.is_struct_value()
+                        && rhs.is_struct_value()
+                        && self.llvm_ty_is_vec_struct(lhs.get_type())
+                        && self.llvm_ty_is_vec_struct(rhs.get_type())
+                    {
+                        self.free_fresh_owned_str_arg(left, lhs);
+                        self.free_fresh_owned_str_arg(right, rhs);
+                    }
                     Ok(result)
                 }
             },
