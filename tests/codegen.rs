@@ -74909,6 +74909,66 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sorted_by_key_immutable_key_sort() {
+        // B-2026-08-11-23 — `sorted_by_key` was the ONLY hole in the
+        // six-method sort family: `sort`, `sort_by`, `sort_by_key`, `sorted`
+        // and `sorted_by` all compiled, and this one passed `karac check` and
+        // then died at build with "not yet supported in codegen". That shape
+        // is worse than a plain missing method for the Mend loop, where
+        // `check` is the primary tool — a program that checks clean and fails
+        // at build leaves the repair loop nothing to act on.
+        //
+        // It now shares an arm with `sorted_by`: same desugar, different inner
+        // method (`{ let mut tmp = v.clone(); tmp.sort_by_key(f); tmp }`), so
+        // everything the in-place `sort_by_key` lowering supports carries over
+        // through the clone. Covered here:
+        //  * the immutable contract — the RECEIVER must be left unsorted;
+        //  * a key that is not the element (`|p| p.age`), which is the whole
+        //    point of `by_key` and the thing a `sorted`/`sorted_by` test
+        //    cannot exercise;
+        //  * a FLOAT key, which routes through `karac_float_cmp` — NaN must
+        //    sort last (B-2026-08-11-17), proving that dispatch survives the
+        //    clone desugar;
+        //  * a String key on a heap-bearing element, whose clone-and-drop is
+        //    ASAN-covered by `asan_vec_sorted_by_key_heap_elements`.
+        let out = run_program(
+            r#"
+struct P { name: String, age: i64 }
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let mut v: Vec[i64] = v;
+    v.push(3); v.push(1); v.push(2);
+    let s = v.sorted_by_key(|x| x);
+    for x in v.iter() { println(x); }
+    for x in s.iter() { println(x); }
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { name: "c padded beyond the small-string threshold", age: 30 });
+    ps.push(P { name: "a padded beyond the small-string threshold", age: 10 });
+    ps.push(P { name: "b padded beyond the small-string threshold", age: 20 });
+    let byage = ps.sorted_by_key(|p| p.age);
+    for p in byage.iter() { println(p.age); }
+    let mut fs: Vec[f64] = Vec.new();
+    fs.push(2.5); fs.push(0.0 / 0.0); fs.push(1.5);
+    let fsorted = fs.sorted_by_key(|x| x);
+    for x in fsorted.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec![
+                    // receiver untouched, then the sorted copy
+                    "3", "1", "2", "1", "2", "3", // by a non-element key
+                    "10", "20", "30", // float key: NaN last
+                    "1.5", "2.5", "NaN",
+                ]
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_reverse() {
         // `Vec.reverse()` must reverse in place in codegen (same silent-no-op
         // regression class as `sort`).

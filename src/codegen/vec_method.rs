@@ -1782,10 +1782,36 @@ impl<'ctx> super::Codegen<'ctx> {
             // callback thunk — applies to the clone identically; an
             // unsupported comparator shape fails LOUD via `sort_by`'s own
             // error, exactly as the in-place form would.
-            "sorted_by" => {
+            // B-2026-08-11-23 folds `sorted_by_key` in here. It was the ONLY
+            // hole in the six-method sort family — `sort`, `sort_by`,
+            // `sort_by_key`, `sorted` and `sorted_by` all compiled, and
+            // `sorted_by_key` alone passed `karac check` and then died at
+            // build with "not yet supported in codegen". That shape is worse
+            // than a plain missing method for the Mend loop, where `check` is
+            // the primary tool: a program that checks clean and fails at build
+            // gives the repair loop no diagnostic to act on.
+            //
+            // The two are the same desugar with a different inner method, so
+            // they share an arm rather than being copied — the immutable form
+            // is exactly the in-place form applied to a clone, and whatever
+            // the in-place lowering supports (for `sort_by_key`: the
+            // precompute-keys path and the float-key `karac_float_cmp`
+            // dispatch) carries over unchanged, including its error messages
+            // for shapes it cannot handle.
+            "sorted_by" | "sorted_by_key" => {
+                let inner = if method == "sorted_by" {
+                    "sort_by"
+                } else {
+                    "sort_by_key"
+                };
+                let what = if method == "sorted_by" {
+                    "comparator closure"
+                } else {
+                    "key closure"
+                };
                 if args.len() != 1 {
                     return Err(format!(
-                        "Vec.sorted_by expects 1 argument (comparator closure), got {}",
+                        "Vec.{method} expects 1 argument ({what}), got {}",
                         args.len()
                     ));
                 }
@@ -1794,7 +1820,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(var_name)
                     .cloned()
                     .ok_or_else(|| {
-                        "Vec.sorted_by() in codegen requires a known element type".to_string()
+                        format!("Vec.{method}() in codegen requires a known element type")
                     })?;
                 let uid = self.indexed_elem_counter;
                 self.indexed_elem_counter += 1;
@@ -1806,7 +1832,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     offset: usize::MAX - (uid as usize) - 1,
                     length: 1,
                 };
-                let tmp = format!("__srtb_{}", uid);
+                let tmp = format!("__srtb_{}_{}", inner, uid);
                 let ident = |n: &str| Expr {
                     kind: ExprKind::Identifier(n.to_string()),
                     span: sp.clone(),
@@ -1845,7 +1871,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     kind: StmtKind::Expr(Expr {
                         kind: ExprKind::MethodCall {
                             object: Box::new(ident(&tmp)),
-                            method: "sort_by".to_string(),
+                            method: inner.to_string(),
                             turbofish: None,
                             args: vec![args[0].clone()],
                             args_close_span: sp.clone(),

@@ -33628,6 +33628,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_sorted_by_key_heap_elements() {
+        // B-2026-08-11-23 — `sorted_by_key` desugars to `{ let mut tmp =
+        // v.clone(); tmp.sort_by_key(f); tmp }`, so with heap-bearing elements
+        // it creates a SECOND owner of every String in the vector and then
+        // returns the clone while the receiver stays live. That is the shape
+        // that leaks or double-frees if the clone's element ownership is
+        // wrong, and it is not covered by the in-place `sort_by_key` tests
+        // (no clone) nor by `sorted_by` (which never reads a field for a key).
+        //
+        // Both vectors are read after the call so neither can be optimized
+        // away, and the strings are padded past the small-string threshold so
+        // each one is a real heap allocation rather than an inline buffer.
+        assert_clean_asan_run(
+            r#"
+struct P { name: String, age: i64 }
+fn main() {
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { name: f"carol padded beyond thirty-six bytes junk {1}", age: 30 });
+    ps.push(P { name: f"alice padded beyond thirty-six bytes junk {1}", age: 10 });
+    ps.push(P { name: f"bob padded beyond thirty-six bytes junk {1}", age: 20 });
+    let byage = ps.sorted_by_key(|p| p.age);
+    for p in byage.iter() { println(p.age); }
+    for p in ps.iter() { println(p.age); }
+    let byname = ps.sorted_by_key(|p| p.name);
+    println(byname.len());
+}
+"#,
+            &["10", "20", "30", "30", "10", "20", "3"],
+            "vec_sorted_by_key_heap_elements",
+        );
+    }
+
+    #[test]
     fn asan_gsort_vec_of_vec_string_sorts_and_frees() {
         // B-2026-06-30-15: `Vec[Vec[String]].sort()` — codegen previously
         // errored ("supports integer and String element types") and the
