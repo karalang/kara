@@ -10482,6 +10482,101 @@ fn main() {
     /// the interpreter moved to MATCH these (already-correct) behaviors, so
     /// this twin guards the target semantics from drifting. Same program as
     /// `tests/interpreter.rs`'s `test_let_move_source_frozen`.
+    /// B-2026-08-10-21 — the `UseAfterMove` defensive copy does not exist.
+    ///
+    /// `src/cli.rs`'s `is_fatal_ownership_kind` keeps `UseAfterMove` non-fatal
+    /// for `build` on a stated promise: "codegen defensive-copies the reuse, so
+    /// the binary is memory-safe". Measured, that copy is not emitted for a
+    /// binding-to-binding move of ANY heap type. `karac check` exits 0 ("All
+    /// checks passed" — the kind is excluded from `total_errors` by design),
+    /// `karac build` exits 0, and the program reads freed memory.
+    ///
+    /// Every case below is the same shape: move the value into a binding whose
+    /// scope ENDS, then read the source afterwards. That ordering is the whole
+    /// experiment — with the read before the destination dies, the alias is
+    /// still live and every case "passes" by timing, which is what makes this
+    /// easy to mis-measure.
+    ///
+    /// Cases 2 and 3 are hard SEGFAULTS, not garbage output.
+    ///
+    /// This is `#[ignore]`d rather than absent so the shapes are recorded
+    /// executably. Note it can only become a live ASAN fixture once
+    /// `tests/common/mod.rs`'s ownership gate admits `UseAfterMove` programs —
+    /// it currently refuses them on the premise that "`karac check` would
+    /// reject it", which is false for exactly this kind. That is why the
+    /// ~1000-fixture memory suite contains no test of the mechanism whose
+    /// correctness `UseAfterMove`'s non-fatal status depends on.
+    #[test]
+    #[ignore = "B-2026-08-10-21: the UseAfterMove defensive copy is not emitted for any heap type"]
+    fn test_e2e_use_after_move_defensive_copy_still_missing() {
+        // 1. String — prints garbage bytes.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let s: String = f\"alpha\";\n\
+                     { let keep: String = s; }\n\
+                     println(s);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+        // 2. Map — SEGFAULT.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut m: Map[String, i64] = Map.new();\n\
+                     m.insert(f\"k\", 7i64);\n\
+                     { let keep: Map[String, i64] = m; }\n\
+                     println(m.get(f\"k\").unwrap_or(0i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("7\n")
+        );
+        // 3. Set — SEGFAULT.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut st: Set[i64] = Set.new();\n\
+                     st.insert(9i64);\n\
+                     { let keep: Set[i64] = st; }\n\
+                     println(st.contains(9i64));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("true\n")
+        );
+        // 4. `Vec[i64]` — prints a garbage word. Worth pinning explicitly
+        // because `e2e_let_move_source_frozen` reads only `.len()`, which never
+        // dereferences the buffer, so it passes while this fails.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let mut w: Vec[i64] = Vec.new();\n\
+                     w.push(11i64); w.push(22i64);\n\
+                     { let keep: Vec[i64] = w; }\n\
+                     println(w[1]);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("22\n")
+        );
+        // 5. A struct carrying a heap field — prints an empty String.
+        assert_eq!(
+            run_program(
+                "struct H { name: String }\n\
+                 fn main() {\n\
+                     let h = H { name: f\"alpha\" };\n\
+                     { let keep: H = h; }\n\
+                     println(h.name);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("alpha\n")
+        );
+    }
+
     #[test]
     fn e2e_let_move_source_frozen() {
         let Some(out) = run_program(
