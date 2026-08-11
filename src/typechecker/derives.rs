@@ -10,7 +10,7 @@
 use crate::ast::*;
 
 use super::types::{is_numeric, type_display, Type, UIntSize, VariantTypeInfo};
-use super::{extract_derived_traits, TypeErrorKind};
+use super::{extract_derived_traits, Span, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
     /// If `ty` is a `distinct type`, return whether it derives ANY of
@@ -247,6 +247,100 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// Check whether a type supports total `Ord`. Floats do not (see Eq).
+    /// B-2026-08-11-7 — enforce the `T: Ord` bound on a sequence method whose
+    /// result is only meaningful under a TOTAL order (`sort`, `sorted`,
+    /// `max`, `min`, `binary_search`).
+    ///
+    /// design.md § Float semantics is explicit that `f32`/`f64` implement
+    /// `PartialOrd` but NOT `Ord`, and that they therefore "cannot be used …
+    /// in any context requiring `Ord`" — and it gives `scores.sort()` on a
+    /// `Vec[f64]` as its own counter-example. That example compiled. The gate
+    /// was already wired for `SortedSet`/`SortedMap` and for the generic
+    /// bound solver; the Vec/Slice method arms simply never consulted it, so
+    /// the same ordering question was REJECTED as a free `max(a, b)` call and
+    /// ACCEPTED as `v.max()`.
+    ///
+    /// The harm is a silent wrong answer, not a missing message: with a NaN
+    /// present `sort()` leaves the Vec unsorted (measured identical on all
+    /// three backends, so the differential oracle cannot see it either), and
+    /// `max`/`min` return an order-dependent element — NaN first makes BOTH
+    /// of them return NaN, NaN in the middle is silently skipped.
+    ///
+    /// Deliberately NOT applied to `contains` (which the row flagged as the
+    /// arguable leg) or to `reverse`: `contains` needs only `PartialEq`,
+    /// which `f64` genuinely has, and its measured behaviour is IEEE-correct
+    /// and backend-identical — it finds elements past a NaN, `contains(NaN)`
+    /// is correctly `false`, and `-0.0` finds `0.0`. Rejecting it would break
+    /// correct code for no soundness gain. `reverse` involves no comparison
+    /// at all.
+    pub(super) fn require_ord_element(
+        &mut self,
+        element: &Type,
+        receiver: &str,
+        method: &str,
+        span: &Span,
+    ) {
+        let Some(float) = Self::reachable_ieee_float(element) else {
+            return;
+        };
+        let wrapper = match float.as_str() {
+            "f32" => "F32",
+            "f16" => "F16",
+            "bf16" => "Bf16",
+            _ => "F64",
+        };
+        let disp = type_display(element);
+        // Same remedy wording as the generic bound solver's note
+        // (`render_unsatisfied_bound_message`), so a user who meets this gate
+        // through either route reads the same fix. The wrapper it names is
+        // real as of B-2026-08-11-8 — before that, this advice dead-ended at
+        // "no associated function 'from' on type 'F64'".
+        let mut msg = format!(
+            "{receiver}.{method}(): element type '{disp}' has no total order, so the \
+             result would not be well-defined"
+        );
+        msg.push_str(&format!(
+            "; note: `{float}` is not totally ordered (IEEE-754 NaN), and with a NaN \
+             present this silently produces a WRONG ANSWER rather than an error — \
+             `[3.0, NaN, 1.0, 2.0].sort()` leaves the sequence completely unsorted on \
+             every backend. Use the total-order wrapper `{wrapper}` \
+             (`{wrapper}.from(x)`), e.g. `xs.iter().map({wrapper}.from).collect()`"
+        ));
+        self.type_error(msg, span.clone(), TypeErrorKind::TraitBoundNotSatisfied);
+    }
+
+    /// The name of an IEEE float primitive reachable inside `ty` by a
+    /// structural comparison, or `None`.
+    ///
+    /// B-2026-08-11-7 gates on THIS rather than on `!type_supports_ord`,
+    /// deliberately. `type_supports_ord` is stricter than what the sort
+    /// comparators actually implement — it answers `false` for
+    /// `Vec[Vec[String]]`, because `Vec` is a baked stdlib struct carrying no
+    /// `#[derive(Ord)]`, even though `Vec[Vec[String]].sort()` is supported
+    /// and tested (B-2026-06-30-15 added the recursive lexicographic
+    /// comparator). Gating on it broke that fixture. Floats are the case with
+    /// evidence of a silent wrong answer and the case design.md explicitly
+    /// forbids, so the gate is scoped to exactly them: it cannot reject a
+    /// sort that works today.
+    fn reachable_ieee_float(ty: &Type) -> Option<String> {
+        match ty {
+            Type::Float(_) => Some(type_display(ty)),
+            Type::Refinement { base, .. } => Self::reachable_ieee_float(base),
+            Type::Tuple(elems) => elems.iter().find_map(Self::reachable_ieee_float),
+            Type::Array { element, .. }
+            | Type::Vector { element, .. }
+            | Type::Slice { element, .. } => Self::reachable_ieee_float(element),
+            Type::Ref(inner) | Type::MutRef(inner) => Self::reachable_ieee_float(inner),
+            // `Vec[f64]` / `Option[f64]` spelled as a Named container. The
+            // wrappers (`F64` and friends) are Named too and deliberately do
+            // NOT match — carrying a total order is their whole purpose.
+            Type::Named { name, args } if matches!(name.as_str(), "Vec" | "Option") => {
+                args.iter().find_map(Self::reachable_ieee_float)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn type_supports_ord(&self, ty: &Type) -> bool {
         if let Some(ok) = self.distinct_derive_supported(ty, &["Ord"]) {
             return ok;

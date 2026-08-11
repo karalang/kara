@@ -33667,6 +33667,19 @@ fn main() {
         // B-2026-06-30-15: tuple elements (per-field lexicographic — (1,z)
         // < (2,a) < (2,b)) and float elements both sort via the comparator
         // family now; both previously errored in codegen.
+        //
+        // B-2026-08-11-7 moved the float half from `Vec[f64]` to `Vec[F64]`.
+        // `Vec[f64].sort()` is now a typecheck error, because with a NaN
+        // present it left the sequence COMPLETELY unsorted on every backend
+        // (`[3.0, NaN, 1.0, 2.0]` came back untouched) — a silent wrong
+        // answer, and design.md's own counter-example. The wrapper is the
+        // remedy that gate prescribes, so exercising it here keeps the
+        // memory-safety coverage AND moves it onto the path users are now
+        // directed to — which is a strictly better thing to ASAN, since the
+        // element is a struct rather than a scalar. The `let` bindings before
+        // the prints are required: Display of a struct in a non-place
+        // position (`println(f[0])`) is a standing codegen restriction for
+        // all user structs, not specific to the wrapper.
         assert_clean_asan_run(
             r#"
 fn main() {
@@ -33678,13 +33691,15 @@ fn main() {
     for t in v {
         println(t.0);
     }
-    let mut f: Vec[f64] = Vec.new();
-    f.push(2.5);
-    f.push(1.5);
-    f.push(3.5);
+    let mut f: Vec[F64] = Vec.new();
+    f.push(F64.from(2.5));
+    f.push(F64.from(1.5));
+    f.push(F64.from(3.5));
     f.sort();
-    println(f[0]);
-    println(f[2]);
+    let lo = f[0];
+    let hi = f[2];
+    println(lo);
+    println(hi);
 }
 "#,
             &["1", "2", "2", "1.5", "3.5"],

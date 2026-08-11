@@ -404,6 +404,28 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
+                // B-2026-08-11-7 deliberately does NOT gate `max`/`min` on
+                // `Ord`, even though "numeric" here admits `f32`/`f64` and the
+                // result is genuinely order-dependent (measured: `[3.0, NaN,
+                // 1.0].max()` silently skips the NaN and answers 3, while
+                // `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer
+                // NaN). The gate was written and then withdrawn, because
+                // there is no remedy to point at and a diagnostic that
+                // dead-ends is what B-2026-08-11-8 was filed for:
+                //   * `Vec[F64].max()` — the wrapper this row's `sort` gate
+                //     prescribes — typechecks only if this numeric test is
+                //     widened, and then FAILS IN CODEGEN ("no handler for
+                //     method 'max'"), i.e. it would trade a wrong answer for
+                //     a run-vs-build gap.
+                //   * `Stats.max(v)`, the obvious f64-shaped alternative, is
+                //     itself broken AND backend-divergent on the same input
+                //     (NaN-first: interp 3, JIT NaN).
+                // Left open as B-2026-08-11-15 with both measurements, and it
+                // should land with the codegen `max`/`min`-over-wrapper arm
+                // that makes `F64` a complete answer rather than a partial
+                // one. `sort` / `sorted` / `binary_search` ARE gated here and
+                // in stdlib_seq.rs: for those the `F64` remedy is clean,
+                // complete and verified end-to-end on all three backends.
                 self.iter_terminal_elem_types
                     .insert(SpanKey::from_span(span), Self::type_to_type_expr(item));
                 Type::Named {

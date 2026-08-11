@@ -6689,6 +6689,104 @@ fn test_float_ord_bound_hint_points_to_wrapper() {
     );
 }
 
+#[test]
+fn test_float_seq_methods_requiring_ord_are_gated() {
+    // B-2026-08-11-7 — design.md § Float semantics gives `scores.sort()` on a
+    // `Vec[f64]` as its own counter-example to "f64 cannot be used in any
+    // context requiring `Ord`", and that example COMPILED. The harm was a
+    // silent wrong answer, not a missing message: with a NaN present `sort()`
+    // left the Vec completely unsorted on all three backends (so the
+    // three-backend differential oracle could not see it either), and
+    // `max()`/`min()` returned an order-dependent element — NaN first made
+    // BOTH answer NaN.
+    //
+    // The gate machinery already existed (SortedSet/SortedMap and the generic
+    // bound solver both used it); the Vec/Slice arms just never consulted it,
+    // so the identical ordering question was rejected as a free `max(a, b)`
+    // call and accepted as `v.max()`.
+    for (label, src) in [
+        ("Vec.sort", "fn main() { let mut v: Vec[f64] = [1.0]; v.sort(); }"),
+        (
+            "Vec.sorted",
+            "fn main() { let v: Vec[f64] = [1.0]; let _ = v.sorted(); }",
+        ),
+        (
+            "Vec.binary_search",
+            "fn main() { let v: Vec[f64] = [1.0]; let _ = v.binary_search(1.0); }",
+        ),
+        (
+            "Slice.sort",
+            "fn s(x: mut Slice[f64]) { x.sort(); }\nfn main() { let mut v: Vec[f64] = [1.0]; s(mut v[0..1]); }",
+        ),
+    ] {
+        let joined = typecheck_errors(src)
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            joined.contains("has no total order"),
+            "{label} on Vec[f64] must be rejected, got: {joined}"
+        );
+        // The remedy must name the wrapper AND a constructor that exists —
+        // before B-2026-08-11-8 this advice dead-ended at "no associated
+        // function 'from' on type 'F64'", which is worse than silence for
+        // `karac fix` and for any LLM trying to converge on a repair.
+        assert!(
+            joined.contains("F64.from"),
+            "{label} diagnostic must name the working remedy, got: {joined}"
+        );
+    }
+}
+
+#[test]
+fn test_float_seq_methods_not_requiring_ord_stay_allowed() {
+    // The other half of B-2026-08-11-7: the gate must not over-reach.
+    //
+    // `contains` is the leg the row flagged as arguable, and it is ALLOWED
+    // deliberately — it needs only `PartialEq`, which design.md says `f64`
+    // does implement, and its measured behaviour is IEEE-correct and
+    // identical across all three backends: it finds elements positioned after
+    // a NaN, `contains(NaN)` is correctly `false`, and `-0.0` finds `0.0`.
+    // There is no silent wrong answer to prevent, so gating it would only
+    // break correct code.
+    //
+    // `reverse` performs no comparison at all — it shared a match arm with
+    // `sort`, which is part of why the check was never added there.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[f64] = [2.0, 1.0];\n\
+             v.reverse();\n\
+             let _ = v.contains(1.0);\n\
+             let _ = v.sum();\n\
+             let _ = v.len();\n\
+         }",
+    );
+    // And the prescribed remedy must actually typecheck end to end.
+    typecheck_ok(
+        "fn main() {\n\
+             let scores: Vec[f64] = [1.0, 2.0];\n\
+             let mut w: Vec[F64] = scores.iter().map(F64.from).collect();\n\
+             w.sort();\n\
+             let _ = w.sorted();\n\
+             let _ = w.binary_search(F64.from(1.0));\n\
+         }",
+    );
+    // Non-float element types are untouched.
+    typecheck_ok("fn main() { let mut v: Vec[i64] = [2, 1]; v.sort(); let _ = v.max(); }");
+    // `max`/`min` on `Vec[f64]` stay ALLOWED for now, deliberately and
+    // against this row's original fix shape. They are genuinely
+    // order-dependent with a NaN present, but every remedy measured is worse
+    // than the disease: `Vec[F64].max()` fails in CODEGEN even when admitted
+    // at typecheck ("no handler for method 'max'"), and `Stats.max(v)` is
+    // itself wrong AND backend-divergent on the same input (NaN first: interp
+    // 3, JIT NaN). Gating them would ship a diagnostic whose advice
+    // dead-ends, which is exactly what B-2026-08-11-8 was filed for. Tracked
+    // as B-2026-08-11-15; this assertion pins the current, deliberate state
+    // so the decision is revisited rather than drifted into.
+    typecheck_ok("fn main() { let v: Vec[f64] = [1.0]; let _ = v.max(); let _ = v.min(); }");
+}
+
 // Full front-end pipeline INCLUDING the desugar pass (`desugar_program`),
 // which splices trait DEFAULT method bodies into each impl. The bare
 // `typecheck_errors` / `typecheck_ok` helpers skip desugar, so a default

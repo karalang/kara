@@ -1115,6 +1115,10 @@ impl<'a> super::TypeChecker<'a> {
                     let at = self.infer_expr(&arg.value);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
+                // B-2026-08-11-7 — binary search is only meaningful over a
+                // total order (and over data sorted by it). Not named in the
+                // row; found ungated while fixing its siblings.
+                self.require_ord_element(&elem, "Slice", "binary_search", span);
                 option_i64
             }
             "split_at" => {
@@ -1178,6 +1182,13 @@ impl<'a> super::TypeChecker<'a> {
                         span.clone(),
                         TypeErrorKind::WrongNumberOfArgs,
                     );
+                }
+                // B-2026-08-11-7 — the Slice twin of the Vec `sort` gate. This
+                // arm checked mutability only. `reverse` shares it but needs
+                // no order, so gate on the method name rather than splitting
+                // the (longer) mutability/arity preamble.
+                if method == "sort" {
+                    self.require_ord_element(&elem, "Slice", "sort", span);
                 }
                 Type::Unit
             }
@@ -1400,6 +1411,10 @@ impl<'a> super::TypeChecker<'a> {
                     let at = self.infer_expr(&arg.value);
                     self.check_assignable(&elem, &at, arg.value.span.clone());
                 }
+                // B-2026-08-11-7 — binary search is only meaningful over a
+                // total order (and over data sorted by it). Not named in the
+                // row; found ungated while fixing its siblings.
+                self.require_ord_element(&elem, "Vec", "binary_search", span);
                 option_i64
             }
             "split_at" => {
@@ -1433,8 +1448,16 @@ impl<'a> super::TypeChecker<'a> {
                 vec_slice
             }
             // ── In-place mutators (binding-layer mut-checked) ─────
-            "sort" | "reverse" => {
-                self.expect_no_args(&format!("Vec.{}", method), args, span);
+            // B-2026-08-11-7: `sort` needs a total order on the element type;
+            // `reverse` compares nothing, so it stays ungated (they shared an
+            // arm, which is part of why the check was never added).
+            "sort" => {
+                self.expect_no_args("Vec.sort", args, span);
+                self.require_ord_element(&elem, "Vec", "sort", span);
+                Type::Unit
+            }
+            "reverse" => {
+                self.expect_no_args("Vec.reverse", args, span);
                 Type::Unit
             }
             "clear" => {
@@ -1477,6 +1500,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             "sorted" => {
                 self.expect_no_args("Vec.sorted", args, span);
+                self.require_ord_element(&elem, "Vec", "sorted", span);
                 vec_elem
             }
             "fill" => {
